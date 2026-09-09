@@ -111,7 +111,6 @@ async fn salvage_test_actor_on_backend(
         sampling_cfg,
         xai_grok_sampler::RetryPolicy {
             max_retries: 0,
-            rate_limit_retry_threshold: 0,
             ..Default::default()
         },
         sampler_event_tx,
@@ -182,13 +181,62 @@ async fn run_prompt(actor: &Arc<SessionActor>, prompt_id: &str) -> PromptTurnRes
     .await
     .expect("turn must finish within timeout")
 }
+/// The remote tier: a spawn-resolved `length_salvage_budget` reaches the
+/// resolver on a real actor (the previously env-blocked default-agent ON
+/// cell, now injectable).
+#[test]
+fn remote_budget_wires_into_the_resolver() {
+    if xai_grok_config::env_bool("GROK_LENGTH_SALVAGE") == Some(true) {
+        panic!("ambient GROK_LENGTH_SALVAGE=1 would mask the remote tier under test");
+    }
+    block_on_session(|| {
+        current_thread_local(async {
+            let (gateway_tx, gateway_rx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            drain_gateway(gateway_rx);
+            let (persistence_tx, persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            drain_persistence(persistence_rx);
+            let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            assert_eq!(actor.length_salvage_budget(), None, "off by default");
+            actor.length_salvage_remote_budget = Some(9);
+            assert_eq!(
+                actor.length_salvage_budget(),
+                Some(9),
+                "the remote tier feeds the resolver"
+            );
+            actor.length_salvage_remote_budget = Some(0);
+            assert_eq!(
+                actor.length_salvage_budget(),
+                None,
+                "the remote kill zero turns salvage off outright"
+            );
+        });
+    });
+}
+/// `RemoteSettings` wire contract: legacy payloads without the key and
+/// explicit null both mean absent; set values (including the kill zero)
+/// round-trip.
+#[test]
+fn remote_settings_length_salvage_budget_serde_cells() {
+    use crate::util::config::RemoteSettings;
+    let legacy: RemoteSettings = serde_json::from_str("{}").expect("legacy payload");
+    assert_eq!(legacy.length_salvage_budget, None);
+    let null: RemoteSettings =
+        serde_json::from_value(serde_json::json!({ "length_salvage_budget": null }))
+            .expect("explicit null");
+    assert_eq!(null.length_salvage_budget, None);
+    let set: RemoteSettings =
+        serde_json::from_value(serde_json::json!({ "length_salvage_budget": 0 }))
+            .expect("kill value");
+    assert_eq!(set.length_salvage_budget, Some(0));
+}
 /// Default agent with the gate off (no env var): a Length response is the legacy non-retryable hard failure.
 /// This is the safety property that nothing changes for production default agents until the rollout flag lands.
 #[test]
 fn default_agent_gate_off_hard_fails_on_length() {
-    if std::env::var_os("GROK_LENGTH_SALVAGE").is_some() {
-        eprintln!("skipping: ambient GROK_LENGTH_SALVAGE would flip the gate under test");
-        return;
+    if xai_grok_config::env_bool("GROK_LENGTH_SALVAGE") == Some(true) {
+        panic!("ambient GROK_LENGTH_SALVAGE=1 would flip the gate under test");
     }
     block_on_session(|| {
         current_thread_local(async {
@@ -252,7 +300,13 @@ fn rate_limit_mid_continuation_stays_terminal() {
             let error =
                 error_with_tiny_window(xai_grok_sampler::SamplingErrorKind::RateLimited, 429);
             let Err(err) = actor
-                .handle_sampling_failure(error, 0, transient_state(0, true), true)
+                .handle_sampling_failure(
+                    error,
+                    0,
+                    transient_state(0, true),
+                    true,
+                    TurnParkState::Fresh,
+                )
                 .await
             else {
                 panic!("a mid-salvage rate limit is still terminal");
@@ -284,7 +338,13 @@ fn suppressed_overflow_mid_continuation_still_completes_truncated() {
             );
             let error = error_with_tiny_window(xai_grok_sampler::SamplingErrorKind::Api, 500);
             let Err(err) = actor
-                .handle_sampling_failure(error, 0, transient_state(0, true), true)
+                .handle_sampling_failure(
+                    error,
+                    0,
+                    transient_state(0, true),
+                    true,
+                    TurnParkState::Fresh,
+                )
                 .await
             else {
                 panic!("the quiet arm returns the typed error");

@@ -1,5 +1,8 @@
 #![allow(dead_code)]
 use super::*;
+use xai_grok_tools::implementations::grok_build::task::types::{
+    SubagentCompletionSummary, SubagentSnapshot, SubagentSnapshotStatus,
+};
 pub(crate) fn completion_identity(actor: &SessionActor) -> std::rc::Rc<()> {
     actor
         .state
@@ -183,13 +186,36 @@ pub(crate) async fn create_test_actor_ex(
     SessionActor,
     tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
 ) {
-    create_test_actor_with_terminal(
+    create_test_actor_with_chat_persistence(
+        total_tokens,
+        context_window,
+        threshold_percent,
+        gateway_tx,
+        persistence_tx,
+        Box::new(xai_chat_state::NullChatPersistence),
+    )
+    .await
+}
+#[cfg(test)]
+pub(crate) async fn create_test_actor_with_chat_persistence(
+    total_tokens: u64,
+    context_window: u64,
+    threshold_percent: u8,
+    gateway_tx: tokio::sync::mpsc::UnboundedSender<xai_acp_lib::AcpClientMessage>,
+    persistence_tx: tokio::sync::mpsc::UnboundedSender<PersistenceMsg>,
+    chat_persistence: Box<dyn xai_chat_state::ChatPersistence>,
+) -> (
+    SessionActor,
+    tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+) {
+    create_test_actor_inner(
         total_tokens,
         context_window,
         threshold_percent,
         gateway_tx,
         persistence_tx,
         Arc::new(DummyTerminal {}),
+        chat_persistence,
     )
     .await
 }
@@ -201,6 +227,30 @@ pub(crate) async fn create_test_actor_with_terminal(
     gateway_tx: tokio::sync::mpsc::UnboundedSender<xai_acp_lib::AcpClientMessage>,
     persistence_tx: tokio::sync::mpsc::UnboundedSender<PersistenceMsg>,
     terminal: Arc<dyn crate::terminal::AsyncTerminalRunner>,
+) -> (
+    SessionActor,
+    tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
+) {
+    create_test_actor_inner(
+        total_tokens,
+        context_window,
+        threshold_percent,
+        gateway_tx,
+        persistence_tx,
+        terminal,
+        Box::new(xai_chat_state::NullChatPersistence),
+    )
+    .await
+}
+#[cfg(test)]
+async fn create_test_actor_inner(
+    total_tokens: u64,
+    context_window: u64,
+    threshold_percent: u8,
+    gateway_tx: tokio::sync::mpsc::UnboundedSender<xai_acp_lib::AcpClientMessage>,
+    persistence_tx: tokio::sync::mpsc::UnboundedSender<PersistenceMsg>,
+    terminal: Arc<dyn crate::terminal::AsyncTerminalRunner>,
+    chat_persistence: Box<dyn xai_chat_state::ChatPersistence>,
 ) -> (
     SessionActor,
     tokio::sync::mpsc::UnboundedReceiver<SessionEvent>,
@@ -226,6 +276,7 @@ pub(crate) async fn create_test_actor_with_terminal(
     let state = TokioMutex::new(State {
         running_task: None,
         finalization_gate: Default::default(),
+        message_delivery: Default::default(),
         pending_inputs: VecDeque::new(),
         edit_holds: HashMap::new(),
         pending_notifications: Vec::new(),
@@ -241,12 +292,16 @@ pub(crate) async fn create_test_actor_with_terminal(
         vec![],
         xai_grok_sampling_types::SamplingConfig {
             base_url: "http://localhost".to_string(),
+            mtls_cert_dir: None,
             model: "test".to_string(),
             max_completion_tokens: None,
             temperature: None,
             top_p: None,
+            max_retries: None,
+            rate_limit_retry_threshold: None,
             api_backend: Default::default(),
             extra_headers: Default::default(),
+            conversation_group_id: None,
             query_params: Default::default(),
             env_http_headers: Default::default(),
             context_window: std::num::NonZeroU64::new(context_window)
@@ -254,7 +309,7 @@ pub(crate) async fn create_test_actor_with_terminal(
             reasoning_effort: None,
             stream_tool_calls: None,
         },
-        Box::new(xai_chat_state::NullChatPersistence),
+        chat_persistence,
         chat_event_tx,
         tokio_util::sync::CancellationToken::new(),
     );
@@ -292,6 +347,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         chat_state_handle,
         unattributed_background_usage: std::sync::atomic::AtomicBool::new(false),
         current_prompt_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        active_work: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         pending_interactions: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
@@ -338,6 +394,7 @@ pub(crate) async fn create_test_actor_with_terminal(
             injection_count: std::sync::atomic::AtomicU64::new(0),
             compaction_recovery_count: std::sync::atomic::AtomicU64::new(0),
             chunks_added: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            init_reindex_handle: std::cell::RefCell::new(None),
             dream_config: Default::default(),
             dream_count: std::sync::atomic::AtomicU64::new(0),
             dream_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -345,6 +402,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         },
         session_start: std::time::Instant::now(),
         inference_idle_timeout: Duration::from_secs(300),
+        uncharged_401_park_enabled: true,
         max_retries: 3,
         rate_limit_waits: crate::session::acp_session::RateLimitWaitConfig::default(),
         max_turns: None,
@@ -398,6 +456,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         goal_classifier_enabled: false,
         goal_planner_enabled: false,
         goal_summary_enabled: false,
+        length_salvage_remote_budget: None,
         goal_verifier_skeptic_count: 1,
         goal_role_models: Default::default(),
         goal_use_current_model_only: false,
@@ -414,11 +473,13 @@ pub(crate) async fn create_test_actor_with_terminal(
         mcp_reminder_mode: McpReminderMode::Delta,
         mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_connecting_reminder_injected: std::cell::Cell::new(false),
-        mcp_handshakes_done: Arc::new(tokio::sync::Notify::new()),
+        mcp_refresh_gate: Arc::new(tokio::sync::Mutex::new(())),
         user_input_generation: std::sync::atomic::AtomicU64::new(0),
         laziness_debug_log: None,
         last_live_orphan_reconcile: std::cell::Cell::new(None),
-        deferred_prefix: TaskSlot::new(),
+        deferred_prefix: DeferredPrefix::new(),
+        mcp_startup_waits: Default::default(),
+        mcp_init_tasks: Default::default(),
         extension_registry: xai_agent_lifecycle::LocalExtensionRegistry::default(),
         last_announced_local_date: std::cell::Cell::new(chrono::Local::now().date_naive()),
         prefix_carries_fallback_date: std::cell::Cell::new(false),
@@ -437,6 +498,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         events: crate::session::events::EventTracker::new(std::path::Path::new("/tmp")),
         observability_bridge: noop_observability_bridge(),
         current_turn_number: std::cell::Cell::new(0),
+        turn_phases: std::sync::Arc::default(),
         last_recap_main_turn: std::cell::Cell::new(0),
         recap_in_flight: std::cell::Cell::new(false),
         recap_epoch: std::cell::Cell::new(0),
@@ -449,6 +511,8 @@ pub(crate) async fn create_test_actor_with_terminal(
         title_refresh_enabled: false,
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
+        stream_apply_span: parking_lot::Mutex::new(None),
+        current_turn_span_id: parking_lot::Mutex::new(None),
         turn_stream_drained: parking_lot::Mutex::new(std::collections::HashMap::new()),
         pending_image_strip: parking_lot::Mutex::new(HashMap::new()),
         image_strip_rewrite_barrier: ImageStripRewriteBarrier::new(),
@@ -602,7 +666,15 @@ pub(crate) async fn build_actor() -> (
 ) {
     let (gateway_tx, gateway_rx) =
         tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
-    let (persistence_tx, _prx) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+    let (persistence_tx, mut persistence_rx) =
+        tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+    tokio::spawn(async move {
+        while let Some(message) = persistence_rx.recv().await {
+            if let PersistenceMsg::FlushAndAck { respond_to } = message {
+                let _ = respond_to.send(Ok(()));
+            }
+        }
+    });
     let actor =
         std::sync::Arc::new(create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await);
     (actor, gateway_rx)
@@ -894,6 +966,105 @@ pub(crate) fn drain_persistence(mut rx: tokio::sync::mpsc::UnboundedReceiver<Per
         }
     });
 }
+/// An actor whose latched disk-full probe refuses every turn before its prompt commits.
+pub(crate) async fn disk_full_actor() -> SessionActor {
+    let (gateway_tx, gateway_rx) =
+        tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+    drain_gateway(gateway_rx);
+    let (persistence_tx, mut persistence_rx) =
+        tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+    tokio::task::spawn_local(async move {
+        while let Some(msg) = persistence_rx.recv().await {
+            if let PersistenceMsg::ProbeWritable { respond_to } = msg {
+                let _ = respond_to.send(Err(std::io::Error::from(std::io::ErrorKind::StorageFull)));
+            }
+        }
+    });
+    let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+    actor.notifications.disk_full = tokio::sync::watch::channel(true).1;
+    actor
+}
+pub(crate) fn subagent_summary(id: &str) -> SubagentCompletionSummary {
+    SubagentCompletionSummary {
+        snapshot: SubagentSnapshot {
+            subagent_id: id.into(),
+            description: format!("desc {id}"),
+            subagent_type: "general-purpose".into(),
+            status: SubagentSnapshotStatus::Completed {
+                output: String::new(),
+                tool_calls: 3,
+                turns: 1,
+                worktree_path: None,
+            },
+            started_at_epoch_ms: 0,
+            duration_ms: 1000,
+            persona: None,
+        },
+        loop_task_id: None,
+        tool_calls: 3,
+        output: std::sync::Arc::from("done"),
+        full_output_bytes: "done".len(),
+    }
+}
+pub(crate) struct FakeCoordinator {
+    suppress_seen: Arc<std::sync::Mutex<Vec<Vec<String>>>>,
+    returned: Arc<std::sync::Mutex<Vec<String>>>,
+    peeks: Arc<std::sync::atomic::AtomicUsize>,
+}
+impl FakeCoordinator {
+    pub(crate) fn suppress_seen(&self) -> Vec<Vec<String>> {
+        self.suppress_seen.lock().unwrap().clone()
+    }
+    pub(crate) fn returned(&self) -> Vec<String> {
+        self.returned.lock().unwrap().clone()
+    }
+    pub(crate) fn peeks(&self) -> usize {
+        self.peeks.load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
+/// Fakes the coordinator's `Completions` (destructive, honours `suppress_ids`) and `PeekCompletions` (clones) arms.
+/// Spawns on the current `LocalSet`; call before the actor is shared.
+pub(crate) fn spawn_fake_coordinator(
+    actor: &mut SessionActor,
+    buffer: Vec<SubagentCompletionSummary>,
+) -> FakeCoordinator {
+    use xai_grok_tools::implementations::grok_build::task::types::SubagentEvent;
+    let fake = FakeCoordinator {
+        suppress_seen: Arc::default(),
+        returned: Arc::default(),
+        peeks: Arc::default(),
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SubagentEvent>();
+    actor.tool_context.subagent_event_tx = Some(tx);
+    let suppress_seen = Arc::clone(&fake.suppress_seen);
+    let returned = Arc::clone(&fake.returned);
+    let peeks = Arc::clone(&fake.peeks);
+    tokio::task::spawn_local(async move {
+        let mut buffer = buffer;
+        while let Some(ev) = rx.recv().await {
+            match ev {
+                SubagentEvent::Completions(req) => {
+                    suppress_seen.lock().unwrap().push(req.suppress_ids.clone());
+                    let (drained, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut buffer)
+                        .into_iter()
+                        .partition(|c| !req.suppress_ids.iter().any(|id| id == c.subagent_id()));
+                    buffer = kept;
+                    returned
+                        .lock()
+                        .unwrap()
+                        .extend(drained.iter().map(|c| c.subagent_id().to_owned()));
+                    let _ = req.respond_to.send(drained);
+                }
+                SubagentEvent::PeekCompletions(req) => {
+                    peeks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let _ = req.respond_to.send(buffer.clone());
+                }
+                _ => {}
+            }
+        }
+    });
+    fake
+}
 /// An actor whose persistence channel answers the `FlushAndAck` barrier, so a turn driven with a `persist_ack` resolves.
 /// Bare `build_actor` never acks.
 #[cfg(test)]
@@ -963,5 +1134,94 @@ pub(crate) fn transient_state(step_attempts: u32, enabled: bool) -> TransientRet
         prompt_attempts: 0,
         episode_start: None,
         enabled,
+    }
+}
+pub(crate) fn ms(n: u64) -> std::time::Duration {
+    std::time::Duration::from_millis(n)
+}
+pub(crate) async fn plain_actor() -> SessionActor {
+    let (gw_tx, _gw_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (persist_tx, _persist_rx) = tokio::sync::mpsc::unbounded_channel();
+    create_test_actor(100, 256_000, 80, gw_tx, persist_tx).await
+}
+pub(crate) async fn actor_with_mcp(
+    configs: Vec<acp::McpServer>,
+    initialized: bool,
+    initializing: Vec<String>,
+) -> SessionActor {
+    let a = plain_actor().await;
+    {
+        let mut st = a.mcp_state.lock().await;
+        st.configs = configs;
+        st.cancel_any_init();
+        if initialized || !initializing.is_empty() {
+            std::mem::forget(st.try_start_init().expect("fixture claims init"));
+            let generation = st.generation();
+            st.mark_servers_initializing(generation, initializing);
+            if initialized {
+                st.finish_init(generation);
+            }
+        }
+    }
+    a
+}
+pub(crate) fn stdio(name: &str, cmd: &str) -> acp::McpServer {
+    let args = if cmd == "sleep" {
+        vec!["300".to_string()]
+    } else {
+        vec![]
+    };
+    acp::McpServer::Stdio(
+        acp::McpServerStdio::new(name.to_string(), cmd)
+            .args(args)
+            .env(vec![]),
+    )
+}
+pub(crate) async fn register_stub(bridge: &crate::tools::bridge::ToolBridge, name: &'static str) {
+    bridge
+        .register_mcp_tools(
+            name.to_string(),
+            StubMcpTool(name),
+            Some(serde_json::json!({"type": "object"})),
+        )
+        .expect("stub registration");
+}
+#[derive(Debug, Clone)]
+pub(crate) struct StubMcpTool(pub(crate) &'static str);
+impl xai_grok_tools::types::tool_metadata::ToolMetadata for StubMcpTool {
+    fn kind(&self) -> xai_grok_tools::types::tool::ToolKind {
+        xai_grok_tools::types::tool::ToolKind::Other
+    }
+    fn tool_namespace(&self) -> xai_grok_tools::types::tool::ToolNamespace {
+        xai_grok_tools::types::tool::ToolNamespace::MCP
+    }
+    fn description_template(&self) -> &str {
+        "stub MCP tool"
+    }
+}
+impl xai_tool_runtime::Tool for StubMcpTool {
+    type Args = serde_json::Value;
+    type Output = xai_grok_tools::types::output::ToolOutput;
+    fn id(&self) -> xai_tool_protocol::ToolId {
+        xai_tool_protocol::ToolId::new(self.0).expect("valid tool id")
+    }
+    fn description(
+        &self,
+        _ctx: &xai_tool_runtime::ListToolsContext,
+    ) -> xai_tool_types::ToolDescription {
+        xai_tool_types::ToolDescription::new(self.0, "stub MCP tool")
+    }
+    async fn run(
+        &self,
+        _ctx: xai_tool_runtime::ToolCallContext,
+        _args: serde_json::Value,
+    ) -> Result<Self::Output, xai_tool_runtime::ToolError> {
+        Ok(xai_grok_tools::types::output::ToolOutput::MCP(
+            xai_grok_tools::types::output::MCPOutput::errored(
+                self.0.into(),
+                "stub".into(),
+                "unused".into(),
+            ),
+        ))
     }
 }

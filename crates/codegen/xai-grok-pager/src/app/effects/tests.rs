@@ -1,7 +1,8 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 use super::*;
-/// The invalid-params server detail survives `attach_prompt_usage`
-/// wrapping `error.data` as `{message, promptUsage}`.
+use std::path::PathBuf;
+use xai_grok_shell::extensions::billing::{BillingConfig, Cent, UsagePeriod};
+/// The invalid-params server detail survives `attach_prompt_usage` wrapping `error.data` as `{message, promptUsage}`.
 #[test]
 fn format_acp_error_reads_detail_from_wrapped_data() {
     let bare = acp::Error::invalid_params().data("model does not support tools");
@@ -144,177 +145,6 @@ fn interject_params_omit_content_when_no_blocks() {
     assert_eq!(obj["text"], "steer");
     assert_eq!(obj["interjectionId"], "i1");
     assert_eq!(obj.len(), 3, "no extra keys on the legacy shape");
-}
-#[test]
-fn picker_keeps_conversation_with_empty_cwd_and_missing_updated_at() {
-    let payload = serde_json::json!({
-            "sessions": [{
-                "sessionId": "conv_abc",
-                "cwd": "",
-                "summary": "Compare GPU vendors",
-                "source": "conversation",
-                "_meta": { "x.ai/session": { "kind": "chat" } }
-            }]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert_eq!(entries.len(), 1, "conversation must not vanish");
-    assert_eq!(entries[0].id, "conv_abc");
-    assert_eq!(entries[0].cwd, "");
-    assert_eq!(entries[0].source, "conversation");
-}
-#[test]
-fn picker_keeps_old_conversation_past_cutoff() {
-    let payload = serde_json::json!({
-            "sessions": [{
-                "sessionId": "conv_old",
-                "cwd": "",
-                "summary": "Ancient chat",
-                "source": "conversation",
-                "updatedAt": "2020-01-01T00:00:00Z",
-                "_meta": { "x.ai/session": { "kind": "chat" } }
-            }]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert_eq!(entries.len(), 1, "old conversation must still render");
-    assert_eq!(entries[0].source, "conversation");
-}
-#[test]
-fn picker_drops_local_with_missing_updated_at() {
-    let payload = serde_json::json!({
-            "sessions": [{
-                "sessionId": "local_no_ts",
-                "cwd": "/Users/me/xai",
-                "summary": "no timestamp",
-                "source": "local"
-            }]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert!(
-            entries.is_empty(),
-            "local rows still require a parseable updatedAt"
-        );
-}
-/// Untitled grok.com chats must stay listed, rendered as "Untitled".
-#[test]
-fn picker_keeps_untitled_conversation_as_untitled() {
-    let payload = serde_json::json!({
-            "sessions": [{
-                "sessionId": "conv_untitled",
-                "cwd": "",
-                "summary": "",
-                "source": "conversation",
-                "updatedAt": "2026-07-01T00:00:00Z",
-                "_meta": { "x.ai/session": { "kind": "chat" } }
-            }]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert_eq!(entries.len(), 1, "untitled conversation must not vanish");
-    assert_eq!(entries[0].summary, "Untitled");
-    assert_eq!(entries[0].source, "conversation");
-}
-/// The recap and last-turn summary ride the session-list wire and land on the picker entry so the expanded card can show them.
-#[test]
-fn picker_parses_last_recap_and_last_turn_summary() {
-    let recent = chrono::Utc::now().to_rfc3339();
-    let payload = serde_json::json!({
-            "sessions": [{
-                "sessionId": "s_recap",
-                "cwd": "/Users/me/xai",
-                "summary": "Auth refactor",
-                "source": "local",
-                "updatedAt": recent,
-                "lastTurnSummary": "Wired retries into billing",
-                "lastRecap": "Where we left off: auth refactor across the API"
-            }]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(
-            entries[0].last_turn_summary.as_deref(),
-            Some("Wired retries into billing")
-        );
-    assert_eq!(
-            entries[0].last_recap.as_deref(),
-            Some("Where we left off: auth refactor across the API")
-        );
-}
-/// `sessionKind` rides the session-list wire onto the entry; the picker's Headless page filter keys on it.
-#[test]
-fn picker_parses_session_kind() {
-    let recent = chrono::Utc::now().to_rfc3339();
-    let payload = serde_json::json!({
-            "sessions": [
-                {
-                    "sessionId": "s_headless",
-                    "cwd": "/Users/me/xai",
-                    "summary": "Classify clip",
-                    "source": "local",
-                    "updatedAt": recent,
-                    "sessionKind": "headless"
-                },
-                {
-                    "sessionId": "s_plain",
-                    "cwd": "/Users/me/xai",
-                    "summary": "Interactive work",
-                    "source": "local",
-                    "updatedAt": recent
-                }
-            ]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].session_kind.as_deref(), Some("headless"));
-    assert_eq!(entries[1].session_kind, None);
-}
-/// The empty-summary drop still applies to Build rows.
-#[test]
-fn picker_still_drops_build_row_with_empty_summary() {
-    let payload = serde_json::json!({
-            "sessions": [{
-                "sessionId": "local_empty",
-                "cwd": "/nonexistent/effects-test",
-                "summary": "",
-                "source": "local",
-                "updatedAt": "2026-07-01T00:00:00Z"
-            }]
-        });
-    let entries = parse_session_picker_entries(&payload);
-    assert!(entries.is_empty(), "empty-summary Build rows stay dropped");
-}
-#[test]
-fn session_list_partial_parses_reasons() {
-    let payload = |reason: &str| {
-        serde_json::json!({
-                "sessions": [],
-                "_meta": { "x.ai/partial": { "conversations": true, "reason": reason } }
-            })
-    };
-    assert_eq!(
-            parse_session_list_partial(&payload("no_oauth")),
-            Some(ConversationsPartial::NoOauth)
-        );
-    assert_eq!(
-            parse_session_list_partial(&payload("timeout")),
-            Some(ConversationsPartial::Timeout)
-        );
-    assert_eq!(
-            parse_session_list_partial(&payload("error")),
-            Some(ConversationsPartial::Error)
-        );
-    assert_eq!(
-            parse_session_list_partial(&payload("something_new")),
-            Some(ConversationsPartial::Error)
-        );
-}
-#[test]
-fn session_list_partial_absent_for_healthy_or_meta_less_responses() {
-    let healthy = serde_json::json!({
-            "sessions": [],
-            "_meta": { "x.ai/partial": { "conversations": false } }
-        });
-    assert_eq!(parse_session_list_partial(&healthy), None);
-    let legacy = serde_json::json!({ "sessions": [] });
-    assert_eq!(parse_session_list_partial(&legacy), None);
 }
 /// The agent serializes `ExtMethodResult<KillTaskResponse>`: the outcome lives at `result.outcome`.
 /// Probing the top level instead was why the tasks-pane ✗ never removed stale (`not_found`) rows after a session resume.
@@ -468,6 +298,262 @@ fn interject_params_carry_content_when_blocks_present() {
     assert_eq!(content.len(), 1);
     assert_eq!(content[0]["text"], "look at [Image #1]");
 }
+/// A billing config with every field unset, for use as a base in `credit_balance_from_config` tests via struct-update syntax.
+fn empty_billing_config() -> BillingConfig {
+    BillingConfig {
+        credit_usage_percent: None,
+        current_period: None,
+        monthly_limit: None,
+        used: None,
+        on_demand_cap: None,
+        on_demand_used: None,
+        prepaid_balance: None,
+        is_unified_billing_user: None,
+        billing_period_start: None,
+        billing_period_end: None,
+        history: vec![],
+    }
+}
+#[test]
+fn credit_balance_prefers_credit_usage_percent_over_limit_used() {
+    let c = BillingConfig {
+        credit_usage_percent: Some(42.0),
+        monthly_limit: Some(Cent { val: 10_000 }),
+        used: Some(Cent { val: 9_000 }),
+        ..empty_billing_config()
+    };
+    assert_eq!(credit_balance_from_config(c).usage_pct, 42.0);
+}
+#[test]
+fn credit_balance_forwards_is_unified_billing_user() {
+    let c = BillingConfig {
+        is_unified_billing_user: Some(true),
+        ..empty_billing_config()
+    };
+    assert_eq!(
+            credit_balance_from_config(c).is_unified_billing_user,
+            Some(true)
+        );
+    assert_eq!(
+            credit_balance_from_config(empty_billing_config()).is_unified_billing_user,
+            None
+        );
+}
+#[test]
+fn credit_balance_falls_back_to_limit_used_when_percent_absent() {
+    let c = BillingConfig {
+        monthly_limit: Some(Cent { val: 10_000 }),
+        used: Some(Cent { val: 2_500 }),
+        ..empty_billing_config()
+    };
+    assert_eq!(credit_balance_from_config(c).usage_pct, 25.0);
+}
+/// Match production: RFC 3339 renders as the user's local wall-clock (no zone label).
+fn expected_period_end_display(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .expect("test fixture is valid RFC 3339")
+        .with_timezone(&chrono::Local)
+        .format("%B %-d, %H:%M")
+        .to_string()
+}
+#[test]
+fn credit_balance_prefers_current_period_end_over_billing_period_end() {
+    let end = "2026-06-08T20:00:00Z";
+    let c = BillingConfig {
+        credit_usage_percent: Some(10.0),
+        current_period: Some(UsagePeriod {
+            period_type: Some("USAGE_PERIOD_TYPE_WEEKLY".into()),
+            start: Some("2026-06-01T00:00:00Z".into()),
+            end: Some(end.into()),
+        }),
+        billing_period_end: Some("2026-07-01T20:00:00Z".into()),
+        ..empty_billing_config()
+    };
+    assert_eq!(
+            credit_balance_from_config(c).period_end_display.as_deref(),
+            Some(expected_period_end_display(end).as_str())
+        );
+}
+#[test]
+fn credit_balance_period_end_uses_local_timezone() {
+    let winter = "2026-01-15T20:00:00Z";
+    let summer = "2026-07-15T20:00:00Z";
+    let winter_cfg = BillingConfig {
+        billing_period_end: Some(winter.into()),
+        ..empty_billing_config()
+    };
+    let summer_cfg = BillingConfig {
+        billing_period_end: Some(summer.into()),
+        ..empty_billing_config()
+    };
+    assert_eq!(
+            credit_balance_from_config(winter_cfg)
+                .period_end_display
+                .as_deref(),
+            Some(expected_period_end_display(winter).as_str())
+        );
+    assert_eq!(
+            credit_balance_from_config(summer_cfg)
+                .period_end_display
+                .as_deref(),
+            Some(expected_period_end_display(summer).as_str())
+        );
+    assert_ne!(
+            expected_period_end_display(winter),
+            expected_period_end_display(summer)
+        );
+}
+#[test]
+fn credit_balance_falls_back_to_billing_period_end() {
+    let end = "2026-07-01T20:00:00Z";
+    let c = BillingConfig {
+        billing_period_end: Some(end.into()),
+        ..empty_billing_config()
+    };
+    assert_eq!(
+            credit_balance_from_config(c).period_end_display.as_deref(),
+            Some(expected_period_end_display(end).as_str())
+        );
+}
+#[test]
+fn credit_balance_period_end_falls_back_when_current_period_has_no_end() {
+    let end = "2026-07-01T20:00:00Z";
+    let c = BillingConfig {
+        current_period: Some(UsagePeriod {
+            period_type: None,
+            start: Some("2026-06-01T00:00:00Z".into()),
+            end: None,
+        }),
+        billing_period_end: Some(end.into()),
+        ..empty_billing_config()
+    };
+    assert_eq!(
+            credit_balance_from_config(c).period_end_display.as_deref(),
+            Some(expected_period_end_display(end).as_str())
+        );
+}
+#[test]
+fn credit_balance_period_end_none_when_unavailable() {
+    assert!(
+            credit_balance_from_config(empty_billing_config())
+                .period_end_display
+                .is_none()
+        );
+}
+#[test]
+fn credit_balance_clamps_new_percent_above_100() {
+    let c = BillingConfig {
+        credit_usage_percent: Some(150.0),
+        ..empty_billing_config()
+    };
+    assert_eq!(credit_balance_from_config(c).usage_pct, 100.0);
+}
+#[test]
+fn credit_balance_clamps_legacy_used_above_limit() {
+    let c = BillingConfig {
+        monthly_limit: Some(Cent { val: 1_000 }),
+        used: Some(Cent { val: 2_500 }),
+        ..empty_billing_config()
+    };
+    assert_eq!(credit_balance_from_config(c).usage_pct, 100.0);
+}
+#[test]
+fn credit_balance_effective_equals_usage_when_no_on_demand() {
+    let c = BillingConfig {
+        credit_usage_percent: Some(40.0),
+        ..empty_billing_config()
+    };
+    let bal = credit_balance_from_config(c);
+    assert!(!bal.pay_as_you_go);
+    assert_eq!(bal.on_demand_cap_cents, None);
+    assert_eq!(bal.effective_usage_pct, 40.0);
+}
+#[test]
+fn credit_balance_effective_uses_on_demand_ratio_when_included_exhausted() {
+    let c = BillingConfig {
+        credit_usage_percent: Some(100.0),
+        on_demand_cap: Some(Cent { val: 5_000 }),
+        on_demand_used: Some(Cent { val: 1_000 }),
+        ..empty_billing_config()
+    };
+    let bal = credit_balance_from_config(c);
+    assert!(bal.pay_as_you_go);
+    assert_eq!(bal.usage_pct, 100.0);
+    assert_eq!(bal.effective_usage_pct, 20.0);
+    assert_eq!(bal.on_demand_cap_cents, Some(5_000));
+    assert_eq!(bal.on_demand_used_cents, Some(1_000));
+}
+#[test]
+fn parse_auto_topup_present_rule_resolves() {
+    let v = serde_json::json!({
+            "rule": {"enabled": true, "topupAmount": {"val": 2000}, "maxAmountPerMonth": {"val": 10000}}
+        });
+    match parse_auto_topup_response(&v) {
+        crate::views::credit_bar::AutoTopupFetch::Resolved(at) => {
+            assert!(at.enabled);
+            assert_eq!(at.topup_amount_cents, Some(2000));
+            assert_eq!(at.max_amount_cents, Some(10000));
+        }
+        other => panic!("expected Resolved, got {other:?}"),
+    }
+}
+#[test]
+fn parse_auto_topup_empty_body_resolves_to_disabled() {
+    for v in [serde_json::json!({}), serde_json::json!({ "rule": null })] {
+        match parse_auto_topup_response(&v) {
+            crate::views::credit_bar::AutoTopupFetch::Resolved(at) => {
+                assert!(!at.enabled);
+            }
+            other => panic!("expected Resolved(disabled), got {other:?}"),
+        }
+    }
+}
+#[test]
+fn parse_auto_topup_rule_without_enabled_is_disabled() {
+    let v = serde_json::json!({ "rule": {"topupAmount": {"val": 500}} });
+    match parse_auto_topup_response(&v) {
+        crate::views::credit_bar::AutoTopupFetch::Resolved(at) => {
+            assert!(!at.enabled);
+            assert_eq!(at.topup_amount_cents, Some(500));
+        }
+        other => panic!("expected Resolved(disabled), got {other:?}"),
+    }
+}
+#[test]
+fn parse_auto_topup_malformed_body_is_unchanged() {
+    for v in [serde_json::json!(null), serde_json::json!(42)] {
+        match parse_auto_topup_response(&v) {
+            crate::views::credit_bar::AutoTopupFetch::Unchanged => {}
+            other => panic!("expected Unchanged, got {other:?}"),
+        }
+    }
+}
+#[test]
+fn credit_balance_effective_tracks_included_for_new_shape_under_100() {
+    let c = BillingConfig {
+        credit_usage_percent: Some(95.0),
+        on_demand_cap: Some(Cent { val: 5_000 }),
+        on_demand_used: Some(Cent { val: 0 }),
+        ..empty_billing_config()
+    };
+    let bal = credit_balance_from_config(c);
+    assert!(bal.pay_as_you_go);
+    assert_eq!(bal.effective_usage_pct, 95.0);
+}
+#[test]
+fn credit_balance_effective_blends_budget_for_legacy_shape_under_100() {
+    let c = BillingConfig {
+        monthly_limit: Some(Cent { val: 10_000 }),
+        used: Some(Cent { val: 5_000 }),
+        on_demand_cap: Some(Cent { val: 10_000 }),
+        on_demand_used: Some(Cent { val: 0 }),
+        ..empty_billing_config()
+    };
+    let bal = credit_balance_from_config(c);
+    assert!(bal.pay_as_you_go);
+    assert_eq!(bal.usage_pct, 50.0);
+    assert_eq!(bal.effective_usage_pct, 25.0);
+}
 #[test]
 fn parse_worktree_restore_payload_full() {
     use xai_grok_workspace::session::git::RestoreDegree;
@@ -510,6 +596,26 @@ fn parse_worktree_restore_payload_rejects_unknown_degree() {
         });
     let (_, _, degree) = parse_worktree_restore_payload(&value);
     assert!(degree.is_none(), "typo must produce None");
+}
+#[test]
+fn parse_worktree_strategy_summary_grove_success_and_empty() {
+    let value = serde_json::json!({
+            "strategy": {
+                "requestedStrategy": "grove",
+                "resolvedStrategy": "grove-fuse",
+                "transport": "fuse",
+                "sourceMode": "local",
+                "daemonCapabilityClass": "current"
+            }
+        });
+    assert_eq!(
+            parse_worktree_strategy_summary(&value).as_deref(),
+            Some("Requested Grove; using `grove-fuse` (local objects).")
+        );
+    assert!(parse_worktree_strategy_summary(&serde_json::json!({})).is_none());
+    assert!(
+            parse_worktree_strategy_summary(&serde_json::json!({ "strategy": {} })).is_none()
+        );
 }
 #[test]
 fn parse_session_load_restore_meta_full_shape() {
@@ -1352,6 +1458,7 @@ async fn fetch_session_list_pushes_query_and_echoes_seq() {
     use crate::views::session_picker_surface::SessionPickerHost;
     let mut tasks = run(Effect::FetchSessionList {
         host: SessionPickerHost::AgentModal,
+        cwd_override: None,
         generation: 41,
         query: Some("hit".into()),
         seq: 7,
@@ -1382,6 +1489,7 @@ async fn fetch_session_list_pushes_query_and_echoes_seq() {
     }
     let mut tasks = run(Effect::FetchSessionList {
         host: SessionPickerHost::Welcome,
+        cwd_override: None,
         generation: 42,
         query: None,
         seq: 8,
@@ -1400,7 +1508,24 @@ async fn fetch_session_list_pushes_query_and_echoes_seq() {
         other => panic!("expected SessionListLoaded, got {other:?}"),
     }
     let mut tasks = run(Effect::FetchSessionList {
+        host: SessionPickerHost::Dashboard,
+        cwd_override: Some("/dashboard-cwd".into()),
+        generation: 44,
+        query: None,
+        seq: 10,
+        kind_filter: Some(vec!["build".into()]),
+        headless_policy: Default::default(),
+    });
+    assert!(matches!(
+            tasks.join_next().await.expect("task").expect("no panic"),
+            TaskResult::SessionListLoaded {
+                host: SessionPickerHost::Dashboard,
+                ..
+            }
+        ));
+    let mut tasks = run(Effect::FetchSessionList {
         host: SessionPickerHost::Welcome,
+        cwd_override: None,
         generation: 43,
         query: Some("fail-me".into()),
         seq: 9,
@@ -1422,13 +1547,16 @@ async fn fetch_session_list_pushes_query_and_echoes_seq() {
         other => panic!("expected SessionListFailed, got {other:?}"),
     }
     let captured = captured.lock().unwrap();
-    assert_eq!(captured.len(), 3);
+    assert_eq!(captured.len(), 4);
     assert_eq!(captured[0]["query"], "hit");
     assert_eq!(captured[0]["limit"], 30);
     assert_eq!(captured[0]["headless"], "exclude");
     assert_eq!(captured[1]["headless"], "exclude");
     assert_eq!(captured[2]["headless"], "exclude");
-    assert!(captured[0]["cwd"].is_string());
+    assert_eq!(captured[2]["limit"], 100);
+    assert_eq!(captured[2]["cwd"], "/dashboard-cwd");
+    assert_eq!(captured[3]["headless"], "exclude");
+    assert_eq!(captured[0]["cwd"], ".");
     assert!(
             captured[0].get("allowRelax").is_none(),
             "search fetches must not opt into relaxing: {:?}",
@@ -1443,7 +1571,7 @@ async fn fetch_session_list_pushes_query_and_echoes_seq() {
             captured[1]["allowRelax"], true,
             "browse fetches opt into relaxing"
         );
-    assert_eq!(captured[2]["query"], "fail-me");
+    assert_eq!(captured[3]["query"], "fail-me");
 }
 #[tokio::test]
 async fn fetch_dashboard_sessions_explicitly_excludes_headless() {
@@ -1511,6 +1639,7 @@ async fn fetch_session_list_sends_kind_facet_filter() {
     execute(
         Effect::FetchSessionList {
             host: crate::views::session_picker_surface::SessionPickerHost::Welcome,
+            cwd_override: None,
             generation: 1,
             query: None,
             seq: 1,
@@ -1810,9 +1939,7 @@ fn subagents_without_plan_produces_no_profile() {
     assert_eq!(flags.agent_profile(), None);
 }
 /// Neutralize `GROK_AGENT` for the profile-matrix tests below.
-/// Agent-driven dev shells export it, which flips `to_meta` into the defer-to-shell escape hatch and drops `agentProfile`.
 /// The tests would then assert the wrong branch.
-/// Empty string counts as unset (`!s.trim().is_empty()`).
 /// Callers must be `#[serial_test::serial(GROK_AGENT)]` (process-global env).
 fn without_grok_agent() -> crate::test_util::EnvVarGuard {
     crate::test_util::EnvVarGuard::set("GROK_AGENT", "")
@@ -2322,7 +2449,7 @@ fn format_session_info_session_auth_ignores_api_key_env() {
     assert!(!text.contains("Manage account and credits"), "{text}");
     assert!(!text.contains("Also present: XAI_API_KEY"), "{text}");
     assert!(!text.contains("console.x.ai"), "{text}");
-    assert!(!text.contains("thanh login"), "{text}");
+    assert!(!text.contains("grok login"), "{text}");
 }
 #[test]
 fn format_session_info_api_key_without_env() {
@@ -2332,7 +2459,7 @@ fn format_session_info_api_key_without_env() {
     assert!(!text.contains("XAI_API_KEY"), "{text}");
     assert!(!text.contains("Manage account and credits"), "{text}");
     assert!(
-            text.contains("Run `thanh login` to use your SuperGrok subscription instead."),
+            text.contains("Run `grok login` to use your SuperGrok subscription instead."),
             "{text}"
         );
     assert!(!text.contains("grok.com"), "{text}");
@@ -2344,7 +2471,7 @@ fn format_session_info_api_key_auth_suggests_grok_login() {
     assert!(text.contains("Auth method: API key (XAI_API_KEY)"), "{text}");
     assert!(!text.contains("Manage account and credits"), "{text}");
     assert!(
-            text.contains("Run `thanh login` to use your SuperGrok subscription instead."),
+            text.contains("Run `grok login` to use your SuperGrok subscription instead."),
             "{text}"
         );
     assert!(!text.contains("Also present: XAI_API_KEY"), "{text}");
@@ -2359,7 +2486,7 @@ fn format_session_info_session_only_shows_oauth() {
     assert!(!text.contains("Manage account and credits"), "{text}");
     assert!(!text.contains("Also present: XAI_API_KEY"), "{text}");
     assert!(!text.contains("console.x.ai"), "{text}");
-    assert!(!text.contains("thanh login"), "{text}");
+    assert!(!text.contains("grok login"), "{text}");
 }
 #[test]
 fn format_session_info_shows_conversation_id_when_present() {
@@ -2472,14 +2599,14 @@ fn sanitize_user_error_rewrites_shared_service_names() {
 }
 #[test]
 fn compact_error_message_empty_data_renders_terse_and_no_data_uses_display() {
-    let empty = compact_error(&acp::Error::internal_error().data(""));
+    let empty = compact_error_message(&acp::Error::internal_error().data(""));
     assert_eq!(empty, "");
     assert_eq!(
             crate::scrollback::blocks::SessionEvent::CompactionFailed { error: empty }.message(),
             "Compaction failed."
         );
     assert_eq!(
-            compact_error(&acp::Error::internal_error()),
+            compact_error_message(&acp::Error::internal_error()),
             "Internal error"
         );
 }
@@ -2527,6 +2654,7 @@ fn sanitize_user_error_collapses_disk_full() {
 /// Sanitizing the composed message would collapse a disk-full chain whole and erase the title hint for a deferred local-miss target.
 #[test]
 fn worktree_resume_failure_sanitizes_detail_before_hint() {
+    use crate::app::session_title_resolve::worktree_resume_failure_message;
     let raw = "failed to copy index: No space left on device (os error 28)";
     let msg = worktree_resume_failure_message(
         Some("typo title"),
@@ -2542,48 +2670,6 @@ fn worktree_resume_failure_sanitizes_detail_before_hint() {
     let id_msg = worktree_resume_failure_message(None, &sanitize_user_error(raw));
     assert_eq!(id_msg, "couldn't resume worktree session: No space left on device");
 }
-/// A resume-picker entry converts to a dormant dashboard roster row (the non-leader idle source).
-/// It preserves title, cwd, model, worktree flag, origin, and last-change time.
-#[test]
-fn session_picker_entry_maps_to_dormant_roster_row() {
-    use crate::app::app_view::SessionPickerEntry;
-    use crate::app::roster::RosterActivity;
-    let updated = chrono::Utc::now();
-    let entry = SessionPickerEntry {
-        id: "sess-1".to_string(),
-        summary: "Wire up dashboard".to_string(),
-        updated_at: updated,
-        created_at: updated,
-        cwd: "/repo/app".to_string(),
-        hostname: Some("box".to_string()),
-        source: "local".to_string(),
-        model_id: Some("grok-4".to_string()),
-        num_messages: 3,
-        last_active_at: Some(updated),
-        branch: None,
-        repo_name: "repo-app".to_string(),
-        worktree_label: Some("wt".to_string()),
-        last_turn_summary: Some("Fixed the parser".to_string()),
-        last_recap: None,
-        session_kind: None,
-        card_detail: None,
-    };
-    let roster = session_picker_entry_to_roster(&entry);
-    assert_eq!(roster.session_id, "sess-1");
-    assert_eq!(roster.title.as_deref(), Some("Wire up dashboard"));
-    assert_eq!(roster.cwd, "/repo/app");
-    assert!(roster.is_worktree, "worktree_label present → is_worktree");
-    assert_eq!(roster.model_id.as_deref(), Some("grok-4"));
-    assert_eq!(roster.activity, RosterActivity::Dormant);
-    assert_eq!(
-            roster.last_turn_summary.as_deref(),
-            Some("Fixed the parser")
-        );
-    assert!(!roster.resident);
-    assert_eq!(roster.last_change_unix_ms, updated.timestamp_millis());
-    assert_eq!(roster.origin.kind, "local");
-    assert_eq!(roster.origin.host.as_deref(), Some("box"));
-}
 #[test]
 fn rewind_execute_params_sends_conversation_only_with_force() {
     let params = rewind_execute_params("sess-1", 3);
@@ -2592,4 +2678,34 @@ fn rewind_execute_params_sends_conversation_only_with_force() {
     assert_eq!(params["force"], true);
     assert_eq!(params["mode"], REWIND_MODE_WIRE);
     assert_eq!(params["mode"], "conversation_only");
+}
+/// Exact wire bytes of the one-shot request: the shell's `upload_trace_offer_gate_allows`
+/// relaxation keys off this exact snake_case value, so the shape is a cross-crate contract.
+#[test]
+fn upload_trace_request_with_intent_exact_wire_shape() {
+    let request = UploadTraceRequest {
+        session_id: "sess-1".to_string(),
+        intent: Some(
+            crate::views::feedback_modal::FeedbackTraceUploadIntent::SendThisSession,
+        ),
+        trace_upload_token: Some("grant-1".to_string()),
+    };
+    assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"sessionId":"sess-1","intent":"send_this_session","traceUploadToken":"grant-1"}"#
+        );
+}
+/// A legacy trace-card upload must stay byte-identical to the pre-intent request
+/// (no `"intent":null`), so an older shell's strict parsing cannot regress.
+#[test]
+fn upload_trace_request_without_intent_keeps_legacy_wire_shape() {
+    let request = UploadTraceRequest {
+        session_id: "sess-1".to_string(),
+        intent: None,
+        trace_upload_token: None,
+    };
+    assert_eq!(
+            serde_json::to_string(&request).unwrap(),
+            r#"{"sessionId":"sess-1"}"#
+        );
 }

@@ -451,6 +451,72 @@
     }
 
     #[test]
+    fn wake_terminal_drains_parked_follow_up() {
+        use crate::app::actions::Effect;
+
+        let mut app = make_app_with_agent("sess-wake");
+        let _ = handle(
+            make_viewer_chunk_with_turn_start("sess-wake", "task-completed-bg1", 5_000),
+            &mut app,
+        );
+        app.agents
+            .get_mut(&AgentId(0))
+            .unwrap()
+            .session
+            .enqueue_prompt("follow-up after wake".into());
+
+        let _ = handle_ext_notification(
+            &xai_wake_turn_completed_notif("sess-wake", "task-completed-bg1", None),
+            &mut app,
+        );
+        assert!(
+            app.pending_effects
+                .iter()
+                .any(|e| matches!(e, Effect::SendPrompt { text, .. } if text == "follow-up after wake")),
+            "wake terminal must drain the parked follow-up; effects = {:?}",
+            app.pending_effects
+        );
+        assert!(
+            app.agents[&AgentId(0)].session.pending_prompts.is_empty(),
+            "the parked row must leave the local queue"
+        );
+    }
+
+    #[test]
+    fn wake_terminal_does_not_drain_while_reconnect_pending() {
+        use crate::app::actions::Effect;
+
+        let mut app = make_app_with_agent("sess-wake");
+        let _ = handle(
+            make_viewer_chunk_with_turn_start("sess-wake", "task-completed-bg1", 5_000),
+            &mut app,
+        );
+        app.agents
+            .get_mut(&AgentId(0))
+            .unwrap()
+            .session
+            .enqueue_prompt("follow-up after wake".into());
+        app.reconnect_pending = true;
+
+        let _ = handle_ext_notification(
+            &xai_wake_turn_completed_notif("sess-wake", "task-completed-bg1", None),
+            &mut app,
+        );
+        assert!(
+            !app.pending_effects
+                .iter()
+                .any(|e| matches!(e, Effect::SendPrompt { .. })),
+            "reconnect must hold the parked follow-up; effects = {:?}",
+            app.pending_effects
+        );
+        assert_eq!(
+            app.agents[&AgentId(0)].session.pending_prompts.len(),
+            1,
+            "the parked row must stay queued until reconnect drains"
+        );
+    }
+
+    #[test]
     fn wake_terminal_finishes_in_flight_streamed_entry() {
         // The terminal is a wake's ONLY flush site (wakes skip PromptResponse).
         let mut app = make_app_with_agent("sess-wake");
@@ -1665,7 +1731,6 @@
     }
 
     /// The core reattach-finalization: a `TurnCompleted` seen during a load's replay window records its prompt id.
-    /// (The running turn isn't adopted yet.)
     /// The post-replay `SessionLoaded` adoption then SKIPS that same id.
     /// A viewer that re-attached after the turn ended does not re-strand on "Waiting…".
     #[test]
@@ -1699,7 +1764,6 @@
                 restore_summary: None,
                 restore_degree: None,
                 running_prompt_id: Some("p-run".to_string()),
-                scheduler_background_loops: None,
             }),
             &mut app,
         );
@@ -1715,11 +1779,9 @@
         );
     }
 
-    /// Regression pin for a BACKGROUND-tab driver (`is_active == false`).
     /// Arming the lost-RPC reconcile from a live `TurnCompleted` must STILL report a change.
     /// Otherwise `event_loop` skips `schedule_tick` and `reconcile_overdue_turn_ends` never fires, stranding the turn on "Waiting…".
     /// The reconcile-arm return must NOT be gated on `is_active`.
-    /// (This test fails if the live arm routes the arm through `changed && is_active`.)
     #[test]
     fn background_driver_live_turn_completed_arms_reconcile_and_reports_change() {
         let mut app = make_app_with_agent("sess-bg");
@@ -1785,7 +1847,7 @@
                 attempts: 1,
                 confirmed: false,
                 cancel_subagents: true,
-                trigger: crate::app::actions::CancelTrigger::Esc,
+                trigger: crate::app::actions::CancelTrigger::DashboardStop,
             });
         app.agents.get_mut(&id).unwrap().begin_session_reload(1);
         let agent = &app.agents[&id];

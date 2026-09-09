@@ -24,6 +24,7 @@ pub enum Phase {
     HooksStop,
     Memory,
     MemorySave,
+    /// Intentionally unpopulated; retained because downstream metrics consumers still read this field.
     MemoryConsolidate,
     Feedback,
     FeedbackDrain,

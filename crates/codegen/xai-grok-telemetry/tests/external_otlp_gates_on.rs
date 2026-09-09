@@ -22,6 +22,10 @@ const SECRET_MODEL: &str = "grok-4-sk-LEAKmodel1234567890abcd";
 // Benign markers: with the gate ON these MUST appear on the wire (proving the gated field is actually exported, not just that the scrub ran)
 const PROMPT_MARK: &str = "promptbodymarker";
 const PARAM_MARK: &str = "parammarker";
+const LONG_CMD_MARK: &str = "longcmdmarker";
+const DENY_CMD_MARK: &str = "denycmdmarker";
+const RESPONSE_MARK: &str = "assistantresponsemarker";
+const OAUTH_EMAIL: &str = "otel.parity.on@example.com";
 const CLIENT_VERSION: &str = "9.9.9-cv";
 
 #[test]
@@ -35,7 +39,10 @@ fn external_stream_gates_on_end_to_end() {
             "OTEL_LOGS_EXPORTER" | "OTEL_METRICS_EXPORTER" => Some("otlp".into()),
             "OTEL_EXPORTER_OTLP_ENDPOINT" => Some(endpoint.clone()),
             // Both content gates ON.
-            "OTEL_LOG_USER_PROMPTS" | "OTEL_LOG_TOOL_DETAILS" => Some("1".into()),
+            "OTEL_LOG_USER_PROMPTS"
+            | "OTEL_LOG_TOOL_DETAILS"
+            | "OTEL_LOG_ASSISTANT_RESPONSES"
+            | "OTEL_LOG_TOOL_CONTENT" => Some("1".into()),
             "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE" => Some("cumulative".into()),
             "OTEL_METRICS_INCLUDE_VERSION" => Some("1".into()),
             "OTEL_METRIC_EXPORT_INTERVAL" => Some("200".into()),
@@ -46,6 +53,11 @@ fn external_stream_gates_on_end_to_end() {
     )
     .expect("double opt-in must resolve");
     assert!(cfg.gates.log_user_prompts && cfg.gates.log_tool_details);
+    assert!(cfg.gates.log_tool_content, "content gate must be on");
+    assert!(
+        cfg.gates.log_assistant_responses,
+        "assistant gate must be on in this binary"
+    );
     cfg.client = external::config::ExternalClientInfo {
         service_version: "0.0.0-test".into(),
         client_version: CLIENT_VERSION.into(),
@@ -58,6 +70,7 @@ fn external_stream_gates_on_end_to_end() {
     // Identity attrs (plain ids, never tokens) ride every record and metric
     external::set_identity(IdentityAttrs {
         user_id: Some("user-x".into()),
+        email: Some(OAUTH_EMAIL.into()),
         organization_id: Some("org-acme".into()),
         team_id: Some("team-7".into()),
         deployment_id: Some("deploy-eu".into()),
@@ -89,6 +102,7 @@ fn external_stream_gates_on_end_to_end() {
         client_identifier: None,
         screen_mode: None,
         prompt_text: Some(format!("refactor {PROMPT_MARK} with key {SECRET_KEY} now")),
+        command_name: Some("compact".into()),
     });
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::ModelResponseReceived {
         model_id: SECRET_MODEL.into(),
@@ -107,12 +121,61 @@ fn external_stream_gates_on_end_to_end() {
         hook_rewrote: false,
         duration_ms: 12,
         tool_result_size_bytes: None,
+        model_id: "grok".into(),
         file_path: Some("/tmp/projectdir/config.toml".into()),
         parameters: Some(serde_json::json!({
             "marker": PARAM_MARK,
             "token": SECRET_KEY,
             "deep": {"a": {"b": "c"}},
         })),
+        tool_use_id: Some("call-github".into()),
+        tool_output: Some(format!("ok {PARAM_MARK}")),
+        error_message: None,
+    });
+    let long_command = format!("{LONG_CMD_MARK}{}", "x".repeat(600));
+    xai_grok_telemetry::log_event(xai_grok_telemetry::events::ToolCallCompleted {
+        tool_name: "run_terminal_cmd".into(),
+        outcome: xai_grok_session_events::types::ToolOutcome::Success,
+        hook_rewrote: false,
+        duration_ms: 8,
+        tool_result_size_bytes: None,
+        model_id: "grok".into(),
+        file_path: None,
+        parameters: Some(serde_json::json!({ "command": long_command })),
+        tool_use_id: Some("call-bash-long".into()),
+        tool_output: None,
+        error_message: None,
+    });
+    xai_grok_telemetry::log_event(xai_grok_telemetry::events::PermissionDecisionRecord {
+        payload: xai_grok_telemetry::events::PermissionDecisionPayload {
+            tool_name: "run_terminal_cmd".into(),
+            access_kind: xai_grok_telemetry::events::AccessKind::Bash,
+            decision: xai_grok_telemetry::events::PermissionOutcome::Deny,
+            wait_ms: 10,
+            permission_mode: xai_grok_telemetry::enums::PermissionMode::Ask,
+            source: Some("user_reject".into()),
+            subagent_session_id: None,
+            subagent_type: None,
+            manager_prompt_attempted: None,
+            prompt_outcome: None,
+            prompt_outcome_detail: None,
+            remember_tool_approvals: None,
+            decision_reason: None,
+            classifier_source: None,
+            classifier_verdict: None,
+            security_findings: None,
+            classifier_latency_ms: None,
+            auto_denials_consecutive: None,
+            auto_denials_total: None,
+        },
+        tool_input: xai_grok_telemetry::events::ExternalToolInput {
+            parameters: Some(serde_json::json!({ "command": DENY_CMD_MARK })),
+            tool_use_id: Some("call-deny-1".into()),
+        },
+    });
+    xai_grok_telemetry::external::emit(&xai_grok_telemetry::events::AssistantResponse {
+        response_length: RESPONSE_MARK.len(),
+        response_text: Some(RESPONSE_MARK.into()),
     });
 
     external::flush();
@@ -156,6 +219,10 @@ fn external_stream_gates_on_end_to_end() {
         Some("user-x")
     );
     assert_eq!(
+        harness.attrs.get("user.email").and_then(|v| v.as_str()),
+        Some(OAUTH_EMAIL)
+    );
+    assert_eq!(
         harness
             .attrs
             .get("organization.id")
@@ -186,6 +253,10 @@ fn external_stream_gates_on_end_to_end() {
         !prompt_text.contains(SECRET_KEY),
         "secret survived in prompt: {prompt_text:?}"
     );
+    assert_eq!(
+        prompt.attrs.get("command_name").and_then(|v| v.as_str()),
+        Some("compact")
+    );
 
     // ── Tool details gate ON: verbatim name + gated path/params, scrubbed ─
     let tool = col::find_event(&collected, "grok_code.tool_result").expect("tool_result present");
@@ -193,6 +264,14 @@ fn external_stream_gates_on_end_to_end() {
         tool.attrs.get("tool_name").and_then(|v| v.as_str()),
         Some("github__create_issue"),
         "details gate exposes the verbatim tool name"
+    );
+    assert_eq!(
+        tool.attrs.get("mcp_tool.name").and_then(|v| v.as_str()),
+        Some("create_issue")
+    );
+    assert_eq!(
+        tool.attrs.get("mcp_server.name").and_then(|v| v.as_str()),
+        Some("github")
     );
     assert_eq!(
         tool.attrs.get("file_extension").and_then(|v| v.as_str()),
@@ -216,6 +295,95 @@ fn external_stream_gates_on_end_to_end() {
         !params.contains(SECRET_KEY),
         "secret survived in params: {params:?}"
     );
+    let tool_input = tool
+        .attrs
+        .get("tool_input")
+        .and_then(|v| v.as_str())
+        .expect("tool_input present under content gate");
+    assert!(
+        tool_input.contains(PARAM_MARK),
+        "full tool_input must export: {tool_input:?}"
+    );
+    let expected_output = format!("ok {PARAM_MARK}");
+    assert_eq!(
+        tool.attrs.get("tool_output").and_then(|v| v.as_str()),
+        Some(expected_output.as_str())
+    );
+
+    let bash = col::log_records(&collected)
+        .into_iter()
+        .find(|r| {
+            r.event_name == "grok_code.tool_result"
+                && r.attrs.get("tool_use_id").and_then(|v| v.as_str()) == Some("call-bash-long")
+        })
+        .expect("long-command tool_result");
+    let full_command = bash
+        .attrs
+        .get("full_command")
+        .and_then(|v| v.as_str())
+        .expect("full_command under content gate");
+    assert!(
+        full_command.starts_with(LONG_CMD_MARK),
+        "full_command must keep the marker: {full_command:?}"
+    );
+    assert_eq!(
+        full_command.len(),
+        LONG_CMD_MARK.len() + 600,
+        "full_command must not 512→128 collapse"
+    );
+    assert!(
+        !full_command.contains("…[truncated]"),
+        "full_command must not collapse: {full_command:?}"
+    );
+
+    let decision = col::find_event(&collected, "grok_code.tool_decision").expect("tool_decision");
+    assert_eq!(
+        decision.attrs.get("decision").and_then(|v| v.as_str()),
+        Some("deny")
+    );
+    assert_eq!(
+        decision.attrs.get("tool_use_id").and_then(|v| v.as_str()),
+        Some("call-deny-1")
+    );
+    let deny_params = decision
+        .attrs
+        .get("tool_parameters")
+        .and_then(|v| v.as_str())
+        .expect("deny tool_decision exports params under details gate");
+    assert!(
+        deny_params.contains(DENY_CMD_MARK),
+        "deny params must export: {deny_params:?}"
+    );
+    assert_eq!(
+        decision.attrs.get("full_command").and_then(|v| v.as_str()),
+        Some(DENY_CMD_MARK)
+    );
+
+    let assistant = col::find_event(&collected, "grok_code.assistant_response")
+        .expect("assistant_response present");
+    assert!(!assistant.has_body, "no record may carry a body");
+    let response = assistant
+        .attrs
+        .get("response")
+        .and_then(|v| v.as_str())
+        .expect("gated response present");
+    assert!(
+        response.contains(RESPONSE_MARK),
+        "gated response must export: {response:?}"
+    );
+    let response_length = assistant
+        .attrs
+        .get("response_length")
+        .and_then(|v| v.as_i64())
+        .or_else(|| {
+            assistant
+                .attrs
+                .get("response_length")
+                .and_then(|v| v.as_str())
+                .and_then(|s| s.parse().ok())
+        })
+        .expect("response_length always-on");
+    assert_eq!(response_length as usize, RESPONSE_MARK.len());
 
     // ── Metrics: cumulative temporality + app.version + scrubbed model ──
     let tokens = col::find_metric(&collected, "grok_code.token.usage");
@@ -234,6 +402,10 @@ fn external_stream_gates_on_end_to_end() {
         assert_eq!(
             p.attrs.get("user.id").and_then(|v| v.as_str()),
             Some("user-x")
+        );
+        assert_eq!(
+            p.attrs.get("user.email").and_then(|v| v.as_str()),
+            Some(OAUTH_EMAIL)
         );
         let model = p.attrs.get("model").and_then(|v| v.as_str()).unwrap_or("");
         assert!(
@@ -272,6 +444,7 @@ fn external_stream_gates_on_end_to_end() {
         client_identifier: None,
         screen_mode: None,
         prompt_text: Some("post-kill".into()),
+        command_name: None,
     });
     std::thread::sleep(std::time::Duration::from_millis(400));
     assert_eq!(

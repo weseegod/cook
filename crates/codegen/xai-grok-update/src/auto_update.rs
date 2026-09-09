@@ -56,12 +56,9 @@ fn reinstall_hint(installer: &str, channel: &str) -> String {
     }
 }
 
-/// True when this process is an x86_64 build translated by Rosetta on an Apple Silicon host.
-/// `hw.optional.arm64` is 1 on Apple Silicon, including from a translated process, where the compile-time arch says x86_64.
-///
-/// Read in-process via `sysctlbyname`: no spawn, no stdout parse, and no dependence on the `sysctl` binary being on PATH.
-/// A missing key (genuine Intel Mac) or any error means not Apple Silicon: the probe fails open to the compile-time arch.
-/// Cached: fixed host property, read from async paths via [`detect_platform`].
+/// True when this process is an x86_64 build translated by Rosetta on an Apple Silicon host. `hw.optional.arm64` is 1 on
+/// Apple Silicon, including from a translated process, where the compile-time arch says x86_64. A missing key (genuine
+/// Intel Mac) or any error means not Apple Silicon: the probe fails open to the compile-time arch.
 #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
 fn running_under_rosetta_on_apple_silicon() -> bool {
     static ROSETTA: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -321,6 +318,8 @@ async fn fetch_update_plan(
     update_config: &UpdateConfig,
     policy: &config::VersionPolicy,
 ) -> Result<UpdatePlan> {
+    let _check_span =
+        xai_grok_telemetry::region!("update.check", xai_grok_telemetry::region::Parent::Inherit);
     let latest = fetch_latest_version(installer, update_config).await?;
     Ok(plan_for(policy, latest))
 }
@@ -371,6 +370,10 @@ pub struct EnsureLatestOutcome {
 /// There the running process's version decides the download, and relaunch happens only after this pass installed something.
 /// On Windows a busy leader therefore still re-downloads hourly; only the symlink layout can prove the disk is current without exec'ing the binary.
 pub async fn ensure_latest_on_disk(update_config: &UpdateConfig) -> Result<EnsureLatestOutcome> {
+    let _ensure_span = xai_grok_telemetry::region!(
+        "update.ensure_latest",
+        xai_grok_telemetry::region::Parent::Inherit
+    );
     let mut outcome = EnsureLatestOutcome {
         installed: None,
         relaunch_needed: false,
@@ -516,11 +519,9 @@ fn needs_update(current: &str, target: &str, channel: &str, allow_downgrade: boo
     })
 }
 
-/// Returns `true` for installer backends whose version source is authoritative (managed by xAI directly).
-/// For those a pointer rollback is intentional and should trigger a client downgrade.
-/// Returns `false` for backends like npm where stale corporate registries/proxies can return arbitrarily old versions.
-///
-/// Users who installed via `install.sh` are classified as `"internal"` by `get_installer()`, so they also get rollback support.
+/// Returns `true` for installer backends whose version source is authoritative (managed by xAI directly). Returns `false`
+/// for backends like npm where stale corporate registries/proxies can return arbitrarily old versions. Users who
+/// installed via `install.sh` are classified as `"internal"` by `get_installer()`, so they also get rollback support.
 fn installer_allows_downgrade(installer: &str) -> bool {
     match installer {
         "internal" | "gh-release" => true,
@@ -789,7 +790,7 @@ async fn run_update_subcommand(
     let mut cmd = tokio::process::Command::new(exe);
     // One trigger representation end to end: the enum crosses the process boundary as --trigger=<value> (FromStr on the other side)
     cmd.arg("update");
-    cmd.arg(format!("--trigger={}", trigger.as_str()));
+    cmd.arg(format!("--trigger={}", trigger.as_ref()));
     // Hand the resolved telemetry mode to the child, which cannot see the remote-settings layer (requirement pins still beat env)
     // None at the startup spawns: they run before the settings prefetch, when this process knows no more than the child
     // Waiting would let telemetry delay an update
@@ -798,19 +799,14 @@ async fn run_update_subcommand(
     }
     match run_mode {
         UpdateRunMode::Blocking => {
-            // stderr must be null, not piped: `.status()` does not drain
-            // pipes, so if the child writes more than the OS pipe buffer
-            // (~16 KB macOS / ~64 KB Linux) to stderr (e.g. download
-            // progress bars), the child blocks on the write while the
-            // parent blocks on waitpid — deadlocking both processes.
-            // With `panic = "abort"`, the blocked child eventually
-            // receives SIGABRT.
+            // stderr must be null, not piped: `.status()` does not drain pipes, so if the child writes more than the OS pipe buffer
+            // (~16 KB macOS / ~64 KB Linux) to stderr (e.g. download progress bars), the child blocks on the write while the parent
+            // blocks on waitpid — deadlocking both processes. With `panic = "abort"`, the blocked child eventually receives SIGABRT.
             cmd.stdin(Stdio::null())
                 .stdout(Stdio::null())
-                // inherit, not piped: the TUI is already restored so the parent's stderr fd is a normal terminal
-                // inherit lets the child's diagnostic output reach the user
-                // With piped stderr, `status()` would immediately close the read end
-                // The child then hits EPIPE and panics, which is SIGABRT (signal 6) under panic=abort
+                // inherit, not piped: the TUI is already restored so the parent's stderr fd is a normal terminal inherit lets the
+                // child's diagnostic output reach the user. With piped stderr, `status()` would immediately close the read end. The
+                // child then hits EPIPE and panics, which is SIGABRT (signal 6) under panic=abort
                 .stderr(Stdio::inherit());
             // No detach: the child must stay in the foreground process group so Ctrl+C cancels it with the parent
             // The atomic install protocol makes mid-download kills safe
@@ -938,12 +934,8 @@ pub async fn run_install_script(
     })
 }
 
-/// Detect the platform (os, arch) to download binaries for.
-///
-/// Arch is the compile-time arch with one correction: an x86_64 build on an Apple Silicon host (Rosetta) selects `aarch64`.
-/// Every update path converges to the native build instead of perpetuating the translated one.
-/// That covers interactive `grok update`, background `--auto` children, the leader's hourly converge, and forced minimum-version installs.
-/// This mirrors install.sh's `hw.optional.arm64` probe.
+/// Every update path converges to the native build instead of perpetuating the translated one. That covers interactive
+/// `thanh update`, background `--auto` children, the leader's hourly converge, and forced minimum-version installs.
 /// Without it, a lingering x86_64 process would reinstall x86_64 right over a fresh native install.
 pub(crate) fn detect_platform() -> Result<(&'static str, &'static str)> {
     let os = if cfg!(target_os = "macos") {
@@ -968,11 +960,9 @@ pub(crate) fn detect_platform() -> Result<(&'static str, &'static str)> {
     ))
 }
 
-/// Age past which a leftover `.tmp` download file or freshly-renamed versioned binary counts as abandoned (crashed or killed updater).
-/// `cleanup_old_downloads` sweeps files older than this.
-/// An hour is generous compared to the longest plausible download.
-/// The per-request budget is [`DOWNLOAD_REQUEST_TIMEOUT`] and the leader's check-and-download pass matches it.
-/// So a concurrent updater's in-flight or just-landed file is never deleted out from under it.
+/// Age past which a leftover `.tmp` download file or freshly-renamed versioned binary counts as abandoned (crashed or
+/// killed updater). The per-request budget is [`DOWNLOAD_REQUEST_TIMEOUT`] and the leader's check-and-download pass
+/// matches it. So a concurrent updater's in-flight or just-landed file is never deleted out from under it.
 const STALE_TMP_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// Total timeout for a CLI artifact download request (including body).
@@ -1057,6 +1047,11 @@ async fn try_parallel_download(
         anyhow::bail!("file too small for parallel download ({} bytes)", size);
     }
 
+    let _dl_span = xai_grok_telemetry::region::Region::from_span(tracing::info_span!(
+        "update.download",
+        bytes = size as i64,
+    ));
+
     let n_chunks = parallel_chunk_count(size);
     if n_chunks < 2 {
         anyhow::bail!(
@@ -1118,12 +1113,9 @@ async fn try_parallel_download(
     }
 }
 
-/// Fetch bytes `[start, end]` (inclusive) of `url` and write them at `start` in `dest`.
-/// Errors if the server doesn't return `206 Partial Content`.
-///
-/// Streams from the network into a `Vec<u8>` so progress ticks smoothly as bytes arrive.
-/// A single `spawn_blocking` per chunk then does the open, seek, and write_all in `std::fs`.
-/// This avoids the per-write hop into tokio's blocking pool that `tokio::fs::File::write_all` performs on every ~8 KiB Bytes item.
+/// Streams from the network into a `Vec<u8>` so progress ticks smoothly as bytes arrive. A single `spawn_blocking` per
+/// chunk then does the open, seek, and write_all in `std::fs`. This avoids the per-write hop into tokio's blocking pool
+/// that `tokio::fs::File::write_all` performs on every ~8 KiB Bytes item.
 async fn download_range(
     client: &reqwest::Client,
     url: &str,
@@ -1162,10 +1154,9 @@ async fn download_range(
     Ok(())
 }
 
-/// Download a file from `url` to `dest` with a terminal progress bar.
-///
-/// If the server provides a `Content-Length` header, a determinate bar is shown with bytes downloaded, total size, and ETA.
-/// Otherwise a spinner with a byte counter is used as a fallback.
+/// Download a file from `url` to `dest` with a terminal progress bar. If the server provides a `Content-Length` header, a
+/// determinate bar is shown with bytes downloaded, total size, and ETA. Otherwise a spinner with a byte counter is used
+/// as a fallback.
 #[doc(hidden)]
 pub async fn download_with_progress(url: &str, dest: &std::path::Path) -> Result<()> {
     // Try parallel byte-range first
@@ -1446,10 +1437,9 @@ pub async fn install_internal_from_bases(
 /// A short cap would fail a good artifact.
 const SMOKE_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Retry budget for exec attempts refused with ETXTBSY.
-/// The failure window is normally the microseconds another spawn in this process sits between fork and exec (see [`smoke_test_binary`]).
-/// On a heavily loaded machine that window can stretch, so the budget errs generous.
-/// A false "failed to run" both aborts this install and deletes the binary.
+/// Retry budget for exec attempts refused with ETXTBSY. The failure window is normally the microseconds another spawn in
+/// this process sits between fork and exec (see [`smoke_test_binary`]). On a heavily loaded machine that window can
+/// stretch, so the budget errs generous. A false "failed to run" both aborts this install and deletes the binary.
 const SMOKE_TEST_ETXTBSY_ATTEMPTS: u32 = 8;
 const SMOKE_TEST_ETXTBSY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(25);
 
@@ -1496,11 +1486,9 @@ fn nonzero_message(status: &str, stderr: &str) -> String {
 }
 
 async fn smoke_test_binary(binary_path: &std::path::Path) -> Result<(), SmokeTestFailure> {
-    // ETXTBSY race: a concurrent updater's child in this process briefly holds every open fd between fork and exec
-    // pre_exec in detach_command forces the fork/exec path
-    // The held fds include the write side of a download just renamed onto `binary_path`
-    // Exec'ing a binary whose inode is still open for write fails with ETXTBSY even though the file is complete and healthy
-    // So retry instead of failing the install (and deleting a racer's freshly installed binary)
+    // ETXTBSY race: a concurrent updater's child in this process briefly holds every open fd between fork and exec pre_exec
+    // in detach_command forces the fork/exec path. The held fds include the write side of a download just renamed onto
+    // `binary_path`. So retry instead of failing the install (and deleting a racer's freshly installed binary)
     let mut last_spawn = String::new();
     for attempt in 1..=SMOKE_TEST_ETXTBSY_ATTEMPTS {
         let mut cmd = tokio::process::Command::new(binary_path);
@@ -1598,7 +1586,17 @@ async fn download_verified_from_base(
 
     // Smoke-test: run the binary before activating it
     // A truncated or corrupt download is caught here and never becomes the active grok
-    if let Err(fail) = smoke_test_binary(&binary_path).await {
+    let smoke_span = xai_grok_telemetry::region::Region::from_span(tracing::info_span!(
+        "update.smoke_test",
+        elapsed_ms = tracing::field::Empty,
+    ));
+    let smoke_started = Instant::now();
+    let smoke_result = smoke_test_binary(&binary_path).await;
+    smoke_span
+        .span()
+        .record("elapsed_ms", smoke_started.elapsed().as_millis() as i64);
+    smoke_span.close();
+    if let Err(fail) = smoke_result {
         let _ = tokio::fs::remove_file(&binary_path).await;
         // No prefix: run_install_script's wrap adds "Auto-update failed:".
         return Err(fail.into());
@@ -1613,6 +1611,11 @@ async fn download_verified_from_base(
 /// Local activation phase: swap the managed bin links to the downloaded binary and finish bookkeeping.
 /// Nothing here depends on which base URL served the download, so callers must not retry another base on failure.
 async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
+    let activate_span = xai_grok_telemetry::region::Region::from_span(tracing::info_span!(
+        "update.install",
+        elapsed_ms = tracing::field::Empty,
+    ));
+    let activate_started = Instant::now();
     let grok_home = grok_home();
     let download_dir = grok_home.join("downloads");
     let bin_dir = grok_home.join("bin");
@@ -1639,13 +1642,15 @@ async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
 
     regenerate_completions(&link_path, &grok_home).await;
 
+    activate_span
+        .span()
+        .record("elapsed_ms", activate_started.elapsed().as_millis() as i64);
     Ok(())
 }
 
-/// Regenerate shell completions after a binary update (best-effort).
-///
-/// Spawns the newly-installed binary with `completions <shell>` for each supported shell and writes the output to the standard completion paths.
-/// Failures are silently ignored: completions are a nice-to-have, not a requirement for a successful update.
+/// Regenerate shell completions after a binary update (best-effort). Spawns the newly-installed binary with `completions
+/// <shell>` for each supported shell and writes the output to the standard completion paths. Failures are silently
+/// ignored: completions are a nice-to-have, not a requirement for a successful update.
 async fn regenerate_completions(binary: &std::path::Path, grok_home: &std::path::Path) {
     // Derive $HOME independently: grok_home may be overridden via GROK_HOME env var, so grok_home.parent() isn't necessarily the user's home dir
     let user_home = xai_dirs::home_dir().unwrap_or_default();
@@ -1932,12 +1937,9 @@ impl LinkRollback {
     }
 }
 
-/// Atomically swap a symlink to point to a new target.
-///
-/// Creates a temporary symlink next to `link_path`, then renames it over the old symlink.
-/// This avoids the remove-then-create race where the path briefly doesn't exist, and never deletes the old target file.
-/// On macOS (especially Apple Silicon), deleting a binary that a running process has mmap'd causes SIGKILL.
-/// The kernel can no longer verify the code signature of the executable pages.
+/// Creates a temporary symlink next to `link_path`, then renames it over the old symlink. This avoids the
+/// remove-then-create race where the path briefly doesn't exist, and never deletes the old target file. On macOS
+/// (especially Apple Silicon), deleting a binary that a running process has mmap'd causes SIGKILL.
 #[cfg(unix)]
 async fn atomic_symlink_swap(target: &std::path::Path, link_path: &std::path::Path) -> Result<()> {
     // Per-racer temp name: a shared one makes remove_file then symlink racy (EEXIST, or ENOENT when another racer renames the link away)
@@ -1983,18 +1985,9 @@ async fn sweep_stale_tmp_links(link_path: &std::path::Path, max_age: Duration) {
     }
 }
 
-/// Replace an executable that may be locked by a running process (Windows).
-///
-/// On Windows the kernel prevents writes to a running executable but allows renames.
-/// If a direct copy fails with a sharing violation, this renames `dest` aside and copies `src` into the freed path.
-/// If the copy then fails, the rename is rolled back to avoid a broken install.
-///
-/// The aside target is normally `<dest>.old`, but a leftover `.old` can itself still be a running image.
-/// The session that was live during the previous update keeps executing the renamed-aside file.
-/// A running image can neither be deleted nor rename-replaced.
-/// In that case `dest` is renamed to a unique `<dest>.old.{pid}-{seq}.old` sibling instead, so a locked leftover can never block the update.
-/// All `.old` leftovers are swept best-effort at the start of each cycle.
-/// Still-locked ones survive until a later update runs after those processes exit.
+/// If the copy then fails, the rename is rolled back to avoid a broken install. In that case `dest` is renamed to a
+/// unique `<dest>.old.{pid}-{seq}.old` sibling instead, so a locked leftover can never block the update. Still-locked
+/// ones survive until a later update runs after those processes exit.
 #[cfg(windows)]
 async fn windows_replace_exe(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
     let file_name = dest
@@ -2066,15 +2059,9 @@ async fn windows_replace_exe(src: &std::path::Path, dest: &std::path::Path) -> R
     }
 }
 
-/// Best-effort removal of `<exe>.old` plus the unique `<exe>.old.{pid}-{seq}.old` asides accumulated by prior update cycles.
-/// Locked ones (still-running images) survive and are collected by a later update once those processes exit.
-/// The `<exe>.old` prefix keeps the sweep away from `<exe>` itself, other executables' leftovers, and the `.rollback.bak` / `.tmp` sibling shapes.
-///
-/// Unlike `sweep_stale_tmp_links` there is deliberately no `max_age` gate.
-/// Rename preserves mtime, so a racer's seconds-old aside already looks days old and age cannot distinguish it.
-/// In-use asides survive deletion by being locked.
-/// Deleting a racer's fresh unlocked aside is the same accepted race as in `tmp_download_path`.
-/// That aside is the racer's rollback source while both racers converge on the same dest.
+/// The `<exe>.old` prefix keeps the sweep away from `<exe>` itself, other executables' leftovers, and the `.rollback.bak`
+/// / `.tmp` sibling shapes. Rename preserves mtime, so a racer's seconds-old aside already looks days old and age cannot
+/// distinguish it. Deleting a racer's fresh unlocked aside is the same accepted race as in `tmp_download_path`.
 #[cfg(windows)]
 async fn sweep_old_exe_backups(old: &std::path::Path) {
     let _ = tokio::fs::remove_file(old).await;
@@ -2689,11 +2676,9 @@ pub async fn run_update(
         );
     }
 
-    // What's on disk wins over this process's compiled-in version
-    // A concurrent or earlier updater (TUI background download, leader hourly checker) may already have installed the target
-    // In that case there is nothing to download
-    // Gated on the installer maintaining the managed symlink
-    // For npm a leftover symlink would lie (see `disk_version_for_installer`)
+    // What's on disk wins over this process's compiled-in version. A concurrent or earlier updater (TUI background download,
+    // leader hourly checker) may already have installed the target. In that case there is nothing to download. Gated on the
+    // installer maintaining the managed symlink. For npm a leftover symlink would lie (see `disk_version_for_installer`)
     let effective_current =
         disk_version_for_installer(installer).unwrap_or_else(|| current_version.clone());
 

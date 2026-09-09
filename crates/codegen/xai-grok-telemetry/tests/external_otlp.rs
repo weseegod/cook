@@ -4,10 +4,47 @@
 mod otlp_collector;
 
 use otlp_collector as col;
+use xai_grok_telemetry::external::IdentityAttrs;
 
 const CANARY_MODEL: &str = "sk-CANARYabcdefghij1234567890";
 const CANARY_PROMPT: &str = "CANARY_PROMPT_TEXT do not export";
 const CANARY_MCP: &str = "canary-internal-mcp-server";
+const CANARY_CMD: &str = "CANARY_BASH_COMMAND_ls_la";
+const CANARY_RESPONSE: &str = "CANARY_ASSISTANT_PROSE do not export";
+const OAUTH_EMAIL: &str = "otel.parity@example.com";
+
+fn deny_decision(
+    command: &str,
+    tool_use_id: &str,
+) -> xai_grok_telemetry::events::PermissionDecisionRecord {
+    xai_grok_telemetry::events::PermissionDecisionRecord {
+        payload: xai_grok_telemetry::events::PermissionDecisionPayload {
+            tool_name: "run_terminal_cmd".into(),
+            access_kind: xai_grok_telemetry::events::AccessKind::Bash,
+            decision: xai_grok_telemetry::events::PermissionOutcome::Deny,
+            wait_ms: 10,
+            permission_mode: xai_grok_telemetry::enums::PermissionMode::Ask,
+            source: Some("user_reject".into()),
+            subagent_session_id: None,
+            subagent_type: None,
+            manager_prompt_attempted: None,
+            prompt_outcome: None,
+            prompt_outcome_detail: None,
+            remember_tool_approvals: None,
+            decision_reason: None,
+            classifier_source: None,
+            classifier_verdict: None,
+            security_findings: None,
+            classifier_latency_ms: None,
+            auto_denials_consecutive: None,
+            auto_denials_total: None,
+        },
+        tool_input: xai_grok_telemetry::events::ExternalToolInput {
+            parameters: Some(serde_json::json!({ "command": command })),
+            tool_use_id: Some(tool_use_id.into()),
+        },
+    }
+}
 
 #[test]
 fn external_stream_end_to_end() {
@@ -36,6 +73,15 @@ fn external_stream_end_to_end() {
 
     xai_grok_telemetry::external::init(Some(cfg));
     assert!(xai_grok_telemetry::external::is_active());
+
+    // OAuth identity is not a content gate — email must still export with gates off.
+    xai_grok_telemetry::external::set_identity(IdentityAttrs {
+        user_id: Some("user-gates-off".into()),
+        email: Some(OAUTH_EMAIL.into()),
+        organization_id: None,
+        team_id: None,
+        deployment_id: None,
+    });
 
     // Emit through the same funnel production uses, with the product events client never initialized and no auth at all
     // The external sink must fire anyway: it does not depend on product telemetry being enabled
@@ -70,6 +116,7 @@ fn external_stream_end_to_end() {
         client_identifier: None,
         screen_mode: None,
         prompt_text: Some(CANARY_PROMPT.into()),
+        command_name: None,
     });
     // The model id is a canary: the scrub that runs when the metric increments must keep it out of the metrics body
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::ModelResponseReceived {
@@ -82,6 +129,24 @@ fn external_stream_end_to_end() {
         cached_prompt_tokens: None,
         cache_creation_tokens: None,
         cost_usd_ticks: None,
+    });
+    xai_grok_telemetry::log_event(xai_grok_telemetry::events::ToolCallCompleted {
+        tool_name: "run_terminal_cmd".into(),
+        outcome: xai_grok_session_events::types::ToolOutcome::Success,
+        hook_rewrote: false,
+        duration_ms: 3,
+        tool_result_size_bytes: None,
+        model_id: "grok".into(),
+        file_path: None,
+        parameters: Some(serde_json::json!({ "command": CANARY_CMD })),
+        tool_use_id: Some("call-gates-off".into()),
+        tool_output: None,
+        error_message: None,
+    });
+    xai_grok_telemetry::log_event(deny_decision(CANARY_CMD, "call-deny-off"));
+    xai_grok_telemetry::external::emit(&xai_grok_telemetry::events::AssistantResponse {
+        response_length: CANARY_RESPONSE.len(),
+        response_text: Some(CANARY_RESPONSE.into()),
     });
 
     xai_grok_telemetry::external::flush();
@@ -200,7 +265,40 @@ fn external_stream_end_to_end() {
             "MCP server name reached the {label} wire"
         );
     }
-    // The prompt length exports; the canary scan above already proves the text does not
+    // Prompt length exported, text not (already covered by the canary scan).
+    // Email is identity: present on logs and metrics even with content gates off.
+    let prompt = col::find_event(&collected, "grok_code.user_prompt").expect("user_prompt");
+    assert_eq!(
+        prompt.attrs.get("user.email").and_then(|v| v.as_str()),
+        Some(OAUTH_EMAIL)
+    );
+    assert!(!prompt.attrs.contains_key("prompt"));
+    let assistant = col::find_event(&collected, "grok_code.assistant_response")
+        .expect("assistant_response present with gates off");
+    assert!(
+        assistant.attrs.contains_key("response_length"),
+        "response_length is always-on"
+    );
+    assert!(
+        !assistant.attrs.contains_key("response"),
+        "gated response must be absent with gates off"
+    );
+    assert!(!assistant.has_body, "no record may carry a body");
+    let decision = col::find_event(&collected, "grok_code.tool_decision").expect("tool_decision");
+    assert!(!decision.attrs.contains_key("tool_parameters"));
+    assert!(!decision.attrs.contains_key("full_command"));
+    let tool = col::find_event(&collected, "grok_code.tool_result").expect("tool_result");
+    assert!(!tool.attrs.contains_key("full_command"));
+    assert!(!tool.attrs.contains_key("tool_parameters"));
+    assert!(!tool.attrs.contains_key("tool_input"));
+    assert!(!tool.attrs.contains_key("tool_output"));
+    let sessions = col::find_metric(&collected, "grok_code.session.count");
+    assert!(
+        sessions
+            .iter()
+            .any(|p| p.attrs.get("user.email").and_then(|v| v.as_str()) == Some(OAUTH_EMAIL)),
+        "user.email must ride metrics when OAuth identity is set"
+    );
 
     // ── Shutdown: ≤ 2 s + post-shutdown silence ─────────────────────────
     let start = std::time::Instant::now();
@@ -219,6 +317,7 @@ fn external_stream_end_to_end() {
         client_identifier: None,
         screen_mode: None,
         prompt_text: None,
+        command_name: None,
     });
     std::thread::sleep(std::time::Duration::from_millis(400));
     assert_eq!(

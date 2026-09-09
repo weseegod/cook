@@ -22,13 +22,16 @@ fn receipt_for_turn(
         PromptTurnReceipt {
             prompt_id: prompt_id.to_owned(),
             result,
-            telemetry: crate::session::telemetry::ActiveAgentMessageAdmissionTelemetry {
-                admitted_at: std::time::Instant::now(),
-                parent_ctx: xai_grok_telemetry::TelemetryCtx::new(
+            telemetry: crate::session::telemetry::ActiveAgentMessageAdmissionTelemetry::new(
+                std::time::Instant::now(),
+                xai_grok_telemetry::TelemetryCtx::new(
                     "parent".to_owned(),
                     std::sync::Arc::new(tokio::sync::Mutex::new(turn)),
                 ),
-            },
+                xai_grok_tools::implementations::grok_build::task::types::ActiveAgentMessageOperation::Queue,
+                xai_grok_tools::implementations::grok_build::task::types::ActiveAgentMessageOperation::Queue,
+                None,
+            ),
         },
     )
 }

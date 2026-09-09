@@ -1,7 +1,6 @@
 //! Tests for prompt and bash submission, queueing, and interject shims.
 
 use super::*;
-use crate::scrollback::block::RenderBlock;
 
 /// Sending a prompt is a submit: it retires the active ephemeral tip.
 #[test]
@@ -534,7 +533,6 @@ fn send_prompt_keeps_ambient_small_screen_tip() {
 /// Ambient TTL burns only while the tip row can paint.
 /// While the row is not renderable the tick is a frozen no-op (and reports no animation demand).
 /// The TTL resumes with the remaining budget once the row can paint again.
-/// Edit-contextual tips keep burning regardless (pinned for contrast).
 #[test]
 fn ambient_tip_ttl_freezes_while_row_cannot_paint() {
     let mut app = test_app_with_agent();
@@ -985,7 +983,6 @@ fn send_prompt_clears_follow_up_chips() {
 fn chip_submit_while_enqueued_clears_follow_up_chips() {
     // A chip click submitted while a turn is RUNNING *and* the local queue is non-empty takes the ENQUEUE path, not immediate-server-send
     // `immediate_server_send_eligible` is false whenever `pending_prompts` is non-empty
-    // The clear runs for every `SubmitFollowUp` path
     // Clearing only on the immediate-send branch would leave this path with chips on screen after the user had already acted on one
     let mut app = test_app_with_agent();
     let id = AgentId(0);
@@ -1189,7 +1186,6 @@ fn send_prompt_with_images_while_running_and_steer_stays_local() {
 }
 
 /// Regression (queue reorder race): a mid-turn plain prompt must NOT jump the server queue past an older local drip-feed prompt.
-/// E.g. prompts queued during "Starting session…" before the turn began: the first drains to start the turn and the rest are stranded locally.
 /// An immediate-sent prompt would render/run AHEAD of the older local prompt (the merge is server-rows-first), so `[2, 3]` showed up as `[3, 2]`.
 /// The new prompt must instead join the local queue behind the older one, preserving FIFO.
 #[test]
@@ -1283,8 +1279,12 @@ fn turn_end_drains_next_queued_prompt() {
         &mut app,
     );
 
-    // No re-send (the prompt was already sent at enqueue time).
-    assert!(effects.is_empty());
+    // No re-send (the prompt was already sent at enqueue time): only the billing refresh effect
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_turn_running());
     // current_prompt_id was handed off to the second prompt for correlation.
     assert_eq!(
@@ -1361,8 +1361,12 @@ fn turn_end_with_empty_queue_stays_idle() {
         &mut app,
     );
 
-    // Turn end with empty queue emits no effects.
-    assert!(effects.is_empty());
+    // Silent billing refresh after turn completion.
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_idle());
     // Session event "Worked for" added.
     assert_eq!(app.agents[&id].scrollback.len(), 1);
@@ -1391,21 +1395,31 @@ fn multiple_queued_prompts_drain_one_per_turn() {
         })
     };
 
-    // Turn end → drain "b".
+    // Turn end: drain "b" and FetchBilling
     let effects = dispatch(end_turn(), &mut app);
-    assert_eq!(effects.len(), 1);
     assert!(matches!(&effects[0], Effect::SendPrompt { text, .. } if text == "b"));
+    assert!(matches!(
+        &effects[1],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert_eq!(app.agents[&id].session.queue_len(), 1);
 
-    // Turn end → drain "c".
+    // Turn end: drain "c" and FetchBilling
     let effects = dispatch(end_turn(), &mut app);
-    assert_eq!(effects.len(), 1);
     assert!(matches!(&effects[0], Effect::SendPrompt { text, .. } if text == "c"));
+    assert!(matches!(
+        &effects[1],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert_eq!(app.agents[&id].session.queue_len(), 0);
 
-    // Turn end with empty queue → no effects.
+    // Turn end: FetchBilling only
     let effects = dispatch(end_turn(), &mut app);
-    assert!(effects.is_empty());
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_idle());
 }
 
@@ -1427,8 +1441,12 @@ fn prompt_response_resets_turn_state() {
         }),
         &mut app,
     );
-    // Turn end with empty queue emits no effects.
-    assert!(effects.is_empty());
+    // Silent billing refresh after turn completion.
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_idle());
     assert!(app.agents[&id].turn_started_at.is_none());
     // mark_turn_finished must stamp the activity anchor used by the dashboard relative-time label
@@ -1461,7 +1479,7 @@ fn turn_end_fetches_prompt_suggestion_when_enabled() {
         &mut app,
     );
 
-    assert_eq!(effects.len(), 1, "suggestion fetch: {effects:?}");
+    assert_eq!(effects.len(), 2, "suggestion fetch + billing: {effects:?}");
     let Effect::FetchPromptSuggestion {
         agent_id,
         generation,
@@ -1790,7 +1808,7 @@ fn prompt_response_context_overflow_suppresses_turn_failed_and_toast() {
     }
 
     // Control: with no ContextTooLarge block, PromptResponse still ends the turn with TurnFailed and a toast
-    // Overflow copy in the error string must not change that
+    // Overflow copy in the error string must not change that Only a prior ContextTooLarge banner (from RetryState `error_type=context_length`) suppresses the marker
     // Only a prior ContextTooLarge banner (from RetryState `error_type=context_length`) suppresses the marker
     let (failed_block, toast) = run_failed_turn(false);
     assert!(failed_block, "baseline: a failed turn pushes TurnFailed");
@@ -1905,6 +1923,74 @@ fn prompt_response_formatted_401_suppresses_turn_failed_and_stashes_prompt() {
             .map(|p| p.text.as_str()),
         Some("resend me"),
         "401 must stash the prompt for auto-resubmit after /login"
+    );
+}
+
+#[test]
+fn prompt_response_formatted_402_takes_credit_limit_path() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.state = AgentState::TurnRunning;
+        agent.turn_started_at = Some(std::time::Instant::now());
+    }
+    // http_status field absent (older shell): the status must be recovered from the formatted text
+    dispatch(
+        Action::TaskComplete(TaskResult::PromptResponse {
+            agent_id: id,
+            result: Err("Request failed (402): Grok Build usage balance exhausted".to_string()),
+            http_status: None,
+            prompt_id: None,
+        }),
+        &mut app,
+    );
+    let agent = &app.agents[&id];
+    let has_turn_failed = (0..agent.scrollback.len()).any(|idx| {
+        matches!(
+            agent.scrollback.entry(idx).map(|e| &e.block),
+            Some(RenderBlock::SessionEvent(ev))
+                if matches!(ev.event, SessionEvent::TurnFailed { .. })
+        )
+    });
+    assert!(
+        !has_turn_failed,
+        "a credit-limit 402 shows the upsell, not TurnFailed"
+    );
+}
+
+#[test]
+fn credit_limit_402_does_not_overwrite_stash_when_in_flight_cleared() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.state = AgentState::TurnRunning;
+        agent.turn_started_at = Some(std::time::Instant::now());
+        agent.session.in_flight_prompt = None;
+        agent.credit_limit_stashed_prompt = Some(crate::app::agent::InFlightPrompt {
+            text: "kept".into(),
+            images: Vec::new(),
+            scrollback_entry: crate::scrollback::EntryId::new(0),
+            combined_scrollback_entries: Vec::new(),
+            chip_elements: Vec::new(),
+        });
+    }
+    dispatch(
+        Action::TaskComplete(TaskResult::PromptResponse {
+            agent_id: id,
+            result: Err("Request failed (402): Grok Build usage balance exhausted".to_string()),
+            http_status: Some(402),
+            prompt_id: None,
+        }),
+        &mut app,
+    );
+    assert_eq!(
+        app.agents[&id]
+            .credit_limit_stashed_prompt
+            .as_ref()
+            .map(|p| p.text.as_str()),
+        Some("kept")
     );
 }
 
@@ -2046,8 +2132,12 @@ fn turn_complete_notification_suppressed_when_queue_non_empty() {
         }),
         &mut app,
     );
-    // No re-send; the second prompt is adopted.
-    assert!(effects.is_empty());
+    // No re-send; only billing refresh. The second prompt is adopted.
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_turn_running());
     assert!(
         app.deferred_notification.is_none(),
@@ -2077,7 +2167,6 @@ fn turn_complete_notification_suppressed_when_queue_non_empty() {
 /// Regression: cancelling while prompts are queued must hand the queue to the agent untouched.
 /// The FRONT queued prompt runs next (promoted server-side) and the rest stay queued in order.
 /// The authoritative `x.ai/queue/changed` rebroadcast (not client-side prediction) updates the mirror.
-/// Nothing resurrects or reorders.
 #[test]
 fn cancel_hands_queue_to_agent_without_reordering() {
     use crate::app::prompt_queue::{QueueChanged, QueueEntryWire};
@@ -2173,7 +2262,6 @@ fn cancel_hands_queue_to_agent_without_reordering() {
 /// Regression for the "queued message renders 2×" dup: a shell/proxy that re-keys the prompt must still reconcile the echo by kind+text.
 /// (Re-keyed: the broadcast row and later `running_prompt_id` carry a DIFFERENT id than the pager's optimistic echo.)
 /// Without the fallback the echo is pinned forever.
-/// The message shows as a stale queue row alongside the server's copy, and then alongside the running turn's user block.
 #[test]
 fn rekeyed_broadcast_reconciles_optimistic_echo_by_text() {
     use crate::app::prompt_queue::{QueueChanged, QueueEntryWire};
@@ -2347,8 +2435,12 @@ fn prompt_response_resets_cancelling_to_idle() {
         }),
         &mut app,
     );
-    // Turn end with empty queue emits no effects.
-    assert!(effects.is_empty());
+    // Silent billing refresh after turn completion.
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_idle());
     // Cancellation produces a "Turn cancelled" session event.
     assert_eq!(app.agents[&id].scrollback.len(), 1);
@@ -2385,8 +2477,12 @@ fn cancel_with_queued_prompt_drains_on_completion() {
         &mut app,
     );
 
-    assert_eq!(effects.len(), 1);
+    assert_eq!(effects.len(), 2);
     assert!(matches!(&effects[0], Effect::SendPrompt { text, .. } if text == "queued"));
+    assert!(matches!(
+        &effects[1],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_turn_running());
     assert_eq!(app.agents[&id].session.queue_len(), 0);
 }
@@ -2408,8 +2504,12 @@ fn cancel_with_empty_queue_stays_idle() {
         }),
         &mut app,
     );
-    // Turn end with empty queue emits no effects.
-    assert!(effects.is_empty());
+    // Silent billing refresh after turn completion.
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_idle());
 }
 
@@ -2458,8 +2558,12 @@ fn cancel_with_multiple_queued_prompts_drains_only_front_prompt() {
         &mut app,
     );
 
-    assert_eq!(effects.len(), 1);
+    assert_eq!(effects.len(), 2);
     assert!(matches!(&effects[0], Effect::SendPrompt { text, .. } if text == "queued-1"));
+    assert!(matches!(
+        &effects[1],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_turn_running());
     assert_eq!(app.agents[&id].session.queue_len(), 1);
     assert_eq!(app.agents[&id].session.pending_prompts[0].text, "queued-2");
@@ -2500,8 +2604,12 @@ fn cancel_drain_is_blocked_when_editing_front_prompt() {
         &mut app,
     );
 
-    // Drain blocked → no effects.
-    assert!(effects.is_empty());
+    // Drain blocked but billing refresh still happens.
+    assert_eq!(effects.len(), 1);
+    assert!(matches!(
+        &effects[0],
+        Effect::FetchBilling { silent: true, .. }
+    ));
     assert!(app.agents[&id].session.state.is_idle());
     assert_eq!(app.agents[&id].session.queue_len(), 2);
     assert_eq!(app.agents[&id].session.pending_prompts[0].text, "queued-1");
@@ -2675,7 +2783,13 @@ fn slash_compact_enqueues_command() {
     let effects = dispatch(Action::SendPrompt("/compact".into()), &mut app);
     // /compact enqueues as Command and drains immediately (agent was idle).
     assert_eq!(effects.len(), 1);
-    assert!(matches!(&effects[0], Effect::Compact { .. }));
+    assert!(matches!(
+        &effects[0],
+        Effect::Compact {
+            user_context: None,
+            ..
+        }
+    ));
     assert!(app.agents[&id].prompt.text().is_empty());
 }
 
@@ -2745,7 +2859,6 @@ fn palette_dispatch_preserves_prompt_draft() {
     // Regression for the bug where picking a SlashCommand entry from the Ctrl-P palette wiped whatever the user had typed
     // The palette routes through Action::SendSlashCommandPreservingDraft instead of Action::SendPrompt
     // That arm calls dispatch_send_prompt_inner with clear_prompt=false
-    // The slash command still resolves and emits its effect, but the textarea contents survive
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     // User has a draft typed in the prompt.
@@ -2782,7 +2895,13 @@ fn slash_compact_with_context_enqueues_command() {
         &mut app,
     );
     assert_eq!(effects.len(), 1);
-    assert!(matches!(&effects[0], Effect::Compact { .. }));
+    assert!(matches!(
+        &effects[0],
+        Effect::Compact {
+            user_context: Some(ctx),
+            ..
+        } if ctx == "focus on auth"
+    ));
 }
 
 #[test]
@@ -2812,12 +2931,8 @@ fn non_slash_prompt_still_works() {
 #[test]
 fn submit_question_answers_cancel_clears_local_modal_and_restores_prompt() {
     // Full-stack contract test: cancel through the public `submit_question_answers` entry point must
-    //   (a) take and drop the local question_view
-    //   (b) restore the stashed prompt text and cursor
-    //   (c) return InputOutcome::Changed (no Action)
-    // and silently drop the directive carried by LocalQuestionKind::Fork.
-    // This complements the inner `translate_local_submit_*` tests
-    // It exercises the prompt.restore and cleanup_question_state contract that lives in `submit_question_answers` itself
+    // (b) restore the stashed prompt text and cursor
+    // (c) return InputOutcome::Changed (no Action) and silently drop the directive carried by LocalQuestionKind::Fork.
     use crate::views::question_view::{LocalQuestionKind, QuestionViewState};
     use xai_grok_tools::implementations::grok_build::ask_user_question::{
         Question, QuestionOption,
@@ -3577,6 +3692,119 @@ fn plain_send_during_blocking_wait_trusts_wire_send_now_trigger() {
     );
 }
 
+fn count_user_prompts(app: &AppView, id: AgentId) -> usize {
+    let agent = &app.agents[&id];
+    (0..agent.scrollback.len())
+        .filter(|i| {
+            matches!(
+                agent.scrollback.entry(*i).map(|e| &e.block),
+                Some(RenderBlock::UserPrompt(_))
+            )
+        })
+        .count()
+}
+
+fn cancelled_removed_from_queue(id: AgentId, prompt_id: &str) -> Action {
+    let mut meta = serde_json::Map::new();
+    meta.insert("promptId".into(), prompt_id.into());
+    meta.insert(
+        crate::app::turn_completion::COMPLETION_KIND_KEY.into(),
+        crate::app::turn_completion::REMOVED_FROM_QUEUE_KIND.into(),
+    );
+    Action::TaskComplete(TaskResult::PromptResponse {
+        agent_id: id,
+        result: Ok(acp::PromptResponse::new(acp::StopReason::Cancelled).meta(Some(meta))),
+        http_status: None,
+        prompt_id: Some(prompt_id.into()),
+    })
+}
+
+#[test]
+fn send_during_wake_queues_without_starting_a_turn() {
+    use crate::app::agent_view::RunningWakeTurn;
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.running_wake_turn = Some(RunningWakeTurn {
+            prompt_id: "task-completed-wake".into(),
+            cancel_sent: false,
+        });
+    }
+
+    const TEXT: &str = "try again";
+    let effects = dispatch(Action::SendPrompt(TEXT.into()), &mut app);
+    match effects.as_slice() {
+        [Effect::SendPrompt { text, .. }] => assert_eq!(text, TEXT),
+        other => panic!("wake send must go to the server queue, got {other:?}"),
+    }
+    let agent = &app.agents[&id];
+    assert_eq!(
+        count_user_prompts(&app, id),
+        0,
+        "queued follow-up must not paint a scrollback bubble mid-wake"
+    );
+    assert!(
+        agent.session.state.is_idle(),
+        "must not start_turn over a non-adopted wake"
+    );
+    assert!(agent.session.current_prompt_id.is_none());
+    assert!(agent.running_wake_turn.is_some());
+}
+
+#[test]
+fn removed_from_queue_completion_kind_is_silent_without_wake_marker() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let effects = dispatch(Action::SendPrompt("try again".into()), &mut app);
+    let prompt_id = match effects.as_slice() {
+        [Effect::SendPrompt { prompt_id, .. }] => prompt_id.clone(),
+        other => panic!("idle drain starts a turn, got {other:?}"),
+    };
+
+    let _ = dispatch(cancelled_removed_from_queue(id, &prompt_id), &mut app);
+    assert_eq!(count_cancelled_markers(&app, id), 0);
+    assert_eq!(count_completed_markers(&app, id), 0);
+}
+
+#[test]
+fn cancelled_response_during_newer_wake_still_shows_cancel_marker() {
+    use crate::app::agent_view::RunningWakeTurn;
+
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let effects = dispatch(Action::SendPrompt("user turn".into()), &mut app);
+    let prompt_id = match effects.as_slice() {
+        [Effect::SendPrompt { prompt_id, .. }] => prompt_id.clone(),
+        other => panic!("idle drain starts a turn, got {other:?}"),
+    };
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.running_wake_turn = Some(RunningWakeTurn {
+            prompt_id: "task-completed-newer".into(),
+            cancel_sent: false,
+        });
+    }
+
+    let mut meta = serde_json::Map::new();
+    meta.insert("promptId".into(), prompt_id.clone().into());
+    let _ = dispatch(
+        Action::TaskComplete(TaskResult::PromptResponse {
+            agent_id: id,
+            result: Ok(acp::PromptResponse::new(acp::StopReason::Cancelled).meta(Some(meta))),
+            http_status: None,
+            prompt_id: Some(prompt_id),
+        }),
+        &mut app,
+    );
+    assert_eq!(
+        count_cancelled_markers(&app, id),
+        1,
+        "ambient wake state must not hide a real cancel"
+    );
+}
+
 /// Pending foreground-subagent UI: a confirmed held row stays reachable and actionable.
 #[test]
 fn plain_send_during_pending_subagent_wait_keeps_confirmed_queue_row_reachable() {
@@ -3809,8 +4037,6 @@ fn send_now_during_active_goal_does_not_arm_expectation() {
     );
 }
 
-/// An active-goal Send Now paints an optimistic user block.
-/// It relies on the interjection notification to claim it in place.
 /// The prompt's RPC resolves as removed-without-running (the expected outcome of routing the Send Now as an interjection).
 /// That takes the non-running `PromptResponse` path, but it must NOT retire the painted block before its interjection claim arrives.
 /// Otherwise the message is dropped and re-pushed at the scrollback end (flicker / reorder).
@@ -4553,28 +4779,50 @@ fn suggestion_debounce_routes_by_agent_id_not_active_view() {
     );
 }
 
+/// Casual commenting parks its draft and keeps the composer live, the opposite of a permission.
+/// Closing a card over it therefore restores into the composer and leaves the parked draft alone.
 #[test]
-fn clear_display_wipes_scrollback_preserves_session() {
-    let mut app = test_app_with_agent();
+fn casual_commenting_keeps_its_parked_draft_when_a_card_closes() {
+    use crate::views::question_view::QuestionViewState;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use xai_grok_tools::implementations::grok_build::ask_user_question::Question;
+
     let id = AgentId(0);
-    let session_id = app.agents[&id].session.session_id.clone();
-    app.agents
-        .get_mut(&id)
-        .unwrap()
-        .scrollback
-        .push_block(RenderBlock::system("hello"));
-    app.agents
-        .get_mut(&id)
-        .unwrap()
-        .scrollback
-        .push_block(RenderBlock::system("world"));
-    assert_eq!(app.agents[&id].scrollback.len(), 2);
+    let mut app = test_app_with_agent();
+    let agent = app.agents.get_mut(&id).unwrap();
+    agent.active_pane = crate::app::agent_view::AgentPane::Prompt;
+    agent.prompt.set_text("pre-comment draft");
+    agent.casual_stashed_prompt = Some(agent.prompt.stash());
+    agent.prompt.set_text("the casual comment");
 
-    let effects = dispatch(Action::ClearDisplay, &mut app);
+    // A card open stashes the live comment and blanks the composer.
+    let stashed = agent.prompt.stash();
+    agent.question_view = Some(QuestionViewState::new(
+        "card-over-comment".into(),
+        vec![Question {
+            question: "busy?".into(),
+            options: vec![],
+            multi_select: Some(false),
+            id: None,
+        }],
+        stashed,
+    ));
+    agent.prompt.set_text("");
+    agent.handle_question_key_for_test(&KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
 
-    assert!(effects.is_empty());
-    assert_eq!(app.agents[&id].scrollback.len(), 0);
-    assert_eq!(app.agents[&id].session.session_id, session_id);
+    assert_eq!(
+        agent.prompt.text(),
+        "the casual comment",
+        "the live comment comes back to the composer"
+    );
+    assert_eq!(
+        agent
+            .casual_stashed_prompt
+            .as_ref()
+            .map(|s| s.text.as_str()),
+        Some("pre-comment draft"),
+        "the parked pre-comment draft must survive"
+    );
 }
 
 mod prompt_history_recording_tests {
@@ -4768,8 +5016,7 @@ mod prompt_stash_dispatch_tests {
         assert_eq!(stash.cause, StashCause::ClearedDraft);
     }
 
-    /// A cleared `!` draft lands in the slot with its shell mode; it was never sent, so
-    /// `session.prompt_history` stays empty. Fork UX still ranks it first in Up-browse history.
+    /// A cleared `!` draft lands in the slot with its shell mode and nowhere else: it was never sent.
     #[test]
     fn clearing_a_shell_draft_stashes_it_and_records_no_history() {
         let mut app = test_app_with_agent();
@@ -4783,16 +5030,7 @@ mod prompt_stash_dispatch_tests {
         dispatch(Action::ClearPrompt, &mut app);
 
         let agent = app.agents.get(&id).unwrap();
-        assert!(
-            agent.session.prompt_history.is_empty(),
-            "cleared draft must not be recorded as a sent prompt"
-        );
-        let history = agent.combined_prompt_history();
-        assert_eq!(
-            history.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
-            ["! git status"],
-            "fork Up-browse ranks the stashed shell draft first"
-        );
+        assert!(agent.combined_prompt_history().is_empty());
         let stash = agent.prompt_stash.as_ref().expect("draft was stashed");
         assert_eq!(stash.prompt.text, "git status");
         assert_eq!(
@@ -4959,5 +5197,4 @@ mod prompt_stash_dispatch_tests {
         );
         assert!(agent.prompt_stash.is_some());
     }
-
 }

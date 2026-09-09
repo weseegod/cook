@@ -10,10 +10,8 @@ use xai_file_utils::queue::UploadQueue;
 use xai_grok_sampling_types::ReasoningEffort;
 use xai_hunk_tracker::HunkTrackerHandle;
 /// Coarse lifecycle state of a session as known to the leader/agent.
-///
 /// A grok session is a resumable log on disk with no terminal status field of its own, so "liveness" is residency plus turn state, not a pid.
 /// The agent's join-handle supervisor tracks this per session so a panicked actor is demoted to `Dormant` instead of lingering in the roster.
-/// This is the data source the roster/dashboard reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SessionLiveState {
     /// Resident actor, a turn is currently running.
@@ -30,34 +28,39 @@ pub(crate) enum SessionLiveState {
     /// A load or resume is building the actor.
     Attaching,
 }
-/// `_meta` key carrying [`SessionHandle::scheduler_background_loops`] on the `session/new` and `session/load` responses.
-/// Defined here so the shell that publishes it and the clients that read it share one spelling.
-pub const SCHEDULER_BACKGROUND_LOOPS_META_KEY: &str = "x.ai/schedulerBackgroundLoops";
-/// Permission event receivers are returned separately from `spawn_session_actor` and should be stored/managed by the caller.
+/// Everything the `session/new` reply reads from session state; built before the actor task starts so the reply cannot wait on it.
+#[derive(Clone)]
+pub struct SpawnSnapshot {
+    pub applied_tool_overrides: Option<xai_grok_sampling_types::ToolOverrides>,
+}
+pub(crate) struct WorkGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+impl WorkGuard {
+    pub(crate) fn new(active_work: std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        active_work.fetch_add(1, std::sync::atomic::Ordering::Release);
+        Self(active_work)
+    }
+}
+impl Drop for WorkGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::Release);
+    }
+}
 #[derive(Clone)]
 pub struct SessionHandle {
     pub cmd_tx: mpsc::UnboundedSender<SessionCommand>,
-    /// Persistence channel shared with the actor (used by extension handlers).
     pub(crate) persistence_tx: mpsc::UnboundedSender<PersistenceMsg>,
-    /// Current running prompt/turn id, if any.
-    ///
-    /// Shared with the session actor so external cancellation paths can target subagents launched by the active turn only.
+    /// Shared with the actor so external cancellation can target subagents launched by the active turn only.
     pub current_prompt_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-    /// Open blocking reverse-requests (permission / question / plan-approval), keyed by `tool_call_id`.
-    /// Mirrors `current_prompt_id`: the same `Arc` is shared with the session actor, which inserts on issue and removes on resolve.
-    /// The roster reads this synchronously to report `NeedsInput`.
-    /// This is never persisted.
+    /// Shared `Arc` with the actor (insert on issue, remove on resolve); never persisted.
     pub pending_interactions: crate::session::pending_interaction::PendingInteractions,
-    /// Session info (id, cwd), cached for quick access without querying persistence
+    pub(crate) active_work: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     pub info: crate::session::info::Info,
-    /// Resolved turn limit for this session; lets a spawned subagent inherit the parent's limit.
     /// `None` means unlimited.
     pub max_turns: Option<usize>,
-    /// Configured cutoff a subagent inherits, published by the session actor. `None` when unset.
     pub resolved_tool_overrides:
         std::sync::Arc<arc_swap::ArcSwapOption<xai_grok_sampling_types::ToolOverrides>>,
+    pub spawn_snapshot: SpawnSnapshot,
     pub hunk_tracker_handle: HunkTrackerHandle,
-    /// Actor-based chat state handle; lets callers inspect final conversation state.
     pub chat_state_handle: xai_chat_state::ChatStateHandle,
     /// Handle to session signals (used for completion tracking)
     pub signals_handle: super::signals::SessionSignalsHandle,
@@ -69,15 +72,11 @@ pub struct SessionHandle {
     pub status_line_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// MCP server configs for this session (merged local and client-provided).
     /// Stored on the handle so forked sessions can inherit the parent's MCP servers without a round-trip through the session actor.
-    ///
-    /// This is a snapshot from `spawn_session_actor` time; if the client later sends `UpdateMcpServers`, the handle's copy is NOT updated.
-    /// That is fine for forks that happen right after spawn, but callers that need the latest MCP state should query the session actor via command.
     pub mcp_servers: Vec<acp::McpServer>,
     /// Client-provided MCP servers as admitted by the vendor `mcps` kill-switch, before merging with disk/plugin/managed servers.
     /// Hot-reloads re-merge from this seed; a server the kill-switch rejected cannot reappear because its on-disk attribution vanished mid-session.
     pub initial_client_mcp_servers: Vec<acp::McpServer>,
     /// Stable display path for forked sessions (original project path).
-    ///
     /// When set, the hunk tracker extension handler rewrites worktree paths in API responses to this path.
     /// The client UI then shows the original project path, not the worktree path.
     pub display_cwd: Option<String>,
@@ -96,12 +95,6 @@ pub struct SessionHandle {
     /// The model this session was created with (or switched to via setModel).
     /// Per-session tracking prevents cross-client contamination in leader mode where `MvpAgent.current_model_id` is shared mutable state.
     pub model_id: acp::ModelId,
-    /// Whether this session's scheduled fires run as detached background subagents.
-    /// Copied from the value the spawn resolved for the session's [`AgentRebuildSpec`](crate::session::agent_rebuild::AgentRebuildSpec).
-    /// It is pinned for the session's whole life exactly like the fire side.
-    /// Published to clients on the `session/new` / `session/load` response.
-    /// Clients then describe the fires this session will actually get rather than re-resolving a setting that may have flipped since spawn.
-    pub scheduler_background_loops: bool,
     pub reasoning_effort: Option<ReasoningEffort>,
     /// YOLO (auto-approve) mode for this session.
     /// Per-session tracking prevents cross-client contamination in leader mode where one client enabling YOLO could affect another client's sessions.
@@ -152,6 +145,102 @@ pub struct SessionHandle {
     /// Subagents inherit the parent's handle so scheduled tasks survive the subagent's exit.
     pub scheduler_handle:
         Option<xai_grok_tools::implementations::grok_build::scheduler::types::SchedulerHandle>,
+    pub registry_write_order: RegistryWriteOrder,
+}
+#[derive(Clone, Default)]
+pub struct RegistryWriteOrder {
+    inner: std::sync::Arc<RegistryWriteOrderInner>,
+}
+struct RegistryWriteOrderInner {
+    tail: std::sync::Mutex<Option<RegistryChainLink>>,
+    restorable_apply: tokio::sync::Mutex<()>,
+    last_turn_floor: std::sync::atomic::AtomicI32,
+    restorable_floor: std::sync::atomic::AtomicI32,
+}
+impl Default for RegistryWriteOrderInner {
+    fn default() -> Self {
+        Self {
+            tail: std::sync::Mutex::new(None),
+            restorable_apply: tokio::sync::Mutex::new(()),
+            last_turn_floor: std::sync::atomic::AtomicI32::new(-1),
+            restorable_floor: std::sync::atomic::AtomicI32::new(-1),
+        }
+    }
+}
+struct RegistryChainLink(oneshot::Receiver<Box<RegistryChainLink>>);
+impl RegistryChainLink {
+    async fn wait(&mut self) {
+        while let Ok(next) = (&mut self.0).await {
+            *self = *next;
+        }
+    }
+}
+impl Drop for RegistryChainLink {
+    fn drop(&mut self) {
+        let mut link = self.0.try_recv().ok();
+        while let Some(mut boxed) = link {
+            link = boxed.0.try_recv().ok();
+        }
+    }
+}
+#[must_use = "dropping a RegistryTurnClaim without driving it skips this turn's registry writes; the error path drops it deliberately to forward the chain"]
+pub struct RegistryTurnClaim {
+    prev_done: Option<RegistryChainLink>,
+    done: Option<oneshot::Sender<Box<RegistryChainLink>>>,
+}
+impl RegistryTurnClaim {
+    pub(crate) async fn wait_predecessor(&mut self) {
+        if let Some(prev) = self.prev_done.as_mut() {
+            prev.wait().await;
+        }
+        self.prev_done = None;
+    }
+}
+impl Drop for RegistryTurnClaim {
+    fn drop(&mut self) {
+        if let (Some(prev), Some(done)) = (self.prev_done.take(), self.done.take()) {
+            let _ = done.send(Box::new(prev));
+        }
+    }
+}
+impl RegistryWriteOrder {
+    pub(crate) fn begin_turn_end(&self) -> RegistryTurnClaim {
+        let (done, done_rx) = oneshot::channel();
+        let mut tail = self
+            .inner
+            .tail
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        RegistryTurnClaim {
+            prev_done: tail.replace(RegistryChainLink(done_rx)),
+            done: Some(done),
+        }
+    }
+    pub(crate) async fn lock_restorable_apply(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.restorable_apply.lock().await
+    }
+    pub(crate) fn should_write_last_turn(&self, turn: i32) -> bool {
+        turn > self
+            .inner
+            .last_turn_floor
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn commit_last_turn(&self, turn: i32) {
+        self.inner
+            .last_turn_floor
+            .fetch_max(turn, std::sync::atomic::Ordering::AcqRel);
+    }
+    pub(crate) fn should_write_restorable(&self, turn: i32) -> bool {
+        turn > self
+            .inner
+            .restorable_floor
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+    pub(crate) fn commit_restorable(&self, turn: i32) {
+        self.inner
+            .restorable_floor
+            .fetch_max(turn, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 impl SessionHandle {
     pub(crate) fn message_delivery(&self) -> super::message_delivery::MessageDeliveryHandle {
@@ -209,6 +298,17 @@ impl SessionHandle {
         }
         rx.await.unwrap_or(Err("session actor died".to_string()))
     }
+    pub(crate) async fn persist_resume_status(&self) {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .cmd_tx
+            .send(SessionCommand::PersistResumeStatus { respond_to: tx })
+            .is_err()
+        {
+            return;
+        }
+        let _ = tokio::time::timeout(crate::session::resume_status::PERSIST_ACK_TIMEOUT, rx).await;
+    }
     pub(crate) async fn delete_scheduled_task(&self, task_id: &str) -> Result<bool, String> {
         let (tx, rx) = oneshot::channel();
         if self
@@ -223,10 +323,6 @@ impl SessionHandle {
         }
         rx.await.unwrap_or(Err("session actor died".to_string()))
     }
-    /// Returns `true` if the session has work in flight: a running turn or queued inputs (`running_task.is_some() || !pending_inputs.is_empty()`).
-    ///
-    /// Used by the leader's idle-unload decision on client disconnect.
-    /// Falls back to `true` (conservative: keep the session resident, never unload) if the actor is unreachable.
     pub async fn is_busy(&self) -> bool {
         let (tx, rx) = oneshot::channel();
         if self
@@ -393,9 +489,7 @@ impl SessionHandle {
             .unwrap_or_else(|_| crate::session::slash_commands::ListCommandsResponse::default())
     }
     /// Record whether the client now on this session draws a status row.
-    ///
     /// Assigned rather than raised and lowered from separate events.
-    /// A resident session outlives its clients, and the disconnect sweep hands the decision to an attach that is already in flight.
     /// An attach that only raised the flag would leave the previous client's row enabled, and the session would keep building payloads nobody draws.
     pub(crate) fn set_status_line_wanted(&self, wanted: bool) {
         self.status_line_enabled

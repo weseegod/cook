@@ -26,10 +26,8 @@ use xai_tool_runtime::{
     ToolCallContext, ToolError, ToolErrorKind, ToolStream, TypedToolOutput, terminal_only,
 };
 use xai_tool_types::ToolDescription;
-/// Deprecation monitor for the self-attested `caller_session_id` param.
-/// `kind="param_mismatch"` means the param disagreed with the server-bound envelope session and the envelope was trusted.
-/// `kind="envelope_absent"` means no envelope session existed and the param was used as a compat fallback.
-/// Enforcement (envelope-only identity) waits for this to be flat zero.
+/// Deprecation monitor for self-attested `caller_session_id`. `param_mismatch` trusted the envelope; `envelope_absent` used the param as fallback.
+/// Envelope-only identity waits for this to be flat zero.
 static WORKSPACE_RPC_CALLER_MISMATCH_TOTAL: std::sync::LazyLock<IntCounterVec> =
     std::sync::LazyLock::new(|| {
         register_int_counter_vec!(
@@ -597,7 +595,10 @@ impl WorkspaceRpcHandler {
                     .get("session_id")
                     .and_then(Value::as_str)
                     .ok_or_else(|| WorkspaceError::HubError("missing session_id".into()))?;
-                let result = self.workspace.drop_session(caller, target);
+                let result = self
+                    .workspace
+                    .drop_session_with_teardown(caller, target)
+                    .await;
                 record_mutation_rpc("drop_session", caller, target, &result);
                 result.map(|()| Value::Null)
             }
@@ -678,14 +679,17 @@ impl WorkspaceRpcHandler {
             }
             <DiscoverSkillsReq as WorkspaceRpc>::METHOD => {
                 let cwd = self.workspace.root_cwd()?;
-                let skills =
-                    crate::discovery::discover_skills(&cwd, self.workspace.shared.skills_config())
-                        .await;
+                let skills = crate::discovery::discover_skills(
+                    &cwd,
+                    self.workspace.shared.skills_config(),
+                    true,
+                )
+                .await;
                 Ok(Value::Array(skills))
             }
             <DiscoverAgentsMdReq as WorkspaceRpc>::METHOD => {
                 let cwd = self.workspace.root_cwd()?;
-                let files = crate::discovery::discover_agents_md(&cwd).await;
+                let files = crate::discovery::discover_agents_md(&cwd, true).await;
                 Ok(Value::Array(files))
             }
             <DiscoverPluginsReq as WorkspaceRpc>::METHOD => {
@@ -1140,9 +1144,15 @@ impl ToolServerHandler for WorkspaceRpcHandler {
             }
             HookEvent::SessionEnded => {
                 tracing::info!(%session_id, "session_ended hook received");
-                self.workspace
-                    .teardown_session_mcp(session_id.as_str())
-                    .await;
+                if let Some(session) = self.workspace.session(session_id.as_str()) {
+                    let arrival_generation = session
+                        .mcp_bind_generation
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    drop(session);
+                    self.workspace
+                        .teardown_session_mcp_for_event(session_id.as_str(), arrival_generation)
+                        .await;
+                }
                 self.workspace.on_session_ended(session_id.as_str());
             }
             HookEvent::Custom { kind, payload } => {
@@ -1228,18 +1238,10 @@ impl ToolServerHandler for WorkspaceRpcHandler {
             .await;
         Some(serde_json::to_value(&reply).unwrap_or(Value::Null))
     }
-    /// Hub-issued `tool_server.evict`.
-    /// Always tears the evicted session down (MCP bridges and activity/writer state, like the `SessionEnded` hook).
-    /// The global two-phase drain then runs **only** when no other session survives.
-    /// A global drain shuts down the *shared* upload queue, which must not happen while another session is live.
-    /// Idempotent across fan-out and safe for an already-gone session id.
-    ///
-    /// Contract: the server-supplied `grace_period_ms` budgets the drain and is therefore honored only when evicting the **last** live session.
-    /// For a multi-session workspace the evicted session is dropped immediately, with no per-session drain.
+    /// Hub `tool_server.evict`: always tear down the evicted session. Global drain runs only when no other session survives, because it closes the shared upload queue.
+    /// `grace_period_ms` is honored only for the last live session; a multi-session evict drops immediately.
     async fn handle_evict(&self, params: ToolServerEvictParams) {
         let sid = params.session_id.as_str();
-        self.workspace.teardown_session_mcp(sid).await;
-        self.workspace.on_session_ended(sid);
         let (became_empty, start_drain, removed) = {
             let mut sessions = self.workspace.shared.sessions.write();
             let removed = sessions.remove(sid);
@@ -1257,6 +1259,10 @@ impl ToolServerHandler for WorkspaceRpcHandler {
             }
             (empty, start, removed)
         };
+        if let Some(session) = &removed {
+            self.workspace.teardown_session_mcp_arc(session, None).await;
+        }
+        self.workspace.on_session_ended(sid);
         if let Some(session) = removed {
             self.workspace.invoke_unbind_hook(&session);
         }

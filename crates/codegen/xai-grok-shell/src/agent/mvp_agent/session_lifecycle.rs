@@ -77,6 +77,9 @@ impl MvpAgent {
             }
             Some(_) => {}
         }
+        if let Some(handle) = self.resident_handle(id) {
+            handle.persist_resume_status().await;
+        }
         if !self.hard_stop_resident(id, CancelTrigger::SessionClose) {
             return CloseOutcome::NotResident;
         }
@@ -104,9 +107,7 @@ impl MvpAgent {
             .send(SessionCommand::Shutdown(ShutdownKind::CancelRunningTurn));
         true
     }
-    /// Hard-stop before wiping history so delete cannot race live writers.
-    ///
-    /// Order matches [`Self::close_active_session`]: drop residency before any await.
+    /// Hard-stop before wiping history so delete cannot race live writers. Order matches [`Self::close_active_session`]: drop residency before any await.
     /// The supervisor treats a finished still-resident actor as a crash, so awaiting the subagent drain while resident races that sweep.
     /// Every wait spends from a shared [`DELETE_TOTAL_BUDGET`] so the two drains cannot stack into a toast twice as long as close's.
     pub(crate) async fn teardown_live_session_before_delete(&self, id: &acp::SessionId) {
@@ -212,6 +213,13 @@ impl MvpAgent {
     /// Keep the work done while holding it short.
     pub(super) fn dispatch_lock(&self, id: &acp::SessionId) -> std::rc::Rc<tokio::sync::Mutex<()>> {
         self.session_registry.dispatch_lock(id)
+    }
+    /// Per-session lock serializing model and reasoning-effort changes; see `handlers::model_switch`.
+    pub(crate) fn config_mutation_lock(
+        &self,
+        id: &acp::SessionId,
+    ) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        self.session_registry.config_mutation_lock(id)
     }
     /// Record the coarse lifecycle state for a session.
     pub(super) fn set_session_live_state(&self, id: &acp::SessionId, state: SessionLiveState) {
@@ -439,11 +447,7 @@ impl MvpAgent {
             }
         });
     }
-    /// Any work in flight? Checks the running turn and a parked plan approval synchronously, then probes the queue asynchronously.
-    /// On a poisoned lock or a timeout it conservatively reports busy.
-    ///
-    /// TODO: once the session actor can report its own aggregate activity, including background work, move this gate inside the actor.
-    pub(super) async fn session_has_live_work(&self, id: &acp::SessionId) -> bool {
+    pub(super) async fn session_is_busy(&self, id: &acp::SessionId) -> bool {
         let Some(handle) = self.resident_handle(id) else {
             return false;
         };
@@ -486,6 +490,7 @@ impl MvpAgent {
             retained_resources: counts.retained_resources,
             dispatch_locks: counts.dispatch_locks,
             live_orphan_heal_locks: counts.live_orphan_heal_locks,
+            config_mutation_locks: counts.config_mutation_locks,
             session_turn_numbers: counts.session_turn_numbers,
             permission_event_receivers: counts.permission_event_receivers,
             model_unavailable_sessions: counts.model_unavailable_sessions,
@@ -514,6 +519,7 @@ pub(crate) struct RegistrySnapshot {
     pub retained_resources: usize,
     pub dispatch_locks: usize,
     pub live_orphan_heal_locks: usize,
+    pub config_mutation_locks: usize,
     pub session_turn_numbers: usize,
     pub permission_event_receivers: usize,
     pub model_unavailable_sessions: usize,

@@ -1,4 +1,5 @@
 use super::*;
+use rmcp::ServiceExt;
 use std::path::PathBuf;
 
 #[tokio::test]
@@ -35,6 +36,17 @@ async fn resilient_transport_skips_undecodable_line_and_keeps_stream_alive() {
 
 fn make_stdio_server(name: &str, command: &str) -> acp::McpServer {
     acp::McpServer::Stdio(acp::McpServerStdio::new(name, PathBuf::from(command)))
+}
+
+/// A shared-only session's tools come from inherited clients, so the init waits must not fast-path on "no servers".
+#[test]
+fn inherited_clients_count_as_mcp_servers() {
+    let mut state = McpState::new(vec![]);
+    assert!(!state.has_mcp_servers());
+    state
+        .shared_clients
+        .insert("parent".to_string(), Arc::new(McpClient::stub("parent")));
+    assert!(state.has_mcp_servers());
 }
 
 fn make_http_server(name: &str, url: &str) -> acp::McpServer {
@@ -315,7 +327,12 @@ fn test_mcp_state_new() {
 #[test]
 fn config_update_clears_stale_failure_records() {
     let mut state = McpState::new(vec![make_http_server("a", "https://old.example/a")]);
-    state.record_init_failure("a", false, Some("old cause".to_string()));
+    state.record_init_failure(
+        state.generation(),
+        "a",
+        false,
+        Some("old cause".to_string()),
+    );
     let diff = state
         .update_configs_diff(vec![make_http_server("a", "https://new.example/a")])
         .expect("configs changed");
@@ -326,7 +343,12 @@ fn config_update_clears_stale_failure_records() {
     );
 
     let mut state = McpState::new(vec![make_http_server("b", "https://old.example/b")]);
-    state.record_init_failure("b", false, Some("old cause".to_string()));
+    state.record_init_failure(
+        state.generation(),
+        "b",
+        false,
+        Some("old cause".to_string()),
+    );
     assert!(state.update_configs(vec![make_http_server("b", "https://new.example/b")]));
     assert!(state.init_failed.is_empty());
 }
@@ -356,9 +378,9 @@ fn test_mcp_state_update_configs_returns_true_when_changed() {
 fn test_mcp_state_update_configs_resets_initialized() {
     let configs = vec![make_stdio_server("test", "/bin/test")];
     let mut state = McpState::new(configs);
-    assert!(state.try_start_init());
-    state.mark_servers_initializing(["a".to_string()]);
-    state.finish_init();
+    let _owner = state.try_start_init().expect("claims init");
+    state.mark_servers_initializing(state.generation(), ["a".to_string()]);
+    state.finish_init(state.generation());
     assert!(state.has_finished_init());
     assert!(state.is_server_handshaking("a"));
 
@@ -490,6 +512,7 @@ async fn acp_clients_are_not_liveness_watched() {
         HttpConfig {
             url: "http://localhost/api/mcp".to_string(),
             headers: vec![],
+            local_agent_endpoint: false,
         },
         None,
         None,
@@ -511,7 +534,7 @@ fn test_mark_servers_initializing_clears_prior_init_failure() {
     state.init_failed.insert("a".to_string(), String::new());
     state.init_failed.insert("b".to_string(), String::new());
 
-    state.mark_servers_initializing(["a".to_string()]);
+    state.mark_servers_initializing(state.generation(), ["a".to_string()]);
 
     assert!(
         !state.init_failed.contains_key("a"),
@@ -527,7 +550,7 @@ fn test_mark_servers_initializing_clears_prior_init_failure() {
 fn test_record_init_failure_keeps_auth_and_init_failed_disjoint() {
     let mut state = McpState::new(vec![make_stdio_server("a", "/bin/a")]);
 
-    state.record_init_failure("auth-srv", true, None);
+    state.record_init_failure(state.generation(), "auth-srv", true, None);
     assert!(state.auth_required.contains("auth-srv"));
     assert!(
         !state.init_failed.contains_key("auth-srv"),
@@ -535,6 +558,7 @@ fn test_record_init_failure_keeps_auth_and_init_failed_disjoint() {
     );
 
     state.record_init_failure(
+        state.generation(),
         "dead-srv",
         false,
         Some("tools/list failed: boom".to_string()),
@@ -545,14 +569,19 @@ fn test_record_init_failure_keeps_auth_and_init_failed_disjoint() {
         Some("tools/list failed: boom"),
     );
 
-    state.mark_servers_initializing(["dead-srv".to_string()]);
+    state.mark_servers_initializing(state.generation(), ["dead-srv".to_string()]);
     assert!(!state.init_failed.contains_key("dead-srv"));
 }
 
 #[test]
 fn test_clear_init_failed_removes_entry() {
     let mut state = McpState::new(vec![make_stdio_server("a", "/bin/a")]);
-    state.record_init_failure("dead-srv", false, Some("boom".to_string()));
+    state.record_init_failure(
+        state.generation(),
+        "dead-srv",
+        false,
+        Some("boom".to_string()),
+    );
     assert!(state.init_failed.contains_key("dead-srv"));
 
     state.clear_init_failed("dead-srv");
@@ -629,21 +658,21 @@ fn test_mcp_servers_equal_order_matters() {
 fn test_try_start_init_prevents_concurrent_init() {
     let mut state = McpState::new(vec![make_stdio_server("test", "/bin/test")]);
 
-    assert!(state.try_start_init());
+    let _owner = state.try_start_init().expect("claims init");
     assert!(state.is_initializing());
     assert!(!state.is_initialized());
 
-    assert!(!state.try_start_init());
+    assert!(state.try_start_init().is_none());
 }
 
 #[test]
 fn test_try_start_init_fails_when_initialized() {
     let mut state = McpState::new(vec![make_stdio_server("test", "/bin/test")]);
-    assert!(state.try_start_init());
-    state.finish_init();
+    let _owner = state.try_start_init().expect("claims init");
+    state.finish_init(state.generation());
     assert!(state.is_initialized());
 
-    assert!(!state.try_start_init());
+    assert!(state.try_start_init().is_none());
     assert!(!state.is_initializing());
     assert!(state.is_initialized(), "is_initialized stays true");
 }
@@ -652,11 +681,11 @@ fn test_try_start_init_fails_when_initialized() {
 fn test_finish_init_clears_initializing() {
     let mut state = McpState::new(vec![make_stdio_server("test", "/bin/test")]);
 
-    state.try_start_init();
+    let _owner = state.try_start_init().expect("claims init");
     assert!(state.is_initializing());
     assert!(!state.is_initialized());
 
-    state.finish_init();
+    state.finish_init(state.generation());
     assert!(!state.is_initializing());
     assert!(state.is_initialized());
 }
@@ -665,10 +694,15 @@ fn test_finish_init_clears_initializing() {
 fn test_cancel_init_clears_initializing() {
     let mut state = McpState::new(vec![make_stdio_server("test", "/bin/test")]);
 
-    state.try_start_init();
+    let stale = state.try_start_init().expect("claims init");
+    state.cancel_any_init();
+    let live = state.try_start_init().expect("re-claims init");
     assert!(state.is_initializing());
 
-    state.cancel_init();
+    assert!(!state.cancel_init(&stale), "a non-owner cancel is a no-op");
+    assert!(state.is_initializing());
+
+    assert!(state.cancel_init(&live));
     assert!(!state.is_initializing());
     assert!(!state.is_initialized());
 }
@@ -676,7 +710,7 @@ fn test_cancel_init_clears_initializing() {
 #[test]
 fn test_update_configs_resets_initializing() {
     let mut state = McpState::new(vec![make_stdio_server("test", "/bin/test")]);
-    state.try_start_init();
+    let _owner = state.try_start_init().expect("claims init");
     assert!(state.is_initializing());
 
     state.update_configs(vec![make_stdio_server("test2", "/bin/test2")]);
@@ -760,6 +794,7 @@ fn test_tool_timeout_for_returns_per_tool_override() {
         HttpConfig {
             url: String::new(),
             headers: vec![],
+            local_agent_endpoint: false,
         },
         Some(&overrides),
         None,
@@ -783,6 +818,7 @@ fn test_tool_timeout_for_empty_map_returns_default() {
         HttpConfig {
             url: String::new(),
             headers: vec![],
+            local_agent_endpoint: false,
         },
         Some(&overrides),
         None,
@@ -1577,6 +1613,7 @@ async fn recover_and_retry_surfaces_original_error_when_recover_fails() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(1),
@@ -1631,18 +1668,43 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Copy)]
 enum CallToolBehavior {
-    ErrorThenOk { code: i32 },
-    AlwaysError { code: i32 },
-    HangThenOk { hang_ms: u64 },
-    ErrorThenHang { code: i32, hang_ms: u64 },
+    ErrorThenOk {
+        code: i32,
+    },
+    AlwaysError {
+        code: i32,
+    },
+    HangThenOk {
+        hang_ms: u64,
+    },
+    ErrorThenHang {
+        code: i32,
+        hang_ms: u64,
+    },
+    /// SEP-2322: first `tools/call` returns `input_required` with a form
+    /// elicitation and a `requestState`; the retry completes.
+    FormElicitThenOk,
+    /// SEP-2322 + transport recovery: round 0 returns `input_required`, the
+    /// retry fails with a recoverable JSON-RPC error, and the post-recovery
+    /// retry completes.
+    FormElicitThenErrorThenOk,
+    /// SEP-2322 URL mode: round 0 returns a URL elicitation + `requestState`,
+    /// round 1 returns a `requestState`-only `input_required` (out-of-band
+    /// interaction still pending), round 2 completes.
+    UrlElicitThenStateOnlyThenOk,
 }
 
 #[derive(Clone)]
 struct FakeMcpHandles {
     inits: Arc<AtomicUsize>,
+    discovers: Arc<AtomicUsize>,
     calls: Arc<AtomicUsize>,
     init_version: Arc<parking_lot::Mutex<Option<String>>>,
     init_user_agents: Arc<parking_lot::Mutex<Vec<String>>>,
+    /// `capabilities` object from the last `initialize` request.
+    init_capabilities: Arc<parking_lot::Mutex<Option<serde_json::Value>>>,
+    /// Raw `tools/call` request bodies, for asserting MRTR retry wire shapes.
+    call_bodies: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
 }
 
 fn header_values(
@@ -1656,9 +1718,31 @@ fn header_values(
         .collect()
 }
 
+/// How the fake reacts to the SEP-2575 `server/discover` probe.
+#[derive(Clone, Copy, Default)]
+enum DiscoverBehavior {
+    /// JSON-RPC method-not-found — the typical legacy SDK reaction.
+    #[default]
+    MethodNotFound,
+    /// A modern server: discover succeeds with 2026-07-28.
+    Modern,
+    /// Legacy middleware that 500s the probe with a non-JSON body — one of the
+    /// malformed shapes that must still fall back to `initialize`.
+    NonJsonServerError,
+}
+
+#[derive(Clone, Default)]
+struct FakeMcpOptions {
+    discover: DiscoverBehavior,
+    /// When set, `initialize` is rejected with an "Unauthorized" JSON-RPC
+    /// error, for asserting that fallback errors keep their auth classification.
+    init_unauthorized: bool,
+}
+
 #[derive(Clone)]
 struct FakeMcpState {
     behavior: CallToolBehavior,
+    options: FakeMcpOptions,
     handles: FakeMcpHandles,
 }
 
@@ -1688,11 +1772,31 @@ async fn fake_handle_post(
             state.handles.inits.fetch_add(1, Ordering::Relaxed);
             *state.handles.init_version.lock() =
                 req["params"]["protocolVersion"].as_str().map(str::to_owned);
+            *state.handles.init_capabilities.lock() = Some(req["params"]["capabilities"].clone());
             state
                 .handles
                 .init_user_agents
                 .lock()
                 .extend(header_values(&headers, axum::http::header::USER_AGENT));
+            let requested = req["params"]["protocolVersion"]
+                .as_str()
+                .unwrap_or_default();
+            // Version-strict servers (e.g. the C# SDK 2.x) reject an `initialize`
+            // naming a post-handshake revision instead of counter-offering.
+            // Mimic that so a reintroduced 2026-07-28 pin fails every test here.
+            if requested == "2026-07-28" {
+                return axum::Json(err(
+                    -32602,
+                    format!(
+                        "Protocol version '{requested}' is not available through the initialize handshake."
+                    ),
+                ))
+                .into_response();
+            }
+            if state.options.init_unauthorized {
+                return axum::Json(err(-32001, "Unauthorized: token expired".to_string()))
+                    .into_response();
+            }
             let result = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id.clone(),
@@ -1704,6 +1808,36 @@ async fn fake_handle_post(
             });
             ([("mcp-session-id", "fake-session")], axum::Json(result)).into_response()
         }
+        Some("server/discover") => {
+            state.handles.discovers.fetch_add(1, Ordering::Relaxed);
+            match state.options.discover {
+                DiscoverBehavior::Modern => axum::Json(serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id.clone(),
+                    "result": {
+                        "resultType": "complete",
+                        "supportedVersions": ["2026-07-28"],
+                        "capabilities": {"tools": {}},
+                        "ttlMs": 0,
+                        "cacheScope": "private",
+                        "_meta": {
+                            "io.modelcontextprotocol/serverInfo": {"name": "fake", "version": "0.0.0"}
+                        },
+                    },
+                }))
+                .into_response(),
+                // A legacy server: the SEP-2575 probe reaches JSON-RPC dispatch
+                // and gets method-not-found.
+                DiscoverBehavior::MethodNotFound => {
+                    axum::Json(err(-32601, "Method not found".to_string())).into_response()
+                }
+                DiscoverBehavior::NonJsonServerError => (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "middleware exploded",
+                )
+                    .into_response(),
+            }
+        }
         Some("tools/list") => axum::Json(serde_json::json!({
             "jsonrpc": "2.0",
             "id": id.clone(),
@@ -1712,6 +1846,14 @@ async fn fake_handle_post(
         .into_response(),
         Some("tools/call") => {
             let n = state.handles.calls.fetch_add(1, Ordering::Relaxed);
+            state.handles.call_bodies.lock().push(req.clone());
+            let input_required = |result: serde_json::Value| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id.clone(),
+                    "result": result,
+                })
+            };
             match state.behavior {
                 CallToolBehavior::ErrorThenOk { code } => {
                     if n == 0 {
@@ -1737,6 +1879,82 @@ async fn fake_handle_post(
                         axum::Json(ok()).into_response()
                     }
                 }
+                CallToolBehavior::FormElicitThenOk => {
+                    if n == 0 {
+                        axum::Json(input_required(serde_json::json!({
+                            "resultType": "input_required",
+                            "inputRequests": {
+                                "user_email": {
+                                    "method": "elicitation/create",
+                                    "params": {
+                                        "mode": "form",
+                                        "message": "Please provide your email",
+                                        "requestedSchema": {
+                                            "type": "object",
+                                            "properties": {
+                                                "email": {"type": "string", "format": "email"}
+                                            },
+                                            "required": ["email"]
+                                        }
+                                    }
+                                }
+                            },
+                            "requestState": "sealed-round-1",
+                        })))
+                        .into_response()
+                    } else {
+                        axum::Json(ok()).into_response()
+                    }
+                }
+                CallToolBehavior::FormElicitThenErrorThenOk => match n {
+                    0 => axum::Json(input_required(serde_json::json!({
+                        "resultType": "input_required",
+                        "inputRequests": {
+                            "user_email": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "mode": "form",
+                                    "message": "Please provide your email",
+                                    "requestedSchema": {
+                                        "type": "object",
+                                        "properties": {
+                                            "email": {"type": "string", "format": "email"}
+                                        },
+                                        "required": ["email"]
+                                    }
+                                }
+                            }
+                        },
+                        "requestState": "sealed-round-1",
+                    })))
+                    .into_response(),
+                    1 => axum::Json(err(-32603, "session expired".to_string())).into_response(),
+                    _ => axum::Json(ok()).into_response(),
+                },
+                CallToolBehavior::UrlElicitThenStateOnlyThenOk => match n {
+                    0 => axum::Json(input_required(serde_json::json!({
+                        "resultType": "input_required",
+                        "inputRequests": {
+                            "user_auth": {
+                                "method": "elicitation/create",
+                                "params": {
+                                    "mode": "url",
+                                    "message": "Connect your account",
+                                    "url": "https://example.com/connect",
+                                    "elicitationId": "e-42"
+                                }
+                            }
+                        },
+                        "requestState": "sealed-url-1",
+                    })))
+                    .into_response(),
+                    1 => axum::Json(input_required(serde_json::json!({
+                        "resultType": "input_required",
+                        "requestState": "sealed-url-2",
+                    })))
+                    .into_response(),
+                    _ => axum::Json(ok()).into_response(),
+                },
             }
         }
         _ => axum::http::StatusCode::ACCEPTED.into_response(),
@@ -1766,11 +1984,34 @@ async fn spawn_test_http_server(app: axum::Router) -> String {
 }
 
 async fn spawn_fake_mcp(behavior: CallToolBehavior) -> (String, FakeMcpHandles) {
+    spawn_fake_mcp_with(behavior, FakeMcpOptions::default()).await
+}
+
+/// A SEP-2575 modern server: `server/discover` succeeds and `initialize` is
+/// never expected on the wire.
+async fn spawn_fake_mcp_modern(behavior: CallToolBehavior) -> (String, FakeMcpHandles) {
+    spawn_fake_mcp_with(
+        behavior,
+        FakeMcpOptions {
+            discover: DiscoverBehavior::Modern,
+            ..Default::default()
+        },
+    )
+    .await
+}
+
+async fn spawn_fake_mcp_with(
+    behavior: CallToolBehavior,
+    options: FakeMcpOptions,
+) -> (String, FakeMcpHandles) {
     let handles = FakeMcpHandles {
         inits: Arc::new(AtomicUsize::new(0)),
+        discovers: Arc::new(AtomicUsize::new(0)),
         calls: Arc::new(AtomicUsize::new(0)),
         init_version: Arc::new(parking_lot::Mutex::new(None)),
         init_user_agents: Arc::new(parking_lot::Mutex::new(Vec::new())),
+        init_capabilities: Arc::new(parking_lot::Mutex::new(None)),
+        call_bodies: Arc::new(parking_lot::Mutex::new(Vec::new())),
     };
     let app = axum::Router::new()
         .route(
@@ -1779,9 +2020,33 @@ async fn spawn_fake_mcp(behavior: CallToolBehavior) -> (String, FakeMcpHandles) 
         )
         .with_state(FakeMcpState {
             behavior,
+            options,
             handles: handles.clone(),
         });
     (spawn_test_http_server(app).await, handles)
+}
+
+/// A client whose startup budget exceeds the `server/discover` probe timeout,
+/// so the handshake runs the probe phase before any legacy fallback.
+fn fake_http_client_probing(url: &str, tool_timeout_sec: u64) -> Arc<McpClient> {
+    fake_http_client_with_startup(
+        url,
+        McpClient::DISCOVER_PROBE_TIMEOUT_SECS + 5,
+        tool_timeout_sec,
+    )
+}
+
+fn fake_http_client_with_startup(
+    url: &str,
+    startup_timeout_sec: u64,
+    tool_timeout_sec: u64,
+) -> Arc<McpClient> {
+    let overrides = McpClientTimeoutOverrides {
+        startup_timeout_sec: Some(startup_timeout_sec),
+        tool_timeout_sec: Some(tool_timeout_sec),
+        ..Default::default()
+    };
+    fake_http_client_with_overrides(url, overrides)
 }
 
 fn fake_http_client(url: &str, tool_timeout_sec: u64) -> Arc<McpClient> {
@@ -1790,11 +2055,19 @@ fn fake_http_client(url: &str, tool_timeout_sec: u64) -> Arc<McpClient> {
         tool_timeout_sec: Some(tool_timeout_sec),
         ..Default::default()
     };
+    fake_http_client_with_overrides(url, overrides)
+}
+
+fn fake_http_client_with_overrides(
+    url: &str,
+    overrides: McpClientTimeoutOverrides,
+) -> Arc<McpClient> {
     Arc::new(McpClient::new_http(
         "fake".to_string(),
         HttpConfig {
             url: url.to_string(),
             headers: vec![],
+            local_agent_endpoint: false,
         },
         Some(&overrides),
         None,
@@ -1844,7 +2117,14 @@ async fn try_call_tool_http_mcperror_recovers_then_retry_succeeds() {
     let mut is_timeout = false;
     let raw = serde_json::json!({});
     let out = tool
-        .try_call_tool(&client, &raw, &mut reconnect, &mut is_timeout, &ew)
+        .try_call_tool(
+            &client,
+            &raw,
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
         .await
         .expect("recovered call should succeed");
 
@@ -1867,7 +2147,7 @@ async fn try_call_tool_http_mcperror_recovers_then_retry_succeeds() {
     assert_eq!(
         handles.init_version.lock().as_deref(),
         Some("2025-11-25"),
-        "initialize must offer protocolVersion 2025-11-25"
+        "the legacy fallback must offer the newest initialize-era protocolVersion"
     );
 
     let jsonl = std::fs::read_to_string(tmp.path().join("events.jsonl")).unwrap();
@@ -1895,7 +2175,14 @@ async fn try_call_tool_http_retry_failure_surfaces_retry_error() {
     let mut is_timeout = false;
     let raw = serde_json::json!({});
     let err = tool
-        .try_call_tool(&client, &raw, &mut reconnect, &mut is_timeout, &ew)
+        .try_call_tool(
+            &client,
+            &raw,
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
         .await
         .expect_err("both attempts fail");
 
@@ -1925,7 +2212,14 @@ async fn try_call_tool_http_invalid_params_not_recovered() {
     let mut is_timeout = false;
     let raw = serde_json::json!({});
     let err = tool
-        .try_call_tool(&client, &raw, &mut reconnect, &mut is_timeout, &ew)
+        .try_call_tool(
+            &client,
+            &raw,
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
         .await
         .expect_err("invalid params surfaced as-is");
 
@@ -1940,6 +2234,489 @@ async fn try_call_tool_http_invalid_params_not_recovered() {
     );
 }
 
+/// Regression test for the version-strict-server startup failure: the fake rejects `server/discover` with method-not-found AND rejects any
+/// `initialize` naming 2026-07-28. Startup must probe discover once, then fall back to a legacy `initialize` that names 2025-11-25 — never 2026-07-28, which SEP-2575 removed from the handshake.
+#[tokio::test(flavor = "multi_thread")]
+async fn handshake_falls_back_to_initialize_era_version_on_legacy_server() {
+    let (url, handles) = spawn_fake_mcp(CallToolBehavior::AlwaysError { code: -32603 }).await;
+    let client = fake_http_client_probing(&url, 5);
+
+    client.ensure_initialized().await.expect("handshake");
+
+    assert_eq!(
+        handles.discovers.load(Ordering::Relaxed),
+        1,
+        "startup must probe server/discover once"
+    );
+    assert_eq!(
+        handles.inits.load(Ordering::Relaxed),
+        1,
+        "legacy classification must fall back to one initialize"
+    );
+    assert_eq!(
+        handles.init_version.lock().as_deref(),
+        Some("2025-11-25"),
+        "the fallback initialize must name the newest initialize-era protocolVersion"
+    );
+}
+
+/// A startup budget at or under the probe timeout must skip `server/discover`
+/// entirely: against a probe-swallowing server the probe phase costs its full
+/// timeout in extra startup latency, more than such a budget asks for.
+#[test]
+fn short_startup_budget_skips_the_discover_probe() {
+    let url = "http://127.0.0.1:1/mcp";
+    for budget in [5, McpClient::DISCOVER_PROBE_TIMEOUT_SECS] {
+        assert!(
+            !fake_http_client_with_startup(url, budget, 5).probe_fits_budget(),
+            "budget {budget}s must not probe"
+        );
+    }
+    assert!(
+        fake_http_client_with_startup(url, McpClient::DISCOVER_PROBE_TIMEOUT_SECS + 1, 5)
+            .probe_fits_budget()
+    );
+}
+
+/// Waiters parked on an in-flight handshake must budget for both phases: with
+/// the probe active, the holder can legitimately take probe + startup, so a
+/// `startup_timeout_sec`-only wait would time out concurrent first tool calls
+#[test]
+fn handshake_budget_covers_the_probe_phase() {
+    let url = "http://127.0.0.1:1/mcp";
+    // Short budgets never probe: the handshake bound is the startup budget alone.
+    assert_eq!(
+        fake_http_client_with_startup(url, 5, 5).handshake_budget_secs(),
+        5
+    );
+    // Probing budgets add the probe phase on top of the full startup budget.
+    let probing = McpClient::DISCOVER_PROBE_TIMEOUT_SECS + 5;
+    assert_eq!(
+        fake_http_client_with_startup(url, probing, 5).handshake_budget_secs(),
+        probing + McpClient::DISCOVER_PROBE_TIMEOUT_SECS
+    );
+}
+
+/// Wire-level counterpart of the budget gate: a 5s-startup client handshakes a
+/// legacy server without ever sending `server/discover`.
+#[tokio::test(flavor = "multi_thread")]
+async fn short_startup_budget_handshakes_without_probing() {
+    let (url, handles) = spawn_fake_mcp(CallToolBehavior::AlwaysError { code: -32603 }).await;
+    let client = fake_http_client(&url, 5);
+
+    client.ensure_initialized().await.expect("handshake");
+
+    assert_eq!(
+        handles.discovers.load(Ordering::Relaxed),
+        0,
+        "a short-budget client must not probe server/discover"
+    );
+    assert_eq!(handles.inits.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        handles.init_version.lock().as_deref(),
+        Some("2025-11-25"),
+        "the direct initialize must name the newest initialize-era protocolVersion"
+    );
+}
+
+/// A legacy server whose middleware reacts to the probe with a malformed shape
+/// (non-JSON 500) must still handshake: the probe fails on its own transport and
+/// the legacy `initialize` runs on a fresh one.
+#[tokio::test(flavor = "multi_thread")]
+async fn junk_discover_response_still_handshakes_via_initialize() {
+    let (url, handles) = spawn_fake_mcp_with(
+        CallToolBehavior::AlwaysError { code: -32603 },
+        FakeMcpOptions {
+            discover: DiscoverBehavior::NonJsonServerError,
+            ..Default::default()
+        },
+    )
+    .await;
+    let client = fake_http_client_probing(&url, 5);
+
+    client.ensure_initialized().await.expect("handshake");
+
+    assert_eq!(handles.discovers.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        handles.inits.load(Ordering::Relaxed),
+        1,
+        "a malformed probe reaction must still reach the initialize fallback"
+    );
+}
+
+/// When the fallback `initialize` itself fails, its error must surface directly
+/// — with its auth classification intact — rather than being hidden behind a
+/// generic probe-then-fallback wrapper.
+#[tokio::test(flavor = "multi_thread")]
+async fn legacy_fallback_surfaces_the_initialize_error_for_classification() {
+    let (url, handles) = spawn_fake_mcp_with(
+        CallToolBehavior::AlwaysError { code: -32603 },
+        FakeMcpOptions {
+            init_unauthorized: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let client = fake_http_client_probing(&url, 5);
+
+    let err = client
+        .ensure_initialized()
+        .await
+        .expect_err("initialize is rejected");
+
+    assert_eq!(handles.discovers.load(Ordering::Relaxed), 1);
+    assert_eq!(handles.inits.load(Ordering::Relaxed), 1);
+    assert!(
+        err.is_auth_rejection(),
+        "the initialize rejection must keep its auth classification: {err}"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Unauthorized"),
+        "the initialize error text must surface to the user: {msg}"
+    );
+}
+
+/// A SEP-2575 modern server: `server/discover` negotiates 2026-07-28, no `initialize` is
+/// sent, and every request carries the client context in per-request `_meta`.
+#[tokio::test(flavor = "multi_thread")]
+async fn handshake_negotiates_modern_discover_without_initialize() {
+    let (url, handles) = spawn_fake_mcp_modern(CallToolBehavior::HangThenOk { hang_ms: 0 }).await;
+    let client = fake_http_client_probing(&url, 5);
+
+    client.ensure_initialized().await.expect("handshake");
+
+    assert_eq!(
+        handles.discovers.load(Ordering::Relaxed),
+        1,
+        "startup must negotiate via server/discover"
+    );
+    assert_eq!(
+        handles.inits.load(Ordering::Relaxed),
+        0,
+        "a modern server must never receive initialize"
+    );
+
+    let tool = fake_echo_tool();
+    let ew = xai_grok_session_events::EventWriter::noop();
+    let mut reconnect = false;
+    let mut is_timeout = false;
+    let out = tool
+        .try_call_tool(
+            &client,
+            &serde_json::json!({}),
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
+        .await
+        .expect("tools/call succeeds over the modern session");
+    assert!(!out.is_error.unwrap_or(false));
+    let bodies = handles.call_bodies.lock().clone();
+    assert!(!bodies.is_empty(), "tools/call must reach the server");
+    assert_eq!(
+        bodies[0]["params"]["_meta"]["io.modelcontextprotocol/protocolVersion"], "2026-07-28",
+        "modern-era requests must carry the negotiated protocolVersion in _meta: {}",
+        bodies[0]
+    );
+}
+
+/// A connect-phase probe failure means the server was never reached; a legacy
+/// retry against the same endpoint would only double the time-to-error, so the
+/// probe surfaces the failure instead of returning a legacy verdict.
+#[tokio::test(flavor = "multi_thread")]
+async fn probe_connect_failure_surfaces_instead_of_legacy_fallback() {
+    // A port that just stopped listening: connection refused at connect phase.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/mcp", listener.local_addr().unwrap());
+    drop(listener);
+
+    let client = fake_http_client_probing(&url, 5);
+    let config = HttpConfig {
+        url: url.clone(),
+        headers: vec![],
+        local_agent_endpoint: false,
+    };
+    let http_client = McpClient::build_http_client(
+        &config,
+        "fake",
+        crate::mcp_http_client::WarnBudget::default(),
+    )
+    .expect("client builds");
+    let transport = StreamableHttpClientTransport::with_client(
+        http_client,
+        StreamableHttpClientTransportConfig::with_uri(url.as_str()),
+    );
+
+    let err = match client.probe_modern(transport).await {
+        Err(err) => err,
+        Ok(ProbeVerdict::Modern(_)) => panic!("no server is listening"),
+        Ok(ProbeVerdict::Legacy { probe_error }) => {
+            panic!("connect failures must not become a legacy verdict: {probe_error}")
+        }
+    };
+    assert!(
+        err.is_connect_failure(),
+        "the surfaced error must classify as a connect failure: {err}"
+    );
+}
+
+/// Deadline-driven callers derive per-server startup budgets from
+/// [`McpClient::max_startup_within_deadline`]; the resulting worst-case
+/// handshake must always fit the deadline.
+#[test]
+fn max_startup_within_deadline_fits_the_probe_phase() {
+    let probe = McpClient::DISCOVER_PROBE_TIMEOUT_SECS;
+    // Room for a probe plus a same-sized legacy window: probe + startup == deadline.
+    assert_eq!(McpClient::max_startup_within_deadline(30), 30 - probe);
+    assert_eq!(
+        McpClient::max_startup_within_deadline(2 * probe + 1),
+        probe + 1
+    );
+    // No room: probe-free, with the largest window the probe gate allows.
+    assert_eq!(McpClient::max_startup_within_deadline(2 * probe), probe);
+    assert_eq!(McpClient::max_startup_within_deadline(6), 6);
+    for deadline in [1, 5, 10, 11, 15, 20, 21, 25, 30, 60] {
+        let startup = McpClient::max_startup_within_deadline(deadline);
+        let client = fake_http_client_with_startup("http://127.0.0.1:1/mcp", startup, 5);
+        assert!(
+            client.handshake_budget_secs() <= deadline,
+            "deadline {deadline}s: worst-case handshake {}s exceeds it",
+            client.handshake_budget_secs()
+        );
+    }
+}
+
+/// End-to-end SEP-2322 form flow against the wire-level fake server:
+/// `tools/call` → `input_required` (form elicitation + `requestState`) → HITL accept via the
+#[tokio::test(flavor = "multi_thread")]
+async fn try_call_tool_mrtr_form_elicitation_round_trip() {
+    let (url, handles) = spawn_fake_mcp(CallToolBehavior::FormElicitThenOk).await;
+    let client = fake_http_client(&url, 5);
+    let inbox = crate::elicitation::ElicitationInbox::new();
+    client.set_elicitation_tx(Some(inbox.clone()));
+
+    let answer = tokio::spawn(async move {
+        let job = inbox
+            .recv()
+            .await
+            .expect("elicitation job reaches the inbox");
+        assert_eq!(job.server_name, "fake");
+        assert_eq!(job.fields.message, "Please provide your email");
+        assert!(
+            matches!(
+                job.fields.mode,
+                xai_grok_tools::mcp_elicitation::McpElicitModeFields::Form {
+                    requested_schema: Some(_)
+                }
+            ),
+            "form schema must survive the bridge"
+        );
+        let _ = job.response_tx.send(crate::elicitation::accept_result(Some(
+            serde_json::json!({"email": "user@example.com"}),
+        )));
+    });
+
+    let tool = fake_echo_tool();
+    let ew = xai_grok_session_events::EventWriter::noop();
+    let mut reconnect = false;
+    let mut is_timeout = false;
+    let out = tool
+        .try_call_tool(
+            &client,
+            &serde_json::json!({"q": 1}),
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
+        .await
+        .expect("tool call completes after the MRTR round");
+    answer.await.unwrap();
+
+    assert!(!out.is_error.unwrap_or(false));
+    assert!(!reconnect, "MRTR rounds are not transport recovery");
+    assert!(!is_timeout);
+    assert_eq!(
+        handles.calls.load(Ordering::Relaxed),
+        2,
+        "initial call + one retry"
+    );
+
+    let bodies = handles.call_bodies.lock().clone();
+    assert_eq!(bodies.len(), 2);
+    // This client's 5s startup budget skips the discover probe, so the handshake is the classic `initialize`, where the elicitation capability is declared at initialize time (rmcp stamps per-request `_meta` capabilities only on the SEP-2575 session-less `discover` handshake).
+    assert_eq!(
+        handles.init_version.lock().as_deref(),
+        Some("2025-11-25"),
+        "the legacy fallback must offer the newest initialize-era protocolVersion"
+    );
+    let init_caps = handles
+        .init_capabilities
+        .lock()
+        .clone()
+        .expect("initialize captured");
+    assert!(
+        init_caps["elicitation"]["form"].is_object() && init_caps["elicitation"]["url"].is_object(),
+        "initialize must declare form+url elicitation: {init_caps}"
+    );
+    assert!(
+        bodies[0]["params"].get("requestState").is_none(),
+        "fresh call must not carry requestState"
+    );
+    let retry = &bodies[1]["params"];
+    assert_eq!(
+        retry["requestState"], "sealed-round-1",
+        "requestState must be echoed verbatim"
+    );
+    assert_eq!(retry["inputResponses"]["user_email"]["action"], "accept");
+    assert_eq!(
+        retry["inputResponses"]["user_email"]["content"]["email"],
+        "user@example.com"
+    );
+    assert_eq!(
+        retry["arguments"]["q"], 1,
+        "retry must re-send the original arguments"
+    );
+}
+
+/// Transport recovery mid-MRTR: the retry after the elicitation round hits a recoverable
+/// JSON-RPC error, recovery re-initializes the session, and the post-recovery retry (on the
+/// fresh `RunningService`) still carries the `inputResponses` and echoed `requestState`.
+#[tokio::test(flavor = "multi_thread")]
+async fn try_call_tool_mrtr_round_survives_transport_recovery() {
+    let (url, handles) = spawn_fake_mcp(CallToolBehavior::FormElicitThenErrorThenOk).await;
+    let client = fake_http_client(&url, 5);
+    let inbox = crate::elicitation::ElicitationInbox::new();
+    client.set_elicitation_tx(Some(inbox.clone()));
+
+    let answer = tokio::spawn(async move {
+        let job = inbox
+            .recv()
+            .await
+            .expect("elicitation job reaches the inbox");
+        let _ = job.response_tx.send(crate::elicitation::accept_result(Some(
+            serde_json::json!({"email": "user@example.com"}),
+        )));
+    });
+
+    let tool = fake_echo_tool();
+    let ew = xai_grok_session_events::EventWriter::noop();
+    let mut reconnect = false;
+    let mut is_timeout = false;
+    let out = tool
+        .try_call_tool(
+            &client,
+            &serde_json::json!({}),
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
+        .await
+        .expect("tool call completes after recovery");
+    answer.await.unwrap();
+
+    assert!(!out.is_error.unwrap_or(false));
+    assert!(reconnect, "the failed retry must trigger recovery");
+    assert!(!is_timeout);
+    assert_eq!(
+        handles.calls.load(Ordering::Relaxed),
+        3,
+        "initial call + failed retry + recovered retry"
+    );
+    assert_eq!(
+        handles.inits.load(Ordering::Relaxed),
+        2,
+        "initial handshake + one recovery re-init"
+    );
+    let bodies = handles.call_bodies.lock().clone();
+    let recovered_retry = &bodies[2]["params"];
+    assert_eq!(
+        recovered_retry["requestState"], "sealed-round-1",
+        "the recovered retry must still echo requestState"
+    );
+    assert_eq!(
+        recovered_retry["inputResponses"]["user_email"]["action"],
+        "accept"
+    );
+}
+
+/// SEP-2322 URL mode: consent accept → retry (echoing state) → `requestState`-only
+/// `input_required` while the out-of-band interaction is pending → retry → final result.
+#[tokio::test(flavor = "multi_thread")]
+async fn try_call_tool_mrtr_url_elicitation_with_state_only_round() {
+    let (url, handles) = spawn_fake_mcp(CallToolBehavior::UrlElicitThenStateOnlyThenOk).await;
+    let client = fake_http_client(&url, 5);
+    let inbox = crate::elicitation::ElicitationInbox::new();
+    client.set_elicitation_tx(Some(inbox.clone()));
+
+    let answer = tokio::spawn(async move {
+        let job = inbox
+            .recv()
+            .await
+            .expect("elicitation job reaches the inbox");
+        let xai_grok_tools::mcp_elicitation::McpElicitModeFields::Url {
+            url,
+            elicitation_id,
+        } = &job.fields.mode
+        else {
+            panic!("expected url mode, got {:?}", job.fields.mode);
+        };
+        assert_eq!(url, "https://example.com/connect");
+        assert_eq!(elicitation_id, "e-42");
+        // URL-mode accept means "user consented to open the URL"; no content.
+        let _ = job
+            .response_tx
+            .send(crate::elicitation::accept_result(None));
+    });
+
+    let tool = fake_echo_tool();
+    let ew = xai_grok_session_events::EventWriter::noop();
+    let mut reconnect = false;
+    let mut is_timeout = false;
+    let out = tool
+        .try_call_tool(
+            &client,
+            &serde_json::json!({}),
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
+        .await
+        .expect("tool call completes after the pending round resolves");
+    answer.await.unwrap();
+
+    assert!(!out.is_error.unwrap_or(false));
+    assert_eq!(
+        handles.calls.load(Ordering::Relaxed),
+        3,
+        "initial call + consent retry + state-only retry"
+    );
+
+    let bodies = handles.call_bodies.lock().clone();
+    let consent_retry = &bodies[1]["params"];
+    assert_eq!(consent_retry["requestState"], "sealed-url-1");
+    assert_eq!(
+        consent_retry["inputResponses"]["user_auth"]["action"],
+        "accept"
+    );
+    assert!(
+        consent_retry["inputResponses"]["user_auth"]
+            .get("content")
+            .is_none_or(|c| c.is_null()),
+        "url-mode accept carries no content"
+    );
+    let state_only_retry = &bodies[2]["params"];
+    assert_eq!(state_only_retry["requestState"], "sealed-url-2");
+    assert!(
+        state_only_retry.get("inputResponses").is_none(),
+        "state-only rounds retry without inputResponses"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn try_call_tool_http_outer_timeout_resets_transport_no_retry() {
     let (url, handles) = spawn_fake_mcp(CallToolBehavior::HangThenOk { hang_ms: 3000 }).await;
@@ -1951,7 +2728,14 @@ async fn try_call_tool_http_outer_timeout_resets_transport_no_retry() {
     let mut is_timeout = false;
     let raw = serde_json::json!({});
     let err = tool
-        .try_call_tool(&client, &raw, &mut reconnect, &mut is_timeout, &ew)
+        .try_call_tool(
+            &client,
+            &raw,
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
         .await
         .expect_err("call must time out");
 
@@ -1976,7 +2760,14 @@ async fn try_call_tool_http_outer_timeout_resets_transport_no_retry() {
     let mut reconnect2 = false;
     let mut is_timeout2 = false;
     let out = tool
-        .try_call_tool(&client, &raw, &mut reconnect2, &mut is_timeout2, &ew)
+        .try_call_tool(
+            &client,
+            &raw,
+            &mut reconnect2,
+            &mut is_timeout2,
+            &ew,
+            &tracing::Span::none(),
+        )
         .await
         .expect("second dispatch should re-init and succeed");
     assert!(!out.is_error.unwrap_or(false));
@@ -2003,7 +2794,14 @@ async fn try_call_tool_http_retry_timeout_surfaces_timeout() {
     let mut is_timeout = false;
     let raw = serde_json::json!({});
     let err = tool
-        .try_call_tool(&client, &raw, &mut reconnect, &mut is_timeout, &ew)
+        .try_call_tool(
+            &client,
+            &raw,
+            &mut reconnect,
+            &mut is_timeout,
+            &ew,
+            &tracing::Span::none(),
+        )
         .await
         .expect_err("the retried call must time out");
 
@@ -2033,6 +2831,7 @@ async fn test_reset_transport_succeeds_for_http_client() {
     let config = HttpConfig {
         url: "http://127.0.0.1:9/api/mcp".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let client = McpClient::new_http("example-mcp".to_string(), config, None, None);
     assert!(client.reset_transport().await);
@@ -2049,6 +2848,7 @@ async fn test_reset_transport_is_idempotent() {
     let config = HttpConfig {
         url: "http://127.0.0.1:9/api/mcp".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let client = McpClient::new_http("example-mcp".to_string(), config, None, None);
 
@@ -2062,6 +2862,7 @@ async fn test_reset_transport_makes_ensure_initialized_retry_handshake() {
     let config = HttpConfig {
         url: "http://127.0.0.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let client = McpClient::new_http("test".to_string(), config, None, None);
 
@@ -2234,7 +3035,7 @@ async fn try_call_tool_reconnects_then_succeeds_after_retriable_transport_error(
     let dead = dead_service().await;
     *client.state.lock().await = ClientState::Ready {
         service: dead,
-        _connected: xai_grok_telemetry::activity::MCP_SERVERS_CONNECTED.enter(),
+        _connected: MCP_SERVERS_CONNECTED.enter(),
     };
 
     let erased = McpErasedTool {
@@ -2259,6 +3060,7 @@ async fn try_call_tool_reconnects_then_succeeds_after_retriable_transport_error(
             &mut reconnect_attempted,
             &mut is_timeout,
             &ew,
+            &tracing::Span::none(),
         )
         .await
         .expect("retry after reconnect should succeed");
@@ -2280,7 +3082,7 @@ async fn try_call_tool_reconnects_then_succeeds_after_retriable_transport_error(
         ClientState::Ready { .. }
     ));
     assert!(
-        xai_grok_telemetry::activity::MCP_SERVERS_CONNECTED.get() >= 1,
+        MCP_SERVERS_CONNECTED.get() >= 1,
         "a Ready client must hold a connected-gauge slot"
     );
 }
@@ -2338,13 +3140,14 @@ async fn watched_live_client(name: &str) -> Arc<McpClient> {
         HttpConfig {
             url: "http://127.0.0.1:0/".to_string(),
             headers: Vec::new(),
+            local_agent_endpoint: false,
         },
         None,
         None,
     ));
     *client.state.lock().await = ClientState::Ready {
         service,
-        _connected: xai_grok_telemetry::activity::MCP_SERVERS_CONNECTED.enter(),
+        _connected: MCP_SERVERS_CONNECTED.enter(),
     };
     let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel();
     client.set_event_tx(Some(event_tx));
@@ -2415,7 +3218,7 @@ fn is_auth_rejection_message_matches_auth_signals() {
 #[test]
 fn auth_required_records_as_auth_not_init_failed_and_maps_category() {
     let mut state = McpState::new(vec![]);
-    state.record_init_failure("oauth-srv", true, None);
+    state.record_init_failure(state.generation(), "oauth-srv", true, None);
     assert!(state.auth_required.contains("oauth-srv"));
     assert!(!state.init_failed.contains_key("oauth-srv"));
 
@@ -2557,6 +3360,7 @@ fn new_http_propagates_expose_image_base64_override_to_getter() {
     let config = HttpConfig {
         url: "http://localhost/api/mcp".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         expose_image_base64: Some(true),
@@ -2596,6 +3400,7 @@ async fn ensure_initialized_concurrent_callers_never_see_legacy_fast_fail() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(1),
@@ -2637,6 +3442,7 @@ async fn ensure_initialized_parked_caller_retries_after_notify() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(1),
@@ -2686,6 +3492,7 @@ async fn ensure_initialized_inflight_wait_times_out_when_holder_silent() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(0),
@@ -2712,6 +3519,7 @@ async fn ensure_initialized_drop_guard_restores_state_after_holder_aborted() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(10),
@@ -2762,8 +3570,8 @@ fn test_mcp_state_is_initialized_requires_empty_initializing_servers() {
     assert!(!state.has_finished_init());
     assert!(matches!(state.init_progress(), InitProgress::NotStarted));
 
-    assert!(state.try_start_init());
-    state.mark_servers_initializing(["a".to_string()]);
+    let _owner = state.try_start_init().expect("claims init");
+    state.mark_servers_initializing(state.generation(), ["a".to_string()]);
     assert!(!state.is_initialized());
     assert!(state.is_initializing());
     assert!(!state.has_finished_init());
@@ -2772,7 +3580,7 @@ fn test_mcp_state_is_initialized_requires_empty_initializing_servers() {
         InitProgress::Starting { .. }
     ));
 
-    state.finish_init();
+    state.finish_init(state.generation());
     assert!(
         !state.is_initialized(),
         "is_initialized() must wait for per-server handshakes"
@@ -2785,7 +3593,7 @@ fn test_mcp_state_is_initialized_requires_empty_initializing_servers() {
     assert!(state.is_server_handshaking("a"));
     assert_eq!(state.handshaking_servers_count(), 1);
 
-    state.mark_server_ready("a");
+    state.mark_server_ready(state.generation(), "a");
     assert!(state.is_initialized());
     assert!(!state.is_initializing());
     assert!(state.has_finished_init());
@@ -2797,28 +3605,58 @@ fn test_mcp_state_is_initialized_requires_empty_initializing_servers() {
 fn test_init_progress_state_machine_invariants() {
     let mut state = McpState::new(vec![make_stdio_server("a", "/bin/a")]);
 
-    assert!(state.try_start_init());
-    assert!(!state.try_start_init(), "double try_start_init is rejected");
+    let _owner = state.try_start_init().expect("claims init");
+    assert!(
+        state.try_start_init().is_none(),
+        "double try_start_init is rejected"
+    );
 
-    state.mark_servers_initializing(["a".to_string(), "b".to_string()]);
+    state.mark_servers_initializing(state.generation(), ["a".to_string(), "b".to_string()]);
     assert_eq!(state.handshaking_servers_count(), 2);
-    state.mark_all_servers_ready();
+    state.mark_all_servers_ready(state.generation());
     assert_eq!(state.handshaking_servers_count(), 0);
     assert!(
         matches!(state.init_progress(), InitProgress::Starting { .. }),
         "mark_all_servers_ready preserves the lifecycle variant"
     );
 
-    state.finish_init();
+    state.finish_init(state.generation());
     assert!(state.is_initialized());
     assert!(matches!(
         state.init_progress(),
         InitProgress::Finished { .. }
     ));
 
-    state.cancel_init();
+    state.cancel_any_init();
     assert!(matches!(state.init_progress(), InitProgress::NotStarted));
-    assert!(state.try_start_init(), "cancel_init re-enables init");
+    let _owner = state
+        .try_start_init()
+        .expect("cancel_any_init re-enables init");
+
+    let stale = state.generation();
+    assert!(state.update_configs(vec![make_stdio_server("c", "/bin/c")]));
+    let _owner = state.try_start_init().expect("claims init");
+    state.mark_servers_initializing(state.generation(), ["c".to_string()]);
+    state.mark_servers_initializing(stale, ["ghost".to_string()]);
+    assert!(
+        !state.is_server_handshaking("ghost"),
+        "a stale pass must not mark the successor generation's handshake set"
+    );
+    state.record_init_failure(stale, "ghost", false, Some("stale".to_string()));
+    assert!(
+        !state.has_failure_record("ghost"),
+        "a stale pass must not record failures onto the successor generation"
+    );
+    state.mark_server_ready(stale, "c");
+    assert!(
+        state.is_server_handshaking("c"),
+        "a stale pass must not conclude the successor generation's handshake"
+    );
+    state.finish_init(stale);
+    assert!(
+        !state.has_finished_init(),
+        "a stale pass must not finish the successor generation's init"
+    );
 }
 
 fn state_label(s: &ClientState) -> &'static str {
@@ -2843,6 +3681,7 @@ async fn is_healthy_pending_returns_false() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let client = McpClient::new_http("pending".to_string(), config, None, None);
     assert!(matches!(
@@ -2866,6 +3705,7 @@ async fn is_healthy_pending_does_not_block_on_handshake() {
     let config = HttpConfig {
         url: "http://192.0.2.1:1/unreachable".to_string(),
         headers: vec![],
+        local_agent_endpoint: false,
     };
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(10),
@@ -2889,6 +3729,9 @@ async fn is_healthy_pending_does_not_block_on_handshake() {
 
 #[test]
 fn make_client_info_pins_protocol_version() {
+    // The client info's version rides the legacy `initialize` handshake, so it must
+    // stay on the newest initialize-era revision: 2026-07-28 removed the handshake
+    // (SEP-2575), and version-strict servers reject an `initialize` naming it.
     assert_eq!(
         McpClient::make_client_info("test-srv", /* advertise_elicitation */ true).protocol_version,
         rmcp::model::ProtocolVersion::V_2025_11_25
@@ -3048,6 +3891,7 @@ fn probe_ctx<'a>(
         mode,
         scope: None,
         discovery: McpOauthDiscovery::Network,
+        send_grok_agent_id_header: false,
     }
 }
 
@@ -3269,6 +4113,27 @@ fn apply_stdio_env_session_id_cannot_be_shadowed() {
         .and_then(|(_, v)| v)
         .map(|v| v.to_string_lossy().into_owned());
     assert_eq!(value.as_deref(), Some("sess-real"));
+}
+
+#[tokio::test]
+async fn grok_agent_id_header_rejects_invalid_session_id() {
+    let writer = xai_grok_session_events::EventWriter::noop();
+    let ctx = McpSpawnCtx::for_session(
+        "bad\nsession",
+        &writer,
+        OauthInteractivity::Interactive,
+        None,
+    )
+    .with_grok_agent_id_header();
+    let server = acp::McpServer::Http(
+        acp::McpServerHttp::new("local", "http://127.0.0.1:9/mcp").headers(vec![]),
+    );
+
+    let error = match start_mcp_server(server, None, None, None, &ctx).await {
+        Ok(_) => panic!("invalid header value must fail closed"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("invalid X-Grok-Agent-ID value"));
 }
 
 #[test]
@@ -3555,7 +4420,7 @@ fn fresh_init_attempt_clears_unreachable_schedule() {
     let mut state = McpState::new(vec![make_stdio_server("srv", "/bin/srv")]);
     state.record_unreachable_failure_at("srv", "down".to_string(), std::time::Instant::now());
 
-    state.mark_servers_initializing(vec!["srv".to_string()]);
+    state.mark_servers_initializing(state.generation(), vec!["srv".to_string()]);
     assert!(!state.init_failed.contains_key("srv"));
     assert!(state.take_unreachable_retry_candidates().is_empty());
 }

@@ -1,4 +1,4 @@
-//! `thanh wrap` — run any command in a local PTY that forwards its clipboard.
+//! `grok wrap` runs any command in a local PTY that forwards its clipboard.
 //!
 //! Generalizes the `grok ssh` wrapper: spawns an arbitrary command inside a local pseudo-terminal.
 //! It intercepts OSC 52 clipboard escape sequences from the command's output and writes their payload to the local system clipboard.
@@ -6,12 +6,10 @@
 //! That matters most in terminals that do not handle OSC 52 themselves (for example Apple Terminal).
 //! It also stamps `LC_GROK_APPEARANCE` from the local OS theme so a remote `theme = "auto"` can resolve over SSH and tmux.
 //!
-//! Resolvable programs spawn directly. On Unix, commands a direct spawn cannot
-//! run — a single shell-quoted string (`thanh wrap "mycli ssh host"`) or a shell
-//! alias — are handed to `$SHELL -i -c` instead, so the user's own shell does
-//! the word-splitting and alias expansion. The exec fallback (a non-TTY
-//! session, or PTY setup failure) keeps the same route but drops `-i` to
-//! avoid job-control noise without our PTY.
+//! Resolvable programs spawn directly.
+//! On Unix, a command a direct spawn cannot run (a single shell-quoted string `grok wrap "mycli ssh host"` or a shell alias) goes to `$SHELL -i -c`.
+//! The user's own shell then does the word-splitting and alias expansion.
+//! The exec fallback (a non-TTY session, or PTY setup failure) keeps the same route but drops `-i` to avoid job-control noise without our PTY.
 //!
 //! The PTY/OSC 52/resize engine lives in [`crate::pty_wrap::run_wrapped_command`].
 
@@ -19,17 +17,13 @@ use anyhow::Result;
 
 use crate::app::WrapArgs;
 
-/// Run the `thanh wrap` command.
-///
-/// On Unix interactive sessions the command runs inside a local PTY.
-/// Its OSC 52 clipboard sequences are intercepted and written to the local clipboard.
-/// Otherwise the command is executed directly (no wrapping).
+/// Run the `grok wrap` command. Otherwise the command is executed directly (no wrapping).
 pub fn run(args: &WrapArgs) -> Result<()> {
     // `command` is `required` in clap, so it always has at least one element.
     let program = args
         .command
         .first()
-        .ok_or_else(|| anyhow::anyhow!("thanh wrap: no command given"))?;
+        .ok_or_else(|| anyhow::anyhow!("grok wrap: no command given"))?;
 
     // Unix: derive both spawn plans up front from one env snapshot so the PTY attempt and its fallback route consistently
     // The wrapped run uses `$SHELL -i` when routing through the shell (rc files load, aliases expand; safe because it runs inside our PTY)
@@ -56,9 +50,8 @@ pub fn run(args: &WrapArgs) -> Result<()> {
         match crate::pty_wrap::run_wrapped_command(&wrapped.program, &wrapped.args) {
             Ok(code) => std::process::exit(code),
             Err(e) => {
-                // PTY setup failed; keep the chosen route without our PTY so
-                // the command still works (just without clipboard forwarding).
-                eprintln!("thanh wrap: wrapped mode failed, running without PTY wrapping: {e}");
+                // PTY setup failed; keep the chosen route without our PTY so the command still works (just without clipboard forwarding)
+                eprintln!("grok wrap: wrapped mode failed, running without PTY wrapping: {e}");
                 exec_command(&fallback.program, &fallback.args)
             }
         }
@@ -67,7 +60,7 @@ pub fn run(args: &WrapArgs) -> Result<()> {
     }
 }
 
-/// The program and argv `thanh wrap` will actually spawn.
+/// The program and argv `grok wrap` will actually spawn.
 #[derive(Clone)]
 struct SpawnPlan {
     program: String,
@@ -105,19 +98,15 @@ fn derive_spawn(
         }
     };
 
-    // A single argument containing whitespace is a shell-quoted command line
-    // (`thanh wrap "mycli ssh host"`), not a program name: hand it to the shell
-    // verbatim so it does word-splitting, alias expansion, pipes, etc.
+    // A single argument containing whitespace is a shell-quoted command line (`grok wrap "mycli ssh host"`), not a program name
+    // Hand it to the shell verbatim so it does word-splitting, alias expansion, pipes, etc
     if command.len() == 1 && command[0].contains(char::is_whitespace) {
         return via_shell(command[0].clone());
     }
 
-    // A bare program name that PATH cannot resolve is usually a shell alias
-    // (`alias mycli=remote`); only a shell can expand it. Explicit paths
-    // (containing `/`) spawn directly so their errors stay precise, as do
-    // empty and whitespace-containing first words — neither can be an alias
-    // name, and an empty one (`thanh wrap "$PROG" ...` with `$PROG` unset)
-    // must keep failing fast instead of silently running the tail.
+    // A bare program name that PATH cannot resolve is usually a shell alias (`alias mycli=remote`); only a shell can
+    // expand it. An empty one (`grok wrap "$PROG".` with `$PROG` unset) must keep failing fast instead of silently
+    // running the tail.
     if !command[0].is_empty()
         && !command[0].contains('/')
         && !command[0].contains(char::is_whitespace)
@@ -172,17 +161,8 @@ fn resolve_shell(shell: Option<&str>) -> String {
     }
 }
 
-/// Returns true when the command should be wrapped in a local PTY.
-///
-/// Unlike `grok ssh`, `thanh wrap` does not gate on the terminal brand: the user
-/// has explicitly asked to forward the clipboard, and interception works
-/// regardless of whether the outer terminal supports OSC 52 (the payload is
-/// written to the local clipboard directly).
-///
-/// It requires a platform `portable-pty` can drive, Unix (`openpty`) or Windows (ConPTY), and an interactive (TTY) session.
-/// Wrapping a non-interactive pipe would make the child think it has a terminal and has no clipboard destination anyway.
-/// On Windows the OSC 52 clipboard bridge works the same.
-/// Only the live outer-to-inner resize is not forwarded (see [`crate::pty_wrap::run_wrapped_command`]).
+/// Wrapping a non-interactive pipe would make the child think it has a terminal and has no clipboard destination
+/// anyway. Only the live outer-to-inner resize is not forwarded.
 fn should_wrap() -> bool {
     // PTY wrapping requires native pseudo-terminal APIs (Unix openpty / Windows ConPTY), both of which `portable-pty` supports
     if !cfg!(any(unix, windows)) {

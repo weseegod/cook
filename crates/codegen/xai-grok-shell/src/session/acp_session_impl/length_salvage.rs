@@ -14,15 +14,14 @@ pub(super) const LENGTH_CONTINUE_REMINDER_BODY: &str = "Your previous response e
      message follows this note, answer that instead.";
 
 /// Pure form of [`SessionActor::length_salvage_budget`].
-/// Kill switches outrank the always-on cursor tier: an explicit `GROK_LENGTH_SALVAGE=0` locally, and the remote `length_salvage_budget = 0`.
-/// The env opt-in is a debug override and outranks the remote kill.
+/// Kill switches are absolute and outrank every tier, including the always-on cursor one: an explicit `GROK_LENGTH_SALVAGE=0` locally, and the remote `length_salvage_budget = 0` fleet-wide.
 /// Otherwise the precedence is cursor, then env opt-in, then remote budget, then off.
 pub(super) fn resolve_length_salvage_budget(
     is_cursor: bool,
     env: Option<bool>,
     remote: Option<u32>,
 ) -> Option<u32> {
-    if env == Some(false) || (env.is_none() && remote == Some(0)) {
+    if env == Some(false) || remote == Some(0) {
         return None;
     }
     if is_cursor {
@@ -36,14 +35,12 @@ pub(super) fn resolve_length_salvage_budget(
 
 impl SessionActor {
     /// `Some(budget)` salvages Length truncations (partial commit and bounded continues); `None` hard-fails.
-    /// Always on when [`SessionActor::is_cursor_agent`]; the `GROK_LENGTH_SALVAGE` env var is the local debug override.
-    /// The remote `length_salvage_budget` setting is not wired to the snapshot yet, so this passes `None`.
-    /// The precedence, including remote `0` turning the cursor tier off, is already fixed here.
+    /// Always on when [`SessionActor::is_cursor_agent`]; otherwise the `GROK_LENGTH_SALVAGE` env var (debug override), then the `length_salvage_budget` remote setting.
     pub(super) fn length_salvage_budget(&self) -> Option<u32> {
         resolve_length_salvage_budget(
             self.is_cursor_agent(),
             xai_grok_config::env_bool("GROK_LENGTH_SALVAGE"),
-            None,
+            self.length_salvage_remote_budget,
         )
     }
 }
@@ -204,8 +201,21 @@ mod tests {
         assert_eq!(resolve_length_salvage_budget(false, None, Some(0)), None);
         assert_eq!(
             resolve_length_salvage_budget(true, Some(true), Some(0)),
-            Some(CURSOR_LENGTH_CONTINUE_BUDGET),
-            "the env opt-in is a debug override over the remote kill"
+            None,
+            "the remote kill outranks the env opt-in and the cursor tier"
+        );
+        assert_eq!(
+            resolve_length_salvage_budget(false, Some(true), Some(0)),
+            None,
+            "the remote kill outranks the env opt-in"
+        );
+    }
+
+    #[test]
+    fn env_override_beats_a_nonzero_remote_budget() {
+        assert_eq!(
+            resolve_length_salvage_budget(false, Some(true), Some(9)),
+            Some(DEFAULT_LENGTH_CONTINUE_BUDGET)
         );
     }
 

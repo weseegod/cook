@@ -14,14 +14,9 @@ pub(super) enum Activity {
     Idle,
     Working,
 }
-/// Where a session is in its life.
-/// Each variant carries the evidence that makes it true, so a reader cannot observe a combination the type forbids.
-///
+/// Where a session is in its life. Each variant carries the evidence that makes it true, so a reader cannot observe a combination the type forbids.
 /// A hosted actor is a handle on [`Self::Resident`] or mid-attach on [`Self::Attaching`].
-/// [`Self::Attaching`] owns the waiter racing requests wait on and parks the previous presence in `displaced` so a failed attach can restore it.
-/// Independent `set_live` writes stay inside [`Self::Attaching`] until the attach settles.
-/// Terminal variants still carry an optional thread so `set_live` and `set_thread` cannot drop a thread the sweep still owns.
-/// `handle` is `Option` so `take_session` can drop residency without also rewriting live state (unload and close do that next).
+/// [`Self::Attaching`] owns the waiter racing requests wait on and parks the previous presence in `displaced` so a failed attach can restore it. Terminal variants still carry an optional thread so `set_live` and `set_thread` cannot drop a thread the sweep still owns. `handle` is `Option` so `take_session` can drop residency without also rewriting live state (unload and close do that next).
 pub(super) enum SessionPresence {
     /// Actor running and registered. The handle is the evidence of residency.
     Resident {
@@ -213,6 +208,7 @@ pub(super) struct SessionCounts {
     pub(super) model_unavailable_sessions: usize,
     pub(super) dispatch_locks: usize,
     pub(super) live_orphan_heal_locks: usize,
+    pub(super) config_mutation_locks: usize,
     pub(super) session_turn_numbers: usize,
     pub(super) permission_event_receivers: usize,
     pub(super) session_index_claims: usize,
@@ -220,7 +216,6 @@ pub(super) struct SessionCounts {
 }
 impl SessionRegistry {
     /// Releases everything a closing session leaves behind, in one drop.
-    ///
     /// A running actor thread stays: dropping its handle would detach it, and nothing would track the memory it holds.
     /// The sweep reclaims it later.
     pub(super) fn release(&self, id: &acp::SessionId) {
@@ -665,6 +660,16 @@ impl SessionRegistry {
             e.retained.get_or_insert_default().turn_number = Some(next);
         });
     }
+    pub(super) fn clear_turn_number(&self, id: &acp::SessionId) {
+        self.clear(id, |e| {
+            if let Some(retained) = &mut e.retained {
+                retained.turn_number = None;
+                if retained.is_empty() {
+                    e.retained = None;
+                }
+            }
+        });
+    }
     pub(super) fn dispatch_lock(&self, id: &acp::SessionId) -> Rc<tokio::sync::Mutex<()>> {
         self.edit(id, |e| {
             e.retained
@@ -682,6 +687,17 @@ impl SessionRegistry {
             e.retained
                 .get_or_insert_default()
                 .live_orphan_heal_lock
+                .get_or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        })
+    }
+    /// Serializes a session's model and reasoning-effort changes so they compose.
+    /// The handlers hold this for the whole change; see `handlers::model_switch`.
+    pub(super) fn config_mutation_lock(&self, id: &acp::SessionId) -> Arc<tokio::sync::Mutex<()>> {
+        self.edit(id, |e| {
+            e.retained
+                .get_or_insert_default()
+                .config_mutation_lock
                 .get_or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
                 .clone()
         })
@@ -753,6 +769,8 @@ impl SessionRegistry {
                 counts.dispatch_locks += usize::from(retained.dispatch_lock.is_some());
                 counts.live_orphan_heal_locks +=
                     usize::from(retained.live_orphan_heal_lock.is_some());
+                counts.config_mutation_locks +=
+                    usize::from(retained.config_mutation_lock.is_some());
                 counts.session_turn_numbers += usize::from(retained.turn_number.is_some());
                 counts.permission_event_receivers +=
                     usize::from(retained.permission_event_receiver.is_some());

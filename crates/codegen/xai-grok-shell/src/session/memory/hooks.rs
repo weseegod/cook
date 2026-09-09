@@ -44,7 +44,6 @@ pub enum SessionEndResult {
 
 /// Real user queries iff the conversation meets the session-end size gate (enough real prompts, enough total bytes).
 /// `None` for empty/brief sessions.
-/// Independent of `save_on_end` so exit dream can still consolidate prior logs when auto-save is off for a substantial session.
 pub(crate) fn queries_meeting_session_end_threshold(
     conversation: &[ConversationItem],
 ) -> Option<Vec<String>> {
@@ -55,7 +54,7 @@ pub(crate) fn queries_meeting_session_end_threshold(
         tracing::debug!(
             real_count = real_queries.len(),
             min = MIN_USER_MESSAGES,
-            "session too short for memory save/dream"
+            "session too short for memory save"
         );
         return None;
     }
@@ -64,7 +63,7 @@ pub(crate) fn queries_meeting_session_end_threshold(
         tracing::debug!(
             total_bytes,
             min = MIN_TOTAL_QUERY_BYTES,
-            "session content too brief for memory save/dream"
+            "session content too brief for memory save"
         );
         return None;
     }
@@ -72,10 +71,6 @@ pub(crate) fn queries_meeting_session_end_threshold(
 }
 
 /// Run the session end hook: save a structured metadata summary to memory.
-///
-/// This is called from the `SessionCommand::Shutdown` handler and the channel-closed path.
-/// It is best-effort: errors are logged but do not prevent shutdown.
-///
 /// Returns the path written (if any) for logging purposes.
 pub fn on_session_end(
     storage: &MemoryStorage,
@@ -396,7 +391,6 @@ mod tests {
         );
     }
 
-    /// Threshold is independent of `save_on_end` so exit dream can still run.
     #[test]
     fn test_conversation_meets_session_end_threshold_ignores_save_config() {
         let short = vec![make_user("hi"), make_assistant("hey")];
@@ -532,7 +526,6 @@ mod tests {
 
     /// The *actual* AUTO_CONTINUE_PROMPT text pushed into the conversation after auto-compaction must not be counted as a real user message.
     /// It must not appear in session-end topics either.
-    ///
     /// The gate matches the real stored text, not just the `"__auto_continue__"` request-id sentinel.
     #[test]
     fn test_actual_auto_continue_prompt_excluded() {

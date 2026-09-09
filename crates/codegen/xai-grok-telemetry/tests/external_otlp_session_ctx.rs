@@ -52,6 +52,7 @@ fn ambient_ctx_injects_session_turn_and_prompt_id() {
             client_identifier: None,
             screen_mode: None,
             prompt_text: None,
+            command_name: None,
         });
         xai_grok_telemetry::log_event(xai_grok_telemetry::events::ModelResponseReceived {
             model_id: "grok-4".into(),

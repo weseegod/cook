@@ -202,6 +202,8 @@ pub(crate) fn prompt_suggest_sampling_defaults(
     let temperature = cfg
         .temperature
         .unwrap_or(PROMPT_SUGGEST_TEMPERATURE_DEFAULT);
+    // Pass through. Unset stays None so the non-reasoning model pin still applies.
+    // Low is chosen later, and only if the selected model supports reasoning.
     (max_output_tokens, temperature, cfg.reasoning_effort)
 }
 
@@ -307,13 +309,22 @@ mod tests {
     }
 
     #[test]
-    fn sampling_defaults_leave_reasoning_unspecified() {
+    fn sampling_defaults_leave_unset_reasoning_unset() {
         let (max_output_tokens, _, reasoning_effort) =
             prompt_suggest_sampling_defaults(&PromptSuggestConfig::default());
         assert_eq!(
             (max_output_tokens, reasoning_effort),
             (PROMPT_SUGGEST_MAX_OUTPUT_TOKENS_DEFAULT, None)
         );
+    }
+
+    #[test]
+    fn sampling_defaults_preserve_explicit_high() {
+        let (_, _, reasoning_effort) = prompt_suggest_sampling_defaults(&PromptSuggestConfig {
+            reasoning_effort: Some(ReasoningEffort::High),
+            ..PromptSuggestConfig::default()
+        });
+        assert_eq!(reasoning_effort, Some(ReasoningEffort::High));
     }
 
     #[test]

@@ -144,10 +144,9 @@ fn setup_gh_release(running_version: &str) -> FakeBinGuard {
     FakeBinGuard::install("gh", fake_gh_serving_releases)
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Convergence: ensure_latest_on_disk downloads once, then every subsequent pass (the leader's hourly re-entry) converges without re-downloading
-// This is the e2e companion to the decision-level tests in test_downgrade_matrix.rs; it asserts on actual download invocations
-// ─────────────────────────────────────────────────────────────────────────────
+// Convergence: ensure_latest_on_disk downloads once, then every subsequent pass (the leader's hourly re-entry) converges
+// without re-downloading. This is the e2e companion to the decision-level tests in test_downgrade_matrix.rs; it asserts
+// on actual download invocations ─────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 #[serial]

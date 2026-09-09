@@ -74,6 +74,7 @@ impl MvpAgent {
                 open_files: usage.open_files,
                 resident_sessions: self.session_registry.resident_count(),
                 session_threads: self.session_registry.counts().session_threads,
+                idle: xai_grok_telemetry::activity::work_is_idle(),
             },
         );
     }

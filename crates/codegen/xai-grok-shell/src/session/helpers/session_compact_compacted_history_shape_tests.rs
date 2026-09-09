@@ -309,6 +309,9 @@ fn fallback_minimal_history_has_no_tool_results() {
         running_subagents: vec![],
         connected_mcp_servers: vec![],
         todos: vec![],
+        scheduled_loops: vec![],
+        workflows: vec![],
+        workflow_tool_name: None,
     };
     let fallback = build_compacted_history(
         "You are a helpful assistant.",
@@ -329,7 +332,7 @@ fn fallback_minimal_history_has_no_tool_results() {
         "fallback history must contain no ToolResult items"
     );
 }
-/// Compaction with running subagents: the `## Running Subagents` section must appear in the `<system-reminder>` with correct content and tool names.
+/// Compaction with running subagents: their ids must appear under `## Running Background Tasks`.
 #[tokio::test]
 async fn test_compacted_history_with_running_subagents() {
     let conversation = vec![
@@ -374,6 +377,10 @@ async fn test_compacted_history_with_running_subagents() {
     let system_reminder =
         to_system_reminder_sync(&state_context, &[], &[], Some(&tool_names), None, None);
     let reminder = system_reminder.expect("should produce a system-reminder");
+    assert!(
+        reminder.contains("## Running Background Tasks"),
+        "must contain Running Background Tasks heading"
+    );
     assert!(
         reminder.contains("## Running Subagents"),
         "must contain Running Subagents heading"
@@ -534,6 +541,9 @@ fn fallback_preserves_subagents() {
         ],
         connected_mcp_servers: vec![],
         todos: vec![],
+        scheduled_loops: vec![],
+        workflows: vec![],
+        workflow_tool_name: None,
     };
     let fallback = CompactionStateContext {
         cwd_generation: original.cwd_generation,
@@ -546,6 +556,9 @@ fn fallback_preserves_subagents() {
         running_subagents: original.running_subagents.clone(),
         connected_mcp_servers: original.connected_mcp_servers.clone(),
         todos: original.todos.clone(),
+        scheduled_loops: original.scheduled_loops.clone(),
+        workflows: original.workflows.clone(),
+        workflow_tool_name: original.workflow_tool_name.clone(),
     };
     assert_eq!(
         fallback.running_subagents.len(),

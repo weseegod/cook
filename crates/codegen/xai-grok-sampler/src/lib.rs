@@ -19,10 +19,13 @@ mod doom_loop_recovery;
 pub mod events;
 pub mod handle;
 pub mod metrics;
+mod prewarm;
 pub mod retry;
 pub mod sampling_log;
 mod shared_http;
+mod span_timing;
 pub mod stream;
+mod stream_classify;
 pub mod types;
 
 // Public re-exports: the API consumers see
@@ -42,6 +45,7 @@ pub use events::{
 };
 pub use handle::{CollectedSamplingResult, DoomLoopRecoveryAttempt, SamplerHandle};
 pub use metrics::{InferenceLatencyStats, compute_percentiles};
+pub use prewarm::{PrewarmOutcome, PrewarmReport, prewarm_transport};
 pub use retry::{
     DEFAULT_MAX_RETRIES, MAX_RETRY_BACKOFF, RATE_LIMIT_RETRY_DISABLED, RATE_LIMIT_RETRY_THRESHOLD,
     RetryDecision, classify_error, format_sampling_error, jitter_backoff, resolve_max_retries,
@@ -50,3 +54,4 @@ pub use retry::{
 pub use sampling_log::AuthInfo;
 pub use stream::{collect_response, stream_chat_completions, stream_messages, stream_responses};
 pub use types::RequestId;
+pub use xai_grok_sampling_types::ConversationGroupId;

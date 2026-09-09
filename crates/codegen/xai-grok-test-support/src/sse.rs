@@ -42,6 +42,57 @@ pub fn messages_api_events(text: &str, model: &str, stop_reason: &str) -> Vec<Ev
     ]
 }
 
+/// Messages API tool-use turn: one `input_json_delta`, then `stop_reason: "tool_use"`.
+pub fn messages_api_tool_use_events(
+    tool_id: &str,
+    name: &str,
+    partial_json: &str,
+    model: &str,
+) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test", "type": "message", "role": "assistant",
+                    "content": [], "model": model, "stop_reason": null,
+                    "usage": {
+                        "input_tokens": 10, "output_tokens": 0,
+                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": tool_id, "name": name, "input": {}}
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": partial_json}
+            })
+            .to_string(),
+        ),
+        SseEvent::data(json!({"type": "content_block_stop", "index": 0}).to_string()),
+        SseEvent::data(
+            json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use"},
+                "usage": {"output_tokens": 5, "input_tokens": 10}
+            })
+            .to_string(),
+        ),
+        SseEvent::data(json!({"type": "message_stop"}).to_string()),
+    ]
+}
+
 /// Generate ChatCompletions SSE events that stream `text` word-by-word, collapsing whitespace.
 /// Use [`chat_completion_events_exact`] when the receiver must reconstruct `text` byte-for-byte.
 pub fn chat_completion_events(text: &str, model: &str) -> Vec<Event> {
@@ -253,11 +304,212 @@ fn scripted_to_axum(events: Vec<SseEvent>) -> Vec<Event> {
         .collect()
 }
 
-/// Generate a reasoning-only Responses API completion: reasoning summary deltas, then a `reasoning` output item with no message and no tool call.
-/// The shell's collector synthesizes an empty assistant, classifying the response as `EmptyReason::ReasoningOnly`, which makes the sampler resample.
-///
-/// Returns [`SseEvent`]s (not axum `Event`s) for use with [`crate::ScriptedResponse::sse`] or `enqueue_response`.
-/// Reasoning-only is a scripted scenario, not an echo/fixed response mode, so it is not wired into the `mock_server` mode handlers.
+/// Responses API zero-arg tool call: `function_call` on `output_item.added`, no arguments delta.
+pub fn responses_api_zero_arg_tool_call_events(
+    call_id: &str,
+    name: &str,
+    model: &str,
+) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "in_progress", "output": []
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {
+                    "type": "function_call", "call_id": call_id, "name": name, "arguments": ""
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "completed",
+                    "output": [{
+                        "type": "function_call", "call_id": call_id, "name": name, "arguments": ""
+                    }],
+                    "usage": {
+                        "input_tokens": 10, "output_tokens": 1, "total_tokens": 11,
+                        "input_tokens_details": { "cached_tokens": 0 },
+                        "output_tokens_details": { "reasoning_tokens": 0 }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ]
+}
+
+/// Responses API completion with empty output: `response.created` then `response.completed`.
+pub fn responses_api_completed_only_events(model: &str) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "in_progress", "output": []
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.completed",
+                "sequence_number": 1,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "completed", "output": [],
+                    "usage": {
+                        "input_tokens": 10, "output_tokens": 0, "total_tokens": 10,
+                        "input_tokens_details": { "cached_tokens": 0 },
+                        "output_tokens_details": { "reasoning_tokens": 0 }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ]
+}
+
+/// Responses API incomplete turn with no content: `response.created` then `response.incomplete`.
+pub fn responses_api_incomplete_only_events(model: &str) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "in_progress", "output": []
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.incomplete",
+                "sequence_number": 1,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "incomplete", "output": [],
+                    "usage": {
+                        "input_tokens": 10, "output_tokens": 0, "total_tokens": 10,
+                        "input_tokens_details": { "cached_tokens": 0 },
+                        "output_tokens_details": { "reasoning_tokens": 0 }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ]
+}
+
+/// Chat Completions turn with no content: role-only chunk, usage-only chunk, `[DONE]`.
+pub fn chat_completions_no_content_events(model: &str) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "id": "chatcmpl-test", "object": "chat.completion.chunk",
+                "created": 1234567890, "model": model,
+                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "id": "chatcmpl-test", "object": "chat.completion.chunk",
+                "created": 1234567890, "model": model,
+                "choices": [],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 0, "total_tokens": 10}
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ]
+}
+
+/// Messages API turn with no content: `message_start`, stop delta, `message_stop`.
+pub fn messages_api_no_content_events(model: &str) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test", "type": "message", "role": "assistant",
+                    "content": [], "model": model, "stop_reason": null,
+                    "usage": {
+                        "input_tokens": 10, "output_tokens": 0,
+                        "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": 0, "input_tokens": 10}
+            })
+            .to_string(),
+        ),
+        SseEvent::data(json!({"type": "message_stop"}).to_string()),
+    ]
+}
+
+/// Responses API failure before content: `response.created` then `response.failed`.
+pub fn responses_api_failed_events(message: &str, model: &str) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "in_progress", "output": []
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.failed",
+                "sequence_number": 1,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "failed", "output": [],
+                    "error": { "code": "server_error", "message": message }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ]
+}
+
+/// Generate a reasoning-only Responses API completion: reasoning summary deltas, then a `reasoning` output item with no
+/// message and no tool call. Reasoning-only is a scripted scenario, not an echo/fixed response mode, so it is not wired
+/// into the `mock_server` mode handlers.
 pub fn responses_api_reasoning_only_events(reasoning: &str, model: &str) -> Vec<SseEvent> {
     let mut events = Vec::new();
     let mut seq = 0;
@@ -332,11 +584,9 @@ pub fn responses_api_reasoning_only_events(reasoning: &str, model: &str) -> Vec<
     events
 }
 
-/// Generate a Responses API completion that streams reasoning summary deltas first and then a normal text answer.
-/// This is the shape a reasoning-capable model produces on an ordinary turn.
-/// `response.completed` carries both items (`reasoning` and `message`), so the collector yields `[Reasoning, Assistant(text)]`, a non-empty turn.
-///
-/// Returns [`SseEvent`]s for use with [`crate::ScriptedResponse::sse`] or `enqueue_response`, mirroring [`responses_api_reasoning_only_events`].
+/// `response.completed` carries both items (`reasoning` and `message`), so the collector yields `[Reasoning,
+/// Assistant(text)]`, a non-empty turn. Returns [`SseEvent`]s for use with [`crate::ScriptedResponse::sse`] or
+/// `enqueue_response`, mirroring [`responses_api_reasoning_only_events`].
 pub fn responses_api_reasoning_and_text_events(
     reasoning: &str,
     text: &str,
@@ -486,11 +736,9 @@ fn with_terminal_doom_loop_field(mut events: Vec<SseEvent>, triggers: &[&str]) -
     events
 }
 
-/// Generate Responses API SSE events for a server-detected doom loop: a reasoning-only stream (the model loops in its thinking and never answers).
-/// Named `response.doom_loop_check` frames follow, one per prefix of `triggers`; the server re-emits the cumulative set as new triggers appear.
-/// The terminal `response.completed` carries the full set under `doom_loop_check.triggers`.
-///
-/// Returns [`SseEvent`]s for use with [`crate::ScriptedResponse::sse`] or `enqueue_response`, mirroring [`responses_api_reasoning_only_events`].
+/// Generate Responses API SSE events for a server-detected doom loop: a reasoning-only stream (the model loops in its
+/// thinking and never answers). Returns [`SseEvent`]s for use with [`crate::ScriptedResponse::sse`] or
+/// `enqueue_response`, mirroring [`responses_api_reasoning_only_events`].
 pub fn responses_api_doom_loop_check_events(
     triggers: &[&str],
     reasoning: &str,
@@ -566,10 +814,9 @@ fn completed_frame_index(events: &[SseEvent]) -> usize {
         .expect("turn builders always emit a response.completed frame")
 }
 
-/// Splice one named `response.doom_loop_check` frame in just before the first frame of `before_type`, composing over any turn builder.
-/// An armed client observes the signal and aborts on that next frame, so the caller chooses which frame the abort lands on.
-/// Pass `response.function_call_arguments.delta` to abort on tool activity, for instance.
-/// Panics when the turn has no such frame, since that is a script bug.
+/// Splice one named `response.doom_loop_check` frame in just before the first frame of `before_type`, composing over any
+/// turn builder. An armed client observes the signal and aborts on that next frame, so the caller chooses which frame the
+/// abort lands on. Pass `response.function_call_arguments.delta` to abort on tool activity
 pub fn with_doom_loop_frame_before_type(
     mut events: Vec<SseEvent>,
     check_frame_data: &str,
@@ -632,12 +879,9 @@ pub fn responses_api_with_doom_loop_frame_after_text(
     events
 }
 
-/// Generate a Responses API turn that streams reasoning summary deltas first and then issues one `function_call`.
-/// This is the shape a reasoning-capable model produces when it thinks before its first tool call.
-/// `response.completed` carries both items (`reasoning` and `function_call`) and no message, so the collector yields `[Reasoning, ToolCall]`.
-/// Tool calls keep the turn non-empty, so no `EmptyReason::ReasoningOnly` resample fires.
-///
-/// Returns [`SseEvent`]s for use with [`crate::ScriptedResponse::sse`] or `enqueue_response`, mirroring [`responses_api_reasoning_only_events`].
+/// Generate a Responses API turn that streams reasoning summary deltas first and then issues one `function_call`. This is
+/// the shape a reasoning-capable model produces when it thinks before its first tool call. Returns [`SseEvent`]s for use
+/// with [`crate::ScriptedResponse::sse`] or `enqueue_response`, mirroring [`responses_api_reasoning_only_events`].
 pub fn responses_api_reasoning_then_tool_call_events(
     reasoning: &str,
     call_id: &str,

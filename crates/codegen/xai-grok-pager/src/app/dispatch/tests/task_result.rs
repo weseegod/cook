@@ -1,12 +1,45 @@
 //! Tests for async task-result application arms.
 
 use super::super::task_result::{
-    X11_PRIMARY_PASTE_HINT, maybe_show_x11_primary_paste_hint, show_clipboard_failure,
-    wrap_host_image_request_eligible,
+    LiveSessionKind, X11_PRIMARY_PASTE_HINT, live_session_kind, maybe_show_x11_primary_paste_hint,
+    show_clipboard_failure, wrap_host_image_request_eligible,
 };
 use super::*;
+use crate::app::subagent::{SubagentLifecycleReduction, SubagentLifecycleTransition};
 use xai_grok_shell::session::helpers::session_compact::COMPACT_CANCELLED_MSG;
 use xai_grok_shell::session::unified_list::ListScope;
+
+#[test]
+fn live_session_kind_distinguishes_missing_conversation_and_build_matches() {
+    let mut app = test_app_with_agent();
+    assert_eq!(live_session_kind(&app, "missing"), LiveSessionKind::Missing);
+
+    let session_id = app.agents[&AgentId(0)]
+        .session
+        .session_id
+        .as_ref()
+        .unwrap()
+        .0
+        .to_string();
+    app.agents.get_mut(&AgentId(0)).unwrap().conversation_entry = true;
+    assert_eq!(
+        live_session_kind(&app, &session_id),
+        LiveSessionKind::ConversationOnly
+    );
+
+    let duplicate = AgentId(1);
+    app.agents.insert(
+        duplicate,
+        crate::app::agent_view::test_fixtures::make_agent(),
+    );
+    app.agents.get_mut(&duplicate).unwrap().session.session_id =
+        Some(acp::SessionId::new(session_id.clone()));
+    app.agents.get_mut(&duplicate).unwrap().conversation_entry = false;
+    assert_eq!(
+        live_session_kind(&app, &session_id),
+        LiveSessionKind::IncludesBuild
+    );
+}
 
 fn doctor_target(app: &AppView, id: AgentId) -> crate::app::actions::DoctorFixTarget {
     let agent = &app.agents[&id];
@@ -86,6 +119,35 @@ fn doctor_planning_rejects_bind_replace_and_unbind_rebind() {
 }
 
 #[test]
+fn doctor_planning_displaces_feedback_before_opening_question() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let target = doctor_target(&app, id);
+    app.agents.get_mut(&id).unwrap().feedback_modal =
+        Some(crate::views::feedback_modal::FeedbackModalState::new(
+            crate::views::feedback_modal::OpenFeedbackModal {
+                text: Some("unsent report".to_owned()),
+                ..Default::default()
+            },
+        ));
+
+    dispatch_task_result(
+        TaskResult::DoctorFixPlanned {
+            target,
+            result: Ok(crate::app::actions::DoctorPlanningOutcome::Plan(Box::new(
+                crate::diagnostics::test_fix_plan(temp.path()),
+            ))),
+        },
+        &mut app,
+    );
+
+    let agent = &app.agents[&id];
+    assert!(agent.feedback_modal.is_none());
+    assert!(agent.question_view.is_some());
+}
+
+#[test]
 fn doctor_planning_opens_refuses_remote_and_rejects_stale_identity() {
     let temp = tempfile::tempdir().unwrap();
     let mut app = test_app_with_agent();
@@ -129,14 +191,14 @@ fn doctor_planning_opens_refuses_remote_and_rejects_stale_identity() {
         TaskResult::DoctorFixPlanned {
             target: target.clone(),
             result: Ok(crate::app::actions::DoctorPlanningOutcome::RunLocally(
-                "thanh doctor fix ssh-wrap".to_owned(),
+                "grok doctor fix ssh-wrap".to_owned(),
             )),
         },
         &mut app,
     );
     assert!(
         last_system_text(&app, id)
-            .contains("On your local computer, run: thanh doctor fix ssh-wrap")
+            .contains("On your local computer, run: grok doctor fix ssh-wrap")
     );
 
     app.agents
@@ -494,7 +556,6 @@ fn x11_primary_hint_requires_canonical_full_miss_outcome() {
     let target = ClipboardPasteTarget::AgentPrompt {
         agent_id: AgentId(0),
         images_dir: None,
-        from_feedback_pane: false,
     };
 
     for completion in [
@@ -524,8 +585,8 @@ fn x11_primary_hint_requires_canonical_full_miss_outcome() {
 fn wrap_host_image_request_eligible_covers_full_miss_and_attachment_error_only() {
     use crate::app::actions::{ClipboardPasteCompletion, ClipboardPasteFailure};
 
-    // A clean empty miss and a remote read *error* both fall through to the wrap
-    // host-image request — the headless-SSH `thanh wrap` image-paste fix.
+    // A clean empty miss and a remote read *error* both fall through to the wrap host-image request
+    // That request is how `grok wrap` pastes images over headless SSH
     assert!(wrap_host_image_request_eligible(
         ClipboardPasteCompletion::FullMiss
     ));
@@ -560,7 +621,6 @@ fn x11_primary_hint_routes_to_originating_agent() {
     let target = crate::app::actions::ClipboardPasteTarget::AgentPrompt {
         agent_id: origin,
         images_dir: None,
-        from_feedback_pane: false,
     };
 
     maybe_show_x11_primary_paste_hint(
@@ -620,7 +680,6 @@ fn clipboard_failure_routes_to_originating_agent_without_duplicate() {
     let target = crate::app::actions::ClipboardPasteTarget::AgentPrompt {
         agent_id: origin,
         images_dir: None,
-        from_feedback_pane: false,
     };
 
     show_clipboard_failure(
@@ -911,7 +970,7 @@ fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
     {
         let agent = app.agents.get_mut(&id).unwrap();
         let mut info = make_test_subagent("child-1", "sa-1");
-        info.pending_kill = true;
+        info.attempt.pending_kill = true;
         agent.subagent_sessions.insert("child-1".into(), info);
     }
 
@@ -920,12 +979,13 @@ fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
         TaskResult::KillSubagentComplete {
             session_id: sid.clone(),
             subagent_id: "sa-1".into(),
+            attempt_id: None,
             outcome: SubagentKillOutcome::RpcFailed,
         },
         &mut app,
     );
     assert!(
-        !app.agents[&id].subagent_sessions["child-1"].finished,
+        !app.agents[&id].subagent_sessions["child-1"].is_finished(),
         "a failed cancel RPC must not finalize the row"
     );
 
@@ -934,12 +994,13 @@ fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
         TaskResult::KillSubagentComplete {
             session_id: sid,
             subagent_id: "sa-1".into(),
+            attempt_id: None,
             outcome: SubagentKillOutcome::NothingLive { status: None },
         },
         &mut app,
     );
     assert!(
-        app.agents[&id].subagent_sessions["child-1"].finished,
+        app.agents[&id].subagent_sessions["child-1"].is_finished(),
         "nothing-live must finalize the orphan row"
     );
 }
@@ -954,7 +1015,7 @@ fn kill_nothing_live_with_status_stamps_real_terminal_status() {
     {
         let agent = app.agents.get_mut(&id).unwrap();
         let mut info = make_test_subagent("child-1", "sa-1");
-        info.pending_kill = true;
+        info.attempt.pending_kill = true;
         agent.subagent_sessions.insert("child-1".into(), info);
     }
 
@@ -962,6 +1023,7 @@ fn kill_nothing_live_with_status_stamps_real_terminal_status() {
         TaskResult::KillSubagentComplete {
             session_id: sid,
             subagent_id: "sa-1".into(),
+            attempt_id: None,
             outcome: SubagentKillOutcome::NothingLive {
                 status: Some("completed".into()),
             },
@@ -969,12 +1031,72 @@ fn kill_nothing_live_with_status_stamps_real_terminal_status() {
         &mut app,
     );
     let info = &app.agents[&id].subagent_sessions["child-1"];
-    assert!(info.finished, "already-finished orphan must be finalized");
+    assert!(
+        info.is_finished(),
+        "already-finished orphan must be finalized"
+    );
     assert_eq!(
-        info.status.as_deref(),
+        info.attempt.status.as_deref(),
         Some("completed"),
         "the shell's real terminal status must be stamped, not 'cancelled'"
     );
+}
+
+#[test]
+fn stale_kill_result_does_not_finish_replacement_attempt() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let sid = acp::SessionId::new("test-session".to_owned());
+    let mut info = make_test_subagent("child-1", "sa-1");
+    let first_attempt = "at1.first";
+    let second_attempt = "at1.second";
+    let SubagentLifecycleReduction::Accepted(first_spawn) = info.attempt.lifecycle.reduce(
+        SubagentLifecycleTransition::Spawned,
+        Some(first_attempt),
+        Some(1),
+    ) else {
+        panic!("first attempt spawn");
+    };
+    first_spawn.commit(&mut info.attempt.lifecycle);
+    let SubagentLifecycleReduction::Accepted(first_finish) = info.attempt.lifecycle.reduce(
+        SubagentLifecycleTransition::Finished,
+        Some(first_attempt),
+        Some(2),
+    ) else {
+        panic!("first attempt finish");
+    };
+    first_finish.commit(&mut info.attempt.lifecycle);
+    let SubagentLifecycleReduction::Accepted(second_spawn) = info.attempt.lifecycle.reduce(
+        SubagentLifecycleTransition::Spawned,
+        Some(second_attempt),
+        Some(3),
+    ) else {
+        panic!("second attempt spawn");
+    };
+    second_spawn.commit(&mut info.attempt.lifecycle);
+    info.attempt.pending_kill = false;
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .subagent_sessions
+        .insert("child-1".into(), info);
+
+    dispatch_task_result(
+        TaskResult::KillSubagentComplete {
+            session_id: sid,
+            subagent_id: "sa-1".into(),
+            attempt_id: Some(first_attempt.into()),
+            outcome: SubagentKillOutcome::NothingLive { status: None },
+        },
+        &mut app,
+    );
+
+    let info = &app.agents[&id].subagent_sessions["child-1"];
+    assert_eq!(
+        info.attempt.lifecycle.current_attempt_id(),
+        Some(second_attempt)
+    );
+    assert!(info.is_running());
 }
 
 #[test]
@@ -1475,7 +1597,6 @@ fn no_deferred_switch_means_no_extra_effect() {
             agent_id: id,
             session_id: "new-session".into(),
             models: None,
-            scheduler_background_loops: None,
         }),
         &mut app,
     );
@@ -1498,7 +1619,6 @@ fn session_success_arms_finish_startup_obligation() {
             agent_id: id,
             session_id: "new-session".into(),
             models: None,
-            scheduler_background_loops: None,
         },
         TaskResult::SessionLoaded {
             agent_id: id,
@@ -1508,7 +1628,6 @@ fn session_success_arms_finish_startup_obligation() {
             restore_summary: None,
             restore_degree: None,
             running_prompt_id: None,
-            scheduler_background_loops: None,
         },
         TaskResult::WorktreeSessionCreated {
             agent_id: id,
@@ -1516,7 +1635,7 @@ fn session_success_arms_finish_startup_obligation() {
             worktree_path: std::path::PathBuf::from("/tmp/wt"),
             session_cwd: std::path::PathBuf::from("/tmp/wt"),
             models: None,
-            scheduler_background_loops: None,
+            strategy_summary: None,
         },
         TaskResult::WorktreeForked {
             agent_id: id,
@@ -1527,6 +1646,7 @@ fn session_success_arms_finish_startup_obligation() {
             restore_summary: None,
             restore_degree: None,
             resume_session_id: None,
+            strategy_summary: None,
         },
     ];
 
@@ -1898,6 +2018,25 @@ fn delete_remote_session_clears_modal_and_welcome_content_hits() {
     use crate::views::modal::ActiveModal;
 
     let mut app = test_app_with_agent();
+    app.workspace_dashboard_enabled = true;
+    app.workspace_membership
+        .set_snapshot_for_test(xai_grok_dashboard_store::WorkspaceSnapshot {
+            grouping: xai_grok_dashboard_store::Grouping::State,
+            members: vec![xai_grok_dashboard_store::Member {
+                session_id: xai_grok_dashboard_store::SessionId::new("remote-only").unwrap(),
+                kind: xai_grok_dashboard_store::MemberKind::Build,
+                origin: xai_grok_dashboard_store::MemberOrigin::Remote,
+                cwd: Some("/r".into()),
+                title: Some("remote-only".into()),
+                model: None,
+                last_turn_summary: None,
+                is_worktree: false,
+                last_change_unix_ms: 1,
+                pin_rank: None,
+                order_rank: None,
+            }],
+            data_version: 1,
+        });
     let mut remote = make_picker_entry("remote-only", "/r");
     remote.source = "remote".into();
     open_session_picker_with(&mut app, vec![remote.clone()]);
@@ -1948,12 +2087,49 @@ fn delete_remote_session_clears_modal_and_welcome_content_hits() {
             .unwrap()
             .is_empty()
     );
+    assert!(
+        app.workspace_membership.view().unwrap().members.is_empty(),
+        "the derived view hides a pending removal"
+    );
+    assert_eq!(
+        app.workspace_membership.snapshot().unwrap().members.len(),
+        1,
+        "optimism must not mutate committed state"
+    );
+    assert!(app.workspace_membership.removal_pending_for_test(
+        &xai_grok_dashboard_store::SessionId::new("remote-only").unwrap()
+    ));
+    assert!(
+        !app.workspace_membership.removal_suppressed_for_test(
+            &xai_grok_dashboard_store::SessionId::new("remote-only").unwrap()
+        ),
+        "an unloaded picker row needs no live-adoption exclusion"
+    );
 }
 
 #[test]
 fn delete_session_failed_keeps_all_entries() {
     use crate::views::modal::ActiveModal;
     let mut app = test_app_with_agent();
+    app.workspace_dashboard_enabled = true;
+    app.workspace_membership
+        .set_snapshot_for_test(xai_grok_dashboard_store::WorkspaceSnapshot {
+            grouping: xai_grok_dashboard_store::Grouping::State,
+            members: vec![xai_grok_dashboard_store::Member {
+                session_id: xai_grok_dashboard_store::SessionId::new("s1").unwrap(),
+                kind: xai_grok_dashboard_store::MemberKind::Build,
+                origin: xai_grok_dashboard_store::MemberOrigin::Local,
+                cwd: Some("/r".into()),
+                title: Some("s1".into()),
+                model: None,
+                last_turn_summary: None,
+                is_worktree: false,
+                last_change_unix_ms: 1,
+                pin_rank: None,
+                order_rank: None,
+            }],
+            data_version: 1,
+        });
     open_session_picker_with(
         &mut app,
         vec![make_picker_entry("s0", "/r"), make_picker_entry("s1", "/r")],
@@ -1977,6 +2153,107 @@ fn delete_session_failed_keeps_all_entries() {
         panic!("expected SessionPicker modal");
     };
     assert_eq!(list.len(), 2, "a failed delete must not remove any entry");
+    assert_eq!(
+        app.workspace_membership.snapshot().unwrap().members.len(),
+        1,
+        "failed permanent delete must leave membership intact"
+    );
+    assert!(!app.workspace_membership.has_pending_removals_for_test());
+}
+
+#[test]
+fn picker_delete_of_open_build_suppresses_immediate_workspace_re_adoption() {
+    let mut app = test_app_with_agent();
+    let session_id = app.agents[&AgentId(0)]
+        .session
+        .session_id
+        .as_ref()
+        .unwrap()
+        .0
+        .to_string();
+    app.workspace_dashboard_enabled = true;
+    app.workspace_membership
+        .set_snapshot_for_test(xai_grok_dashboard_store::WorkspaceSnapshot {
+            grouping: xai_grok_dashboard_store::Grouping::State,
+            members: vec![],
+            data_version: 1,
+        });
+
+    let _ = dispatch_task_result(
+        TaskResult::DeleteSessionComplete {
+            source: "local".into(),
+            session_id: session_id.clone(),
+            after: crate::app::actions::AfterSessionDelete::Stay,
+        },
+        &mut app,
+    );
+
+    let id = xai_grok_dashboard_store::SessionId::new(session_id).unwrap();
+    assert!(
+        app.agents.contains_key(&AgentId(0)),
+        "Stay keeps the view open"
+    );
+    assert!(app.workspace_membership.removal_pending_for_test(&id));
+    assert!(
+        !app.workspace_membership.removal_suppressed_for_test(&id),
+        "suppression becomes a tombstone only after removal succeeds"
+    );
+}
+
+#[test]
+fn deleting_current_conversation_does_not_remove_build_membership_with_same_id() {
+    let mut app = test_app_with_agent();
+    let session_id = app.agents[&AgentId(0)]
+        .session
+        .session_id
+        .as_ref()
+        .unwrap()
+        .0
+        .to_string();
+    app.agents.get_mut(&AgentId(0)).unwrap().conversation_entry = true;
+    app.workspace_dashboard_enabled = true;
+
+    let _ = dispatch_task_result(
+        TaskResult::DeleteSessionComplete {
+            source: "current".into(),
+            session_id,
+            after: crate::app::actions::AfterSessionDelete::Stay,
+        },
+        &mut app,
+    );
+
+    assert!(!app.workspace_membership.has_pending_removals_for_test());
+}
+
+#[test]
+fn delete_completion_reports_membership_failure_if_store_became_read_only() {
+    let mut app = test_app_with_agent();
+    app.workspace_dashboard_enabled = true;
+    let temp = tempfile::tempdir().unwrap();
+    let store =
+        xai_grok_dashboard_store::WorkspaceStore::open(&temp.path().join("workspace.db")).unwrap();
+    app.workspace_membership.set_read_only_for_test(
+        store,
+        xai_grok_dashboard_store::WorkspaceSnapshot {
+            grouping: xai_grok_dashboard_store::Grouping::State,
+            members: vec![],
+            data_version: 1,
+        },
+    );
+
+    let _ = dispatch_task_result(
+        TaskResult::DeleteSessionComplete {
+            source: "local".into(),
+            session_id: "deleted-during-schema-race".into(),
+            after: crate::app::actions::AfterSessionDelete::Stay,
+        },
+        &mut app,
+    );
+
+    assert!(
+        read_toast(&app).contains("dashboard membership could not be removed"),
+        "the irreversible history deletion must not be reported as wholly successful"
+    );
 }
 
 #[test]
@@ -2149,8 +2426,450 @@ fn reset_session_title_complete_pushes_system_block() {
     );
 }
 
-/// `apply_setting_rollback` on a known key reverts the in-memory
-/// cache without emitting any new effects.
+// ── GateRefreshed subscription flow ─────────────────────────────
+
+/// Regression: when the 30s gate poll detects the subscription gate has been lifted, it must emit `CheckSubscription` so the shell refreshes the JWT.
+/// Until that refresh the auth token lacks the subscription claim and all API calls return 403.
+#[test]
+fn gate_refreshed_emits_check_subscription_on_gate_lift() {
+    let mut app = test_app();
+    // User starts gated (no subscription).
+    app.gate = Some(xai_grok_login::GateInfo {
+        message: "SuperGrok subscription required".into(),
+        url: Some("https://grok.com/supergrok".into()),
+        label: Some("Subscribe".into()),
+    });
+    assert!(!app.has_access());
+
+    // Server-side settings now show no gate (user purchased subscription).
+    let settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let effects = dispatch_task_result(
+        TaskResult::GateRefreshed {
+            settings: Some(settings),
+        },
+        &mut app,
+    );
+
+    // Gate must be lifted.
+    assert!(app.has_access(), "gate should be lifted");
+    assert!(app.welcome_prompt_focused, "prompt should be focused");
+
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckSubscription { verify: None })),
+        "must emit CheckSubscription to refresh JWT; got: {effects:?}"
+    );
+}
+
+/// When the gate poll returns settings that still have a gate, no effects are emitted and the user stays blocked.
+#[test]
+fn gate_refreshed_no_effect_when_still_gated() {
+    let mut app = test_app();
+    app.gate = Some(xai_grok_login::GateInfo {
+        message: "Subscribe".into(),
+        url: None,
+        label: None,
+    });
+
+    let settings = xai_grok_shell::util::config::RemoteSettings {
+        gate_message: Some("Subscribe".into()),
+        ..Default::default()
+    };
+    let effects = dispatch_task_result(
+        TaskResult::GateRefreshed {
+            settings: Some(settings),
+        },
+        &mut app,
+    );
+
+    assert!(!app.has_access(), "gate should remain");
+    assert!(effects.is_empty(), "no effects when still gated");
+}
+
+/// When the user was never gated, GateRefreshed is a no-op.
+#[test]
+fn gate_refreshed_no_effect_when_already_unblocked() {
+    let mut app = test_app();
+    assert!(app.has_access()); // no gate
+
+    let settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let effects = dispatch_task_result(
+        TaskResult::GateRefreshed {
+            settings: Some(settings),
+        },
+        &mut app,
+    );
+
+    assert!(effects.is_empty(), "no effects when already unblocked");
+}
+
+/// A gate newly imposed by the 30s settings poll (possibly stale) must be deferred for live verification instead of painting the paywall directly.
+/// The gate is held out of `app.gate`, and both `CheckSubscription` and a verify timeout are emitted.
+#[test]
+fn gate_refreshed_newly_blocked_defers_gate_for_verification() {
+    let mut app = test_app();
+    assert!(app.has_access()); // ungated
+
+    let settings = xai_grok_shell::util::config::RemoteSettings {
+        gate_message: Some("Subscribe".into()),
+        ..Default::default()
+    };
+    let effects = dispatch_task_result(
+        TaskResult::GateRefreshed {
+            settings: Some(settings),
+        },
+        &mut app,
+    );
+
+    assert!(
+        app.has_access(),
+        "deferred gate must not show as paywall before verification"
+    );
+    assert!(app.pending_gate_verification.is_some());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckSubscription { verify: Some(_) })),
+        "must live-check before showing the paywall; got: {effects:?}"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::ScheduleGateVerifyTimeout { .. })),
+        "must arm the verification timeout; got: {effects:?}"
+    );
+}
+
+// ── Stale-gate verification resolution ──────────────────────────
+
+fn test_gate() -> xai_grok_login::GateInfo {
+    xai_grok_login::GateInfo {
+        message: "Subscribe".into(),
+        url: None,
+        label: None,
+    }
+}
+
+/// The live check confirmed access (meta without a gate): the deferred stale gate is dropped and the paywall never shows.
+#[test]
+fn verify_check_with_meta_resolves_pending_gate() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+    assert!(app.has_access());
+
+    let meta = serde_json::to_value(xai_grok_login::AuthMeta::default()).unwrap();
+    dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: Some(app.gate_verify_gen),
+            meta: Some(meta),
+        },
+        &mut app,
+    );
+
+    assert!(app.has_access(), "live check says subscribed — no paywall");
+    assert!(app.pending_gate_verification.is_none());
+}
+
+/// The live check confirmed the block (meta WITH a gate): the paywall shows with the authoritative gate.
+#[test]
+fn verify_check_with_gated_meta_shows_gate() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+
+    let meta = serde_json::to_value(xai_grok_login::AuthMeta {
+        gate: Some(test_gate()),
+        ..Default::default()
+    })
+    .unwrap();
+    dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: Some(app.gate_verify_gen),
+            meta: Some(meta),
+        },
+        &mut app,
+    );
+
+    assert!(!app.has_access(), "verified gate must show");
+    assert!(app.pending_gate_verification.is_none());
+}
+
+/// The verification's own check failed (meta None) while its stale gate was deferred: err on blocking, so the deferred gate is promoted.
+#[test]
+fn verify_check_failure_promotes_pending_gate() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+
+    let effects = dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: Some(app.gate_verify_gen),
+            meta: None,
+        },
+        &mut app,
+    );
+
+    assert!(!app.has_access(), "check failed — deferred gate must show");
+    assert!(app.pending_gate_verification.is_none());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SchedulePaywallCheck)),
+        "freshly shown gate must arm the 5s auto-lift chain; got: {effects:?}"
+    );
+}
+
+/// A failed GENERIC check (the watch, focus, or paywall chain; no generation) must never promote a deferred gate.
+/// Only the deferral's own generation-scoped check or timeout may promote it.
+/// A superseded or unrelated check failing is not evidence about the current verification.
+#[test]
+fn check_subscription_complete_failure_leaves_pending_gate_untouched() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+
+    let effects = dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: None,
+            meta: None,
+        },
+        &mut app,
+    );
+
+    assert!(effects.is_empty());
+    assert!(
+        app.has_access(),
+        "generic check failure must not promote the deferred gate"
+    );
+    assert!(
+        app.pending_gate_verification.is_some(),
+        "verification must stay in flight"
+    );
+}
+
+/// A failed verification check from a SUPERSEDED deferral (older generation) must not promote the newer pending gate.
+#[test]
+fn verify_check_stale_generation_failure_is_ignored() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+    let stale_gen = app.gate_verify_gen;
+    // Second deferral supersedes the first (its check is in flight).
+    let _effs = app.impose_gate(test_gate());
+
+    let effects = dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: Some(stale_gen),
+            meta: None,
+        },
+        &mut app,
+    );
+
+    assert!(effects.is_empty());
+    assert!(
+        app.has_access(),
+        "superseded verification failure must not promote the newer gate"
+    );
+    assert!(app.pending_gate_verification.is_some());
+}
+
+/// A check failure with no deferred gate (the plain paywall-poller path) must not invent a gate.
+#[test]
+fn check_subscription_complete_failure_without_pending_gate_is_noop() {
+    let mut app = test_app();
+    dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: None,
+            meta: None,
+        },
+        &mut app,
+    );
+    assert!(app.has_access());
+}
+
+/// The verification window expired before the live check resolved: err on blocking.
+/// The deferred gate is promoted, and the freshly shown paywall gets the 5s auto-lift chain.
+#[test]
+fn gate_verify_timeout_promotes_pending_gate() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+    assert!(app.has_access());
+
+    let effects = dispatch_task_result(
+        TaskResult::GateVerifyTimeout {
+            generation: app.gate_verify_gen,
+        },
+        &mut app,
+    );
+
+    assert!(!app.has_access(), "timeout — deferred gate must show");
+    assert!(app.pending_gate_verification.is_none());
+    assert!(
+        app.paywall_check_started.is_some(),
+        "promoted gate must arm the paywall auto-check chain"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SchedulePaywallCheck)),
+        "promoted gate must schedule the 5s chain; got: {effects:?}"
+    );
+}
+
+/// The timeout fires after the check already resolved the gate: no-op.
+#[test]
+fn gate_verify_timeout_noop_when_already_resolved() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+    let generation = app.gate_verify_gen;
+    // Live check resolved first (access confirmed).
+    let meta = serde_json::to_value(xai_grok_login::AuthMeta::default()).unwrap();
+    dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: None,
+            meta: Some(meta),
+        },
+        &mut app,
+    );
+
+    dispatch_task_result(TaskResult::GateVerifyTimeout { generation }, &mut app);
+    assert!(
+        app.has_access(),
+        "stale timeout must not re-impose the gate"
+    );
+}
+
+/// A timeout from a SUPERSEDED verification (older generation) must not promote a newer deferred gate whose own live check is still in flight.
+#[test]
+fn gate_verify_timeout_stale_generation_is_ignored() {
+    let mut app = test_app();
+    // First deferral resolves (access confirmed)
+    let _effs = app.impose_gate(test_gate());
+    let stale_gen = app.gate_verify_gen;
+    let meta = serde_json::to_value(xai_grok_login::AuthMeta::default()).unwrap();
+    dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: None,
+            meta: Some(meta),
+        },
+        &mut app,
+    );
+    // Then a SECOND gate is deferred (its check is in flight)
+    let _effs = app.impose_gate(test_gate());
+    assert!(app.has_access());
+
+    // The FIRST deferral's timer fires now; it must not promote the second deferral's pending gate
+    let effects = dispatch_task_result(
+        TaskResult::GateVerifyTimeout {
+            generation: stale_gen,
+        },
+        &mut app,
+    );
+
+    assert!(effects.is_empty());
+    assert!(
+        app.has_access(),
+        "stale-generation timer must not promote the newer pending gate"
+    );
+    assert!(
+        app.pending_gate_verification.is_some(),
+        "the newer verification must stay in flight"
+    );
+}
+
+/// A verified gate landing via `CheckSubscriptionComplete` (gated meta while ungated) must start the 5s paywall auto-check chain.
+/// Verify-before-paywall paths never went through the login-path chain start.
+#[test]
+fn verified_gate_via_check_complete_starts_paywall_chain() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+
+    let meta = serde_json::to_value(xai_grok_login::AuthMeta {
+        gate: Some(test_gate()),
+        ..Default::default()
+    })
+    .unwrap();
+    let effects = dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: None,
+            meta: Some(meta),
+        },
+        &mut app,
+    );
+
+    assert!(!app.has_access());
+    assert!(
+        app.paywall_check_started.is_some(),
+        "verified gate must arm the paywall auto-check chain"
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::SchedulePaywallCheck)),
+        "verified gate must schedule the 5s chain; got: {effects:?}"
+    );
+
+    // Steady-state paywall-poller responses (already gated) must NOT fan out extra timers
+    let meta = serde_json::to_value(xai_grok_login::AuthMeta {
+        gate: Some(test_gate()),
+        ..Default::default()
+    })
+    .unwrap();
+    let effects = dispatch_task_result(
+        TaskResult::CheckSubscriptionComplete {
+            verify: None,
+            meta: Some(meta),
+        },
+        &mut app,
+    );
+    assert!(
+        effects.is_empty(),
+        "already-gated check responses must not schedule more timers; got: {effects:?}"
+    );
+}
+
+/// `GateRefreshed` with gate-free settings while a deferred gate awaits verification must drop the pending copy.
+/// The fresh settings are newer than the stale snapshot that produced it.
+/// It must still run the lift bookkeeping (`CheckSubscription` for the JWT refresh).
+#[test]
+fn gate_refreshed_without_gate_clears_pending_verification() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+    let generation = app.gate_verify_gen;
+
+    let settings = xai_grok_shell::util::config::RemoteSettings::default();
+    let effects = dispatch_task_result(
+        TaskResult::GateRefreshed {
+            settings: Some(settings),
+        },
+        &mut app,
+    );
+
+    assert!(app.pending_gate_verification.is_none());
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::CheckSubscription { verify: None })),
+        "settings-confirmed lift of a pending gate must refresh the JWT; got: {effects:?}"
+    );
+    // The still-armed timer must find nothing to promote.
+    dispatch_task_result(TaskResult::GateVerifyTimeout { generation }, &mut app);
+    assert!(
+        app.has_access(),
+        "cleared pending gate must not resurface via the timer"
+    );
+}
+
+/// Logout clears any deferred gate and the check debounce.
+#[test]
+fn logout_clears_pending_gate_verification() {
+    let mut app = test_app();
+    let _effs = app.impose_gate(test_gate());
+
+    dispatch_task_result(TaskResult::LogoutComplete, &mut app);
+
+    assert!(app.pending_gate_verification.is_none());
+    assert!(app.last_subscription_check_at.is_none());
+}
+
+/// `apply_setting_rollback` on a known key reverts the in-memory cache without emitting any new effects.
 #[test]
 fn rollback_known_key_reverts_cache_and_no_effect() {
     use crate::settings::SettingValue;

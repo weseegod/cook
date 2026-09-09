@@ -30,6 +30,14 @@ fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {
     idx
 }
 
+fn truncate_to(s: &str, max_bytes: usize) -> Option<String> {
+    if s.len() <= max_bytes {
+        return None;
+    }
+    let idx = floor_char_boundary(s, max_bytes);
+    Some(format!("{}{TRUNCATION_MARKER}", &s[..idx]))
+}
+
 /// Standard truncation for attribute values.
 /// Strings whose `char` count exceeds [`MAX_STRING_LEN`] collapse to their first [`TRUNCATED_PREFIX_LEN`] chars plus [`TRUNCATION_MARKER`].
 /// Returns `None` when unchanged.
@@ -49,11 +57,18 @@ pub fn truncate_value_owned(s: String) -> String {
 
 /// Cap gated prompt/content text at [`MAX_CONTENT_BYTES`] (UTF-8-safe).
 pub fn truncate_content(s: &str) -> Option<String> {
-    if s.len() <= MAX_CONTENT_BYTES {
-        return None;
-    }
-    let idx = floor_char_boundary(s, MAX_CONTENT_BYTES);
-    Some(format!("{}{TRUNCATION_MARKER}", &s[..idx]))
+    truncate_to(s, MAX_CONTENT_BYTES)
+}
+
+/// Cap DETAILS `tool_parameters` preview and CONTENT `error_message` at
+/// [`MAX_TOOL_INPUT_JSON_BYTES`].
+pub fn truncate_preview(s: &str) -> Option<String> {
+    truncate_to(s, MAX_TOOL_INPUT_JSON_BYTES)
+}
+
+/// Capture-time cap so the shell does not retain multi-MB tool bodies.
+pub fn cap_bytes(s: &str, max_bytes: usize) -> String {
+    truncate_to(s, max_bytes).unwrap_or_else(|| s.to_owned())
 }
 
 /// Reduce a JSON value for the gated `tool_parameters` attribute.

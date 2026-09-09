@@ -12,7 +12,6 @@ use xai_grok_telemetry::session_ctx::log_event;
 /// Copy the selected block's content to the system clipboard.
 ///
 /// Respects the block's raw/pretty mode for markdown content.
-/// Shows a toast notification on theExtensionsTab
 pub(super) fn dispatch_copy_block_content(app: &mut AppView) {
     with_active_agent(app, |agent| {
         let Some(idx) = agent.scrollback.selected() else {
@@ -56,7 +55,10 @@ pub(super) fn dispatch_copy_assistant_message(
     n: usize,
     file_path: Option<std::path::PathBuf>,
 ) {
+    // Session-wide so a later fullscreen child (or the parent after a child) stays quiet.
+    app.export_copy_slash_used = true;
     with_active_agent(app, |agent| {
+        agent.note_export_copy_slash_used();
         // Collect agent messages in reverse order (most recent first).
         let mut agent_messages: Vec<String> = Vec::new();
         for i in (0..agent.scrollback.len()).rev() {
@@ -149,7 +151,9 @@ pub(super) fn dispatch_export_conversation(
     app: &mut AppView,
     file_path: Option<std::path::PathBuf>,
 ) {
+    app.export_copy_slash_used = true;
     with_active_agent(app, |agent| {
+        agent.note_export_copy_slash_used();
         let blocks: Vec<_> = (0..agent.scrollback.len())
             .filter_map(|i| agent.scrollback.entry(i).map(|e| &e.block))
             .collect();
@@ -218,15 +222,8 @@ pub(super) fn dispatch_export_conversation(
 }
 
 /// Open the full transcript in `$PAGER`.
-///
-/// Minimal mode renders a full-fidelity ANSI transcript: every block fully expanded (reasoning in full, tool output uncapped, diff colors kept).
-/// That is a full layout, syntax-highlight, and ANSI-serialization pass over the whole session.
-/// Rendering it inline froze the event loop for seconds on long sessions ("laggy /transcript").
 /// The block model is also `!Send` (syntect's resumable highlighter state lives inside markdown blocks), so the work can't move to a worker either.
 /// So this only records the request; the minimal render loop builds the transcript in time-budgeted slices per frame (`full_view::pump_transcript`).
-/// When done it sets `pending_pager_path` and the event loop suspends into `$PAGER`.
-///
-/// Other modes keep the compact markdown export: string concatenation, no layout or highlighting, cheap enough to stay synchronous.
 pub(crate) fn dispatch_open_transcript_pager(app: &mut AppView) {
     if app.screen_mode.is_minimal() {
         crate::minimal_api::request_minimal_transcript(app);
@@ -359,8 +356,8 @@ pub(super) fn dispatch_open_block_viewer(app: &mut AppView) {
             _ => None,
         };
 
-        if viewer.is_some() {
-            agent.block_viewer = viewer;
+        if let Some(pane) = viewer {
+            agent.install_block_viewer(pane);
             return;
         }
 
@@ -415,7 +412,6 @@ pub(super) fn extensions_modal_tab_fetches(
 
 /// Push a marketplace list fetch, coalescing overlapping requests.
 /// While one is in flight, further requests fold into a single queued refetch that fires when the current response lands.
-/// See the field docs on `ExtensionsModalState`.
 /// The other tab fetches are cheap local reads and don't need this.
 pub(super) fn push_marketplace_fetch(
     modal: &mut crate::views::extensions_modal::ExtensionsModalState,

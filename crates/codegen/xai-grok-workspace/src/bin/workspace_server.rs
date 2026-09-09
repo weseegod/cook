@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use url::Url;
 use xai_grok_diag_server::{self as diag_server, DiagHandle, ErrorClass};
-use xai_grok_workspace::config::merge_session_metadata;
+use xai_grok_workspace::config::{merge_host_identity_metadata, merge_session_metadata};
 use xai_grok_workspace::error::WorkspaceError;
 use xai_grok_workspace_daemon::daemonize;
 use xai_grok_workspace_daemon::preview_supervisor::{
@@ -393,7 +393,15 @@ async fn run(
         ),
         None => None,
     };
-    let metadata = merge_session_metadata(parsed_metadata, session_id);
+    let host_kind = if session_id.as_deref().is_some_and(|s| !s.is_empty()) {
+        xai_tool_protocol::HOST_KIND_SANDBOX
+    } else {
+        xai_tool_protocol::HOST_KIND_DAEMON
+    };
+    let metadata = merge_host_identity_metadata(
+        merge_session_metadata(parsed_metadata, session_id),
+        host_kind,
+    );
     let launch_id = metadata
         .as_ref()
         .and_then(|v| v.get("launch_id"))
@@ -447,16 +455,19 @@ async fn run(
         cwd,
         url,
         auth_provider,
-        metadata,
-        server_id.clone(),
-        None,
-        args.allow_insecure_ws,
-        status_config,
-        args.upload_queue_enabled,
-        args.project_lsp_trusted,
-        Some(diag_handle.clone()),
-        args.require_explicit_toolset,
-        args.confine_fs_to_workspace_root,
+        xai_grok_workspace::LocalWorkspaceConnectOptions {
+            metadata,
+            server_id: server_id.clone(),
+            alpha_test_key: None,
+            allow_insecure_ws: args.allow_insecure_ws,
+            status_config,
+            upload_queue_enabled: args.upload_queue_enabled,
+            project_lsp_trusted: args.project_lsp_trusted,
+            diag: Some(diag_handle.clone()),
+            require_explicit_toolset: args.require_explicit_toolset,
+            confine_fs_to_workspace_root: args.confine_fs_to_workspace_root,
+            bind_mcp: None,
+        },
     )
     .await
     {

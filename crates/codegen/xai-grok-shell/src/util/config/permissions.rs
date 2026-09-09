@@ -744,11 +744,13 @@ mod tests {
         unsafe { std::env::remove_var("GROK_AUTO_PERMISSION_MODE") };
     }
 
-    // Pure tests for the policy predicate itself live next to its canonical definition in `xai_grok_workspace::permission::claude_compat`
+    // Pure tests for the policy predicate itself live next to its canonical definition in `xai_grok_workspace::permission::resolution`
 
     #[test]
     fn resolve_launch_yolo_policy_pin_neutralizes_requested_bypass() {
-        let warning = xai_grok_workspace::permission::resolution::YOLO_PIN_REASON_REQUIREMENTS;
+        let warning =
+            xai_grok_workspace::permission::resolution::YoloPinReason::DisableBypassPermissionsMode
+                .message();
         // A pin with a requested bypass forces yolo off and carries a warning to show
         assert_eq!(
             resolve_launch_yolo(true, Some(warning)),

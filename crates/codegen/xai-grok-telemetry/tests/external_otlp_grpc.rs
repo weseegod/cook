@@ -67,6 +67,7 @@ fn external_stream_grpc_end_to_end() {
         client_identifier: None,
         screen_mode: None,
         prompt_text: Some(CANARY_PROMPT.into()),
+        command_name: None,
     });
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::ModelResponseReceived {
         model_id: CANARY_MODEL.into(),

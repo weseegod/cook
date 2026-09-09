@@ -18,6 +18,7 @@ use crate::scrollback::types::{col_past_grapheme, grapheme_cells_at, slice_displ
 
 use crate::scrollback::blocks::ContextInfoBlock;
 use crate::theme::Theme;
+use crate::views::credit_bar::CreditBalance;
 use crate::views::modal_window::{
     self as mw, ModalSizing, ModalWindowConfig, ModalWindowState, Shortcut,
 };
@@ -32,21 +33,21 @@ pub const COPY_ALL_SESSION_INFO_SHORTCUT: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UsageInfoTab {
     ContextUsage,
-    Usage,
+    UsageLimit,
     SessionInfo,
 }
 
 impl UsageInfoTab {
     pub const ALL: [UsageInfoTab; 3] = [
         UsageInfoTab::ContextUsage,
-        UsageInfoTab::Usage,
+        UsageInfoTab::UsageLimit,
         UsageInfoTab::SessionInfo,
     ];
 
     pub fn label(self) -> &'static str {
         match self {
             UsageInfoTab::ContextUsage => "Context usage",
-            UsageInfoTab::Usage => "Usage",
+            UsageInfoTab::UsageLimit => "Usage limit",
             UsageInfoTab::SessionInfo => "Session info",
         }
     }
@@ -64,10 +65,18 @@ impl UsageInfoTab {
 pub struct UsageInfoContext {
     /// Session ID for the copy shortcut (`None` before the session starts).
     pub session_id: Option<String>,
+    /// False for team/enterprise accounts, which have no consumer billing.
+    pub usage_visible: bool,
+    /// True for gateway chat sessions, which have no Build coding credits.
+    pub chat_kind: bool,
+    /// Remote-settings kill switch: link out instead of showing billing.
+    pub billing_redirect_url: Option<String>,
+    /// Plan name for the allowance header (e.g. "SuperGrok").
+    pub subscription_tier: Option<String>,
 }
 
-/// Modal state. The Usage tab shows this session's token/cost totals (BYOK;
-/// no grok.com credit bar).
+/// Modal state. Billing figures are NOT stored here.
+/// The render reads the agent's cached `credit_balance` mirror, so a silent billing refresh updates the open modal for free.
 pub struct UsageInfoModalState {
     pub window: ModalWindowState,
     pub active_tab: UsageInfoTab,
@@ -80,6 +89,8 @@ pub struct UsageInfoModalState {
     pub session_error: Option<String>,
     /// Pre-formatted session token/cost summary (`session_usage_block_text`).
     pub session_usage_text: Option<String>,
+    pub billing_loading: bool,
+    pub billing_error: Option<String>,
     /// Fetch generation stamped at open; results from an earlier open (same
     /// session, modal reopened) are dropped instead of overwriting.
     pub fetch_nonce: u64,
@@ -161,7 +172,9 @@ impl UsageInfoModalState {
             context_error: None,
             session_error: None,
             session_usage_text: None,
-fetch_nonce: 0,
+            billing_loading: false,
+            billing_error: None,
+            fetch_nonce: 0,
             session_fields: None,
             copy_hits: Vec::new(),
             hovered_copy_line: None,
@@ -197,10 +210,9 @@ fetch_nonce: 0,
         self.clear_text_drag();
     }
 
-    /// Finish an active drag whose `Up(Left)` never arrived (bare `Moved`).
-    /// Unlike scrollback recovery (which discards), a non-empty drag still copies, so the selection band does not vanish without copying.
-    /// The pending press is left alone: it paints nothing and the next Down overwrites it.
-    /// Clearing it would drop click-to-copy on terminals that report held motion as `Moved`.
+    /// Finish an active drag whose `Up(Left)` never arrived (bare `Moved`). Unlike scrollback recovery
+    /// (which discards), a non-empty drag still copies, so the selection band does not vanish without
+    /// copying. The pending press is left alone: it paints nothing and the next Down overwrites it.
     pub(crate) fn finish_lost_drag(&mut self) -> UsageModalOutcome {
         let outcome = if let Some(drag) = self.text_drag.take()
             && drag.is_non_empty()
@@ -242,23 +254,102 @@ fetch_nonce: 0,
     }
 }
 
-/// Outcome of a content key/mouse event. Chrome events (Esc, `[✗]`, tab clicks, footer clicks) are handled by the caller via `modal_window`.
+/// Outcome of routing one key/mouse event through the modal.
+/// The host (agent view or dashboard) owns the modal slot, the clipboard, and the toast surface, so every variant is a request to it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsageModalOutcome {
-    /// Copy the session ID to the clipboard (the caller owns clipboard and toast).
+    /// Drop the modal (Esc, `[✗]`, click outside). Only the chrome routers emit this.
+    Close,
+    /// Copy the session ID to the clipboard.
     /// Emitted by the `c` shortcut and the footer button.
     CopySessionId,
-    /// Copy Session-info text (the caller owns clipboard and toast).
-    /// Emitted by `y`, a click on a value row, and a finished drag-select.
+    /// Copy Session-info text.
+    /// Emitted by `y`, a click on a value row, the footer "copy all" button, and a finished drag-select.
     CopyText(String),
     Changed,
     Unchanged,
 }
 
-pub fn handle_usage_modal_key(
+/// The modal's chrome config: no title, tabs, footer, or fold tree of its own (tabs and shortcuts are painted by `render_usage_modal`).
+fn chrome_cfg() -> ModalWindowConfig<'static> {
+    ModalWindowConfig {
+        title: "",
+        tabs: None,
+        shortcuts: &[],
+        sizing: ModalSizing::default(),
+        fold_info: None,
+    }
+}
+
+/// Route a key: `modal_window` chrome first (Esc closes), then the content keys.
+pub fn route_usage_modal_key(state: &mut UsageInfoModalState, key: &KeyEvent) -> UsageModalOutcome {
+    match mw::handle_modal_key(&mut state.window, key, &chrome_cfg()) {
+        mw::ModalWindowOutcome::CloseRequested => UsageModalOutcome::Close,
+        mw::ModalWindowOutcome::Unhandled => handle_usage_modal_key(state, key),
+        // The chrome config declares no tabs, footer, or fold tree, so these never fire for keys
+        mw::ModalWindowOutcome::Handled
+        | mw::ModalWindowOutcome::TabChanged(_)
+        | mw::ModalWindowOutcome::ShortcutActivated(_)
+        | mw::ModalWindowOutcome::CollapseGroup
+        | mw::ModalWindowOutcome::ExpandGroup
+        | mw::ModalWindowOutcome::CollapseDetails
+        | mw::ModalWindowOutcome::ExpandDetails
+        | mw::ModalWindowOutcome::JumpToParent(_) => UsageModalOutcome::Changed,
+    }
+}
+
+/// Route a mouse event: chrome first (close button, tab headers, footer buttons stay clickable), then drag / wheel / click-to-copy.
+pub fn route_usage_modal_mouse(
     state: &mut UsageInfoModalState,
-    key: &KeyEvent,
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
 ) -> UsageModalOutcome {
+    match mw::handle_modal_mouse(&mut state.window, kind, column, row) {
+        mw::ModalWindowOutcome::CloseRequested => UsageModalOutcome::Close,
+        mw::ModalWindowOutcome::TabChanged(idx) => {
+            state.set_tab(UsageInfoTab::from_index(idx));
+            UsageModalOutcome::Changed
+        }
+        mw::ModalWindowOutcome::ShortcutActivated(id) => {
+            // Footer click: drop gesture and hover
+            state.clear_text_drag();
+            if id == COPY_SESSION_ID_SHORTCUT {
+                UsageModalOutcome::CopySessionId
+            } else if id == COPY_ALL_SESSION_INFO_SHORTCUT
+                && let Some(text) = state.session_info_copy_all()
+            {
+                UsageModalOutcome::CopyText(text)
+            } else {
+                UsageModalOutcome::Changed
+            }
+        }
+        mw::ModalWindowOutcome::Handled => {
+            // Same rule as content: a bare Moved with an active drag is a lost Up, and a non-empty drag still copies
+            // The pending press is left alone for click-to-copy
+            if matches!(kind, MouseEventKind::Moved) {
+                if state.has_active_drag() {
+                    return state.finish_lost_drag();
+                }
+                state.hovered_copy_line = None;
+            } else {
+                // Same-tab click and other chrome Downs: drop gesture and hover
+                state.clear_text_drag();
+            }
+            UsageModalOutcome::Changed
+        }
+        mw::ModalWindowOutcome::Unhandled => handle_usage_modal_mouse(state, kind, column, row),
+        // Fold-tree navigation belongs to the settings modal; this window has no fold info
+        mw::ModalWindowOutcome::CollapseGroup
+        | mw::ModalWindowOutcome::ExpandGroup
+        | mw::ModalWindowOutcome::CollapseDetails
+        | mw::ModalWindowOutcome::ExpandDetails
+        | mw::ModalWindowOutcome::JumpToParent(_) => UsageModalOutcome::Changed,
+    }
+}
+
+/// Content keys (tabs, scroll, copy); chrome has already had its turn in [`route_usage_modal_key`].
+fn handle_usage_modal_key(state: &mut UsageInfoModalState, key: &KeyEvent) -> UsageModalOutcome {
     use crossterm::event::KeyModifiers;
     // BackTab and `G` legitimately carry SHIFT; reject only real chords
     if key
@@ -314,7 +405,8 @@ pub fn handle_usage_modal_key(
     }
 }
 
-pub fn handle_usage_modal_mouse(
+/// Content gestures (wheel, click-to-copy, drag-select); chrome has already had its turn in [`route_usage_modal_mouse`].
+fn handle_usage_modal_mouse(
     state: &mut UsageInfoModalState,
     kind: MouseEventKind,
     column: u16,
@@ -463,6 +555,7 @@ pub fn render_usage_modal(
     buf: &mut Buffer,
     area: Rect,
     state: &mut UsageInfoModalState,
+    balance: Option<&CreditBalance>,
     compact: bool,
     theme: &Theme,
 ) {
@@ -547,7 +640,7 @@ pub fn render_usage_modal(
         return;
     };
     let content = mca.content;
-    let tab = tab_content(state, theme, content.width);
+    let tab = tab_content(state, balance, theme, content.width);
     state.content_rect = content;
     let plain_lines: Vec<String> = tab.lines.iter().map(ToString::to_string).collect();
     // Endpoints index these strings; drop any gesture if the painted text changed.
@@ -733,12 +826,17 @@ impl TabContent {
     }
 }
 
-fn tab_content(state: &UsageInfoModalState, theme: &Theme, width: u16) -> TabContent {
+fn tab_content(
+    state: &UsageInfoModalState,
+    balance: Option<&CreditBalance>,
+    theme: &Theme,
+    width: u16,
+) -> TabContent {
     match state.active_tab {
         UsageInfoTab::ContextUsage => {
             TabContent::from_lines(context_tab_lines(state, theme, width))
         }
-        UsageInfoTab::Usage => TabContent::from_lines(usage_lines(state, theme)),
+        UsageInfoTab::UsageLimit => TabContent::from_lines(usage_lines(state, balance, theme)),
         UsageInfoTab::SessionInfo => session_info_content(state, theme),
     }
 }
@@ -775,10 +873,34 @@ fn context_tab_lines(state: &UsageInfoModalState, theme: &Theme, width: u16) -> 
 
 /// This session's token/cost totals (the fork strips the consumer billing
 /// allowance — BYOK sessions have no grok.com credits to show).
-fn usage_lines(state: &UsageInfoModalState, theme: &Theme) -> Vec<Line<'static>> {
+/// Account allowance followed by this session's token/cost totals.
+fn usage_lines(
+    state: &UsageInfoModalState,
+    balance: Option<&CreditBalance>,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
+    if state.ctx.chat_kind {
+        // Gateway chat sessions have no Build coding credits to show.
+    } else if !state.ctx.usage_visible {
+        lines.push(muted_line(theme, "Usage limits are managed by your team."));
+    } else if let Some(url) = &state.ctx.billing_redirect_url {
+        lines.push(plain(theme, format!("Please check your usage on {url}")));
+    } else if let Some(bal) = balance {
+        lines.extend(allowance_lines(state, bal, theme));
+    } else if let Some(error) = &state.billing_error {
+        lines.push(muted_line(theme, format!("Couldn't load usage: {error}")));
+    } else if state.billing_loading {
+        lines.push(muted_line(theme, "Loading usage\u{2026}"));
+    } else if state.ctx.session_id.is_none() {
+        lines.push(muted_line(theme, "No billing data available."));
+    }
+
     if let Some(usage_text) = &state.session_usage_text {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
         for (i, row) in usage_text.lines().enumerate() {
             if i == 0 {
                 lines.push(Line::styled(row.to_string(), header_style(theme)));
@@ -787,9 +909,73 @@ fn usage_lines(state: &UsageInfoModalState, theme: &Theme) -> Vec<Line<'static>>
             }
         }
     } else if state.ctx.session_id.is_some() {
+        if !lines.is_empty() {
+            lines.push(Line::default());
+        }
         lines.push(muted_line(theme, "Loading session usage\u{2026}"));
-    } else {
+    } else if lines.is_empty() {
         lines.push(muted_line(theme, "No active session."));
+    }
+    lines
+}
+
+fn allowance_lines(
+    state: &UsageInfoModalState,
+    bal: &CreditBalance,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // "Weekly limit", "Monthly limit", or "Usage", plus the plan name
+    let header = match &state.ctx.subscription_tier {
+        Some(tier) => format!("{} ({tier})", bal.usage_label()),
+        None => bal.usage_label().to_string(),
+    };
+    lines.push(Line::styled(header, header_style(theme)));
+    lines.push(Line::default());
+
+    const BAR_WIDTH: usize = 30;
+    let pct = bal.usage_pct.clamp(0.0, 100.0);
+    let filled = (((pct / 100.0) * BAR_WIDTH as f64).round() as usize).min(BAR_WIDTH);
+    lines.push(Line::from(vec![
+        Span::styled(
+            "\u{2588}".repeat(filled),
+            Style::default().fg(theme.gray_bright),
+        ),
+        Span::styled(
+            "\u{2591}".repeat(BAR_WIDTH - filled),
+            Style::default().fg(theme.gray_dim),
+        ),
+        // Floored to match the backend's truncation.
+        Span::styled(
+            format!("  {}%", bal.usage_pct.floor() as i64),
+            Style::default().fg(theme.text_primary),
+        ),
+    ]));
+
+    if let Some(reset) = &bal.period_end_display {
+        lines.push(muted_line(theme, format!("Resets: {reset}")));
+    }
+
+    // Prepaid credits (stored as negative cents, an accounting convention)
+    if let Some(prepaid) = bal.prepaid_balance_cents.map(i64::abs).filter(|c| *c > 0) {
+        lines.push(Line::default());
+        lines.push(plain(
+            theme,
+            format!("Credits: ${:.2}", prepaid as f64 / 100.0),
+        ));
+    }
+
+    // Legacy on-demand (pay-as-you-go) billing.
+    if bal.pay_as_you_go {
+        let used = bal.on_demand_used_cents.unwrap_or(0).abs() as f64 / 100.0;
+        let cap = bal.on_demand_cap_cents.unwrap_or(0).abs() as f64 / 100.0;
+        lines.push(Line::default());
+        lines.push(Line::styled("Pay as you go: Enabled", header_style(theme)));
+        lines.push(muted_line(
+            theme,
+            format!("Usage: ${used:.2} / ${cap:.2} per month"),
+        ));
     }
     lines
 }
@@ -826,7 +1012,7 @@ fn session_info_content(state: &UsageInfoModalState, theme: &Theme) -> TabConten
             let value_idx = lines.len();
             let hovered = state.hovered_copy_line == Some(value_idx);
             let label_style = if hovered {
-                theme.muted().bg(theme.bg_hover)
+                theme.muted().patch(theme.hover_overlay())
             } else {
                 theme.muted()
             };
@@ -865,7 +1051,7 @@ fn session_info_content(state: &UsageInfoModalState, theme: &Theme) -> TabConten
 fn copy_value_style(theme: &Theme, hovered: bool) -> Style {
     let mut style = Style::default().fg(theme.text_primary);
     if hovered {
-        style = style.bg(theme.bg_hover);
+        style = style.patch(theme.hover_overlay());
     }
     style
 }
@@ -894,9 +1080,13 @@ mod tests {
 
     fn state_with_session() -> UsageInfoModalState {
         UsageInfoModalState::new(
-            UsageInfoTab::Usage,
+            UsageInfoTab::UsageLimit,
             UsageInfoContext {
                 session_id: Some("sid-123".to_string()),
+                    usage_visible: true,
+                    chat_kind: false,
+                    billing_redirect_url: None,
+                    subscription_tier: None,
             },
         )
     }
@@ -936,7 +1126,7 @@ mod tests {
         let theme = Theme::current();
         let mut state = state_with_session();
         state.session_usage_text = Some("Session usage\nTokens: 1,234\nCost: $0.01".to_string());
-        let lines = usage_lines(&state, &theme);
+        let lines = usage_lines(&state, None, &theme);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert_eq!(text[0], "Session usage");
         assert!(text.iter().any(|l| l.contains("Tokens: 1,234")));
@@ -949,12 +1139,12 @@ mod tests {
 
         // Loading state for an active session.
         state.session_usage_text = None;
-        let lines = usage_lines(&state, &theme);
+        let lines = usage_lines(&state, None, &theme);
         assert!(lines[0].to_string().contains("Loading session usage"));
 
         // No session at all.
         state.ctx.session_id = None;
-        let lines = usage_lines(&state, &theme);
+        let lines = usage_lines(&state, None, &theme);
         assert!(lines[0].to_string().contains("No active session"));
     }
 
@@ -965,7 +1155,7 @@ mod tests {
         let mut state = state_with_session();
         state.session_usage_text = Some("Session usage: no model calls yet.".to_string());
         let theme = Theme::current();
-        render_usage_modal(&mut buf, area, &mut state, false, &theme);
+        render_usage_modal(&mut buf, area, &mut state, None, false, &theme);
         let text: String = (0..area.height)
             .map(|y| {
                 (0..area.width)
@@ -976,7 +1166,7 @@ mod tests {
             .collect();
         for needle in [
             "Context usage",
-            "Usage",
+            "Usage limit",
             "Session info",
             "copy session ID",
             "Session usage: no model calls yet.",
@@ -1005,7 +1195,7 @@ mod tests {
             Some("Session ID: sid-123\nModel Hash: fp-abc\nTurn: 3")
         );
         let theme = Theme::current();
-        render_usage_modal(&mut buf, area, &mut state, false, &theme);
+        render_usage_modal(&mut buf, area, &mut state, None, false, &theme);
         let text: String = (0..area.height)
             .map(|y| {
                 (0..area.width)
@@ -1028,7 +1218,7 @@ mod tests {
                 "Session ID: sid-123\nModel Hash: fp-abc\nTurn: 3".to_string()
             )
         );
-        state.set_tab(UsageInfoTab::Usage);
+        state.set_tab(UsageInfoTab::UsageLimit);
         assert_eq!(state.session_info_copy_all(), None);
         assert_eq!(
             handle_usage_modal_key(&mut state, &key(KeyCode::Char('y'))),
@@ -1046,7 +1236,7 @@ mod tests {
             field("Session ID", "sid-123", false),
             field("Model Hash", "fp-abc", true),
         ]);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
         let values: Vec<&str> = state.copy_hits.iter().map(|h| h.value.as_str()).collect();
         assert_eq!(values, ["sid-123", "Model Hash: fp-abc"]);
         let hit = state
@@ -1083,7 +1273,7 @@ mod tests {
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Model Hash", "fp-abc", true)]);
         let theme = Theme::current();
-        render_usage_modal(&mut buf, area, &mut state, false, &theme);
+        render_usage_modal(&mut buf, area, &mut state, None, false, &theme);
 
         let line_idx = state
             .plain_lines
@@ -1111,7 +1301,7 @@ mod tests {
             UsageModalOutcome::Changed
         );
 
-        render_usage_modal(&mut buf, area, &mut state, false, &theme);
+        render_usage_modal(&mut buf, area, &mut state, None, false, &theme);
         let cell = &buf[(x0, y)];
         if theme.text_primary != ratatui::style::Color::Reset
             && theme.bg_base != ratatui::style::Color::Reset
@@ -1135,7 +1325,7 @@ mod tests {
         let mut state = state_with_session();
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Title", "t", false)]);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
 
         let blank = state
             .plain_lines
@@ -1179,7 +1369,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut state = state_with_session();
         state.set_tab(UsageInfoTab::SessionInfo);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
         let rect = state.content_rect;
         assert_eq!(
             handle_usage_modal_mouse(
@@ -1191,7 +1381,7 @@ mod tests {
             UsageModalOutcome::Changed
         );
         state.session_fields = Some(vec![field("Title", "t", false)]);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
         assert_eq!(
             handle_usage_modal_mouse(
                 &mut state,
@@ -1210,7 +1400,7 @@ mod tests {
         let mut state = state_with_session();
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Model Hash", "fp-abc", true)]);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
         let hit = state.copy_hits[0].clone();
         let line = state
             .plain_lines
@@ -1249,7 +1439,7 @@ mod tests {
         let mut state = state_with_session();
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Model Hash", "fp-abc", true)]);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
         let hit = state.copy_hits[0].clone();
         handle_usage_modal_mouse(
             &mut state,
@@ -1280,7 +1470,7 @@ mod tests {
         let mut state = state_with_session();
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Session ID", "sid-123", false)]);
-        render_usage_modal(&mut buf, area, &mut state, false, &Theme::current());
+        render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
         let rect = state.content_rect;
         assert!(rect.width > 0 && rect.height > 0);
         assert_eq!(
@@ -1338,7 +1528,7 @@ mod tests {
         let mut buf = Buffer::empty(area);
         let mut state = state_with_session();
         let theme = Theme::current();
-        render_usage_modal(&mut buf, area, &mut state, false, &theme);
+        render_usage_modal(&mut buf, area, &mut state, None, false, &theme);
         let popup = state.window.popup_area.expect("popup rendered");
         assert_eq!(popup.height, 30);
         // Still vertically centered.

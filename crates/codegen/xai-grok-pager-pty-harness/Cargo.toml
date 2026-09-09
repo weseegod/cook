@@ -47,6 +47,7 @@ anyhow = { workspace = true }
 base64 = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+strum = { workspace = true }
 serde_yaml = { workspace = true }
 image = { workspace = true, features = ["png"] }
 tempfile = { workspace = true }
@@ -66,6 +67,12 @@ path = "tests/env_op_compile.rs"
 [[bin]]
 name = "pty-scenario"
 path = "src/bin/pty_scenario.rs"
+
+# Fixture for tests/orphan_reap.rs: holds a PtyController child and blocks so
+# the test can kill it ungracefully and assert the child does not survive.
+[[bin]]
+name = "pty_orphan_holder"
+path = "src/bin/pty_orphan_holder.rs"
 
 # scroll-matrix — scroll validation matrix sweep. The curated tier also runs
 # in CI (tests/scroll_matrix_curated.rs); this binary is the local full-sweep

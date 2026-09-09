@@ -24,6 +24,8 @@ pub fn make_agent_view(session_id: Option<&str>, cwd: &str) -> crate::app::agent
         restore_degree: None,
         rate_limited: false,
         model_incompatible: false,
+        credit_limit_blocked: false,
+        free_usage_blocked: false,
         available_commands: Vec::new(),
         available_commands_generation: 0,
         available_tools: None,
@@ -118,13 +120,9 @@ impl Drop for EnvVarGuard {
         }
     }
 }
-/// Shared GROK_HOME boundary fixture for the resume-by-title startup and pre-sandbox tests.
-///
-/// `grok_home()` is OnceLock-cached process-wide, so summaries land under the
-/// *resolved* home (possibly the real `~/.grok` when another test pinned the
-/// cache first); cwd-encoded dirnames are tempdir-unique, and cleanup runs on
-/// drop so it survives assertion panics.
-/// Callers must hold `#[serial_test::serial(GROK_HOME)]`.
+/// Shared GROK_HOME boundary fixture for the resume-by-title startup and pre-sandbox tests. cwd-encoded dirnames
+/// are tempdir-unique, and cleanup runs on drop so it survives assertion panics. Callers must hold
+/// `[serial_test::serial(GROK_HOME)]`.
 pub struct GrokHomeFixture {
     _home: tempfile::TempDir,
     cwd: tempfile::TempDir,

@@ -807,24 +807,6 @@ fn is_session_attach_request_detects_load_and_resume() {
 }
 
 #[test]
-fn is_scheduled_task_inject_prompt_detects_only_inject() {
-    assert!(is_scheduled_task_inject_prompt(&pv(
-        r#"{"method":"x.ai/scheduled_task_inject_prompt","params":{"sessionId":"s1","taskId":"t1","prompt":"echo hi"}}"#
-    )));
-    // Gateway-wrapped form (the actual wire shape): `_`-prefixed top-level method with the real method and params nested under `params`
-    assert!(is_scheduled_task_inject_prompt(&pv(
-        r#"{"method":"_x.ai/scheduled_task_inject_prompt","params":{"method":"x.ai/scheduled_task_inject_prompt","params":{"sessionId":"s1","taskId":"t1","prompt":"echo hi"}}}"#
-    )));
-    // The sibling informational notification is NOT driver-routed (it fans out so every dashboard updates its tasks pane)
-    assert!(!is_scheduled_task_inject_prompt(&pv(
-        r#"{"method":"x.ai/scheduled_task_fired","params":{"sessionId":"s1"}}"#
-    )));
-    assert!(!is_scheduled_task_inject_prompt(&pv(
-        r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s1"}}"#
-    )));
-}
-
-#[test]
 fn is_interaction_request_detects_only_interaction_methods() {
     for m in [
         "session/request_permission",
@@ -1023,10 +1005,8 @@ fn event_seq_of_parses_acp_and_ext_and_handles_missing() {
     assert_eq!(event_seq_of(&none), None);
 }
 
-/// Regression: on a mid-turn attach, the in-flight turn streams and persists between subscribe and gate close.
-/// Its chunks are therefore BOTH buffered live for the loading client AND read back by replay (same eventId).
-/// The post-load flush must drop the buffered copies replay already delivered (`event_seq <= replay max`) and forward only the newer tail.
-/// Each event then reaches the client exactly once.
+/// Regression: on a mid-turn attach, the in-flight turn streams and persists between subscribe and gate close. Its chunks are therefore BOTH buffered live for the loading client AND read back by replay (same eventId).
+/// The post-load flush must drop the buffered copies replay already delivered (`event_seq <= replay max`) and forward only the newer tail. Each event then reaches the client exactly once.
 #[test]
 fn buffer_flush_drops_replay_overlap_by_event_seq() {
     let client = ClientId(5);
@@ -1579,6 +1559,47 @@ fn extract_model_id_from_set_model_returns_none_for_missing_model() {
     assert_eq!(extract_model_id_from_set_model(&pv(&payload)), None);
 }
 
+fn set_config_option_envelope(
+    config_id: &'static str,
+    value: agent_client_protocol::SessionConfigOptionValue,
+) -> serde_json::Value {
+    let request = agent_client_protocol::SetSessionConfigOptionRequest::new(
+        agent_client_protocol::SessionId::from("sess-123"),
+        config_id,
+        value,
+    );
+    serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": AGENT_METHOD_NAMES.session_set_config_option,
+        "id": 1,
+        "params": serde_json::to_value(&request).unwrap(),
+    })
+}
+
+#[test]
+fn extract_model_id_from_set_config_option_returns_value() {
+    let envelope = set_config_option_envelope("model", "grok-3-fast".into());
+    assert_eq!(
+        extract_model_id_from_set_config_option(&envelope),
+        Some("grok-3-fast".to_string())
+    );
+}
+
+#[test]
+fn extract_model_id_from_set_config_option_ignores_non_model_config() {
+    let envelope = set_config_option_envelope("reasoning_effort", "high".into());
+    assert_eq!(extract_model_id_from_set_config_option(&envelope), None);
+}
+
+#[test]
+fn extract_model_id_from_set_config_option_ignores_boolean_value() {
+    let envelope = set_config_option_envelope(
+        "model",
+        agent_client_protocol::SessionConfigOptionValue::boolean(true),
+    );
+    assert_eq!(extract_model_id_from_set_config_option(&envelope), None);
+}
+
 // ── patch_initialize_response_model tests ─────────────────────────
 
 #[test]
@@ -2117,16 +2138,14 @@ fn version_mismatch_notification_is_none_for_unknown_leader_version() {
     );
 }
 
-/// A session/setModel request updates the client's default_model capability, so the next session/new injects the updated model.
-#[tokio::test]
-async fn set_model_updates_default_model_for_next_session_new() {
+async fn model_injected_after_set_model(response: Option<serde_json::Value>) -> String {
     let temp = TempDir::new().unwrap();
-    let (sock_path, cancel, mut acp_rx) = setup_test_server(&temp).await;
+    let (sock_path, _cancel, response_tx, mut acp_rx) =
+        setup_persistent_server_with_agent(&temp).await;
 
     let stream = LeaderStream::connect(&sock_path).await.unwrap();
     let (mut reader, mut writer) = tokio::io::split(stream);
 
-    // Register with an initial default_model of "grok-original"
     write_message(
         &mut writer,
         &ClientMessage::Register {
@@ -2143,7 +2162,6 @@ async fn set_model_updates_default_model_for_next_session_new() {
     .unwrap();
     let _: ServerMessage = read_message(&mut reader).await.unwrap();
 
-    // 1. Send session/setModel to switch to "grok-4.5"
     let set_model_payload = format!(
         r#"{{"jsonrpc":"2.0","method":"{}","id":1,"params":{{"sessionId":"sess-1","modelId":"grok-4.5"}}}}"#,
         AGENT_METHOD_NAMES.session_set_model
@@ -2156,10 +2174,17 @@ async fn set_model_updates_default_model_for_next_session_new() {
     )
     .await
     .unwrap();
-    // Consume the forwarded message
-    let _ = acp_rx.recv().await.unwrap();
+    let forwarded = acp_rx.recv().await.unwrap();
 
-    // 2. Send session/new; the leader must inject the UPDATED model ("grok-4.5")
+    if let Some(mut response) = response {
+        let forwarded_id =
+            serde_json::from_str::<serde_json::Value>(&forwarded).unwrap()["id"].clone();
+        response["jsonrpc"] = serde_json::json!("2.0");
+        response["id"] = forwarded_id;
+        response_tx.send(response.to_string()).unwrap();
+        let _: ServerMessage = read_message(&mut reader).await.unwrap();
+    }
+
     let session_new_payload = format!(
         r#"{{"jsonrpc":"2.0","method":"{}","id":2,"params":{{"cwd":"/tmp"}}}}"#,
         AGENT_METHOD_NAMES.session_new
@@ -2175,13 +2200,53 @@ async fn set_model_updates_default_model_for_next_session_new() {
 
     let forwarded = acp_rx.recv().await.unwrap();
     let json: serde_json::Value = serde_json::from_str(&forwarded).unwrap();
+    json["params"]["_meta"]["modelId"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
 
+#[tokio::test]
+async fn set_model_optimistically_updates_default_model_without_awaiting_response() {
+    let injected = model_injected_after_set_model(None).await;
     assert_eq!(
-        json["params"]["_meta"]["modelId"], "grok-4.5",
-        "Leader should inject the updated model after session/setModel, not the stale registration model"
+        injected, "grok-4.5",
+        "optimistic switch injects the new model"
     );
+}
 
-    cancel.cancel();
+#[tokio::test]
+async fn rejected_set_model_rolls_back_default_model() {
+    let injected = model_injected_after_set_model(Some(
+        serde_json::json!({ "error": { "code": -32602, "message": "unknown model" } }),
+    ))
+    .await;
+    assert_eq!(
+        injected, "grok-original",
+        "rejected switch rolls back to the previous model"
+    );
+}
+
+#[test]
+fn model_switch_tracker_keeps_newest_when_accepts_arrive_out_of_order() {
+    let mut tracker = ModelSwitchTracker::default();
+    tracker.seed_confirmed(Some("orig".to_string()));
+    tracker.record_forward("r1".to_string(), "a".to_string());
+    tracker.record_forward("r2".to_string(), "b".to_string());
+    assert!(tracker.resolve("r2", true));
+    assert!(tracker.resolve("r1", true));
+    assert_eq!(tracker.default_model().as_deref(), Some("b"));
+}
+
+#[test]
+fn model_switch_tracker_rejection_rolls_back_to_last_confirmed() {
+    let mut tracker = ModelSwitchTracker::default();
+    tracker.seed_confirmed(Some("orig".to_string()));
+    tracker.record_forward("r1".to_string(), "a".to_string());
+    assert!(tracker.resolve("r1", true));
+    tracker.record_forward("r2".to_string(), "b".to_string());
+    assert!(tracker.resolve("r2", false));
+    assert_eq!(tracker.default_model().as_deref(), Some("a"));
 }
 
 #[tokio::test]
@@ -3337,50 +3402,6 @@ async fn two_clients_one_session_broadcast_and_driver() {
     cancel.cancel();
 }
 
-/// A `x.ai/scheduled_task_inject_prompt` (cron `/loop` fire) must be routed to the SINGLE session driver, not fanned out to every subscriber.
-/// If it broadcast, each dashboard would enqueue and try to drive the same cron turn (phantom `#N` queue rows, competing drivers, stuck turns).
-/// The other clients render the resulting turn from the broadcast deltas.
-#[tokio::test]
-async fn scheduled_task_inject_prompt_routes_to_driver_only() {
-    let temp = TempDir::new().unwrap();
-    let (sock_path, cancel, response_tx, mut acp_rx) =
-        setup_persistent_server_with_agent(&temp).await;
-
-    // Client A loads first and becomes driver
-    let (mut reader_a, mut writer_a) = connect_and_register(&sock_path, "client-a").await;
-    load_session(&mut writer_a, "sess-cron").await;
-    complete_load(&mut acp_rx, &response_tx).await;
-    let _ = next_acp_payload(&mut reader_a).await;
-    tokio::time::sleep(Duration::from_millis(30)).await;
-
-    // Client B loads second and joins as subscriber (does not steal driver)
-    let (mut reader_b, mut writer_b) = connect_and_register(&sock_path, "client-b").await;
-    load_session(&mut writer_b, "sess-cron").await;
-    complete_load(&mut acp_rx, &response_tx).await;
-    let _ = next_acp_payload(&mut reader_b).await;
-    tokio::time::sleep(Duration::from_millis(30)).await;
-
-    // The agent fires a scheduled task, producing an inject_prompt notification in the real gateway-WRAPPED wire form
-    // That form (`_x.ai/...` top-level, nested method and params) is the shape that previously fell through to broadcast
-    let inject = r#"{"method":"_x.ai/scheduled_task_inject_prompt","params":{"method":"x.ai/scheduled_task_inject_prompt","params":{"sessionId":"sess-cron","taskId":"task-1","prompt":"echo hello","humanSchedule":"every 1m"}}}"#;
-    response_tx.send(inject.to_string()).unwrap();
-
-    let got_a = next_acp_payload(&mut reader_a).await;
-    let got_b = next_acp_payload(&mut reader_b).await;
-    assert!(
-        got_a
-            .as_deref()
-            .is_some_and(|p| p.contains("scheduled_task_inject_prompt")),
-        "driver A must receive the cron inject_prompt, got {got_a:?}"
-    );
-    assert!(
-        got_b.is_none(),
-        "non-driver B must NOT receive the cron inject_prompt, got {got_b:?}"
-    );
-
-    cancel.cancel();
-}
-
 /// A blocking interaction reverse-request (permission / `ask_user_question` / plan-approval) is SHARED.
 /// It broadcasts to every subscriber so any client can render and answer the modal.
 /// Contrast with `two_clients_one_session_broadcast_and_driver`, where an ordinary reverse-request reaches the driver only.
@@ -3483,8 +3504,7 @@ async fn connect_register_get_id(
 }
 
 /// A client that reattaches AFTER a subagent spawned is backfilled into the child route when its parent `session/load` response lands.
-/// The parent-to-child index survives the disconnect eviction, which only empties subscriber sets.
-/// Live child updates therefore resume without a replayed spawn line.
+/// The parent-to-child index survives the disconnect eviction, which only empties subscriber sets. Live child updates therefore resume without a replayed spawn line.
 /// Driver inheritance is pinned too: a driver-only child reverse-request must reach the reattached client.
 #[tokio::test]
 async fn reattached_client_backfilled_into_child_routes() {
@@ -3719,11 +3739,8 @@ async fn backfill_covers_nested_children() {
     cancel.cancel();
 }
 
-/// Re-parenting on an INTERMEDIATE finish: root spawns A, A spawns B, both live.
-/// A finishes LIVE while B keeps running.
-/// A new client loading the ROOT must still be backfilled into B's live route.
-/// `prune_child_route` promotes B onto A's parent so the forward-only root walk reaches it.
-/// Without re-parenting the edge from root to A is gone and B's subtree is orphaned.
+/// Re-parenting on an INTERMEDIATE finish: root spawns A, A spawns B, both live. A finishes LIVE while B keeps running. A new client loading the ROOT must still be backfilled into B's live route.
+/// `prune_child_route` promotes B onto A's parent so the forward-only root walk reaches it. Without re-parenting the edge from root to A is gone and B's subtree is orphaned.
 #[tokio::test]
 async fn intermediate_finish_reparents_live_grandchild_for_root_backfill() {
     let temp = TempDir::new().unwrap();
@@ -3816,8 +3833,7 @@ async fn live_finished_prunes_index_so_reattach_skips_dead_child() {
 }
 
 /// Symmetric twin of `live_finished_prunes_index_so_reattach_skips_dead_child` for the no-subscribers case.
-/// The parent goes fully detached (every client disconnects, the index edge survives), THEN a live `subagent_finished` arrives.
-/// It is relay-classified (no subscribers) and dropped, but it must still prune the index edge.
+/// The parent goes fully detached (every client disconnects, the index edge survives), THEN a live `subagent_finished` arrives. It is relay-classified (no subscribers) and dropped, but it must still prune the index edge.
 /// A reattaching client's `session/load` backfill then does not resurrect the dead child.
 #[tokio::test]
 async fn detached_live_finished_prunes_index_so_reattach_skips_dead_child() {
@@ -4105,11 +4121,6 @@ async fn mid_load_child_delta_reaches_loader_via_request_side_backfill() {
     cancel.cancel();
 }
 
-/// A pending interaction must SURVIVE a full client disconnect and be replayed on reconnect.
-/// A session with a pending interaction has a running turn (the tool awaits the answer).
-/// The agent therefore keeps it resident across the disconnect with the reverse-request still parked (`session_has_live_work`).
-/// The leader must NOT drop its interaction cache on detach, or the reconnecting client gets no modal while the agent is still waiting.
-/// Regression for the "modal vanishes on reconnect" bug.
 #[tokio::test]
 async fn pending_interaction_survives_disconnect_and_replays_on_reconnect() {
     let temp = TempDir::new().unwrap();
@@ -4149,8 +4160,7 @@ async fn pending_interaction_survives_disconnect_and_replays_on_reconnect() {
 
 /// An interaction raised while the session has NO subscriber must still be cached, so the FIRST client to attach gets the modal replayed.
 /// That happens when a dashboard-started session hits `ask_user_question` before anyone enters it.
-/// It also happens when a reverse-request races ahead of the `session/new`/`session/load` response that registers the subscriber.
-/// Regression for the "entered the session, modal never appears, turn stuck Waiting" bug: the cache insert used to require a subscriber.
+/// It also happens when a reverse-request races ahead of the `session/new`/`session/load` response that registers the subscriber. Regression for the "entered the session, modal never appears, turn stuck Waiting" bug: the cache insert used to require a subscriber.
 #[tokio::test]
 async fn interaction_raised_with_no_subscriber_is_cached_and_replayed_on_first_attach() {
     let temp = TempDir::new().unwrap();
@@ -4310,10 +4320,8 @@ async fn roster_changed_broadcasts_to_all_clients() {
     cancel.cancel();
 }
 
-/// `x.ai/models/update` is a machine-wide catalog notification with no sessionId.
-/// It must broadcast to every registered client, not just the last-active one.
-/// Every model picker then refreshes after a config.toml / models_cache.json hot-reload.
-/// Uses the production wire form: agent ext notifications arrive `_`-prefixed (`_x.ai/models/update`).
+/// `x.ai/models/update` is a machine-wide catalog notification with no sessionId. It must broadcast to every registered client, not just the last-active one.
+/// Every model picker then refreshes after a config.toml / models_cache.json hot-reload. Uses the production wire form: agent ext notifications arrive `_`-prefixed (`_x.ai/models/update`).
 #[tokio::test]
 async fn models_update_broadcasts_to_all_clients() {
     let temp = TempDir::new().unwrap();
@@ -4340,8 +4348,7 @@ async fn models_update_broadcasts_to_all_clients() {
     cancel.cancel();
 }
 
-/// `x.ai/mcp/servers_updated` is a machine-wide MCP-catalog notification with no sessionId (session-agnostic by design).
-/// It must broadcast to every registered client.
+/// `x.ai/mcp/servers_updated` is a machine-wide MCP-catalog notification with no sessionId (session-agnostic by design). It must broadcast to every registered client.
 /// Otherwise managed connectors vanish from clients that weren't last-active when the post-initialize background fetch resolved.
 /// Uses the production wire form (`_`-prefixed ext notification with the real method nested in params).
 #[tokio::test]

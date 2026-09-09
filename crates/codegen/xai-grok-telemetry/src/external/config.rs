@@ -75,8 +75,17 @@ impl ExporterSelection {
 pub struct ContentGates {
     /// `OTEL_LOG_USER_PROMPTS=1`: prompt text on `grok_code.user_prompt` (60 KB cap, secret-scrubbed).
     pub log_user_prompts: bool,
-    /// `OTEL_LOG_TOOL_DETAILS=1`: gated tool params / full paths / verbatim MCP, skill, and plugin names.
+    /// `OTEL_LOG_TOOL_DETAILS=1`: gated tool params preview / full paths / verbatim
+    /// MCP, skill, and plugin names. Does **not** include full bodies.
     pub log_tool_details: bool,
+    /// `OTEL_LOG_ASSISTANT_RESPONSES`: gated `response` on
+    /// `grok_code.assistant_response`. Unset follows `log_user_prompts`;
+    /// explicit `0` keeps responses redacted while prompts stay on.
+    pub log_assistant_responses: bool,
+    /// `OTEL_LOG_TOOL_CONTENT=1`: full bodies (`tool_input`, `tool_output`,
+    /// `full_command`, failure `error_message`). Default off. Does **not**
+    /// follow details — CONTENT without DETAILS is valid.
+    pub log_tool_content: bool,
 }
 
 /// Delta vs. cumulative metric temporality (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`).
@@ -99,12 +108,9 @@ pub struct ExternalClientInfo {
     pub app_entrypoint: String,
 }
 
-/// Config-file layer for the external stream, built by the shell from the `otel_*` keys of the `[telemetry]` table.
-/// Resolution layers it *under* the env vars.
-/// The field names here are internal; users write `otel_enabled`, `otel_metrics_exporter`, and so on (see [`crate::config::TelemetryConfig`]).
-///
-/// There is deliberately **no `headers` key**: collector auth comes from the `OTEL_EXPORTER_OTLP_HEADERS` env var only.
-/// That keeps collector tokens off disk.
+/// Resolution layers it *under* the env vars. The field names here are internal; users write `otel_enabled`,
+/// `otel_metrics_exporter`, and so on (see [`crate::config::TelemetryConfig`]). There is deliberately no `headers` key:
+/// collector auth comes from the `OTEL_EXPORTER_OTLP_HEADERS` env var only. That keeps collector tokens off disk.
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct ExternalOtelFileConfig {
@@ -125,6 +131,26 @@ pub struct ExternalOtelFileConfig {
     pub log_user_prompts: Option<bool>,
     /// Content gate (admins can pin this to `false` via requirements).
     pub log_tool_details: Option<bool>,
+    /// Content gate. Unset follows `log_user_prompts`.
+    pub log_assistant_responses: Option<bool>,
+    /// Content gate for full tool/MCP bodies. Default off; does not follow details.
+    pub log_tool_content: Option<bool>,
+    /// `OTEL_EXPORTER_OTLP_TIMEOUT` (ms), as a decimal string.
+    pub timeout: Option<String>,
+    /// `OTEL_METRIC_EXPORT_INTERVAL` (ms), as a decimal string.
+    pub metric_export_interval: Option<String>,
+    pub logs_endpoint: Option<String>,
+    pub metrics_endpoint: Option<String>,
+    pub logs_protocol: Option<String>,
+    pub metrics_protocol: Option<String>,
+    pub logs_certificate: Option<String>,
+    pub metrics_certificate: Option<String>,
+    pub logs_client_certificate: Option<String>,
+    pub logs_client_key: Option<String>,
+    pub metrics_client_certificate: Option<String>,
+    pub metrics_client_key: Option<String>,
+    /// `OTEL_METRICS_INCLUDE_SESSION_ID`.
+    pub include_session_id: Option<bool>,
 }
 
 /// Returned by [`ExternalOtelConfig::resolve`] only when the double opt-in is satisfied.
@@ -156,6 +182,8 @@ pub struct ExternalOtelConfig {
     pub metrics_client_key: Option<String>,
     /// `OTEL_EXPORTER_OTLP_TIMEOUT` (ms). Default 10 s.
     pub timeout: Duration,
+    /// `OTEL_BLRP_EXPORT_TIMEOUT` (ms). Bounds each log export; falls back to [`Self::timeout`].
+    pub logs_export_timeout: Duration,
     /// `OTEL_METRIC_EXPORT_INTERVAL` (ms). Default 60 s.
     pub metric_export_interval: Duration,
     /// `OTEL_BLRP_SCHEDULE_DELAY` (spec name, wins) / `OTEL_LOGS_EXPORT_INTERVAL` (compatibility alias). Default 5 s.
@@ -439,7 +467,8 @@ impl ExternalOtelConfig {
         let logs_otlp = logs_exporter == ExporterSelection::Otlp;
         let metrics_otlp = metrics_exporter == ExporterSelection::Otlp;
         let logs_transport = match resolve_protocol(
-            getenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL"),
+            getenv("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL")
+                .or_else(|| file.and_then(|f| f.logs_protocol.clone())),
             "logs",
             logs_otlp,
         )? {
@@ -447,7 +476,8 @@ impl ExternalOtelConfig {
             None => inherit_base(logs_otlp)?,
         };
         let metrics_transport = match resolve_protocol(
-            getenv("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL"),
+            getenv("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL")
+                .or_else(|| file.and_then(|f| f.metrics_protocol.clone())),
             "metrics",
             metrics_otlp,
         )? {
@@ -460,13 +490,17 @@ impl ExternalOtelConfig {
             .or_else(|| file.and_then(|f| f.endpoint.clone()))
             .filter(|s| !s.trim().is_empty());
         let logs_endpoint = resolve_signal_endpoint(
-            getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"),
+            getenv("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT")
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| file.and_then(|f| f.logs_endpoint.clone())),
             base_endpoint.as_deref(),
             "v1/logs",
             logs_transport,
         );
         let metrics_endpoint = resolve_signal_endpoint(
-            getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"),
+            getenv("OTEL_EXPORTER_OTLP_METRICS_ENDPOINT")
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| file.and_then(|f| f.metrics_endpoint.clone())),
             base_endpoint.as_deref(),
             "v1/metrics",
             metrics_transport,
@@ -499,15 +533,23 @@ impl ExternalOtelConfig {
             .filter(|s| !s.trim().is_empty())
             .or_else(|| file.and_then(|f| f.certificate.clone()))
             .filter(|s| !s.trim().is_empty());
-        let resolve_signal_certificate = |signal_var: &str| {
+        let resolve_signal_certificate = |signal_var: &str, file_value: Option<String>| {
             getenv(signal_var)
                 .filter(|s| !s.trim().is_empty())
+                .or(file_value)
                 .or_else(|| base_certificate.clone())
                 .map(|s| s.trim().to_string())
         };
-        let logs_ca_certificate = resolve_signal_certificate("OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE");
-        let metrics_ca_certificate =
-            resolve_signal_certificate("OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE");
+        let logs_ca_certificate = resolve_signal_certificate(
+            "OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE",
+            file.and_then(|f| f.logs_certificate.clone())
+                .filter(|s| !s.trim().is_empty()),
+        );
+        let metrics_ca_certificate = resolve_signal_certificate(
+            "OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE",
+            file.and_then(|f| f.metrics_certificate.clone())
+                .filter(|s| !s.trim().is_empty()),
+        );
 
         let env_client_certificate = getenv("OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE")
             .filter(|s| !s.trim().is_empty())
@@ -534,13 +576,27 @@ impl ExternalOtelConfig {
             "config [telemetry].otel_client_certificate",
             "config [telemetry].otel_client_key",
         );
-        let signal_identity = |signal: &str, cert_var: &str, key_var: &str| {
+        let signal_identity = |signal: &str,
+                               cert_var: &str,
+                               key_var: &str,
+                               file_cert: Option<String>,
+                               file_key: Option<String>| {
             let signal_cert = getenv(cert_var)
                 .filter(|s| !s.trim().is_empty())
-                .map(|s| s.trim().to_string());
+                .map(|s| s.trim().to_string())
+                .or_else(|| {
+                    file_cert
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| s.trim().to_string())
+                });
             let signal_key = getenv(key_var)
                 .filter(|s| !s.trim().is_empty())
-                .map(|s| s.trim().to_string());
+                .map(|s| s.trim().to_string())
+                .or_else(|| {
+                    file_key
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|s| s.trim().to_string())
+                });
             resolve_identity_layer(
                 signal,
                 signal_cert,
@@ -557,24 +613,43 @@ impl ExternalOtelConfig {
             "logs",
             "OTEL_EXPORTER_OTLP_LOGS_CLIENT_CERTIFICATE",
             "OTEL_EXPORTER_OTLP_LOGS_CLIENT_KEY",
+            file.and_then(|f| f.logs_client_certificate.clone()),
+            file.and_then(|f| f.logs_client_key.clone()),
         );
         let (metrics_client_certificate, metrics_client_key) = signal_identity(
             "metrics",
             "OTEL_EXPORTER_OTLP_METRICS_CLIENT_CERTIFICATE",
             "OTEL_EXPORTER_OTLP_METRICS_CLIENT_KEY",
+            file.and_then(|f| f.metrics_client_certificate.clone()),
+            file.and_then(|f| f.metrics_client_key.clone()),
         );
 
+        let log_user_prompts = getenv("OTEL_LOG_USER_PROMPTS")
+            .as_deref()
+            .and_then(env_bool)
+            .or_else(|| file.and_then(|f| f.log_user_prompts))
+            .unwrap_or(false);
+        let log_tool_details = getenv("OTEL_LOG_TOOL_DETAILS")
+            .as_deref()
+            .and_then(env_bool)
+            .or_else(|| file.and_then(|f| f.log_tool_details))
+            .unwrap_or(false);
+        // Unset follows prompts; explicit 0 keeps responses off.
+        let log_assistant_responses = getenv("OTEL_LOG_ASSISTANT_RESPONSES")
+            .as_deref()
+            .and_then(env_bool)
+            .or_else(|| file.and_then(|f| f.log_assistant_responses))
+            .unwrap_or(log_user_prompts);
+        let log_tool_content = getenv("OTEL_LOG_TOOL_CONTENT")
+            .as_deref()
+            .and_then(env_bool)
+            .or_else(|| file.and_then(|f| f.log_tool_content))
+            .unwrap_or(false);
         let gates = ContentGates {
-            log_user_prompts: getenv("OTEL_LOG_USER_PROMPTS")
-                .as_deref()
-                .and_then(env_bool)
-                .or_else(|| file.and_then(|f| f.log_user_prompts))
-                .unwrap_or(false),
-            log_tool_details: getenv("OTEL_LOG_TOOL_DETAILS")
-                .as_deref()
-                .and_then(env_bool)
-                .or_else(|| file.and_then(|f| f.log_tool_details))
-                .unwrap_or(false),
+            log_user_prompts,
+            log_tool_details,
+            log_assistant_responses,
+            log_tool_content,
         };
 
         let temporality = match getenv("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
@@ -585,6 +660,11 @@ impl ExternalOtelConfig {
             // `delta`, `lowmemory`, unset, or unrecognized all resolve to the Delta default
             _ => TemporalityPreference::Delta,
         };
+
+        let timeout = parse_ms(
+            getenv("OTEL_EXPORTER_OTLP_TIMEOUT").or_else(|| file.and_then(|f| f.timeout.clone())),
+            Duration::from_millis(10_000),
+        );
 
         Some(Self {
             metrics_exporter,
@@ -601,12 +681,11 @@ impl ExternalOtelConfig {
             logs_client_key,
             metrics_client_certificate,
             metrics_client_key,
-            timeout: parse_ms(
-                getenv("OTEL_EXPORTER_OTLP_TIMEOUT"),
-                Duration::from_millis(10_000),
-            ),
+            timeout,
+            logs_export_timeout: parse_ms(getenv("OTEL_BLRP_EXPORT_TIMEOUT"), timeout),
             metric_export_interval: parse_ms(
-                getenv("OTEL_METRIC_EXPORT_INTERVAL"),
+                getenv("OTEL_METRIC_EXPORT_INTERVAL")
+                    .or_else(|| file.and_then(|f| f.metric_export_interval.clone())),
                 Duration::from_millis(60_000),
             ),
             logs_export_interval: parse_ms(
@@ -618,6 +697,7 @@ impl ExternalOtelConfig {
             include_session_id_on_metrics: getenv("OTEL_METRICS_INCLUDE_SESSION_ID")
                 .as_deref()
                 .and_then(env_bool)
+                .or_else(|| file.and_then(|f| f.include_session_id))
                 .unwrap_or(true),
             include_version_on_metrics: getenv("OTEL_METRICS_INCLUDE_VERSION")
                 .as_deref()
@@ -679,6 +759,8 @@ mod tests {
         assert_eq!(cfg.logs_endpoint, "http://localhost:4318/v1/logs");
         assert!(!cfg.gates.log_user_prompts);
         assert!(!cfg.gates.log_tool_details);
+        assert!(!cfg.gates.log_assistant_responses);
+        assert!(!cfg.gates.log_tool_content);
         assert!(cfg.include_session_id_on_metrics);
         assert!(!cfg.include_version_on_metrics);
         assert_eq!(cfg.temporality, TemporalityPreference::Delta);
@@ -1020,6 +1102,71 @@ mod tests {
         .unwrap();
         assert!(cfg.gates.log_user_prompts);
         assert!(cfg.gates.log_tool_details);
+        assert!(
+            cfg.gates.log_assistant_responses,
+            "unset assistant follows prompts"
+        );
+        assert!(
+            !cfg.gates.log_tool_content,
+            "CONTENT does not follow DETAILS"
+        );
+    }
+
+    #[test]
+    fn assistant_gate_explicit_zero_does_not_follow_prompts() {
+        let cfg = ExternalOtelConfig::resolve_with(
+            env(&[
+                ("GROK_EXTERNAL_OTEL", "1"),
+                ("OTEL_LOGS_EXPORTER", "otlp"),
+                ("OTEL_LOG_USER_PROMPTS", "1"),
+                ("OTEL_LOG_ASSISTANT_RESPONSES", "0"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(cfg.gates.log_user_prompts);
+        assert!(!cfg.gates.log_assistant_responses);
+    }
+
+    #[test]
+    fn tool_content_gate_is_independent_and_defaults_off() {
+        let cfg = ExternalOtelConfig::resolve_with(
+            env(&[
+                ("GROK_EXTERNAL_OTEL", "1"),
+                ("OTEL_LOGS_EXPORTER", "otlp"),
+                ("OTEL_LOG_TOOL_DETAILS", "1"),
+                ("OTEL_LOG_TOOL_CONTENT", "1"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(cfg.gates.log_tool_details);
+        assert!(cfg.gates.log_tool_content);
+
+        let details_only = ExternalOtelConfig::resolve_with(
+            env(&[
+                ("GROK_EXTERNAL_OTEL", "1"),
+                ("OTEL_LOGS_EXPORTER", "otlp"),
+                ("OTEL_LOG_TOOL_DETAILS", "1"),
+            ]),
+            None,
+        )
+        .unwrap();
+        assert!(details_only.gates.log_tool_details);
+        assert!(!details_only.gates.log_tool_content);
+    }
+
+    #[test]
+    fn assistant_gate_file_unset_follows_prompts() {
+        let file = ExternalOtelFileConfig {
+            enabled: Some(true),
+            logs_exporter: Some("otlp".into()),
+            log_user_prompts: Some(true),
+            ..Default::default()
+        };
+        let cfg = ExternalOtelConfig::resolve_with(env(&[]), Some(&file)).unwrap();
+        assert!(cfg.gates.log_user_prompts);
+        assert!(cfg.gates.log_assistant_responses);
     }
 
     #[test]
@@ -1037,6 +1184,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.timeout, Duration::from_millis(2500));
+        assert_eq!(cfg.logs_export_timeout, Duration::from_millis(2500));
         assert_eq!(cfg.metric_export_interval, Duration::from_millis(30_000));
         // Spec name wins over the compatibility alias.
         assert_eq!(cfg.logs_export_interval, Duration::from_millis(1000));

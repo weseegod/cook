@@ -32,8 +32,8 @@ use super::dashboard::{
     dispatch_dashboard_overlay_stop, dispatch_dashboard_peek_reply,
     dispatch_dashboard_permission_followup, dispatch_dashboard_permission_select,
     dispatch_dashboard_question_answer, dispatch_dashboard_stop,
-    dispatch_dashboard_toggle_auto_approve, dispatch_exit_dashboard, dispatch_open_dashboard,
-    ensure_dashboard_state, resolve_location_input,
+    dispatch_dashboard_toggle_auto_approve, dispatch_dashboard_toggle_pin, dispatch_exit_dashboard,
+    dispatch_open_dashboard, ensure_dashboard_state, resolve_location_input,
 };
 use super::modes::{
     YOLO_ON_UNDER_PLAN_TOAST, active_agent_plan_nudge_state, dispatch_cycle_mode_and_sync,
@@ -55,7 +55,8 @@ use super::*;
 use crate::acp::model_state::ModelState;
 use crate::acp::tracker::AcpUpdateTracker;
 use crate::app::actions::{
-    Action, Effect, SubagentKillOutcome, SwitchModelError, TaskResult, WorkspaceMemberUpsertFailure,
+    Action, Effect, SubagentKillOutcome, SwitchModelError, TaskResult, WorkspaceMutation,
+    WorkspaceWriteCompletion,
 };
 use crate::app::agent::{AgentId, AgentSession, AgentState};
 use crate::app::agent_view::{ActivePane, AgentView, PromptMode};
@@ -94,9 +95,13 @@ fn test_app() -> AppView {
         scroll_state: crate::input::mouse::MouseScrollState::default(),
         scroll_config: crate::input::mouse::ScrollConfig::default(),
         appearance: crate::appearance::AppearanceConfig::default(),
-        notification_service: crate::notifications::NotificationService::new(Default::default()),
+        notification_service: crate::notifications::NotificationService::new(
+            Default::default(),
+            crate::render::draw::EscapeWriter::disconnected(),
+        ),
         status_line: Default::default(),
         pending_notification_escapes: None,
+        escape_writer: crate::render::draw::EscapeWriter::disconnected(),
         deferred_notification: None,
         tracing_rx: None,
         active_announcements: vec![],
@@ -135,6 +140,7 @@ fn test_app() -> AppView {
         contextual_hints: Default::default(),
         remote_contextual_hints: None,
         tip_seen_counts: Default::default(),
+        export_copy_slash_used: false,
         last_known_terminal_rows: 0,
         small_screen_tip_evaluated: false,
         ssh_wrap_tip_evaluated: false,
@@ -181,10 +187,16 @@ fn test_app() -> AppView {
         auto_update: None,
         ask_user_question_timeout_enabled: None,
         zdr_access_enabled: false,
+        usage_billing_redirect_url: None,
         access_gate_shown_logged: false,
         announcement_cta_impressions_logged: Default::default(),
         gate: None,
         subscription_tier: None,
+        paywall_check_started: None,
+        last_subscription_check_at: None,
+        subscription_watch_interval_secs: None,
+        pending_gate_verification: None,
+        gate_verify_gen: 0,
         bundle_state: crate::app::bundle::BundleState::default(),
         scroll_debug_hud: crate::views::scroll_debug_hud::ScrollDebugHud::new(),
         fps_hud: crate::views::fps_hud::FpsHud::new(),
@@ -194,6 +206,7 @@ fn test_app() -> AppView {
         )),
         command_tags: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         welcome_prompt_focused: false,
+        home_session_agent: None,
         welcome_tip_typing_dismissed: false,
         welcome_menu_index: None,
         welcome_menu_rects: Vec::new(),
@@ -254,6 +267,7 @@ fn test_app() -> AppView {
         foreign_resume_launch_generation: 0,
         foreign_resume_launch: None,
         quit_for_update: false,
+        trust_quit_error: None,
         relaunch: None,
         import_claude_modal: None,
         welcome_doc_viewer: None,
@@ -270,30 +284,25 @@ fn test_app() -> AppView {
         plugin_cta_enabled: false,
         plugin_cta_marketplace: None,
         workspace_dashboard_enabled: false,
+        usage_visible: true,
         has_external_auth_provider: false,
         tier_restricted_commands: Vec::new(),
         leader_mode: true,
+        credit_balance: None,
+        auto_topup: None,
+        billing_poll_wanted: false,
         leader_roster: Vec::new(),
         dashboard_local_sessions: Vec::new(),
         dashboard_sessions_loading: false,
-        workspace_store: None,
-        workspace_snapshot: None,
-        workspace_store_loading: false,
-        workspace_sync_requested: false,
-        workspace_write_in_flight: false,
-        workspace_writes_disabled: false,
-        workspace_retry_metadata: std::collections::HashMap::new(),
-        workspace_failed_metadata: std::collections::HashMap::new(),
+        workspace_membership: Default::default(),
         shared_prompt_queues: std::collections::HashMap::new(),
         optimistic_prompt_echoes: std::collections::HashMap::new(),
         pending_running_adoptions: std::collections::HashMap::new(),
         session_picker_grouped: false,
-        scheduler_background_loops_seed: true,
         cancel_rewind_enabled: true,
         session_recap_available: false,
         shell_feedback_trace_offer: false,
         feedback_trace_choice_latched: false,
-        feedback_trace_upload_pending: None,
         tutorial: None,
         dashboard: None,
         dashboard_return: None,
@@ -311,7 +320,6 @@ fn test_app() -> AppView {
 /// Build a default `AgentSession` for tests.
 /// Centralises the fixture so new fields on `AgentSession` don't break every test that constructs one by hand.
 /// The `acp_tx` is cloned from the test `AppView`.
-/// The `deferred_model_switch` is pulled from the `AppView`'s CLI overrides for parity with `dispatch_new_session_inner`.
 fn make_test_agent_session(app: &AppView, id: AgentId, sid: &str) -> AgentSession {
     AgentSession {
         id,
@@ -333,6 +341,8 @@ fn make_test_agent_session(app: &AppView, id: AgentId, sid: &str) -> AgentSessio
         restore_degree: None,
         rate_limited: false,
         model_incompatible: false,
+        credit_limit_blocked: false,
+        free_usage_blocked: false,
         available_commands: Vec::new(),
         available_commands_generation: 0,
         available_tools: None,
@@ -362,7 +372,6 @@ pub(super) fn test_app_with_agent() -> AppView {
     app
 }
 /// Give a test agent a generated title so the dashboard renders it.
-///
 /// The dashboard hides sessions with no real turn (`views::dashboard::row::is_empty_top_level`).
 /// Nav and render tests that rely on their placeholder agents being visible call this to opt in.
 fn mark_agent_nonempty(app: &mut AppView, id: AgentId) {
@@ -381,40 +390,46 @@ pub(super) fn enqueue_local(app: &mut AppView, id: AgentId, text: &str) {
         .enqueue_prompt(text.to_string());
 }
 fn make_test_subagent(child_sid: &str, sa_id: &str) -> crate::app::subagent::SubagentInfo {
+    let now = std::time::Instant::now();
     crate::app::subagent::SubagentInfo {
         subagent_id: Arc::from(sa_id),
         child_session_id: Arc::from(child_sid),
         description: Arc::from("test subagent"),
         subagent_type: Arc::from("general-purpose"),
-        persona: None,
-        role: None,
-        model: None,
-        context_source: None,
-        resumed_from: None,
-        capability_mode: None,
-        workflow_run_id: None,
-        context_normalized: false,
-        parent_prompt_id: None,
-        started_at: std::time::Instant::now(),
-        last_progress_at: std::time::Instant::now(),
-        finished: false,
-        status: None,
-        error: None,
-        duration_ms: None,
-        tool_calls: None,
-        turns: None,
-        turn_count: None,
-        tool_call_count: None,
-        tokens_used: None,
-        context_window_tokens: None,
-        context_usage_pct: None,
-        tools_used: Vec::new(),
-        error_count: None,
-        activity_label: None,
-        is_background: false,
-        pending_kill: false,
-        kill_requested_at: None,
-        scrollback_entry_id: None,
+        attempt: crate::app::subagent::SubagentAttemptInfo {
+            lifecycle: crate::app::subagent::SubagentLifecycleState::running_legacy_for_test(),
+            persona: None,
+            role: None,
+            model: None,
+            context_source: None,
+            resumed_from: None,
+            capability_mode: None,
+            workflow_run_id: None,
+            context_normalized: false,
+            parent_prompt_id: None,
+            started_at: now,
+            last_progress_at: now,
+            status: None,
+            error: None,
+            duration_ms: None,
+            tool_calls: None,
+            turns: None,
+            turn_count: None,
+            tool_call_count: None,
+            tokens_used: None,
+            context_window_tokens: None,
+            context_usage_pct: None,
+            tools_used: Vec::new(),
+            error_count: None,
+            activity_label: None,
+            is_background: false,
+            pending_kill: false,
+            kill_requested_at: None,
+            scrollback_entry_id: None,
+            terminal_entry_id: None,
+        },
+        completed_attempt_tokens: 0,
+        sealed_attempt_tokens: Default::default(),
         prompt: None,
         child_cwd: None,
         worktree_path: None,
@@ -477,6 +492,7 @@ fn cta_mcp_server(
         source: plugin
             .map(|p| format!("plugin: {p}"))
             .unwrap_or_else(|| "local".into()),
+        blocked_reason: None,
         wire_source: McpWireSource::Local,
         plugin_name: plugin.map(str::to_string),
         is_managed_gateway: false,
@@ -589,6 +605,8 @@ fn insert_placeholder_agent(app: &mut AppView, id: AgentId) {
             restore_degree: None,
             rate_limited: false,
             model_incompatible: false,
+            credit_limit_blocked: false,
+            free_usage_blocked: false,
             available_commands: Vec::new(),
             available_commands_generation: 0,
             available_tools: None,
@@ -644,7 +662,6 @@ fn fork_args(worktree_override: Option<bool>, directive: Option<&str>) -> ForkAr
     }
 }
 /// Build a single-agent app for the `/fork` dispatcher tests.
-///
 /// Sets `current_branch` to `Some("main")` so the agent appears to be inside a git repo.
 /// `dispatch_fork` skips the worktree question when `current_branch` is `None` (non-git cwd).
 fn fork_test_app() -> AppView {
@@ -748,6 +765,8 @@ fn two_agent_app_with_bg_task() -> AppView {
             restore_degree: None,
             rate_limited: false,
             model_incompatible: false,
+            credit_limit_blocked: false,
+            free_usage_blocked: false,
             available_commands: Vec::new(),
             available_commands_generation: 0,
             available_tools: None,
@@ -817,7 +836,6 @@ fn make_conversation_entry(id: &str) -> crate::app::app_view::SessionPickerEntry
     e
 }
 /// Open a SessionPicker modal on the active agent seeded with `entries`.
-///
 /// Stamps a real allocated generation, as production modals get theirs from `dispatch_fetch_session_list`.
 /// Helper-seeded modals can then receive generation-gated results.
 fn open_session_picker_with(
@@ -939,7 +957,8 @@ fn enqueue_permission_with_enable_always_approve(
     response_rx
 }
 const POLICY_WARNING: &str =
-    xai_grok_workspace::permission::resolution::YOLO_PIN_REASON_REQUIREMENTS;
+    xai_grok_workspace::permission::resolution::YoloPinReason::DisableBypassPermissionsMode
+        .message();
 fn agent_toast(app: &AppView) -> Option<String> {
     app.agents[&AgentId(0)]
         .toast
@@ -969,48 +988,15 @@ fn open_dashboard(app: &mut AppView) {
     let _ = dispatch_open_dashboard(app);
 }
 /// Display-order list of selectable row ids, the same order `dashboard_neighbor_row` and the renderer walk.
-/// Test-only mirror of the row build in `dispatch_dashboard_select`.
 fn dashboard_row_order(app: &AppView) -> Vec<crate::views::dashboard::DashboardRowId> {
-    let d = app.dashboard.as_ref().unwrap();
-    let home = crate::views::dashboard::render::cached_home();
-    let roster: &[crate::app::roster::RosterEntry] = if app.leader_mode {
-        &app.leader_roster
-    } else {
-        &app.dashboard_local_sessions
-    };
-    let rows = if app.workspace_dashboard_enabled {
-        app.workspace_snapshot
-            .as_ref()
-            .map(|snapshot| {
-                crate::views::dashboard::build_rows_with_workspace(&app.agents, snapshot, home)
-            })
-            .unwrap_or_default()
-    } else {
-        crate::views::dashboard::build_rows_with_roster(
-            &app.agents,
-            &d.pinned,
-            &d.reorder,
-            d.grouping,
-            &d.filter,
-            home,
-            roster,
-        )
-    };
-    crate::views::dashboard::render::focusables(
-        &rows,
-        d.grouping,
-        &d.filter,
-        &d.collapsed_sections,
-        d.idle_show_all,
-        d.search_mode,
-    )
-    .into_iter()
-    .filter_map(|f| match f {
-        crate::views::dashboard::Focusable::Row(id) => Some(id),
-        crate::views::dashboard::Focusable::Section(_)
-        | crate::views::dashboard::Focusable::IdleOverflow => None,
-    })
-    .collect()
+    super::dashboard::dashboard_focusables(app)
+        .into_iter()
+        .filter_map(|f| match f {
+            crate::views::dashboard::Focusable::Row(id) => Some(id),
+            crate::views::dashboard::Focusable::Section(_)
+            | crate::views::dashboard::Focusable::IdleOverflow => None,
+        })
+        .collect()
 }
 /// Build a synthetic `PermissionViewState` with the given id and options, and push it onto the agent's permission_queue.
 ///
@@ -1076,4 +1062,19 @@ fn reset_mouse_capture_enabled(on: bool) {
 }
 fn mouse_capture_is_enabled() -> bool {
     crate::app::MOUSE_CAPTURE_ENABLED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+/// Build a minimal `CreditBalance` for billing dispatch tests.
+fn test_bal(usage_pct: f64) -> crate::views::credit_bar::CreditBalance {
+    crate::views::credit_bar::CreditBalance {
+        usage_pct,
+        effective_usage_pct: usage_pct,
+        period_end_display: None,
+        pay_as_you_go: false,
+        on_demand_cap_cents: None,
+        on_demand_used_cents: None,
+        prepaid_balance_cents: None,
+        period_type: None,
+        is_unified_billing_user: None,
+    }
 }

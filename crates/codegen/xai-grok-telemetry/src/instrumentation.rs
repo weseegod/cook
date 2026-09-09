@@ -545,6 +545,7 @@ pub struct InstrumentationTimer {
     fields: Vec<(String, Value)>,
     subphase: Option<crate::startup::Subphase>,
     subphase_span: Option<tracing::Span>,
+    parent: Option<timer_parents::Guard>,
     timer_span: tracing::Span,
     mode: InstrumentationMode,
     _span_guard: Option<tracing::span::EnteredSpan>,
@@ -560,13 +561,15 @@ impl InstrumentationTimer {
         mode: InstrumentationMode,
         span_guard: Option<tracing::span::EnteredSpan>,
     ) -> Self {
-        let timer_span = if matches!(
-            mode,
-            InstrumentationMode::Disabled | InstrumentationMode::Chrome
-        ) {
-            tracing::Span::none()
+        let (timer_span, span_guard, parent) = if span_guard.is_some()
+            || matches!(
+                mode,
+                InstrumentationMode::Disabled | InstrumentationMode::Chrome
+            ) {
+            (tracing::Span::none(), span_guard, None)
         } else {
-            tracing::info_span!("timer", name = name)
+            let (timer_span, parent) = timer_parents::open(name);
+            (timer_span, None, parent)
         };
         Self {
             name,
@@ -574,6 +577,7 @@ impl InstrumentationTimer {
             fields: Vec::new(),
             subphase: None,
             subphase_span: None,
+            parent,
             timer_span,
             mode,
             _span_guard: span_guard,
@@ -587,6 +591,11 @@ impl InstrumentationTimer {
         {
             self.fields.push((key.into(), value.into()));
         }
+        self
+    }
+
+    pub fn with_server(&mut self, server: &str) -> &mut Self {
+        self.timer_span.record("server_name", server);
         self
     }
 
@@ -605,12 +614,14 @@ impl InstrumentationTimer {
 impl Drop for InstrumentationTimer {
     fn drop(&mut self) {
         let elapsed = self.start.elapsed();
-        // Close at the elapsed stamp, so span duration and `*_ms` agree.
+        drop(self.parent.take());
         drop(self.subphase_span.take());
+        drop(self._span_guard.take());
         drop(std::mem::replace(
             &mut self.timer_span,
             tracing::Span::none(),
         ));
+        crate::startup::record_sub_timing(self.name, elapsed);
         // Mirror into `unified.jsonl` while startup is active, so a slow-launch report needs no env vars or repro
         // The first usable session latches this off
         if crate::startup::is_active() {
@@ -632,11 +643,7 @@ impl Drop for InstrumentationTimer {
                 Some(Value::Object(ctx)),
             );
         }
-        if self.mode == InstrumentationMode::Disabled {
-            return;
-        }
-        if self.mode == InstrumentationMode::Chrome {
-            let _ = self._span_guard.take();
+        if self.mode == InstrumentationMode::Disabled || self.mode == InstrumentationMode::Chrome {
             return;
         }
         let elapsed_us = elapsed.as_micros() as u64;
@@ -668,4 +675,91 @@ impl Drop for InstrumentationTimer {
 
 pub fn timer(name: &'static str) -> InstrumentationTimer {
     InstrumentationTimer::new(name)
+}
+
+mod timer_parents {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::thread::ThreadId;
+
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    enum Key {
+        Task(tokio::task::Id),
+        Thread(ThreadId),
+    }
+
+    pub(super) struct Guard {
+        key: Key,
+        span: tracing::Span,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            let mut map = map_lock();
+            let Some(stack) = map.get_mut(&self.key) else {
+                return;
+            };
+            if let Some(index) = stack.iter().rposition(|open| same_span(open, &self.span)) {
+                stack.remove(index);
+            }
+            if stack.is_empty() {
+                map.remove(&self.key);
+            }
+        }
+    }
+
+    fn key() -> Key {
+        match tokio::task::try_id() {
+            Some(id) => Key::Task(id),
+            None => Key::Thread(std::thread::current().id()),
+        }
+    }
+
+    fn map_lock() -> std::sync::MutexGuard<'static, HashMap<Key, Vec<tracing::Span>>> {
+        static STACKS: std::sync::OnceLock<Mutex<HashMap<Key, Vec<tracing::Span>>>> =
+            std::sync::OnceLock::new();
+        STACKS
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn top() -> Option<tracing::Span> {
+        let map = map_lock();
+        map.get(&key()).and_then(|stack| stack.last().cloned())
+    }
+
+    fn push(span: &tracing::Span) -> Option<Guard> {
+        if span.is_disabled() {
+            return None;
+        }
+        let key = key();
+        map_lock().entry(key).or_default().push(span.clone());
+        Some(Guard {
+            key,
+            span: span.clone(),
+        })
+    }
+
+    pub(super) fn open(name: &'static str) -> (tracing::Span, Option<Guard>) {
+        let span = if let Some(parent) = top().or_else(crate::startup::current_phase_span) {
+            tracing::info_span!(parent: &parent, "timer", name = name, server_name = tracing::field::Empty)
+        } else {
+            let current = tracing::Span::current();
+            if current.is_disabled() {
+                tracing::info_span!("timer", name = name, server_name = tracing::field::Empty)
+            } else {
+                tracing::info_span!(parent: &current, "timer", name = name, server_name = tracing::field::Empty)
+            }
+        };
+        let guard = push(&span);
+        (span, guard)
+    }
+
+    fn same_span(a: &tracing::Span, b: &tracing::Span) -> bool {
+        match (a.id(), b.id()) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
+    }
 }

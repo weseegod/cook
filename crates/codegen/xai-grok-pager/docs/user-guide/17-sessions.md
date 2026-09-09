@@ -240,9 +240,17 @@ await connection.request("session/load", {
   cwd: "/path/to/project",
   mcpServers: [],
 });
+
+// Change a live option (model or reasoning_effort).
+// session/new and session/load already return the typed configOptions list.
+await connection.request("session/set_config_option", {
+  sessionId,
+  configId: "model",
+  value: { value: "grok-4.6" },
+});
 ```
 
-The agent persists all session updates automatically. Clients can reconnect and load previous sessions by ID.
+The agent persists all session updates automatically. Clients can reconnect and load previous sessions by ID. See [Agent mode](15-agent-mode.md#session-config-options) for the option IDs, value shape, and leader-mode snoop.
 
 ---
 

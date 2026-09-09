@@ -20,6 +20,7 @@ fn args<'a>(
         cancellation_context: None,
         cancel_trigger: None,
         structured_output: None,
+        completion_kind: None,
     }
 }
 
@@ -173,4 +174,15 @@ fn structured_output_maps_to_camelcase_meta_keys() {
     let none = build_prompt_response_meta(args("s", "p", 0, "m"));
     assert!(none.get("structuredOutput").is_none());
     assert!(none.get("structuredOutputError").is_none());
+}
+
+#[test]
+fn removed_from_queue_stamps_completion_kind() {
+    let none = build_prompt_response_meta(args("s", "p", 0, "m"));
+    assert!(none.get("completionKind").is_none());
+    let meta = build_prompt_response_meta(PromptResponseMetaArgs {
+        completion_kind: Some(crate::session::commands::REMOVED_FROM_QUEUE_KIND.to_string()),
+        ..args("s", "p", 0, "m")
+    });
+    assert_eq!(meta["completionKind"], "removedFromQueue");
 }

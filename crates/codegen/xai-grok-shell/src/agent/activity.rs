@@ -30,31 +30,25 @@ use crate::session::{SessionCommand, SessionHandle, ShutdownKind};
 /// How often [`AgentActivity::flush_all_sessions`] re-polls actors that have not yet exited.
 const FLUSH_POLL: Duration = Duration::from_millis(50);
 
-/// Default bound on a process-exit session flush ([`AgentActivity::flush_all_sessions`]).
-/// Leader auto-update shutdown and the in-process agent's `/exit` / headless-quit path both use it.
+/// Default bound on a process-exit session flush ([`AgentActivity::flush_all_sessions`]). Leader auto-update shutdown and the in-process agent's `/exit` / headless-quit path both use it.
 /// One wedged actor therefore delays exit by the same amount everywhere; sessions are normally idle and the flush completes in milliseconds.
-///
-/// Known gap: a `SessionEnd` hook configured with a longer `timeout` than this is still cut off at the grace.
-/// Aligning the two needs the hook registry's configured timeouts at flush time, which this layer does not see.
+/// Known gap: a `SessionEnd` hook configured with a longer `timeout` than this is still cut off at the grace. Aligning the two needs the hook registry's configured timeouts at flush time, which this layer does not see.
 pub const SESSION_FLUSH_GRACE: Duration = Duration::from_secs(10);
 
 /// Per-session slice of state shared with the session actor (the same `Arc`s the actor mutates; see the matching `SessionHandle` fields).
 struct SessionActivityEntry {
     id: String,
     cmd_tx: tokio::sync::mpsc::UnboundedSender<SessionCommand>,
-    /// `Some` while a turn is running (relay- or IPC-driven alike).
     current_prompt_id: Arc<Mutex<Option<String>>>,
-    /// Non-empty while a blocking reverse-request (permission / question / plan approval) is parked.
     pending_interactions: PendingInteractions,
+    active_work: Arc<AtomicUsize>,
 }
 
 impl SessionActivityEntry {
-    /// The actor still holds the command receiver.
     fn is_live(&self) -> bool {
         !self.cmd_tx.is_closed()
     }
 
-    /// A running turn or a parked blocking interaction.
     fn is_busy(&self) -> bool {
         self.current_prompt_id
             .lock()
@@ -65,6 +59,7 @@ impl SessionActivityEntry {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .is_empty()
+            || self.active_work.load(Ordering::Relaxed) > 0
     }
 }
 
@@ -91,6 +86,7 @@ impl AgentActivity {
             cmd_tx: handle.cmd_tx.clone(),
             current_prompt_id: handle.current_prompt_id.clone(),
             pending_interactions: handle.pending_interactions.clone(),
+            active_work: handle.active_work.clone(),
         });
     }
 
@@ -99,12 +95,6 @@ impl AgentActivity {
         self.inner.subagents.clone()
     }
 
-    /// Whether the agent has live work: a running turn, a parked blocking interaction, or an initializing/running subagent.
-    ///
-    /// Known gap: prompts queued but not yet started (`pending_inputs` in the actor) are not mirrored here.
-    /// A prompt submitted exactly at a turn boundary can therefore read as idle.
-    /// `session_has_live_work` closes that window with an actor round-trip, which a sync `Send` probe cannot do.
-    /// The flush's quiesce loop re-snapshots and still ends such an actor via its Shutdown arm.
     pub fn is_busy(&self) -> bool {
         self.inner.subagents.load(Ordering::Relaxed) > 0
             || self.lock_live_sessions().iter().any(|e| e.is_busy())
@@ -115,19 +105,9 @@ impl AgentActivity {
         self.lock_live_sessions().len()
     }
 
-    /// Send [`SessionCommand::Shutdown`] to every live session actor and wait up to `grace` for them to exit, observed via `cmd_tx.is_closed()`.
-    /// Shutdown runs the replay-buffer flush, then hooks, then the memory save, then the actor returns.
-    ///
-    /// This is a quiesce loop, not a one-shot broadcast.
-    /// Each poll re-snapshots the registry and signals actors that appeared after the flush started.
-    /// Signals are deduped by channel identity, so a session id rebuilt with a fresh actor gets its own signal.
-    /// Everything runs against one deadline; `grace` bounds the **total** shutdown delay.
-    ///
-    /// Callers: the leader's auto-update / `RelaunchForUpdate` shutdown, and the in-process agent worker on `/exit` / headless quit.
-    /// In the leader case, call **before** cancelling the root token.
-    /// In the in-process case, call **after** the cancel that ends the worker's run loop but before its `LocalSet` drops.
-    /// Either way, session state must be durable before the drop aborts remaining tasks.
-    /// Actors that miss the grace are logged and abandoned.
+    /// This is a quiesce loop, not a one-shot broadcast. Each poll re-snapshots the registry and signals actors that appeared after the flush started.
+    /// Signals are deduped by channel identity, so a session id rebuilt with a fresh actor gets its own signal. Everything runs against one deadline; `grace` bounds the **total** shutdown delay.
+    /// In the leader case, call **before** cancelling the root token. In the in-process case, call **after** the cancel that ends the worker's run loop but before its `LocalSet` drops. Either way, session state must be durable before the drop aborts remaining tasks.
     pub async fn flush_all_sessions(&self, grace: Duration) {
         let _span = session_end::span(Phase::SessionFlush);
         let deadline = tokio::time::Instant::now() + grace;
@@ -168,7 +148,6 @@ impl AgentActivity {
     }
 
     /// Lock the session list, dropping entries whose actor has exited.
-    ///
     /// Purging happens only here, so in modes with no periodic reader (no auto-update checker) a dead entry lingers until the next register.
     /// The leak is bounded and tiny: a sender handle and two `Arc`s per entry.
     fn lock_live_sessions(&self) -> std::sync::MutexGuard<'_, Vec<SessionActivityEntry>> {
@@ -201,6 +180,7 @@ impl AgentActivity {
             cmd_tx,
             current_prompt_id: current_prompt_id.clone(),
             pending_interactions: pending_interactions.clone(),
+            active_work: Arc::new(AtomicUsize::new(0)),
         });
         (cmd_rx, current_prompt_id, pending_interactions)
     }

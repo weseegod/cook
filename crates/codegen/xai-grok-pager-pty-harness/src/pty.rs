@@ -7,10 +7,13 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use portable_pty::{CommandBuilder, ExitStatus, PtySize, native_pty_system};
+use portable_pty::{ExitStatus, PtySize, native_pty_system};
 use xai_grok_test_support::{TestProcessTree, TestSandbox, process_has_exited_without_reap};
 
 const PTY_DROP_REAP_TIMEOUT: Duration = Duration::from_millis(250);
+/// Grace after group SIGTERM before SIGKILL so a responsive child can run TERM cleanup. Wedged children fall through to SIGKILL.
+/// Detached-background reap is the pager quit path, not this grace.
+const PTY_DROP_TERM_GRACE: Duration = Duration::from_millis(500);
 const PTY_REAP_POLL: Duration = Duration::from_millis(10);
 const PENDING_STATUS_ERROR: &str = "exit observed but status unavailable";
 
@@ -25,6 +28,8 @@ pub mod keys {
     pub const PGDN: &[u8] = b"\x1b[6~";
     pub const PGUP: &[u8] = b"\x1b[5~";
     pub const ENTER: &[u8] = b"\r";
+    /// Ctrl+N — leave the welcome home screen into an explicit new session.
+    pub const CTRL_N: &[u8] = b"\x0e";
     pub const CTRL_C: &[u8] = b"\x03";
     /// Ctrl+R (0x12): prompt history search or the scrollback mouse-reporting toggle.
     pub const CTRL_R: &[u8] = b"\x12";
@@ -123,20 +128,38 @@ impl PtyController {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(size)?;
 
-        let mut cmd = CommandBuilder::new(binary);
-        for arg in args {
-            cmd.arg(*arg);
-        }
-        if let Some(dir) = cwd {
-            cmd.cwd(dir);
-        }
-        apply_child_env(&mut cmd, sandbox, env);
-
-        // portable-pty calls setsid on Unix
-        // Windows Job enrollment is a best-effort post-spawn attachment, so a very short-lived descendant may escape before enrollment
-        // Diagnostics preserve that downgrade
-        #[allow(clippy::disallowed_methods)]
-        let child = pair.slave.spawn_command(cmd)?;
+        // Own fork/exec: portable-pty has no pre_exec, and the child must arm PDEATHSIG so a SIGKILLed runner (no Drop) cannot leak it.
+        #[cfg(unix)]
+        let child: Box<dyn portable_pty::Child + Send> = {
+            let env_map = crate::pty_spawn::compute_child_env(sandbox, env);
+            let dir = crate::pty_spawn::resolve_child_cwd(cwd, env_map.get(OsStr::new("HOME")))?;
+            let mut cmd = std::process::Command::new(binary);
+            cmd.args(args).env_clear().envs(&env_map).current_dir(dir);
+            Box::new(crate::pty_spawn::spawn_pty_session_child(
+                cmd,
+                pair.master.as_ref(),
+            )?)
+        };
+        // Windows keeps portable-pty's spawn; Job enrollment is a best-effort
+        // post-spawn attachment, so a very short-lived descendant may escape
+        // before enrollment; diagnostics preserve that downgrade.
+        #[cfg(windows)]
+        let child = {
+            let mut cmd = portable_pty::CommandBuilder::new(binary);
+            for arg in args {
+                cmd.arg(*arg);
+            }
+            if let Some(dir) = cwd {
+                cmd.cwd(dir);
+            }
+            if let Some(sandbox) = sandbox {
+                cmd.env_clear();
+                sandbox.apply_to_command_builder(&mut cmd);
+            }
+            crate::pty_spawn::apply_child_env(&mut cmd, env);
+            #[allow(clippy::disallowed_methods)]
+            pair.slave.spawn_command(cmd)?
+        };
         #[cfg(unix)]
         let process_pid = child
             .process_id()
@@ -390,6 +413,15 @@ impl PtyController {
         }
     }
 
+    /// Send SIGTERM to the child's whole process group. Returns whether the
+    /// signal was delivered (so Drop only spends its grace period when a
+    /// graceful exit is actually possible).
+    fn terminate_tree_best_effort(&self) -> bool {
+        self.process_tree
+            .as_ref()
+            .is_some_and(|tree| tree.terminate().is_ok())
+    }
+
     fn release_process_tree(&mut self) {
         if let Some(mut tree) = self.process_tree.take() {
             tree.release();
@@ -424,6 +456,12 @@ impl PtyController {
 
 impl Drop for PtyController {
     fn drop(&mut self) {
+        // Graceful first: SIGTERM the whole group so a responsive child gets
+        // one grace period to run its own TERM cleanup before the hard kill.
+        if self.exit_status.is_none() && !self.exit_observed && self.terminate_tree_best_effort() {
+            let _ = self.wait_child_bounded(PTY_DROP_TERM_GRACE);
+        }
+        // Hard stop: SIGKILL the group, kill the direct child, reap bounded.
         if self.exit_status.is_none() {
             self.cleanup_descendants();
             let _ = self.kill_portable_child();
@@ -465,11 +503,7 @@ fn recover_consumed_status(status: io::Result<Option<ExitStatus>>) -> io::Result
     status?.ok_or_else(|| io::Error::other("PTY child status was consumed without being cached"))
 }
 
-/// Typed result of polling a PTY child's lifecycle.
-///
-/// Only [`Self::Running`] means the process is live.
-/// [`Self::PendingStatus`] means exit was already observed, descendants were cleaned, and the PID was hidden.
-/// portable-pty has not yet yielded the final status in that state.
+/// Only [`Self::Running`] is live. [`Self::PendingStatus`] has already exited and cleaned descendants; portable-pty has not yielded status yet.
 #[must_use = "PTY exit state and poll errors must be handled explicitly"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PtyExitPoll<T> {
@@ -523,111 +557,10 @@ fn cache_exit_status(
     *spawn_pid = None;
 }
 
-const CLIPBOARD_SINK_ENV_VARS: &[&str] = &["GROK_OSC52_SINK", "LC_GROK_OSC52_SINK"];
-
-/// Host/wrap appearance hints that would make `theme=auto` non-deterministic in PTY tests (layout depends on the resolved palette).
-const APPEARANCE_ENV_VARS: &[&str] = &[
-    "GROK_APPEARANCE",
-    "LC_GROK_APPEARANCE",
-    "GROK_THEME",
-    "LC_GROK_THEME",
-    "COLORFGBG",
-];
-
-/// Host terminal identity markers stripped from the child environment.
-///
-/// The pager's terminal detection (`xai-grok-pager-render/src/terminal/mod.rs` and `embedded_editor.rs`) reads all of these.
-/// Any one leaking from the harness's own host terminal reclassifies the child.
-/// A dev running tests inside tmux leaks `TMUX` (every cell becomes the remuxed profile).
-/// Inside Cursor, `CURSOR_TRACE_ID` leaks; it is checked before `TERM_PROGRAM`, so it overrides even a test-injected brand.
-/// Inside nvim's `:terminal`, `NVIM` leaks (clipboard OSC 52 wrapping).
-/// Keep this list in sync with the detection source above.
-const HOST_TERMINAL_ENV_VARS: &[&str] = &[
-    // Brand chain (detect_terminal_brand_from_env), in detection order.
-    "CURSOR_TRACE_ID",
-    "VSCODE_GIT_ASKPASS_MAIN",
-    "TERM_PROGRAM",
-    "TERM_PROGRAM_VERSION",
-    "TERMINAL_EMULATOR",
-    "WEZTERM_VERSION",
-    "ITERM_SESSION_ID",
-    "ITERM_PROFILE",
-    "LC_TERMINAL",
-    "LC_TERMINAL_VERSION",
-    "TERM_SESSION_ID",
-    "KITTY_WINDOW_ID",
-    "ALACRITTY_SOCKET",
-    "TERMINATOR_UUID",
-    "VTE_VERSION",
-    "WT_SESSION",
-    // Multiplexer/Byobu markers (detect_multiplexer_from_env, detect_byobu_from_env, detect_tmux_meta_from_env)
-    "TMUX",
-    "TMUX_PANE",
-    "ZELLIJ",
-    "ZELLIJ_SESSION_NAME",
-    "STY",
-    "BYOBU_BACKEND",
-    "BYOBU_CONFIG_DIR",
-    "BYOBU_DISTRO",
-    "CMUX_SOCKET_PATH",
-    "CMUX_PANEL_ID",
-    "CMUX_BUNDLE_ID",
-    "HERDR_ENV",
-    // Embedded editor markers (embedded_editor_from_env).
-    "NVIM",
-    "NVIM_LISTEN_ADDRESS",
-    "VIM_TERMINAL",
-    "INSIDE_EMACS",
-];
-
 fn set_operations<'a>(env: &'a [(&'a str, &'a str)]) -> Vec<EnvOp<'a>> {
     env.iter()
         .map(|(key, value)| EnvOp::set(key, value))
         .collect()
-}
-
-/// Prepare the child environment.
-/// Content-backed callers provide a [`xai_grok_test_support::TestSandbox`], which always clears inheritance.
-/// The explicitly named inherited-env path is reserved for terminal probing and grok-wrap fixtures.
-/// Caller overrides are always applied last.
-fn apply_child_env(cmd: &mut CommandBuilder, sandbox: Option<&TestSandbox>, env: &[EnvOp<'_>]) {
-    if let Some(sandbox) = sandbox {
-        cmd.env_clear();
-        sandbox.apply_to_command_builder(cmd);
-    }
-    // Set TERM so the pager renders with full color support.
-    cmd.env("TERM", "xterm-256color");
-    // Strip inherited color opt-outs/overrides for the same reason: a leaked NO_COLOR (common in agent/CI shells) renders the pager colorless
-    // That makes style-sensitive assertions (e.g. the selection highlight color swap) silently untestable on some hosts.
-    // Tests may re-set these via the `env` list (applied after this)
-    for color_var in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
-        cmd.env_remove(color_var);
-    }
-    // Strip SSH vars inherited from the parent: the harness PTY is a local terminal
-    // `SSH_CONNECTION`/`SSH_TTY` leaking through makes the pager's terminal detector report SSH and disable the drag-drop image classifier
-    // See `try_handle_dropped_paths_paste` in `agent_view.rs`
-    for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
-        cmd.env_remove(ssh_var);
-    }
-    // A harness launched under `grok wrap` must not silently confirm clipboard delivery for no-sink scenarios
-    // Explicit sink tests re-inject a marker through `env` after this hygiene pass
-    for sink_var in CLIPBOARD_SINK_ENV_VARS {
-        cmd.env_remove(sink_var);
-    }
-    for appearance_var in APPEARANCE_ENV_VARS {
-        cmd.env_remove(appearance_var);
-    }
-    // Neutralize parent-terminal identity bleed: agent hosts often export TERM_PROGRAM=ghostty/iTerm/etc. (and mux/editor markers).
-    // Those make the child pager adopt that host's key/modifier/clipboard quirks even though we only set TERM above
-    for term_var in HOST_TERMINAL_ENV_VARS {
-        cmd.env_remove(term_var);
-    }
-    for operation in env {
-        match operation {
-            EnvOp::Set(key, value) => cmd.env(key, value),
-            EnvOp::Remove(key) => cmd.env_remove(key),
-        }
-    }
 }
 
 /// Spawn a background thread that reads from the PTY master and sends chunks over an `mpsc` channel.
@@ -858,13 +791,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn pid_is_alive(pid: u32) -> bool {
-        // SAFETY: signal 0 performs an existence/permission check only.
-        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-
-    #[cfg(unix)]
     #[test]
     fn pty_drop_tree_cleanup_is_bounded_and_reaps_grandchild() {
         let sandbox = TestSandbox::new();
@@ -901,181 +827,89 @@ mod tests {
             started.elapsed() < Duration::from_secs(1),
             "PTY Drop exceeded its bounded wait"
         );
+        // Grandchild re-parents to pid 1, which may not reap promptly. The contract is that it stops running, not that it is reaped.
         let deadline = std::time::Instant::now() + Duration::from_secs(3);
-        while pid_is_alive(grandchild_pid) && std::time::Instant::now() < deadline {
+        while !xai_tty_utils::process_not_running(grandchild_pid)
+            && std::time::Instant::now() < deadline
+        {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            !pid_is_alive(grandchild_pid),
+            xai_tty_utils::process_not_running(grandchild_pid),
             "PTY grandchild leaked after controller Drop"
         );
     }
 
-    /// Every host-terminal marker the pager's detection chain reads must be stripped from the child env.
-    /// Polluted entries are seeded via `cmd.env` rather than process-global `set_var` (racy under parallel tests).
-    /// `cmd.env` fills the same `CommandBuilder` map that inherited base-env entries live in, so `env_remove` takes the identical path.
+    /// A TERM-trapping child must run cleanup before SIGKILL. Without the grace the trap never runs and the marker never appears.
+    #[cfg(unix)]
     #[test]
-    fn apply_child_env_strips_all_host_terminal_markers() {
-        let mut cmd = CommandBuilder::new("true");
-        for var in HOST_TERMINAL_ENV_VARS {
-            cmd.env(var, "polluted");
-        }
-        for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
-            cmd.env(ssh_var, "polluted");
-        }
-        for color_var in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
-            cmd.env(color_var, "polluted");
-        }
-        for sink_var in CLIPBOARD_SINK_ENV_VARS {
-            cmd.env(sink_var, "polluted");
-        }
-        for appearance_var in APPEARANCE_ENV_VARS {
-            cmd.env(appearance_var, "polluted");
-        }
-        // Sandboxed launches remove unrelated inherited variables before re-applying the baseline and explicit overrides
-        cmd.env("GROK_SCROLL_LOG", "/tmp/scroll.jsonl");
+    fn pty_drop_grace_lets_a_trapping_child_run_its_term_cleanup() {
         let sandbox = TestSandbox::new();
-
-        apply_child_env(&mut cmd, Some(&sandbox), &[]);
-
-        for var in HOST_TERMINAL_ENV_VARS {
-            assert!(
-                cmd.get_env(var).is_none(),
-                "host terminal marker {var} leaked into the child env"
-            );
-        }
-        for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
-            assert!(
-                cmd.get_env(ssh_var).is_none(),
-                "SSH marker {ssh_var} leaked into the child env"
-            );
-        }
-        for color_var in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
-            assert!(
-                cmd.get_env(color_var).is_none(),
-                "color override {color_var} leaked into the child env"
-            );
-        }
-        for sink_var in CLIPBOARD_SINK_ENV_VARS {
-            assert!(
-                cmd.get_env(sink_var).is_none(),
-                "clipboard sink marker {sink_var} leaked into the child env"
-            );
-        }
-        for appearance_var in APPEARANCE_ENV_VARS {
-            assert!(
-                cmd.get_env(appearance_var).is_none(),
-                "appearance hint {appearance_var} leaked into the child env"
-            );
-        }
-        assert_eq!(
-            cmd.get_env("TERM").and_then(|v| v.to_str()),
-            Some("xterm-256color")
-        );
-        assert_eq!(
-            cmd.get_env("GROK_SCROLL_LOG").and_then(|v| v.to_str()),
+        let marker = sandbox.temp_dir().join("graceful-term.marker");
+        let marker_path = marker.to_string_lossy().into_owned();
+        let ready = sandbox.temp_dir().join("trap-installed.ready");
+        let ready_path = ready.to_string_lossy().into_owned();
+        // The group SIGTERM kills the foreground sleep; sh's wait for it then
+        // returns and the TERM trap writes the marker. READY is written after
+        // the trap is installed, closing the drop-before-trap race.
+        let controller = PtyController::spawn_in_sandbox(
+            Path::new("/bin/sh"),
+            PtySize {
+                rows: 8,
+                cols: 40,
+                pixel_width: 0,
+                pixel_height: 0,
+            },
+            &[
+                "-c",
+                "trap 'echo graceful > \"$MARKER\"; exit 0' TERM; : > \"$READY\"; sleep 600",
+            ],
+            &sandbox,
+            &[
+                EnvOp::set("MARKER", &marker_path),
+                EnvOp::set("READY", &ready_path),
+            ],
             None,
-            "hermetic baseline must remove unrelated inherited vars"
+        )
+        .expect("spawn PTY trap fixture");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !ready.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "trap-installed ready file timeout"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let started = std::time::Instant::now();
+        drop(controller);
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "PTY Drop exceeded its bounded wait"
         );
-        assert_eq!(
-            cmd.get_env("GROK_HOME").and_then(|v| v.to_str()),
-            sandbox.grok_home().to_str()
-        );
-    }
-
-    #[test]
-    fn apply_child_env_uses_sandbox_baseline() {
-        let sandbox = TestSandbox::new();
-        let mut cmd = CommandBuilder::new("true");
-
-        apply_child_env(&mut cmd, Some(&sandbox), &[]);
-
-        assert_eq!(
-            cmd.get_env("HOME").and_then(|v| v.to_str()),
-            sandbox.home().to_str()
-        );
-        assert_eq!(
-            cmd.get_env("GROK_HOME").and_then(|v| v.to_str()),
-            sandbox.grok_home().to_str()
-        );
-        assert_eq!(cmd.get_env("GROK_LEADER_SOCKET"), None);
-    }
-
-    #[test]
-    fn apply_child_env_remove_deletes_sandbox_credential() {
-        let sandbox = TestSandbox::builder()
-            .mock_url("http://127.0.0.1:43123/v1")
-            .build();
-        let mut cmd = CommandBuilder::new("true");
-
-        apply_child_env(&mut cmd, Some(&sandbox), &[EnvOp::remove("XAI_API_KEY")]);
-
-        assert_eq!(cmd.get_env("XAI_API_KEY"), None);
-        assert_eq!(
-            cmd.get_env("GROK_XAI_API_BASE_URL")
-                .and_then(|v| v.to_str()),
-            Some("http://127.0.0.1:43123/v1")
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while !marker.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            marker.exists(),
+            "TERM trap never ran: Drop's SIGTERM grace did not let the child clean up"
         );
     }
 
+    #[cfg(unix)]
     #[test]
-    fn inherited_env_projection_is_set_only_and_preserves_unrelated_ambient_vars() {
+    fn pty_tree_diagnostics_surface_enrollment_state() {
+        let tree = TestProcessTree::attach(u32::MAX, "invalid PTY fixture");
+        let diagnostics = tree.diagnostic_summary();
+        assert!(diagnostics.contains("tree_label=\"invalid PTY fixture\""));
+        assert!(diagnostics.contains("tree_attached=false"));
+        assert!(diagnostics.contains("tree_attach_error=Some"));
+    }
+
+    #[test]
+    fn set_operations_projection_is_set_only() {
         let operations = set_operations(&[("EXPLICIT_MARKER", "set")]);
         assert_eq!(operations, [EnvOp::set("EXPLICIT_MARKER", "set")]);
-
-        let mut cmd = CommandBuilder::new("true");
-        cmd.env("AMBIENT_MARKER", "inherited");
-        apply_child_env(&mut cmd, None, &operations);
-
-        assert_eq!(
-            cmd.get_env("AMBIENT_MARKER")
-                .and_then(|value| value.to_str()),
-            Some("inherited")
-        );
-        assert_eq!(
-            cmd.get_env("EXPLICIT_MARKER")
-                .and_then(|value| value.to_str()),
-            Some("set")
-        );
-    }
-
-    #[test]
-    fn apply_child_env_caller_env_overrides_survive_strips() {
-        let mut cmd = CommandBuilder::new("true");
-        cmd.env("TMUX", "/tmp/host-tmux,999,0");
-        cmd.env("CURSOR_TRACE_ID", "host-cursor");
-
-        apply_child_env(
-            &mut cmd,
-            None,
-            &[
-                EnvOp::set("TERM_PROGRAM", "vscode"),
-                EnvOp::set("NVIM", "/tmp/fake-nvim.sock"),
-                EnvOp::set("TERM", "xterm-kitty"),
-                EnvOp::set("GROK_OSC52_SINK", "1"),
-            ],
-        );
-
-        // Host pollution is gone
-        assert!(cmd.get_env("TMUX").is_none());
-        assert!(cmd.get_env("CURSOR_TRACE_ID").is_none());
-        // Caller-injected markers (applied after strips) survive, including overriding the harness's own TERM default
-        assert_eq!(
-            cmd.get_env("TERM_PROGRAM").and_then(|v| v.to_str()),
-            Some("vscode")
-        );
-        assert_eq!(
-            cmd.get_env("NVIM").and_then(|v| v.to_str()),
-            Some("/tmp/fake-nvim.sock")
-        );
-        assert_eq!(
-            cmd.get_env("TERM").and_then(|v| v.to_str()),
-            Some("xterm-kitty")
-        );
-        assert_eq!(
-            cmd.get_env("GROK_OSC52_SINK").and_then(|v| v.to_str()),
-            Some("1"),
-            "explicit sink scenarios must be able to re-inject the marker"
-        );
     }
 }

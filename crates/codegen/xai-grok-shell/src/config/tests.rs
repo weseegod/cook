@@ -3083,10 +3083,8 @@ fn model_provider_honored_only_from_trusted_disk_layers() {
             "its inline auth registers as a synthetic auth provider"
         );
 }
-/// REGRESSION: the real enterprise two-file merge must resolve the deployment-config fetch to cli-chat-proxy, never the model host.
-/// It must also preserve the customer's S3 trace-upload endpoint.
-/// The merge layers `managed_config.toml` (proxy and BYO model host) with `requirements.toml` (deployment key and S3 trace upload).
-/// It runs via the actual `ConfigLayers::effective_config()` path.
+/// REGRESSION: the real enterprise two-file merge must resolve the deployment-config fetch to cli-chat-proxy, never the model host. It must also preserve the customer's S3 trace-upload endpoint.
+/// The merge layers `managed_config.toml` (proxy and BYO model host) with `requirements.toml` (deployment key and S3 trace upload). It runs via the actual `ConfigLayers::effective_config()` path.
 #[test]
 #[serial_test::serial]
 fn enterprise_two_file_merge_routes_deployment_key_to_proxy() {
@@ -3521,6 +3519,221 @@ fn apply_requirements_default_beats_campaign_default() {
             "the enforcement must be reported in the audit trail"
         );
 }
+fn pin_allowed_models(cfg: &mut crate::agent::config::Config, req_toml: &str) {
+    let req: toml::Value = toml::from_str(req_toml).unwrap();
+    let source = RequirementSource::Requirements {
+        path: std::path::PathBuf::from("/test/requirements.toml"),
+    };
+    apply_requirements_inner(cfg, &req, &source);
+}
+#[test]
+fn apply_requirements_allowed_models_clamps_catalog_and_names_source() {
+    let raw: toml::Value = toml::from_str(
+            r#"
+            [models]
+            default = "grok-3"
+            allowed_models = ["*"]
+            [model.grok-3]
+            model = "grok-3"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            [model.grok-4]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            "#,
+        )
+        .unwrap();
+    let mut cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+    pin_allowed_models(&mut cfg, "[models]\nallowed_models = [\"grok-4\"]\n");
+    let catalog = crate::agent::models::resolve_model_catalog(&cfg, None);
+    assert!(
+            catalog["grok-4"].info.user_selectable,
+            "signed allowlist member must stay selectable"
+        );
+    assert!(
+            !catalog["grok-3"].info.user_selectable,
+            "models outside the signed set must not be selectable"
+        );
+    let err = crate::agent::models::validate_selectable(&cfg, &catalog).unwrap_err();
+    assert!(
+            err.contains("administrator"),
+            "fail-closed error must tell the user to contact their administrator: {err}"
+        );
+    assert!(
+            !err.contains("requirements.toml"),
+            "must not name an administrator file the user cannot edit: {err}"
+        );
+    assert!(err.contains("grok-3"), "error must name the excluded default: {err}");
+}
+#[test]
+fn apply_requirements_allowed_models_ignores_user_catalog_key() {
+    let raw: toml::Value = toml::from_str(
+            r#"
+            [models]
+            default = "grok-4"
+            allowed_models = ["*"]
+            [model.grok-4]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            [model.grok-4-anything]
+            model = "other-model"
+            base_url = "https://evil.example/v1"
+            context_window = 256000
+            [model.my-alias]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            "#,
+        )
+        .unwrap();
+    let mut cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+    pin_allowed_models(&mut cfg, "[models]\nallowed_models = [\"grok-4*\"]\n");
+    let catalog = crate::agent::models::resolve_model_catalog(&cfg, None);
+    assert!(
+            catalog["grok-4"].info.user_selectable,
+            "routing slug grok-4 matches grok-4*"
+        );
+    assert!(
+            catalog["my-alias"].info.user_selectable,
+            "user alias whose model id is grok-4 stays selectable"
+        );
+    assert!(
+            !catalog["grok-4-anything"].info.user_selectable,
+            "catalog key grok-4-anything pointing at another model must not satisfy the pin"
+        );
+}
+#[test]
+fn apply_requirements_malformed_allowed_models_fail_closes() {
+    let raw: toml::Value = toml::from_str(
+            r#"
+            [models]
+            default = "grok-4"
+            allowed_models = ["*"]
+            [model.grok-4]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            "#,
+        )
+        .unwrap();
+    let mut cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+    pin_allowed_models(&mut cfg, "[models]\nallowed_models = \"grok-4\"\n");
+    let catalog = crate::agent::models::resolve_model_catalog(&cfg, None);
+    assert!(
+            !catalog["grok-4"].info.user_selectable,
+            "malformed fleet pin must mark nothing selectable, not keep the user list"
+        );
+    assert!(
+            matches!(
+                cfg.requirements.allowed_models.pin_ref(),
+                Some(crate::agent::config::AllowlistPin::FailClosed)
+            ),
+            "unreadable pin must be FailClosed, not a reserved glob"
+        );
+    let err = crate::agent::models::validate_selectable(&cfg, &catalog).unwrap_err();
+    assert!(
+            err.contains("administrator"),
+            "malformed pin must tell the user to contact their administrator: {err}"
+        );
+    assert!(
+            !err.contains("allowed_models"),
+            "fleet invalid-policy message must not tell the user to edit allowed_models: {err}"
+        );
+}
+#[test]
+fn apply_requirements_allowed_models_empty_array_is_unrestricted() {
+    let raw: toml::Value = toml::from_str(
+            r#"
+            [models]
+            allowed_models = ["grok-4"]
+            [model.grok-3]
+            model = "grok-3"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            [model.grok-4]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            "#,
+        )
+        .unwrap();
+    let mut cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+    pin_allowed_models(&mut cfg, "[models]\nallowed_models = []\n");
+    let catalog = crate::agent::models::resolve_model_catalog(&cfg, None);
+    assert!(
+            catalog["grok-3"].info.user_selectable && catalog["grok-4"].info.user_selectable,
+            "empty fleet array must not restrict"
+        );
+    assert!(
+            matches!(
+                cfg.requirements.allowed_models.pin_ref(),
+                Some(crate::agent::config::AllowlistPin::List(v)) if v.is_empty()
+            ),
+            "empty array is an explicit unrestricted pin"
+        );
+    assert_eq!(
+            cfg.models.allowed_models,
+            Some(vec!["grok-4".to_string()]),
+            "pin must not overwrite the user-field copy; EffectiveAllowlist reads the pin"
+        );
+}
+#[test]
+fn apply_requirements_allowed_models_replaces_user_list() {
+    let raw: toml::Value = toml::from_str(
+            r#"
+            [models]
+            allowed_models = ["*"]
+            [model.grok-3]
+            model = "grok-3"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            [model.grok-4]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            "#,
+        )
+        .unwrap();
+    let mut cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+    pin_allowed_models(&mut cfg, "[models]\nallowed_models = [\"grok-4\"]\n");
+    let catalog = crate::agent::models::resolve_model_catalog(&cfg, None);
+    assert!(catalog["grok-4"].info.user_selectable);
+    assert!(
+            !catalog["grok-3"].info.user_selectable,
+            "user * must not union with the fleet pin"
+        );
+}
+#[test]
+fn validate_selectable_rejects_dash_m_outside_fleet_pin() {
+    let raw: toml::Value = toml::from_str(
+            r#"
+            [models]
+            default = "grok-4"
+            [model.grok-3]
+            model = "grok-3"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            [model.grok-4]
+            model = "grok-4"
+            base_url = "https://api.x.ai/v1"
+            context_window = 256000
+            "#,
+        )
+        .unwrap();
+    let mut cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+    pin_allowed_models(&mut cfg, "[models]\nallowed_models = [\"grok-4\"]\n");
+    cfg.default_model_override = Some("grok-3".into());
+    let catalog = crate::agent::models::resolve_model_catalog(&cfg, None);
+    let err = crate::agent::models::validate_selectable(&cfg, &catalog).unwrap_err();
+    assert!(err.contains("-m flag"), "must name the -m source: {err}");
+    assert!(err.contains("administrator"), "fleet -m deny must be admin language: {err}");
+    assert!(
+            !err.contains("Broaden"),
+            "must not tell the user to edit the fleet list: {err}"
+        );
+}
 #[test]
 fn apply_requirements_telemetry_string_form_pins_known_modes_only() {
     use crate::agent::config::TelemetryMode;
@@ -3748,12 +3961,7 @@ fn explicit_grok_root_is_the_only_user_source() {
 }
 /// SECURITY (plugin-RCE): a PROJECT-declared `[plugins].paths` loads as an auto-enabled, auto-trusted ConfigPath plugin.
 /// It must therefore merge into the effective config ONLY when the folder is trusted; project `[plugins].disabled` is never gated.
-/// The closing set-difference proves the gate toggles ONLY that path (user/global paths pass through both verdicts untouched).
-/// The test is GROK_HOME-isolated and `#[serial]` for folder-trust store hygiene: an empty store is deterministically untrusted.
-/// `EnvGuard` restores GROK_HOME even on panic.
-/// No user-global `$GROK_HOME/config.toml` is seeded: `grok_home()` is `OnceLock`-cached.
-/// Under a shared-process harness (Bazel) such a seed is read non-deterministically.
-/// It is reliable only under nextest's process-per-test isolation.
+/// The closing set-difference proves the gate toggles ONLY that path (user/global paths pass through both verdicts untouched). The test is GROK_HOME-isolated and `#[serial]` for folder-trust store hygiene: an empty store is deterministically untrusted. `EnvGuard` restores GROK_HOME even on panic. It is reliable only under nextest's process-per-test isolation.
 #[test]
 #[serial_test::serial]
 fn resolve_effective_plugins_config_gates_project_paths_on_folder_trust() {
@@ -3804,14 +4012,9 @@ fn resolve_effective_plugins_config_gates_project_paths_on_folder_trust() {
             "the trust gate must toggle ONLY the project path; user/global paths unaffected"
         );
 }
-/// SECURITY (plugin-RCE) end-to-end, proved through the REAL `discover_plugins`.
-/// A PROJECT-declared `[plugins].paths` ConfigPath plugin is EXCLUDED from discovery while untrusted and included once trusted.
-/// The Part-2 set-difference test covers the config merge.
-/// This closes the loop at the discovery boundary (if it is never discovered it can never activate).
-/// This mirrors the Project-scope analog `discover_real_project_plugin_gated_on_project_trusted` in `xai-grok-agent`.
-/// An ABSOLUTE plugin path is used so the merged `config_paths` entry resolves against the repo.
-/// `discover_plugins`' `is_dir()` check resolves a relative `./x` against the process cwd, not `cwd`.
-/// The test is GROK_HOME-isolated and `#[serial]` (`EnvGuard` restores it even on panic).
+/// SECURITY (plugin-RCE) end-to-end, proved through the REAL `discover_plugins`. A PROJECT-declared `[plugins].paths` ConfigPath plugin is EXCLUDED from discovery while untrusted and included once trusted.
+/// The Part-2 set-difference test covers the config merge. This closes the loop at the discovery boundary (if it is never discovered it can never activate).
+/// An ABSOLUTE plugin path is used so the merged `config_paths` entry resolves against the repo. `discover_plugins`' `is_dir()` check resolves a relative `./x` against the process cwd, not `cwd`.
 #[test]
 #[serial_test::serial]
 fn discover_plugins_excludes_untrusted_configpath_plugin_end_to_end() {
@@ -3879,12 +4082,9 @@ fn discover_plugins_excludes_untrusted_configpath_plugin_end_to_end() {
             "trusted folder must DISCOVER the merged ConfigPath plugin"
         );
 }
-/// Kill-switch ordering regression: `resolve_effective_plugins_config` reads the folder-trust gate internally.
-/// Its call sites (commands/list, plugin fan-out, reload) therefore resolve with the REAL RemoteSettings first.
-/// A cold key under an org kill-switch must end up allowed.
-/// If the plugins-config read ran first, the gate's remote-less backstop would record a durable kill-switch-blind deny.
-/// The `Some(false)` arm of `resolve_and_record_inner` (store-only reconcile) could never lift that deny.
-/// The test is GROK_HOME-isolated (empty store); GROK_FOLDER_TRUST is unset so the kill-switch is the only signal.
+/// Kill-switch ordering regression: `resolve_effective_plugins_config` reads the folder-trust gate internally. Its call sites (commands/list, plugin fan-out, reload) therefore resolve with the REAL RemoteSettings first.
+/// A cold key under an org kill-switch must end up allowed. If the plugins-config read ran first, the gate's remote-less backstop would record a durable kill-switch-blind deny.
+/// The `Some(false)` arm of `resolve_and_record_inner` (store-only reconcile) could never lift that deny. The test is GROK_HOME-isolated (empty store); GROK_FOLDER_TRUST is unset so the kill-switch is the only signal.
 #[test]
 #[serial_test::serial]
 fn kill_switched_cold_cwd_stays_allowed_through_plugins_config_read() {
@@ -3967,4 +4167,80 @@ fn optional_bwrap_routes_can_degrade() {
         route_bwrap_startup::<()>(None, false, false),
         BwrapStartup::Continue
     );
+}
+/// Concurrent `[plugins]` writers must not lose updates: each whole read-modify-write runs under the config-init flock.
+#[test]
+fn concurrent_plugin_list_writers_lose_no_updates() {
+    let home = tempfile::tempdir().unwrap();
+    let n = 8;
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(n));
+    let handles: Vec<_> = (0..n)
+        .map(|i| {
+            let home = home.path().to_path_buf();
+            let barrier = std::sync::Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                update_config_toml_locked(
+                        &home,
+                        |table| plugins_list_add(
+                            table,
+                            "enabled",
+                            &format!("plugin-{i}"),
+                        ),
+                    )
+                    .unwrap();
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    let content = std::fs::read_to_string(home.path().join("config.toml")).unwrap();
+    let config: toml::Value = toml::from_str(&content).unwrap();
+    let enabled = config["plugins"]["enabled"].as_array().unwrap();
+    assert_eq!(enabled.len(), n, "a concurrent enable was lost:\n{content}");
+}
+/// Pins the blocking-pool hop behind the session `[plugins]` writers: LocalSet tasks keep running during a flock poll.
+#[test]
+fn plugin_config_writes_keep_the_caller_local_set_live() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use std::time::Duration;
+    let home = tempfile::tempdir().unwrap();
+    let held = crate::util::config::acquire_init_lock(home.path()).unwrap();
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(300));
+        drop(held);
+    });
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    let local = tokio::task::LocalSet::new();
+    let ticks = Rc::new(Cell::new(0u32));
+    let ticker_ticks = Rc::clone(&ticks);
+    rt.block_on(
+        local
+            .run_until(async move {
+                tokio::task::spawn_local(async move {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                        ticker_ticks.set(ticker_ticks.get() + 1);
+                    }
+                });
+                let home_path = home.path().to_path_buf();
+                config_write_blocking(move || update_config_toml_locked(
+                        &home_path,
+                        |table| plugins_list_add(table, "enabled", "demo-plugin"),
+                    ))
+                    .await
+                    .expect("write succeeds after the holder releases");
+                assert!(
+            ticks.get() >= 10,
+            "LocalSet starved during a plugin config write: {} ticks",
+            ticks.get()
+        );
+            }),
+    );
+    holder.join().unwrap();
 }

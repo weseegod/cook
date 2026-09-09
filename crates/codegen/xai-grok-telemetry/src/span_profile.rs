@@ -281,6 +281,31 @@ mod tests {
     }
 
     #[test]
+    fn nested_timer_folds_under_parent_without_enter() {
+        use crate::instrumentation::{InstrumentationMode, InstrumentationTimer};
+
+        let folded = super::test_support::folded_with_layer(|| {
+            let _parent =
+                InstrumentationTimer::new_with_span("parent.work", InstrumentationMode::Log, None);
+            let _child =
+                InstrumentationTimer::new_with_span("child.work", InstrumentationMode::Log, None);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        });
+        let paths: Vec<&str> = folded
+            .lines()
+            .filter_map(|l| l.rsplit_once(' ').map(|(p, _)| p))
+            .collect();
+        assert!(
+            paths.contains(&"parent.work;child.work"),
+            "child timer must nest via the explicit parent stack, got:\n{folded}"
+        );
+        assert!(
+            !paths.contains(&"child.work"),
+            "child timer folded as root:\n{folded}"
+        );
+    }
+
+    #[test]
     fn artifact_path_treats_extensionless_output_as_directory() {
         let dir = artifact_path(Path::new("/tmp/prof"), "tui", 7);
         assert!(dir.to_string_lossy().contains("/tmp/prof/tui-"));

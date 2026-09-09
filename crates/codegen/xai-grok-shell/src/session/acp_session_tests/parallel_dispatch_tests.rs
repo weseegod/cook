@@ -22,6 +22,7 @@ impl SubagentBackend for FixedActiveMessageBackend {
     async fn spawn(
         &self,
         _: SubagentRequest,
+        _: Option<tokio::sync::oneshot::Sender<()>>,
     ) -> Result<SubagentResult, xai_tool_runtime::ToolError> {
         Err(xai_tool_runtime::ToolError::custom(
             "unsupported",
@@ -56,12 +57,24 @@ impl SubagentBackend for FixedActiveMessageBackend {
 }
 
 fn active_message_call(id: &str, text: &str) -> crate::sampling::types::ToolCallResponse {
+    active_message_call_with_queue(id, text, None)
+}
+
+fn active_message_call_with_queue(
+    id: &str,
+    text: &str,
+    queue: Option<bool>,
+) -> crate::sampling::types::ToolCallResponse {
+    let mut arguments = serde_json::json!({ "subagent_id": "child", "text": text });
+    if let Some(queue) = queue {
+        arguments["queue"] = queue.into();
+    }
     crate::sampling::types::ToolCallResponse {
         id: id.to_owned(),
         kind: "function".to_owned(),
         function: crate::sampling::types::ToolCallFunction::new(
             "send_subagent_message",
-            serde_json::json!({ "subagent_id": "child", "text": text }).to_string(),
+            arguments.to_string(),
         ),
     }
 }
@@ -241,6 +254,24 @@ async fn generic_tool_completion_chokepoint_has_exact_active_message_cardinality
 
             let events = execute_with_captured_active_message_events(
                 &actor,
+                active_message_call_with_queue("queued", "follow up", Some(true)),
+            )
+            .await;
+            assert!(matches!(
+                events.as_slice(),
+                [
+                    crate::session::telemetry::ActiveAgentMessageEvent::Completed(
+                        xai_grok_telemetry::events::ActiveAgentMessageCompleted {
+                            requested_operation:
+                                xai_grok_telemetry::events::ActiveAgentMessageOperation::Queue,
+                            ..
+                        }
+                    )
+                ]
+            ));
+
+            let events = execute_with_captured_active_message_events(
+                &actor,
                 unrelated_tool_call("unrelated"),
             )
             .await;
@@ -251,10 +282,8 @@ async fn generic_tool_completion_chokepoint_has_exact_active_message_cardinality
 
 #[tokio::test]
 async fn test_parallel_dispatch_basic() {
-    // Ordering correctness: verify that futures::future::join_all preserves the order of results matching the order of input futures
-    //
-    // In Phase 2, dispatch_futures is built by mapping approved.iter() to dispatch_tool calls
-    // Phase 3 zips approved.into_iter() with dispatch_results, so result[i] must correspond to approved[i]
+    // Ordering correctness: verify that futures::future::join_all preserves the order of results matching the order of input futures.
+    // In Phase 2, dispatch_futures is built by mapping approved.iter() to dispatch_tool calls Phase 3 zips approved.into_iter() with dispatch_results, so result[i] must correspond to approved[i].
 
     use futures::future::join_all;
 
@@ -312,13 +341,8 @@ fn test_parallel_dispatch_permission_reject() {
 }
 #[test]
 fn test_parallel_dispatch_followups() {
-    // Deferred followups placement: handle_bridge_tool_success returns Vec<ConversationItem> followups that get extended into deferred_followups
-    //
-    // In Phase 3:
-    //   let followups = handle_bridge_tool_success(...).await?;
-    //   deferred_followups.extend(followups);
-    //
-    // Verify that followups vec can be collected and extended.
+    // Deferred followups placement: handle_bridge_tool_success returns Vec<ConversationItem> followups that get extended into deferred_followups.
+    // In Phase 3: let followups = handle_bridge_tool_success(...).await?; deferred_followups.extend(followups);.
     let mut deferred_followups: Vec<&str> = Vec::new();
 
     // Simulate followups from 2 tools
@@ -336,10 +360,8 @@ fn test_parallel_dispatch_followups() {
 
 #[test]
 fn test_parallel_dispatch_hooks() {
-    // Dispatching a single tool should behave identically to the serial path
-    // The parallel dispatch infrastructure (prepare_tool_call, then dispatch_tool, then post-flight) should work for N=1 without special casing
-    //
-    // Verify: 1 tool in the approved vec yields 1 dispatch future and 1 result
+    // Dispatching a single tool should behave identically to the serial path.
+    // The parallel dispatch infrastructure (prepare_tool_call, then dispatch_tool, then post-flight) should work for N=1 without special casing.
     let approved_count = 1;
     let dispatch_futures_count = approved_count; // 1:1 mapping
     let results_count = 1; // incremental stream yields same count
@@ -356,9 +378,7 @@ fn test_parallel_dispatch_hooks() {
 }
 
 /// Incremental completion ordering: fast tool results must reach the client before slow siblings finish.
-///
 /// Regression for the batch barrier where `join_all` deferred every `ToolCallUpdate(status=Completed)` until the slowest tool in the round finished.
-/// For example, grep sat pending behind `wait_commands_or_subagents`.
 #[tokio::test]
 async fn incremental_dispatch_surfaces_fast_tool_before_slow_sibling() {
     use futures::future::BoxFuture;
@@ -406,14 +426,8 @@ async fn incremental_dispatch_surfaces_fast_tool_before_slow_sibling() {
 }
 
 /// Regression for the race where two toolsets edited the same file concurrently.
-///
 /// `lock_path_for_args` is the per-call key `execute_tool_calls` Phase 2 uses to bucket concurrent calls into per-file `tokio::sync::Mutex` groups.
-/// The original implementation hardcoded `parsed_args.get("file_path")`.
-/// That silently bypassed serialization for any toolset whose edit input declared the path under a different JSON key.
 /// The compat toolset input types use `path`, and grok_build's `read_file` uses `target_file`.
-/// All of those calls fell through to fully concurrent dispatch and could lose edits via TOCTOU on the same workspace file.
-///
-/// These tests pin the JSON-key contract so the bucket key keeps tracking every toolset's actual schema.
 #[test]
 fn lock_path_for_args_matches_grok_build_file_path() {
     // grok_build search_replace / opencode EditTool / WriteTool / etc.
@@ -556,10 +570,9 @@ fn lock_path_for_args_buckets_parallel_compat_strreplace_to_same_lock() {
 
 #[test]
 fn lock_path_for_args_buckets_grok_build_and_compat_to_same_lock_for_same_file() {
-    // A mixed batch of grok_build search_replace and compat StrReplace in the same turn must still serialize on the shared file path
-    // That mix is possible if the harness ever exposes both toolsets, or during a toolset migration
-    // file_path takes precedence over path when both are present, but neither tool emits both keys today
-    // So this asserts that both toolsets' path keys normalize to the same lock
+    // A mixed batch of grok_build search_replace and compat.
+    // StrReplace in the same turn must still serialize on the shared file path.
+    // That mix is possible if the harness ever exposes both toolsets, or during a toolset migration file_path takes precedence over path when both are present, but neither tool emits both keys today.
     let grok = serde_json::json!({
         "file_path": "/repo/src/main.rs",
         "old_string": "a",

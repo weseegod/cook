@@ -6,12 +6,12 @@ Grok connects to custom model endpoints for alternative providers, self-hosted m
 
 ## Default Models
 
-By default, Grok uses models hosted by SpaceXAI, and new sessions start with `grok-4.5`. Default models require no configuration. Authenticate with `thanh login` or an API key, then start a session.
+By default, Grok uses models hosted by SpaceXAI, and new sessions start with `grok-4.5`. Default models require no configuration. Authenticate with `grok login` or an API key, then start a session.
 
 List all available models:
 
 ```bash
-thanh models
+grok models
 ```
 
 ---
@@ -21,7 +21,7 @@ thanh models
 ### CLI Flag
 
 ```bash
-thanh -p "Hello" -m grok-build
+grok -p "Hello" -m grok-4.6
 ```
 
 ### Slash Command
@@ -42,9 +42,21 @@ Or use the alias:
 
 Press `Ctrl+M` from the scrollback pane to open the model picker. It lists all available models, both built-in and custom, and lets you switch with a single keystroke. With the prompt focused, `Ctrl+M` toggles multiline input instead -- use `/model` to switch without leaving the prompt.
 
+### Fleet allowlist (`requirements.toml`)
+
+Enterprise hosts can pin the **selectable** set — not only the default — in signed `requirements.toml`. That list **replaces** any user `allowed_models` (it is not a union), so `/model`, `Ctrl+M`, and `-m` cannot offer models outside it.
+
+```toml
+[models]
+default = "grok-4.5"
+allowed_models = ["grok-4.5", "grok-4*"]
+```
+
+A fleet pin matches the **model id** (not a user-chosen catalog key), so a local `[model.<name>]` entry cannot widen the set. User-config `allowed_models` still matches catalog key or model id. Omit the key to leave user config standing. An empty array is unrestricted. A present-but-unreadable pin fail-closes (nothing selectable). A default or `-m` value outside the pinned set is rejected once the model catalog is fetched — contact your administrator; the list is not user-editable.
+
 ### Config Default
 
-Set a persistent default in `~/.thanh/config.toml`:
+Set a persistent default in `~/.grok/config.toml`:
 
 ```toml
 [models]
@@ -71,7 +83,7 @@ To send provider-specific authentication or version headers -- for example, Anth
 
 ## Configuring Custom Models
 
-Add custom model endpoints in `~/.thanh/config.toml` under `[model.<name>]` sections:
+Add custom model endpoints in `~/.grok/config.toml` under `[model.<name>]` sections:
 
 ```toml
 [model.my-model]
@@ -97,7 +109,7 @@ Grok resolves the API key in this order:
 
 1. The `api_key` field in the model config
 2. The environment variable(s) named by `env_key` — a single string or an array of names. The first set, non-empty value wins (for example `env_key = ["ANTHROPIC_AUTH_TOKEN", "LC_ANTHROPIC_AUTH_TOKEN"]` for SSH `LC_*` forwarding)
-3. Your signed-in session token (from `thanh login`), for a model with no `api_key`/`env_key` of its own
+3. Your signed-in session token (from `grok login`), for a model with no `api_key`/`env_key` of its own
 4. The `XAI_API_KEY` environment variable (global fallback; Grok also accepts `GROK_CODE_XAI_API_KEY` for backward compatibility)
 
 ### Context Window
@@ -125,6 +137,7 @@ temperature                 = 0.7
 top_p                       = 0.95
 max_completion_tokens       = 8192
 max_retries                 = 8
+rate_limit_retry_threshold  = 4
 inference_idle_timeout_secs = 600
 subagent_rate_limit_max_attempts = 8
 stream_tool_calls           = true
@@ -132,19 +145,9 @@ stream_tool_calls           = true
 
 This is a small, fixed set of environment-wide knobs. Settings that identify a specific model (`model`, `base_url`, `api_key`, `context_window`, ...) cannot be defaulted this way, and a few settings with their own dedicated configuration -- auto-compaction (`[session]`), the system-prompt label (`[agent]`), and reasoning effort (`[models].default_reasoning_effort`) -- keep their existing homes.
 
-> **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block. On the Responses API, Grok retries once without `stream_tool_calls` when a provider returns HTTP 400 mentioning that field.
+`rate_limit_retry_threshold` and `subagent_rate_limit_max_attempts` select different 429 retry paths for subagents. Configuring `rate_limit_retry_threshold` makes the sampler own those retries and disables the separate subagent wait loop, including its 150-second cumulative wait budget and wait telemetry. `subagent_rate_limit_max_attempts` applies only when the sampler threshold is unset.
 
-### BYOK and `/goal`
-
-When the active model uses its own credentials (BYOK) or your catalog has a single inference endpoint, Grok defaults `/goal` to **single-model mode**: all roles inherit the session model and the skeptic count defaults to **1**. Native multi-model Grok catalogs keep the default of **3** skeptics unless you override:
-
-```toml
-[goal]
-use_current_model_only = false   # opt back into multi-model goal roles on BYOK
-verifier_count = 3
-```
-
-Undeclared BYOK models with a custom non-xAI `base_url` are treated as **text-only** until you set `input = ["text", "image"]`.
+> **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block.
 
 ### Request Query Parameters
 
@@ -318,7 +321,7 @@ When you use `[endpoints]` with partial model overrides, Grok inherits the `base
 
 ### Auth Behavior
 
-When you set `models_base_url`, Grok uses API key auth (`Authorization: Bearer`) instead of session auth. You do not need `thanh login` -- the API key is enough.
+When you set `models_base_url`, Grok uses API key auth (`Authorization: Bearer`) instead of session auth. You do not need `grok login` -- the API key is enough.
 
 ---
 
@@ -354,13 +357,13 @@ supports_backend_search = true
 
 ```bash
 # List available models (including custom)
-thanh models
+grok models
 
 # Use in the TUI via slash command
 /model my-model
 
 # Use in headless mode
-thanh -p "Hello" -m my-model
+grok -p "Hello" -m my-model
 
 # Set as default in config.toml:
 [models]
@@ -403,7 +406,7 @@ telemetry = false
 
 ```bash
 # List available models
-thanh models
+grok models
 
 # Check config.toml for typos in [model.*] sections
 ```

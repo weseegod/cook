@@ -213,6 +213,7 @@ mod tests {
             session_id: None,
             bundle_state: &EMPTY_BUNDLE,
             screen_mode: crate::app::ScreenMode::Inline,
+            billing_surface_visible: true,
             usage_command_visible: true,
             pager_state: crate::settings::PagerLocalSnapshot {
                 multiline_mode: false,
@@ -249,6 +250,7 @@ mod tests {
             models: &state,
             cwd: std::path::Path::new("."),
             has_session_announcements: false,
+            billing_surface_visible: true,
             usage_command_visible: true,
             workflows_available: true,
             saved_workflows: &[],
@@ -283,6 +285,7 @@ mod tests {
             models: &state,
             cwd: std::path::Path::new("."),
             has_session_announcements: false,
+            billing_surface_visible: true,
             usage_command_visible: true,
             workflows_available: true,
             saved_workflows: &[],
@@ -316,6 +319,7 @@ mod tests {
             models: &state,
             cwd: std::path::Path::new("."),
             has_session_announcements: false,
+            billing_surface_visible: true,
             usage_command_visible: true,
             workflows_available: true,
             saved_workflows: &[],
@@ -339,6 +343,7 @@ mod tests {
             models: &state,
             cwd: std::path::Path::new("."),
             has_session_announcements: false,
+            billing_surface_visible: true,
             usage_command_visible: true,
             workflows_available: true,
             saved_workflows: &[],
@@ -432,7 +437,6 @@ mod tests {
 
     /// The bare `/model <name>` form dispatches `Action::SetDefaultModel(<ModelId>)` instead of the legacy `Action::SwitchModel { effort: None }`.
     /// The dispatcher routes it through both `Effect::SwitchModel` (session mutation) and `Effect::PersistSetting` (next-session default).
-    ///
     /// The payload is the typed `acp::ModelId` (resolved at the slash boundary), not a String.
     #[test]
     fn run_bare_model_name_dispatches_set_default_model() {

@@ -17,6 +17,7 @@ pub mod export_github;
 pub mod file_system;
 pub mod folder_trust;
 pub mod fs_notify;
+pub(crate) mod git_content_filters;
 pub(crate) mod git_odb;
 pub mod handle;
 pub mod hub;
@@ -26,6 +27,7 @@ pub mod hub_ids;
 pub mod hub_server;
 pub mod image_capabilities;
 pub mod mcp;
+pub(crate) mod mcp_claim;
 pub(crate) mod path_virtualization;
 pub mod permission;
 pub mod project_config;
@@ -48,14 +50,14 @@ pub mod worktree;
 pub use capability::CapabilityMode;
 pub use channel::{TransportCallResult, TransportContext, TransportError, TransportNotification};
 pub use config::{
-    AgentSessionConfig, DEFAULT_EVENT_BUFFER_CAPACITY, HookSourceConfig, IsolationMode,
-    MemoryConfig, SessionContextFactory, SessionTerminalBackend, WorkspaceConfig,
+    AgentSessionConfig, BindMcpConfig, DEFAULT_EVENT_BUFFER_CAPACITY, HookSourceConfig,
+    IsolationMode, MemoryConfig, SessionContextFactory, SessionTerminalBackend, WorkspaceConfig,
 };
 pub use error::{WorkspaceError, WorkspaceResult};
 pub use file_system::*;
 pub use handle::{
-    DrainOutcome, DrainReason, WorkspaceHandle, connect_local_workspace, resolve_workspace_home,
-    termination_grace_from_env,
+    DrainOutcome, DrainReason, LocalWorkspaceConnectOptions, WorkspaceHandle,
+    connect_local_workspace, resolve_workspace_home, termination_grace_from_env,
 };
 pub use hub::HubConfig;
 pub use path_virtualization::{

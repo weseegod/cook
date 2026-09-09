@@ -54,16 +54,8 @@ pub(crate) struct StreamSegment {
 }
 
 /// Per-turn snapshot of the model's streamed generations, retained out-of-band from `chat_state`.
-/// The in-progress generation lives in the flat fields; finalized prior generations live in `segments`.
-///
 /// At `finalize_for_upload` the flat fields are rebuilt as a joined view of the retained `segments`.
-/// This duplicates each retained generation's reasoning: once under `segments[i]`, once joined in the flat `reasoning_text`.
-/// The duplication is a deliberate back-compat tradeoff bounded by the byte cap.
 /// The currently deployed trace viewer reads only the flat fields, so the joined view makes the full doomloop visible without a frontend deploy.
-/// `segments` carries the structured per-attempt breakdown for newer readers.
-///
-/// Uploaded as `{session_id}/turn_N/streaming_partial.json` by `upload_streaming_partial`.
-/// The upload fires whenever a non-completed turn end produces a non-empty capture.
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct StreamingTurnCapture {
     /// Request owning the in-progress generation. Never uploaded.
@@ -127,7 +119,6 @@ impl StreamingTurnCapture {
     /// Empty means nothing worth uploading.
     /// A terminal reasoning-only empty response stamps the token magnitude (`reasoning_tokens` / `empty_reason` / ...).
     /// The stamp lands even when no reasoning text was streamed to the shell, so those fields keep the capture non-empty.
-    /// Otherwise the take gate would drop the only record of the doomloop's size.
     pub(crate) fn is_empty(&self) -> bool {
         self.reasoning_text.is_empty()
             && self.response_text.is_empty()
@@ -175,7 +166,6 @@ impl StreamingTurnCapture {
         self.current_request_id.as_deref() == Some(request_id)
     }
 
-    /// Fold the in-progress slot (the flat fields) into `segments` and clear it for the next generation.
     /// A slot that streamed nothing is skipped, unless it carries a doom-loop stamp.
     /// A stamp folds text-free (the same rule as `clear_current_segment`) so it can never linger and mislabel a later generation.
     /// Only uncommitted generations reach this; a generation that emits `Completed` is discarded via `clear_current_segment` instead.
@@ -252,10 +242,8 @@ impl StreamingTurnCapture {
     }
 
     /// Discard the in-progress generation without folding it into `segments`.
-    /// Called on `Completed`: that generation committed to `afterStateHistory`.
     /// Its reasoning must neither be uploaded nor count against the byte cap of later generations.
     /// A doom-stamped committed generation (a budget-spent accept) keeps a TEXT-FREE segment so the stamp survives for traces.
-    /// The text itself lives in the committed history.
     pub(crate) fn clear_current_segment(&mut self) {
         if let Some(stamp) = self.doom_loop.take() {
             self.segments.push(StreamSegment {
@@ -329,11 +317,35 @@ impl StreamingTurnCapture {
         }
     }
 
+    /// In-progress assistant text only (reasoning excluded).
+    /// Retained `segments` are discarded same-turn attempts (doomloop resample / restart) and must not enter the customer OTEL `assistant_response`.
+    /// Empty after `clear_current_segment`; production emit then uses committed chat-state text for finished bubbles, plus this slot for uncommitted mid-stream text.
+    pub(crate) fn assembled_response_text(&self) -> String {
+        self.response_text.clone()
+    }
+
+    /// Completed turns trust chat-state: the slot can still hold the last bubble after a stream-drain timeout (`clear_request_segment` runs on the sampling-event rail and is skipped when the 5s barrier fails open).
+    /// Interrupt / error paths keep the slot so a cancel after a prior tool round still exports the in-progress bubble.
+    /// When both sides are non-empty, skip the join if `committed` already ends with `captured` so a stale slot cannot duplicate the last bubble.
+    pub(crate) fn merge_assistant_response_for_otel(
+        committed: String,
+        captured: &str,
+        trust_committed: bool,
+    ) -> String {
+        if trust_committed || captured.is_empty() {
+            committed
+        } else if committed.is_empty() {
+            captured.to_owned()
+        } else if committed.ends_with(captured) {
+            committed
+        } else {
+            format!("{committed}\n{captured}")
+        }
+    }
+
     /// Consolidate the turn for upload by folding the in-progress slot into `segments`.
     /// `segments` only ever holds uncommitted generations (a committed one is discarded on `Completed`).
     /// Every retained generation (a doomloop retry, a cancel or error mid-stream) is therefore uploaded.
-    /// The upload happens regardless of whether the generation carried reasoning, response text, or a tool call.
-    /// The flat back-compat fields are rebuilt from the segments; when there are none the capture is left empty (no upload).
     pub(crate) fn finalize_for_upload(&mut self) {
         self.push_current_segment();
         // `truncated` reflects only the retained reasoning: committed generations were cleared on `Completed` (never counted)
@@ -628,5 +640,86 @@ mod streaming_turn_capture_tests {
         assert_eq!(cap.completion_tokens, Some(12));
         assert_eq!(cap.finish_reason.as_deref(), Some("stop"));
         assert_eq!(cap.empty_reason.as_deref(), Some("reasoning_only"));
+    }
+
+    #[test]
+    fn assembled_response_text_current_slot_only_excludes_reasoning_and_segments() {
+        let mut cap = StreamingTurnCapture::default();
+        cap.begin_turn(Some("p1".to_owned()), 1);
+        cap.start_stream(1);
+        cap.append(true, "thinking first");
+        cap.append(false, "discarded text");
+        cap.start_stream(2);
+        cap.append(true, "thinking second");
+        cap.append(false, "current text");
+        assert_eq!(cap.assembled_response_text(), "current text");
+    }
+
+    #[test]
+    fn assembled_response_text_empty_after_commit() {
+        let mut cap = StreamingTurnCapture::default();
+        cap.begin_turn(Some("p1".to_owned()), 1);
+        cap.start_stream(1);
+        cap.append(false, "the answer");
+        cap.clear_current_segment();
+        assert!(cap.assembled_response_text().is_empty());
+    }
+
+    #[test]
+    fn assembled_response_text_empty_after_commit_even_with_discarded_segments() {
+        let mut cap = StreamingTurnCapture::default();
+        cap.begin_turn(Some("p1".to_owned()), 1);
+        cap.start_stream(1);
+        cap.append(false, "discarded attempt");
+        cap.start_stream(2);
+        cap.append(false, "accepted answer");
+        cap.clear_current_segment();
+        assert!(cap.assembled_response_text().is_empty());
+        assert_eq!(cap.segments[0].response_text, "discarded attempt");
+    }
+
+    #[test]
+    fn merge_otel_drain_timeout_does_not_duplicate_committed_bubble() {
+        // Slot still populated, chat-state already has the same bubble.
+        assert_eq!(
+            StreamingTurnCapture::merge_assistant_response_for_otel(
+                "blocks".into(),
+                "blocks",
+                true,
+            ),
+            "blocks"
+        );
+        assert_eq!(
+            StreamingTurnCapture::merge_assistant_response_for_otel(
+                "blocks".into(),
+                "blocks",
+                false,
+            ),
+            "blocks"
+        );
+    }
+
+    #[test]
+    fn merge_otel_cancel_after_tool_round_joins_uncommitted_slot() {
+        assert_eq!(
+            StreamingTurnCapture::merge_assistant_response_for_otel(
+                "first bubble".into(),
+                "partial second",
+                false,
+            ),
+            "first bubble\npartial second"
+        );
+    }
+
+    #[test]
+    fn merge_otel_completed_multi_round_trusts_chat_state() {
+        assert_eq!(
+            StreamingTurnCapture::merge_assistant_response_for_otel(
+                "first bubble\nlast bubble".into(),
+                "",
+                true,
+            ),
+            "first bubble\nlast bubble"
+        );
     }
 }

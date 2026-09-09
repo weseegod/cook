@@ -19,6 +19,11 @@ use super::tracker::WorkflowTracker;
 pub(crate) const WORKFLOW_MAX_ACTIVE_RUNS_PER_SESSION: usize = 4;
 pub(crate) const WORKFLOW_DEFAULT_AGENT_BUDGET: u64 = xai_workflow::DEFAULT_AGENT_BUDGET;
 
+static WORKFLOW_RUNS_ACTIVE: xai_grok_telemetry::activity::ActivityGauge =
+    xai_grok_telemetry::activity::ActivityGauge::work(
+        xai_grok_telemetry::activity::WORKFLOW_RUNS_ACTIVE_KEY,
+    );
+
 struct ActiveRun {
     cancel: CancellationToken,
     pause_intent: Arc<AtomicBool>,
@@ -59,6 +64,7 @@ pub(crate) struct WorkflowManager {
     session_dir: Option<PathBuf>,
     cwd: PathBuf,
     tracker: Arc<parking_lot::Mutex<WorkflowTracker>>,
+    active_work: Arc<std::sync::atomic::AtomicUsize>,
     store: WorkflowRunStore,
     notify: WorkflowNotifySender,
     subagent_event_tx: mpsc::UnboundedSender<
@@ -79,6 +85,7 @@ impl WorkflowManager {
         session_dir: Option<PathBuf>,
         cwd: PathBuf,
         tracker: Arc<parking_lot::Mutex<WorkflowTracker>>,
+        active_work: Arc<std::sync::atomic::AtomicUsize>,
         store: WorkflowRunStore,
         notify: WorkflowNotifySender,
         subagent_event_tx: mpsc::UnboundedSender<
@@ -94,6 +101,7 @@ impl WorkflowManager {
             session_dir,
             cwd,
             tracker,
+            active_work,
             store,
             notify,
             subagent_event_tx,
@@ -140,7 +148,7 @@ impl WorkflowManager {
                     .ok_or_else(|| LaunchError::UnknownRun(run_id.clone()))?;
                 if !existing.status.is_resumable() {
                     return Err(LaunchError::NotResumable(
-                        existing.status.as_str().to_string(),
+                        existing.status.as_ref().to_string(),
                     ));
                 }
                 if existing.status
@@ -199,7 +207,7 @@ impl WorkflowManager {
                             limit: existing.agent_budget.unwrap_or(0),
                         }
                     } else {
-                        LaunchError::NotResumable(existing.status.as_str().into())
+                        LaunchError::NotResumable(existing.status.as_ref().into())
                     }
                 })?;
 
@@ -244,9 +252,10 @@ impl WorkflowManager {
         self.notify
             .emit(&state, self.tracker.lock().elapsed_ms(&run_id), 0);
 
-        let active = xai_grok_telemetry::activity::WORKFLOW_RUNS_ACTIVE.enter();
+        let active = WORKFLOW_RUNS_ACTIVE.enter();
+        let work = crate::session::handle::WorkGuard::new(self.active_work.clone());
         debug_assert!(
-            xai_grok_telemetry::activity::WORKFLOW_RUNS_ACTIVE.get() >= 1,
+            WORKFLOW_RUNS_ACTIVE.get() >= 1,
             "WorkflowRunStarted must stamp a self-inclusive count"
         );
         log_run_started(
@@ -327,6 +336,7 @@ impl WorkflowManager {
         let execution_epoch = self.tracker.lock().execution_epoch(&run_id).unwrap_or(0);
         tokio::spawn(async move {
             let _active = active;
+            let _work = work;
             let mut outcome = exec.await.unwrap_or_else(|e| WorkflowOutcome::Failed {
                 error: format!("workflow executor panicked: {e}"),
             });
@@ -501,6 +511,7 @@ impl WorkflowManager {
             session_dir,
             std::env::temp_dir(),
             tracker.clone(),
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             store,
             notify,
             mpsc::unbounded_channel().0,
@@ -882,6 +893,7 @@ mod tests {
             session_dir,
             std::env::temp_dir(),
             tracker,
+            Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             store,
             notify,
             subagent_tx,
@@ -967,6 +979,45 @@ mod tests {
                 .join(&run_id)
                 .join("script.rhai")
                 .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn running_workflow_keeps_session_active_work_nonzero() {
+        use std::sync::atomic::Ordering;
+        let dir = tempfile::tempdir().unwrap();
+        let (mut manager, mut rx) = test_manager(Some(dir.path().to_path_buf()));
+
+        assert_eq!(
+            manager.active_work.load(Ordering::Acquire),
+            0,
+            "no active work before any run launches"
+        );
+
+        let (_run_id, outcome_rx) = manager
+            .launch(resolve_inline(parallel_n_script(1)).unwrap(), spec())
+            .unwrap();
+        let req = recv_spawn(&mut rx).await;
+        assert!(
+            manager.active_work.load(Ordering::Acquire) > 0,
+            "a running workflow must count toward the session's active work (GBT-6282)"
+        );
+
+        complete_spawn(req);
+        assert!(matches!(
+            outcome_rx.await.unwrap(),
+            WorkflowOutcome::Completed { .. }
+        ));
+        for _ in 0..200 {
+            if manager.active_work.load(Ordering::Acquire) == 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            manager.active_work.load(Ordering::Acquire),
+            0,
+            "active work returns to zero once the run completes"
         );
     }
 

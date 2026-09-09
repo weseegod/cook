@@ -98,6 +98,7 @@ async fn create_test_actor_with_memory(
     let state = TokioMutex::new(State {
         running_task: None,
         finalization_gate: Default::default(),
+        message_delivery: Default::default(),
         pending_inputs: VecDeque::new(),
         edit_holds: HashMap::new(),
         pending_notifications: Vec::new(),
@@ -113,12 +114,16 @@ async fn create_test_actor_with_memory(
         vec![],
         xai_grok_sampling_types::SamplingConfig {
             base_url: "http://localhost".to_string(),
+            mtls_cert_dir: None,
             model: "test".to_string(),
             max_completion_tokens: None,
             temperature: None,
             top_p: None,
+            max_retries: None,
+            rate_limit_retry_threshold: None,
             api_backend: Default::default(),
             extra_headers: Default::default(),
+            conversation_group_id: None,
             query_params: Default::default(),
             env_http_headers: Default::default(),
             context_window: std::num::NonZeroU64::new(context_window)
@@ -168,6 +173,7 @@ async fn create_test_actor_with_memory(
         chat_state_handle,
         unattributed_background_usage: std::sync::atomic::AtomicBool::new(false),
         current_prompt_id: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        active_work: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         pending_interactions: std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::new(),
         )),
@@ -216,6 +222,7 @@ async fn create_test_actor_with_memory(
             injection_count: std::sync::atomic::AtomicU64::new(0),
             compaction_recovery_count: std::sync::atomic::AtomicU64::new(0),
             chunks_added: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            init_reindex_handle: std::cell::RefCell::new(None),
             dream_config: Default::default(),
             dream_count: std::sync::atomic::AtomicU64::new(0),
             dream_success_count: std::sync::atomic::AtomicU64::new(0),
@@ -223,6 +230,7 @@ async fn create_test_actor_with_memory(
         },
         session_start: std::time::Instant::now(),
         inference_idle_timeout: Duration::from_secs(300),
+        uncharged_401_park_enabled: true,
         max_retries: 3,
         rate_limit_waits: crate::session::acp_session::RateLimitWaitConfig::default(),
         max_turns: None,
@@ -284,6 +292,7 @@ async fn create_test_actor_with_memory(
         goal_classifier_enabled: false,
         goal_planner_enabled: false,
         goal_summary_enabled: false,
+        length_salvage_remote_budget: None,
         goal_verifier_skeptic_count: 1,
         goal_role_models: Default::default(),
         goal_use_current_model_only: false,
@@ -300,11 +309,13 @@ async fn create_test_actor_with_memory(
         mcp_reminder_mode: McpReminderMode::Delta,
         mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_connecting_reminder_injected: std::cell::Cell::new(false),
-        mcp_handshakes_done: Arc::new(tokio::sync::Notify::new()),
+        mcp_refresh_gate: Arc::new(tokio::sync::Mutex::new(())),
         user_input_generation: std::sync::atomic::AtomicU64::new(0),
         laziness_debug_log: None,
         last_live_orphan_reconcile: std::cell::Cell::new(None),
-        deferred_prefix: TaskSlot::new(),
+        deferred_prefix: DeferredPrefix::new(),
+        mcp_startup_waits: Default::default(),
+        mcp_init_tasks: Default::default(),
         extension_registry: xai_agent_lifecycle::LocalExtensionRegistry::default(),
         last_announced_local_date: std::cell::Cell::new(chrono::Local::now().date_naive()),
         prefix_carries_fallback_date: std::cell::Cell::new(false),
@@ -323,6 +334,7 @@ async fn create_test_actor_with_memory(
         events: crate::session::events::EventTracker::new(std::path::Path::new("/tmp")),
         observability_bridge: noop_observability_bridge(),
         current_turn_number: std::cell::Cell::new(0),
+        turn_phases: std::sync::Arc::default(),
         last_recap_main_turn: std::cell::Cell::new(0),
         recap_in_flight: std::cell::Cell::new(false),
         recap_epoch: std::cell::Cell::new(0),
@@ -335,6 +347,8 @@ async fn create_test_actor_with_memory(
         title_refresh_enabled: false,
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
+        stream_apply_span: parking_lot::Mutex::new(None),
+        current_turn_span_id: parking_lot::Mutex::new(None),
         turn_stream_drained: parking_lot::Mutex::new(std::collections::HashMap::new()),
         pending_image_strip: parking_lot::Mutex::new(std::collections::HashMap::new()),
         image_strip_rewrite_barrier: ImageStripRewriteBarrier::new(),
@@ -517,6 +531,146 @@ async fn test_memory_storage_created_when_enabled() {
                 !actor2.memory.is_enabled(),
                 "memory_storage should be None when disabled"
             );
+        })
+        .await;
+}
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::field_reassign_with_default)]
+async fn test_session_close_does_not_run_dream() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let mut config = crate::config::MemoryConfig::default();
+            config.enabled = true;
+            let mut actor = create_test_actor_with_memory(
+                50_000,
+                100_000,
+                85,
+                gateway_tx,
+                persistence_tx,
+                Some(config),
+            )
+            .await;
+            let tmp = tempfile::TempDir::new().unwrap();
+            let global_dir = tmp.path().join("memory");
+            let workspace_dir = global_dir.join("test_ws");
+            std::fs::create_dir_all(&workspace_dir).unwrap();
+            crate::session::memory::index::init_sqlite_vec();
+            actor.memory.storage =
+                std::cell::RefCell::new(Some(crate::session::memory::MemoryStorage::with_paths(
+                    global_dir,
+                    workspace_dir.clone(),
+                )));
+            let sessions_dir = actor.memory.storage().unwrap().sessions_dir();
+            std::fs::create_dir_all(&sessions_dir).unwrap();
+            for i in 0..5 {
+                std::fs::write(
+                    sessions_dir.join(format!("20200101-0000{i:02}-priorsession{i}.md")),
+                    "prior session\n",
+                )
+                .unwrap();
+            }
+            actor.chat_state_handle.replace_conversation(vec![
+                xai_grok_sampling_types::ConversationItem::user(
+                    "help me fix the authentication bug in the login flow",
+                ),
+                xai_grok_sampling_types::ConversationItem::assistant("looking at auth.rs"),
+                xai_grok_sampling_types::ConversationItem::user(
+                    "also add integration tests for the token refresh path",
+                ),
+                xai_grok_sampling_types::ConversationItem::assistant("found the issue"),
+                xai_grok_sampling_types::ConversationItem::user(
+                    "great, can you patch the logout handler as well",
+                ),
+                xai_grok_sampling_types::ConversationItem::assistant("done"),
+            ]);
+            let timer = xai_grok_telemetry::session_end::SessionEndTimer::new_shared();
+            actor.run_session_end_memory_pipeline("test", &timer).await;
+            assert_eq!(
+                actor
+                    .memory
+                    .dream_count
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0,
+                "close must not invoke the dream model call"
+            );
+        })
+        .await;
+}
+/// Drives the real `run_session` loop and asserts the launch dream fires when gated (not a subagent,
+/// memory enabled, open gate). This guards the launch wiring itself: removing the launch
+/// `spawn_dream_check` leaves `dream_count` at 0, which calling `maybe_run_dream` directly would miss.
+#[tokio::test(flavor = "current_thread")]
+#[allow(clippy::field_reassign_with_default)]
+async fn test_run_session_spawns_launch_dream() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let mut config = crate::config::MemoryConfig::default();
+            config.enabled = true;
+            let mut actor = create_test_actor_with_memory(
+                50_000,
+                100_000,
+                85,
+                gateway_tx,
+                persistence_tx,
+                Some(config),
+            )
+            .await;
+            let tmp = tempfile::TempDir::new().unwrap();
+            let global_dir = tmp.path().join("memory");
+            let workspace_dir = global_dir.join("test_ws");
+            std::fs::create_dir_all(&workspace_dir).unwrap();
+            crate::session::memory::index::init_sqlite_vec();
+            actor.memory.storage =
+                std::cell::RefCell::new(Some(crate::session::memory::MemoryStorage::with_paths(
+                    global_dir,
+                    workspace_dir.clone(),
+                )));
+            let sessions_dir = actor.memory.storage().unwrap().sessions_dir();
+            std::fs::create_dir_all(&sessions_dir).unwrap();
+            for i in 0..5 {
+                std::fs::write(
+                    sessions_dir.join(format!("20200101-0000{i:02}-priorsession{i}.md")),
+                    "prior session\n",
+                )
+                .unwrap();
+            }
+            let actor = std::sync::Arc::new(actor);
+            let (_cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+            let (_chat_tx, chat_rx) = mpsc::unbounded_channel();
+            let (_event_tx, event_rx) = mpsc::unbounded_channel();
+            let codebase_indexes = std::sync::Arc::new(parking_lot::Mutex::new(
+                xai_grok_workspace::file_system::CodebaseIndexManager::new(),
+            ));
+            tokio::task::spawn_local(super::run_session(
+                actor.clone(),
+                cmd_rx,
+                chat_rx,
+                event_rx,
+                None,
+                codebase_indexes,
+                std::path::PathBuf::from("/tmp"),
+                crate::session::fs_watch::FsWatchCapabilities::none(),
+            ));
+            let mut ran = false;
+            for _ in 0..200 {
+                if actor
+                    .memory
+                    .dream_count
+                    .load(std::sync::atomic::Ordering::Relaxed)
+                    == 1
+                {
+                    ran = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            assert!(ran, "run_session must spawn the launch dream when gated");
         })
         .await;
 }

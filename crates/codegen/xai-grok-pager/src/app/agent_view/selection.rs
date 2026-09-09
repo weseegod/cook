@@ -10,9 +10,10 @@ use crate::scrollback::text_selection::{
     PendingTextDrag, PersistentTextSelection, RangeHit, ResolvedSelectionModel, SelectionEndpoint,
     SelectionKind, SelectionOrigin, TableSelectionGeometry, apply_selection_boundary,
     block_drag_threshold_exceeded, compute_autoscroll, configured_word_separators,
-    drag_threshold_exceeded, reconstruct_full_selection_text_with_boundaries,
-    reconstruct_selection_text, reconstruct_selection_text_with_boundaries,
-    reconstruct_table_selection_text_with_meta, resolve_table_drag_kind, semantic_selection_at,
+    drag_threshold_exceeded, reconstruct_full_selection_text,
+    reconstruct_full_selection_text_with_boundaries, reconstruct_selection_text,
+    reconstruct_selection_text_with_boundaries, reconstruct_table_selection_text_with_meta,
+    resolve_table_drag_kind, semantic_selection_at,
 };
 use crate::views::btw_overlay::BTW_OVERLAY_ENTRY_IDX;
 use crossterm::event::MouseEvent;
@@ -59,7 +60,7 @@ impl AgentView {
         false
     }
 
-    /// Table geometry stored alongside the selection (the "side-car"), if it was resolved for it.
+    /// Held-highlight table geometry, if it was resolved for this selection.
     pub(in crate::app) fn table_geometry_for_selection(
         &self,
         entry_idx: usize,
@@ -70,11 +71,78 @@ impl AgentView {
             .and_then(|t| t.for_selection(entry_idx, range_id))
     }
 
+    /// Active-drag table geometry. Separate from the held highlight so both can paint.
+    pub(in crate::app) fn drag_table_geometry_for(
+        &self,
+        entry_idx: usize,
+        range_id: u16,
+    ) -> Option<&TableGeometry> {
+        self.drag_table_geometry
+            .as_ref()
+            .and_then(|t| t.for_selection(entry_idx, range_id))
+    }
+
+    /// Drop a `/btw` highlight and any geometry keyed to the overlay.
+    pub(crate) fn clear_btw_owned_selection(&mut self) {
+        if self
+            .persistent_text_selection
+            .as_ref()
+            .is_some_and(|sel| sel.entry_idx == BTW_OVERLAY_ENTRY_IDX)
+        {
+            self.persistent_text_selection = None;
+            self.selection_created_at = None;
+        }
+        if self
+            .table_selection_geometry
+            .as_ref()
+            .is_some_and(|geom| geom.entry_idx == BTW_OVERLAY_ENTRY_IDX)
+        {
+            self.table_selection_geometry = None;
+        }
+        if self
+            .drag_table_geometry
+            .as_ref()
+            .is_some_and(|geom| geom.entry_idx == BTW_OVERLAY_ENTRY_IDX)
+        {
+            self.drag_table_geometry = None;
+        }
+        self.btw_selection_wrap_width = None;
+    }
+
+    /// Overlay has no chrome and the visible model is only the window; detect/copy need the full wrap.
+    fn with_btw_output<R>(
+        &self,
+        range_id: u16,
+        width_override: Option<u16>,
+        f: impl FnOnce(
+            &dyn Fn(usize) -> Option<String>,
+            &[crate::scrollback::types::BlockLine],
+            &crate::scrollback::blocks::markdown_content::MarkdownContent,
+        ) -> R,
+    ) -> Option<R> {
+        let content_width = width_override.or_else(|| {
+            self.last_btw_selection_model
+                .visible_block_content_width(BTW_OVERLAY_ENTRY_IDX)
+        })?;
+        let crate::views::btw_overlay::BtwOverlayState::Done { content, .. } =
+            self.btw_state.as_ref()?
+        else {
+            return None;
+        };
+        let output = content.output(content_width as usize);
+        let source = |i: usize| -> Option<String> {
+            let line = output.lines.get(i)?;
+            if line.selection_range != Some(range_id) {
+                return None;
+            }
+            Some(crate::scrollback::types::derive_selection_text(line))
+        };
+        Some(f(&source, &output.lines, content))
+    }
+
     /// Run `f` with a text source over the anchor entry's full block output (so off-screen fragments are included).
     /// Lines outside the hit's selection range yield `None`, which detection treats as a boundary.
-    ///
     /// `width_override` is the drag-start width snapshot, for callers whose entry may have scrolled fully out of `visible_blocks` by now.
-    /// Other callers pass `None` and use the current frame's geometry.
     fn with_entry_output_text_source<R>(
         &self,
         entry_idx: usize,
@@ -82,6 +150,9 @@ impl AgentView {
         width_override: Option<u16>,
         f: impl FnOnce(&dyn Fn(usize) -> Option<String>) -> R,
     ) -> Option<R> {
+        if entry_idx == BTW_OVERLAY_ENTRY_IDX {
+            return self.with_btw_output(range_id, width_override, |src, _, _| f(src));
+        }
         let scrollback = if let Some(ref child_id) = self.active_subagent
             && let Some(child) = self.subagent_views.get(child_id)
         {
@@ -118,6 +189,21 @@ impl AgentView {
         geom: &TableGeometry,
         f: impl FnOnce(&dyn Fn(usize) -> Option<String>, Option<&xai_grok_markdown::TableCopyMeta>) -> R,
     ) -> Option<R> {
+        if entry_idx == BTW_OVERLAY_ENTRY_IDX {
+            return self.with_btw_output(range_id, width_override, |src, lines, content| {
+                content.with_table_copy_meta(|tables| {
+                    let meta = prewrap_line_index(lines, geom.line_range().start).and_then(|idx| {
+                        tables.iter().find(|t| {
+                            t.line_index == idx
+                                && t.n_cols == geom.n_cols()
+                                && t.line_count == geom.line_range().len()
+                                && t.cells.len() == geom.n_rows() * t.n_cols
+                        })
+                    });
+                    f(src, meta)
+                })
+            });
+        }
         let scrollback = if let Some(ref child_id) = self.active_subagent
             && let Some(child) = self.subagent_views.get(child_id)
         {
@@ -159,13 +245,10 @@ impl AgentView {
         }))
     }
 
-    /// Detect the table grid under a drag anchor (btw drags stay linear).
+    /// Detect the table grid under a drag anchor.
     /// Pre-gated on the anchor line having a box-drawing glyph: prose drags must not touch `effective_output`, which thrashes the render cache.
     fn compute_drag_table_geometry(&self, anchor: &RangeHit) -> Option<TableGeometry> {
-        if anchor.entry_idx == BTW_OVERLAY_ENTRY_IDX {
-            return None;
-        }
-        if let Some(line) = self.last_scrollback_selection_model.line_for_hit(anchor)
+        if let Some(line) = self.selection_model_for_hit(anchor).line_for_hit(anchor)
             && !line.text.contains(['│', '┌', '├', '└'])
         {
             return None;
@@ -183,7 +266,7 @@ impl AgentView {
         head: &RangeHit,
         prev: SelectionKind,
     ) -> SelectionKind {
-        let geom = self.table_geometry_for_selection(anchor.entry_idx, anchor.range_id);
+        let geom = self.drag_table_geometry_for(anchor.entry_idx, anchor.range_id);
         resolve_table_drag_kind(geom, anchor, head, prev)
     }
 
@@ -193,32 +276,29 @@ impl AgentView {
     }
 
     /// Advance drag autoscroll by one tick.
-    ///
     /// Scrolls the active scrollback (main or subagent) by `speed` rows in the autoscroll direction.
     /// After scrolling, recomputes the drag head from the stored mouse position using the current (soon-stale) selection model.
-    /// [`Self::reclamp_drag_head_post_render`] re-snaps the head once the next render rebuilds the model.
-    ///
-    /// For block drag, implements long-block snap.
-    /// If the current head block is no longer visible after scrolling, the head advances to the next visible block in the scroll direction.
     pub fn tick_drag_autoscroll(&mut self) -> bool {
         let Some(autoscroll) = self.drag_autoscroll else {
             return false;
         };
 
         // Scroll the active scrollback.
-        let scrollback = if let Some(ref child_id) = self.active_subagent {
-            if let Some(child) = self.subagent_views.get_mut(child_id) {
-                &mut child.scrollback
+        {
+            let scrollback = if let Some(ref child_id) = self.active_subagent {
+                if let Some(child) = self.subagent_views.get_mut(child_id) {
+                    &mut child.scrollback
+                } else {
+                    &mut self.scrollback
+                }
             } else {
                 &mut self.scrollback
-            }
-        } else {
-            &mut self.scrollback
-        };
+            };
 
-        match autoscroll.direction {
-            AutoScrollDirection::Up => scrollback.scroll_up(autoscroll.speed),
-            AutoScrollDirection::Down => scrollback.scroll_down(autoscroll.speed),
+            match autoscroll.direction {
+                AutoScrollDirection::Up => scrollback.scroll_up(autoscroll.speed),
+                AutoScrollDirection::Down => scrollback.scroll_down(autoscroll.speed),
+            }
         }
 
         // Recompute the text drag head from the stored mouse position, against the pre-scroll (stale) model
@@ -278,12 +358,8 @@ impl AgentView {
     }
 
     /// Snap an active drag head to the freshly rebuilt selection model.
-    ///
     /// Input handlers and autoscroll ticks hit-test against the previous frame's model, which scrolling/streaming/resizing make stale.
-    /// `draw` calls this right after each model rebuild and before the corresponding overlay paints.
     /// The head thus re-resolves from the held pointer position with at most one frame of lag.
-    /// `btw_rebuilt` names which model was just rebuilt: a drag anchored on the other one is left alone (its model is still last frame's).
-    /// Keeps the previous head when the anchor's range has no lines in the fresh model.
     pub(in crate::app) fn reclamp_drag_head_post_render(&mut self, btw_rebuilt: bool) {
         let Some((col, row)) = self.last_drag_mouse else {
             return;
@@ -343,6 +419,7 @@ impl AgentView {
         self.pending_scrollback_click = None;
         self.pending_link_click = None;
         if self.drag_selection.is_some() {
+            // Lost mouse-up still delivers the copy; the tip is tick-driven.
             self.finish_text_drag();
         } else if self.block_drag_selection.is_some() {
             self.finish_block_drag();
@@ -353,33 +430,20 @@ impl AgentView {
         self.last_drag_mouse = None;
     }
 
-    /// On xterm.js embeds a lost release can also mean the terminal's own button tracker is wedged and will eat every release from now on.
-    /// (VS Code does this after a context-menu gesture.)
     /// Toggling reporting off and on resets the tracker so the next gesture gets clean reports.
     /// Callers must know the button is UP (bare `Moved`, an unpaired release).
-    /// The toggle clears xterm.js's tracking of a press in flight, so firing it mid-press would break that gesture.
     /// Gated to xterm.js embeds: other terminals don't have the wedge, and some (VTE) emit spurious events on mouse-mode churn.
-    pub(super) fn reset_wedged_mouse_reporting(&self) {
+    pub(super) fn reset_wedged_mouse_reporting(&mut self) {
         if crate::terminal::terminal_context().brand.is_xtermjs_embed()
             && crate::app::MOUSE_CAPTURE_ENABLED.load(std::sync::atomic::Ordering::Acquire)
         {
-            xai_grok_shell::util::with_locked_stderr(|stderr| {
-                let _ = crossterm::execute!(
-                    stderr,
-                    crossterm::event::DisableMouseCapture,
-                    crossterm::event::EnableMouseCapture
-                );
-            });
+            self.pending_effects
+                .push(crate::app::actions::Effect::ResetMouseReporting);
         }
     }
 
     /// Update [`Self::plan_prompt_mouse_drag`] for a left-button mouse event during plan feedback.
     /// Reports whether the event should be forwarded to the feedback prompt (for cursor placement / text selection).
-    ///
-    /// `in_prompt` is whether the pointer currently sits in the prompt rect.
-    /// A left press arms the drag when it lands in the prompt; the release disarms it.
-    /// Subsequent `Drag`/`Up` events keep being routed to the prompt even after the pointer leaves the rect.
-    /// (TextArea tracks drag state internally and handles drag-beyond-edge.)
     /// Shared by both plan-feedback mouse paths (line-viewer-open and empty-plan) so the two route drags the same way.
     pub(super) fn route_plan_prompt_mouse_drag(
         &mut self,
@@ -492,8 +556,6 @@ impl AgentView {
     /// Shared arming tail for every text drag.
     /// Threshold promotion ([`Self::update_text_drag`]) and deferred conversion ([`Self::convert_deferred_text_press`]) both end here.
     /// Ending in one place keeps their bookkeeping from drifting.
-    /// Geometry resolves once per drag, at arming.
-    /// Btw mouse-downs don't clear a held persistent selection, so a btw drag must not wipe its side-car.
     fn arm_text_drag(
         &mut self,
         mouse: &MouseEvent,
@@ -501,14 +563,22 @@ impl AgentView {
         head: RangeHit,
         anchor_content_width: Option<u16>,
     ) {
-        if anchor.entry_idx != BTW_OVERLAY_ENTRY_IDX {
-            self.table_selection_geometry =
-                self.compute_drag_table_geometry(&anchor)
-                    .map(|geometry| TableSelectionGeometry {
-                        entry_idx: anchor.entry_idx,
-                        range_id: anchor.range_id,
-                        geometry,
-                    });
+        if let Some(geometry) = self.compute_drag_table_geometry(&anchor) {
+            self.drag_table_geometry = Some(TableSelectionGeometry {
+                entry_idx: anchor.entry_idx,
+                range_id: anchor.range_id,
+                geometry,
+            });
+        } else if self.drag_table_geometry.as_ref().is_some_and(|stored| {
+            stored.entry_idx == anchor.entry_idx && stored.range_id == anchor.range_id
+        }) {
+            self.drag_table_geometry = None;
+        }
+        if anchor.entry_idx == BTW_OVERLAY_ENTRY_IDX {
+            self.btw_selection_wrap_width = anchor_content_width.or_else(|| {
+                self.last_btw_selection_model
+                    .visible_block_content_width(BTW_OVERLAY_ENTRY_IDX)
+            });
         }
         let kind = self.resolve_drag_kind(&anchor, &head, SelectionKind::Linear);
         self.drag_selection = Some(ActiveTextDrag {
@@ -524,8 +594,6 @@ impl AgentView {
 
     /// One-way deferred-anchor conversion.
     /// A scrollback press with no selectable text under it arms [`AgentView::deferred_text_press`] alongside the normal block-drag latch.
-    /// The FIRST drag position that hits selectable text (the same hit test the press ran) becomes both anchor and head of an [`ActiveTextDrag`].
-    /// Any block-drag state in flight is cancelled: once text, the gesture stays text.
     /// A gesture that never enters text leaves the block drag to run unchanged.
     fn convert_deferred_text_press(&mut self, mouse: &MouseEvent) -> bool {
         let Some((press_col, press_row)) = self.deferred_text_press else {
@@ -651,25 +719,9 @@ impl AgentView {
     /// Clipboard text for a finished drag, tagged with the kind that produced it (`Linear` when a table copy fell through).
     /// The persisted highlight then mirrors what reached the clipboard.
     fn reconstruct_drag_copy(&self, drag: &ActiveTextDrag) -> Option<(String, SelectionKind)> {
-        if drag.anchor.entry_idx == BTW_OVERLAY_ENTRY_IDX {
-            // Same width rule as scrollback anchors: the drag-start snapshot matches the wrap the drag's block_line_idx values came from
-            // The current panel width is the fallback
-            let content_width = drag
-                .anchor_content_width
-                .map(usize::from)
-                .unwrap_or_else(|| self.last_btw_area.width.saturating_sub(4) as usize);
-            if let Some(ref btw) = self.btw_state {
-                let full_model = btw.full_selection_model(content_width);
-                if let Some(text) = reconstruct_selection_text(&full_model, drag) {
-                    return Some((text, SelectionKind::Linear));
-                }
-            }
-            return reconstruct_selection_text(&self.last_btw_selection_model, drag)
-                .map(|text| (text, SelectionKind::Linear));
-        }
         if drag.kind != SelectionKind::Linear
             && let Some(geom) =
-                self.table_geometry_for_selection(drag.anchor.entry_idx, drag.anchor.range_id)
+                self.drag_table_geometry_for(drag.anchor.entry_idx, drag.anchor.range_id)
             && let Some(text) = self
                 .with_entry_table_copy_source(
                     drag.anchor.entry_idx,
@@ -691,6 +743,21 @@ impl AgentView {
                 .flatten()
         {
             return Some((text, drag.kind));
+        }
+        if drag.anchor.entry_idx == BTW_OVERLAY_ENTRY_IDX {
+            // Same wrap as table detect/copy (`MarkdownContent::output` + trimmed selection text)
+            if let Some(text) = self
+                .with_btw_output(
+                    drag.anchor.range_id,
+                    drag.anchor_content_width,
+                    |_, lines, _| reconstruct_full_selection_text(lines, drag),
+                )
+                .flatten()
+            {
+                return Some((text, SelectionKind::Linear));
+            }
+            return reconstruct_selection_text(&self.last_btw_selection_model, drag)
+                .map(|text| (text, SelectionKind::Linear));
         }
         let scrollback = if let Some(ref child_id) = self.active_subagent
             && let Some(child) = self.subagent_views.get(child_id)
@@ -735,6 +802,14 @@ impl AgentView {
     fn persist_drag_selection(&mut self, drag: &ActiveTextDrag, kind: SelectionKind) {
         if kind == SelectionKind::Linear && drag.kind != SelectionKind::Linear {
             self.table_selection_geometry = None;
+            self.drag_table_geometry = None;
+        } else if let Some(geom) = self.drag_table_geometry.take()
+            && geom.entry_idx == drag.anchor.entry_idx
+            && geom.range_id == drag.anchor.range_id
+        {
+            self.table_selection_geometry = Some(geom);
+        } else {
+            self.drag_table_geometry = None;
         }
         self.persistent_text_selection = Some(PersistentTextSelection {
             entry_idx: drag.anchor.entry_idx,
@@ -753,6 +828,47 @@ impl AgentView {
         self.selection_created_at = Some(Instant::now());
     }
 
+    fn export_copy_tip_showing(&self) -> bool {
+        self.ephemeral_tip.current_key() == Some(crate::tips::export_copy::EXPORT_COPY_TIP_KEY)
+    }
+
+    /// Note a successful drag-copy on this view, rebasing entry_idx by this scrollback's visible start.
+    fn note_own_scrollback_drag_copy(&mut self, entry_idx: usize, toast_ticks: u16) {
+        if entry_idx == BTW_OVERLAY_ENTRY_IDX {
+            return;
+        }
+        let visible_start = self.scrollback.visible_entry_range().start;
+        let abs_key = (entry_idx as u64).saturating_add(visible_start as u64);
+        self.export_copy_detector.note_drag_copy(
+            std::time::Instant::now(),
+            abs_key,
+            self.export_copy_tip_showing(),
+            toast_ticks,
+        );
+    }
+
+    /// Note on the AgentView whose scrollback was copied: the fullscreen child when active_subagent is set (same view reconstruct_drag_copy / with_entry_* use).
+    /// active_subagent is set (same view reconstruct_drag_copy / with_entry_* use).
+    fn note_scrollback_drag_copy(&mut self, entry_idx: usize, toast_ticks: u16) {
+        if let Some(child_id) = self.active_subagent.clone()
+            && let Some(child) = self.subagent_views.get_mut(&child_id)
+        {
+            child.note_own_scrollback_drag_copy(entry_idx, toast_ticks);
+            return;
+        }
+        self.note_own_scrollback_drag_copy(entry_idx, toast_ticks);
+    }
+
+    /// One frame of the Copied! debounce; true when the export-copy tip is due.
+    pub(in crate::app) fn tick_export_copy_detector(&mut self) -> bool {
+        self.export_copy_detector
+            .tick(self.export_copy_tip_showing())
+    }
+
+    pub(in crate::app) fn note_export_copy_slash_used(&mut self) {
+        self.export_copy_detector.note_slash_used();
+    }
+
     pub(in crate::app) fn finish_text_drag(&mut self) -> bool {
         let drag = self.drag_selection;
         let copied = drag.and_then(|d| self.reconstruct_drag_copy(&d));
@@ -768,7 +884,9 @@ impl AgentView {
             if let Some(d) = drag {
                 self.persist_drag_selection(&d, kind);
             }
-            self.copy_to_clipboard(&text);
+            let delivery = self.copy_to_clipboard(&text);
+            let entry_key = drag.map(|d| d.anchor.entry_idx).unwrap_or(0);
+            self.note_scrollback_drag_copy(entry_key, u16::from(delivery.toast_ticks()));
             return true;
         }
         false
@@ -953,21 +1071,14 @@ impl AgentView {
             "scrollback block drag finished"
         );
         if !text.is_empty() {
-            self.copy_to_clipboard(&text);
+            let delivery = self.copy_to_clipboard(&text);
+            self.note_scrollback_drag_copy(start, u16::from(delivery.toast_ticks()));
             return true;
         }
         false
     }
 
     /// Handle a click on a scrollback entry with multi-click detection.
-    ///
-    /// - Single click: select entry
-    /// - Double-click non-prompt: toggle fold in place
-    /// - Double-click prompt: toggle fold + scroll to top
-    /// - Triple-click non-prompt: toggle fold + scroll to top
-    ///
-    /// Returns `(last_click_state, show_word_select_tip)`.
-    /// The tip flag is set on a REPEATED double-click on assistant text: a second gesture within [`WORD_SELECT_REPEAT_WINDOW`].
     /// It only fires while Text selection is still fold/nav (not `word_select`), so dispatch can teach `/settings → Text selection`.
     /// A lone double-click, or one on fold-affordance rows (headers, prompts, tool rows), never tips.
     pub(in crate::app) fn handle_scrollback_click(
@@ -1061,17 +1172,15 @@ impl AgentView {
                     && let crate::scrollback::block::RenderBlock::BgTask(ref bt) = entry.block
                     && let Some(task) = self.session.bg_tasks.get(&bt.task_id)
                 {
-                    let eid = task
-                        .scrollback_entry_id
-                        .unwrap_or_else(|| crate::scrollback::entry::EntryId::new(0));
                     let is_running = task.status == crate::app::agent::BgTaskStatus::Running;
-                    self.block_viewer =
-                        Some(crate::views::block_viewer::BlockViewerPane::for_bg_task(
-                            eid,
+                    self.install_block_viewer(
+                        crate::views::block_viewer::BlockViewerPane::for_bg_task(
+                            entry.id,
                             &bt.task_id,
                             &task.stdout,
                             is_running,
-                        ));
+                        ),
+                    );
                 }
             }
             2 if is_subagent => {
@@ -1095,10 +1204,8 @@ impl AgentView {
             }
             2 if is_prompt => {
                 // Edit in place; bash/cron keep the old fold behavior.
-                //
                 // Gated OFF for now (unsolved scroll jump on enter; see inline_edit::INLINE_EDIT_ENABLED)
                 // When disabled this is a no-op, so the block below runs
-                // That restores the EXACT pre-feature double-click behavior for a prompt: fold (if foldable) and scroll the entry to the top
                 if !(crate::app::inline_edit::INLINE_EDIT_ENABLED && self.enter_inline_edit(idx)) {
                     if foldable {
                         self.scrollback.toggle_fold_selected();
@@ -1236,12 +1343,8 @@ impl AgentView {
     }
 
     /// Select the logical line (paragraph or list item) at `hit`.
-    ///
     /// The run is bounded to a single pre-wrap logical line.
     /// Prose paragraphs collapse soft breaks into one logical line, so this takes the whole wrapped paragraph.
-    /// Each list item (and each hard-broken source line) is its own logical line, so triple-click on a bullet takes that item, not the whole list.
-    /// Soft-wrap continuation rows carry a `joiner_to_previous`; a `None` joiner marks a new logical line and bounds the run.
-    /// A single-line run delegates to [`Self::select_line_at`].
     pub(in crate::app) fn select_paragraph_at(&mut self, hit: &RangeHit) {
         // Resolve the run's first/last rendered lines under an immutable borrow, then release it before mutating selection state
         let resolved = {
@@ -1258,7 +1361,6 @@ impl AgentView {
             };
 
             // `b` is a soft-wrap continuation of `a` (same logical line): the two are adjacent and `b` carries a joiner
-            // A `None` joiner starts a new logical line (new paragraph, list item, or source line) and bounds the run
             // Reads go through `.get()`, so an out-of-range neighbor just ends the walk instead of panicking
             // `click_pos` is valid and start/end only move inward-to-outward from it
             let continues = |a: usize, b: usize| match (range.lines.get(a), range.lines.get(b)) {
@@ -1291,14 +1393,12 @@ impl AgentView {
 
         // Degrade to the single clicked line if the run could not be resolved, which never panics and is still a valid selection
         let Some((first_block_line_idx, last_block_line_idx, last_width)) = resolved else {
-            self.select_line_at(hit);
-            return;
+            return self.select_line_at(hit);
         };
 
         // A single-line paragraph is exactly the clicked line, so reuse the tested full-line copy path (boundary-aware)
         if first_block_line_idx == last_block_line_idx {
-            self.select_line_at(hit);
-            return;
+            return self.select_line_at(hit);
         }
         if last_width == 0 {
             return;
@@ -1402,7 +1502,9 @@ impl AgentView {
         if !clipboard_text.is_empty() {
             self.copy_to_clipboard_debounced(&clipboard_text);
         }
-        self.scrollback.set_selected(Some(hit.entry_idx));
+        if hit.entry_idx != BTW_OVERLAY_ENTRY_IDX {
+            self.scrollback.set_selected(Some(hit.entry_idx));
+        }
         true
     }
 
@@ -1452,7 +1554,9 @@ impl AgentView {
         if !clipboard_text.is_empty() {
             self.copy_to_clipboard_debounced(&clipboard_text);
         }
-        self.scrollback.set_selected(Some(hit.entry_idx));
+        if hit.entry_idx != BTW_OVERLAY_ENTRY_IDX {
+            self.scrollback.set_selected(Some(hit.entry_idx));
+        }
         true
     }
 }
@@ -2424,7 +2528,6 @@ mod tests {
 
     /// The TABLE-shaped copy also survives full scroll-out via the width snapshot.
     /// The side-car geometry frozen while the block was visible re-detects against the snapshot-width output.
-    /// The cell text is then copied with no `visible_blocks` entry at mouse-up.
     /// Without the snapshot the whole copy fails.
     #[test]
     fn table_copy_uses_width_snapshot_when_anchor_block_scrolled_out() {
@@ -2458,7 +2561,8 @@ mod tests {
             })
             .flatten()
             .expect("grid detected at the anchor line");
-        agent.table_selection_geometry = Some(TableSelectionGeometry {
+        // Active copy reads the drag slot (`reconstruct_drag_copy`), not the held highlight.
+        agent.drag_table_geometry = Some(TableSelectionGeometry {
             entry_idx: 0,
             range_id: 0,
             geometry,
@@ -2538,6 +2642,228 @@ mod tests {
         assert!(agent.reconstruct_drag_copy(&no_snapshot).is_none());
     }
 
+    const BTW_TABLE_MD: &str = "| Name | Role |\n|------|------|\n| Alice | Eng |\n| Bob | PM |";
+    const BTW_TABLE_WIDTH: u16 = 40;
+
+    /// `/btw` Done panel with a rendered markdown table and a visible-block width so copy/detect can run.
+    fn agent_with_btw_table() -> AgentView {
+        let mut agent = make_agent();
+        agent.btw_state = Some(crate::views::btw_overlay::BtwOverlayState::done(
+            "q".to_string(),
+            BTW_TABLE_MD.to_string(),
+        ));
+        let output = match agent.btw_state.as_ref() {
+            Some(crate::views::btw_overlay::BtwOverlayState::Done { content, .. }) => {
+                content.output(BTW_TABLE_WIDTH as usize)
+            }
+            _ => panic!("btw Done panel"),
+        };
+        let mut model = ResolvedSelectionModel::default();
+        for (idx, line) in output.lines.iter().enumerate() {
+            let text = crate::scrollback::types::line_plain_text(&line.content);
+            model.push_line(ResolvedSelectableLine {
+                entry_idx: BTW_OVERLAY_ENTRY_IDX,
+                range_id: 0,
+                block_line_idx: idx,
+                screen_y: 10 + idx as u16,
+                screen_x: 2,
+                selectable_cols: 0..crate::scrollback::types::str_display_cells(&text) as u16,
+                text,
+                painted_region: None,
+                joiner_to_previous: if idx == 0 { None } else { line.joiner.clone() },
+            });
+        }
+        model.visible_blocks.push(VisibleBlockGeometry {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            area: Rect::new(2, 10, BTW_TABLE_WIDTH, 8),
+            content_area: Rect::new(2, 10, BTW_TABLE_WIDTH, 8),
+            selection_area: Rect::new(2, 10, BTW_TABLE_WIDTH, 8),
+            content_width: BTW_TABLE_WIDTH,
+            top_clipped: false,
+            bottom_clipped: false,
+            drag_startable: true,
+        });
+        agent.last_btw_selection_model = model;
+        agent.last_btw_area = Rect::new(0, 9, BTW_TABLE_WIDTH + 4, 10);
+        agent
+    }
+
+    fn btw_table_geometry(agent: &AgentView) -> TableGeometry {
+        (0..8)
+            .find_map(|probe| {
+                agent
+                    .with_entry_output_text_source(
+                        BTW_OVERLAY_ENTRY_IDX,
+                        0,
+                        Some(BTW_TABLE_WIDTH),
+                        |src| TableGeometry::detect(src, probe),
+                    )
+                    .flatten()
+            })
+            .expect("btw markdown table renders a detectable grid")
+    }
+
+    /// `/btw` table drags resolve cell geometry instead of staying linear.
+    #[test]
+    fn btw_table_drag_detects_geometry_and_copies_cells() {
+        let mut agent = agent_with_btw_table();
+        let probe = btw_table_geometry(&agent);
+        let header = probe.row_lines(0);
+        let header_col = probe.band(0).start + 1;
+        let hit = RangeHit {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            range_id: 0,
+            block_line_idx: header.start,
+            col_within_range: header_col,
+        };
+        let geometry = agent
+            .compute_drag_table_geometry(&hit)
+            .expect("btw table under the header cell");
+        assert_eq!(
+            agent.with_entry_table_copy_source(
+                BTW_OVERLAY_ENTRY_IDX,
+                0,
+                Some(BTW_TABLE_WIDTH),
+                &geometry,
+                |_, meta| meta.is_some(),
+            ),
+            Some(true),
+            "btw table copy-meta must match the detected grid"
+        );
+        agent.drag_table_geometry = Some(TableSelectionGeometry {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            range_id: 0,
+            geometry: geometry.clone(),
+        });
+
+        let name_end = geometry.band(0).end.saturating_sub(1);
+        let role_end = geometry.band(1).end.saturating_sub(1);
+        let last_row = geometry.row_lines(geometry.n_rows() - 1);
+        let drag = ActiveTextDrag {
+            anchor: hit,
+            head: RangeHit {
+                block_line_idx: last_row.end.saturating_sub(1),
+                col_within_range: role_end,
+                ..hit
+            },
+            kind: resolve_table_drag_kind(
+                Some(&geometry),
+                &hit,
+                &RangeHit {
+                    block_line_idx: last_row.end.saturating_sub(1),
+                    col_within_range: role_end,
+                    ..hit
+                },
+                SelectionKind::Linear,
+            ),
+            anchor_content_width: Some(BTW_TABLE_WIDTH),
+        };
+        assert_ne!(
+            drag.kind,
+            SelectionKind::Linear,
+            "btw table drag must not stay linear"
+        );
+
+        let (text, kind) = agent.reconstruct_drag_copy(&drag).expect("btw table copy");
+        assert_eq!(kind, drag.kind);
+        assert!(text.contains("Alice"), "cell text copied: {text:?}");
+        assert!(text.contains("Bob"), "grid includes later rows: {text:?}");
+        assert!(!text.contains('│'), "no border glyphs: {text:?}");
+
+        // A single-cell drag copies only that band.
+        let cell_drag = ActiveTextDrag {
+            head: RangeHit {
+                col_within_range: name_end,
+                ..hit
+            },
+            kind: SelectionKind::TableCell,
+            ..drag
+        };
+        let (cell_text, cell_kind) = agent
+            .reconstruct_drag_copy(&cell_drag)
+            .expect("btw cell copy");
+        assert_eq!(cell_kind, SelectionKind::TableCell);
+        assert!(cell_text.contains("Name"), "header cell: {cell_text:?}");
+        assert!(
+            !cell_text.contains("Role"),
+            "band-clamped to one cell: {cell_text:?}"
+        );
+    }
+
+    /// A `/btw` drag keeps its own geometry and must not steal or timer-clear a held scrollback table.
+    #[test]
+    fn btw_drag_keeps_held_scrollback_geometry() {
+        let mut agent = agent_with_btw_table();
+        let held = table_geometry();
+        agent.table_selection_geometry = Some(TableSelectionGeometry {
+            entry_idx: 0,
+            range_id: 0,
+            geometry: held.clone(),
+        });
+        agent.selection_created_at = Some(Instant::now() - Duration::from_secs(3600));
+
+        let geometry = btw_table_geometry(&agent);
+        let header = geometry.row_lines(0);
+        let anchor = RangeHit {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            range_id: 0,
+            block_line_idx: header.start,
+            col_within_range: geometry.band(0).start + 1,
+        };
+        agent.arm_text_drag(&mouse_drag(4, 12), anchor, anchor, Some(BTW_TABLE_WIDTH));
+
+        assert_eq!(
+            agent.drag_table_geometry_for(BTW_OVERLAY_ENTRY_IDX, 0),
+            Some(&geometry)
+        );
+        assert_eq!(agent.table_geometry_for_selection(0, 0), Some(&held));
+        assert!(agent.tick_selection_highlight());
+        assert!(agent.table_geometry_for_selection(0, 0).is_none());
+        assert_eq!(
+            agent.drag_table_geometry_for(BTW_OVERLAY_ENTRY_IDX, 0),
+            Some(&geometry)
+        );
+    }
+
+    /// Replacing a minimal `/btw` panel must drop the previous overlay highlight.
+    #[test]
+    fn start_minimal_btw_clears_owned_overlay_selection() {
+        let mut agent = agent_with_btw_table();
+        let geometry = btw_table_geometry(&agent);
+        agent.persistent_text_selection = Some(PersistentTextSelection {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            range_id: 0,
+            anchor: SelectionEndpoint {
+                block_line_idx: 0,
+                col_within_range: 0,
+            },
+            head: SelectionEndpoint {
+                block_line_idx: 0,
+                col_within_range: 4,
+            },
+            origin: SelectionOrigin::Drag,
+            kind: SelectionKind::TableCell,
+        });
+        agent.table_selection_geometry = Some(TableSelectionGeometry {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            range_id: 0,
+            geometry: geometry.clone(),
+        });
+        agent.drag_table_geometry = Some(TableSelectionGeometry {
+            entry_idx: BTW_OVERLAY_ENTRY_IDX,
+            range_id: 0,
+            geometry,
+        });
+        agent.btw_selection_wrap_width = Some(BTW_TABLE_WIDTH);
+
+        let _ = crate::minimal_api::start_minimal_btw(&mut agent, "next".into());
+
+        assert!(agent.persistent_text_selection.is_none());
+        assert!(agent.table_selection_geometry.is_none());
+        assert!(agent.drag_table_geometry.is_none());
+        assert!(agent.btw_selection_wrap_width.is_none());
+    }
+
     // -----------------------------------------------------------------------
     // deferred text-press (anchor on entry into text) tests
     // -----------------------------------------------------------------------
@@ -2554,7 +2880,6 @@ mod tests {
     /// Two message entries with chrome rows and a dead gap between them.
     /// Entry 0 area: rows 4-6 (row 4 chrome, text on rows 5-6, width 46).
     /// Rows 7-8: dead gap.
-    /// Entry 1 area: rows 9-10 (row 9 chrome, text on row 10, width 52).
     fn agent_with_chrome_and_gap() -> AgentView {
         let mut agent = make_agent();
         agent.pane_areas.scrollback = Rect::new(0, 0, 80, 24);
@@ -3097,7 +3422,6 @@ mod tests {
     }
 
     /// A held pointer (no motion events) in the bottom edge zone, and equally on a strip row below the pane, must scroll monotonically down.
-    /// It stops dead at the clamp.
     /// The direction is only ever written by motion handlers, so ticks alone can never flip it or oscillate at the boundary.
     /// The per-tick reclamp must stay a pure head snap (it never scrolls).
     #[test]
@@ -3215,7 +3539,6 @@ mod tests {
 
     /// The strip conversion landing on the bottommost text row (inside the edge zone).
     /// With content already at-bottom the clamped offset must not move and the reclamped head must not wobble.
-    /// With room to scroll, ticks and per-frame reclamps advance offset and head monotonically.
     /// The reclamp never amplifies scrolling into oscillation.
     #[test]
     fn conversion_at_bottom_edge_ticks_without_oscillation() {

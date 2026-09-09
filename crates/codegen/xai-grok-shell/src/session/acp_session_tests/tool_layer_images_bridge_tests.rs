@@ -128,6 +128,7 @@ fn text_only_model_entry(model_id: &str) -> ModelEntry {
     info.input_modalities = Some(vec![InputModality::Text]);
     ModelEntry {
         info,
+        mtls_cert_dir: None,
         api_key: None,
         env_key: None,
         auth_provider: None,

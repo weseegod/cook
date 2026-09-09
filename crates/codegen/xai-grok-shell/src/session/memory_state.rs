@@ -35,6 +35,9 @@ pub(crate) struct SessionMemory {
     pub compaction_recovery_count: AtomicU64,
     /// Total memory chunks added across all sources.
     pub chunks_added: Arc<AtomicU64>,
+    /// Handle to the startup reindex+embed task, taken and awaited by the launch dream. `None`
+    /// once taken, or when memory was not indexed at launch.
+    pub init_reindex_handle: RefCell<Option<tokio::task::JoinHandle<()>>>,
     /// autoDream consolidation config.
     pub dream_config: crate::config::MemoryDreamConfig,
     pub dream_count: AtomicU64,
@@ -70,7 +73,6 @@ impl SessionMemory {
     }
 
     /// Record a flush result and increment the appropriate counter.
-    ///
     /// "written" increments success, "error" increments error.
     /// Anything else ("nothing_to_store", "rejected") increments only the total flush count.
     pub(crate) fn record_flush_result(&self, outcome: &str) {
@@ -125,6 +127,14 @@ impl SessionMemory {
         .ok()
     }
 
+    /// Await the startup reindex+embed task if it is still tracked; `None` returns at once.
+    pub(crate) async fn await_init_reindex(&self) {
+        let handle = self.init_reindex_handle.borrow_mut().take();
+        if let Some(handle) = handle {
+            let _ = handle.await;
+        }
+    }
+
     /// Reindex a file and embed new chunks when embedding is configured.
     pub(crate) async fn reindex_and_embed(&self, path: &std::path::Path, source: &str) {
         let Some(storage) = self.storage.borrow().clone() else {
@@ -141,7 +151,6 @@ impl SessionMemory {
     }
 
     /// Remove chunks for the given file paths from the search index.
-    ///
     /// Used after dream consolidation deletes processed session files so that stale chunks don't linger in the index.
     /// Best-effort: errors are logged but don't propagate.
     pub(crate) fn delete_paths_from_index(&self, paths: &[std::path::PathBuf]) {

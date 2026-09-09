@@ -48,6 +48,9 @@ auto_update = true                     # check for updates on launch
 [models]
 default = "grok-4.5"                   # model used for new sessions
 web_search = "grok-4.5"                # model used by the web_search tool
+# Optional picker allowlist (globs on catalog key or model id). Empty = unrestricted.
+# A signed policy pin replaces this list (model id only) and cannot be widened from here.
+# allowed_models = ["grok-4.5", "grok-4*"]
 
 # Defaults applied to every model; a per-model [model.<id>] value always wins.
 # See "Custom Models" for the per-model overrides and full details.
@@ -157,8 +160,8 @@ You can also override this with `GROK_DEFAULT_SELECTED_PERMISSION`, which is han
 
 | Value | Behavior |
 |-------|----------|
-| `false` (default) | Bare-letter and `Shift+letter` keys (`j`/`k`, `h`/`l`, `g`/`G`, `y`/`Y`, `o`/`O`, `r`, `x`, `e`/`E`, `H`/`L`, plus `i`) are suppressed in the scrollback: pressing one focuses the prompt and types the character. Arrows, `Tab`, `Space`, `PageUp`/`PageDown`, and every `Ctrl+letter` shortcut still navigate. `Esc` is **not** a scrollback key — it cancels a running turn, and while idle follows the clear / rewind policy (see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape)). |
-| `true` | All vim-style scrollback bindings are active, exactly as listed in [Keyboard Shortcuts](03-keyboard-shortcuts.md). Mid-turn `Esc` is swallowed in this mode (`Ctrl+C` cancels); minimal mode keeps Esc-cancel regardless. |
+| `false` (default) | Bare-letter and `Shift+letter` keys (`j`/`k`, `h`/`l`, `g`/`G`, `y`/`Y`, `o`/`O`, `r`, `x`, `e`/`E`, `H`/`L`, plus `i`) are suppressed in the scrollback: pressing one focuses the prompt and types the character. Arrows, `Tab`, `Space`, `PageUp`/`PageDown`, and every `Ctrl+letter` shortcut still navigate. `Esc` is **not** a scrollback key — it never cancels a running turn (`Ctrl+C` does), and while idle follows the clear / rewind policy (see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape)). |
+| `true` | All vim-style scrollback bindings are active, exactly as listed in [Keyboard Shortcuts](03-keyboard-shortcuts.md). Esc behavior is the same in both settings. |
 
 Toggle it at runtime with `/vim-mode`, or from `/settings` → **Vim scrollback navigation**. Grok writes the change to `[ui] vim_mode` immediately and applies it to every future pager session, including new agents and subagents in the same process. There's no per-session override — `config.toml` is the source of truth on next launch. `vim_mode` is independent of `simple_mode`.
 
@@ -589,9 +592,16 @@ otel_protocol = "http/protobuf"                           # http/protobuf | grpc
 otel_certificate = "/etc/ssl/corp-ca.pem"                 # optional: trust private CA (path only)
 otel_client_certificate = "/etc/ssl/client.crt"           # optional: mTLS client cert (path only)
 otel_client_key = "/etc/ssl/client.key"                   # optional: mTLS client key (path only)
-otel_log_user_prompts = false                             # content gate (admins can pin via requirements)
-otel_log_tool_details = false                             # content gate (admins can pin via requirements)
+otel_log_user_prompts = false                             # content gate (admins pin via requirements)
+otel_log_assistant_responses = false                      # unset follows prompts; pin false for prompts-only
+otel_log_tool_details = true                              # metadata/preview; enterprise default on for SIEM join
+otel_log_tool_content = false                             # full-body gate; independent of details — does not imply names/paths
 ```
+
+Listed `[telemetry] otel_*` keys in signed `requirements.toml` **pin** over
+process env (destination lock). `managed_config.toml` does not. There is no
+`headers` key — collector tokens stay in `OTEL_EXPORTER_OTLP_HEADERS`. See
+[Monitoring & Usage](24-monitoring-usage.md).
 
 ### Version pinning
 

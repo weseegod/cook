@@ -15,7 +15,6 @@ use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 use crate::extensions::notification::{SessionNotification, SessionUpdate as XaiSessionUpdate};
 
 /// Shared per-session map of open reverse-requests, keyed by `tool_call_id`.
-///
 /// Mirrors the `current_prompt_id` signal on [`crate::session::handle::SessionHandle`].
 /// The same `Arc` is shared between the session actor (which mutates it) and the handle (which the roster reads synchronously).
 pub(crate) type PendingInteractions = Arc<Mutex<HashMap<String, PendingKind>>>;
@@ -32,11 +31,6 @@ pub enum PendingKind {
     McpElicitation,
 }
 
-/// The resume re-park issues `x.ai/exit_plan_mode` from a detached task with no running turn.
-/// That makes it the one parked interaction that also carries a persisted gate (`awaiting_plan_approval`).
-/// `session_has_live_work` consults this to keep the session resident until the decision is answered or a real disconnect `Err`s the reverse-request.
-/// Otherwise an idle-unload drops the parked future and its guard clears the on-disk gate.
-/// Permission/question parks carry no persisted gate, so they are intentionally not counted here.
 pub(crate) fn has_parked_plan_approval(pending: &PendingInteractions) -> bool {
     pending
         .lock()

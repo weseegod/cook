@@ -6,10 +6,12 @@ use super::{ActivePane, InputMode, test_fixtures};
 use crate::actions::ActionRegistry;
 use crate::app::actions::Action;
 use crate::app::app_view::InputOutcome;
+use crate::scrollback::RenderBlock;
+use crate::scrollback::blocks::SessionEvent;
 use crate::views::file_search::line_viewer::LineViewerState;
 use crate::views::list_pane::ListItem;
 use crate::views::plan_approval_view::{
-    PlanApprovalFocus, PlanApprovalViewState, PlanComment, PlanReviewSource,
+    PlanApprovalFocus, PlanApprovalViewState, PlanComment, PlanReviewOutcome, PlanReviewSource,
 };
 use crate::views::prompt_widget::{EnterOutcome, PromptEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -49,18 +51,11 @@ impl AgentView {
             && self.is_plan_viewer()
             && self.casual_commenting_range.is_some()
     }
-    /// Whether the prompt "auto" (LLM classifier mode) flag should render.
-    /// Extracted for unit testing the precedence.
-    /// Auto shows only when the session is in auto mode and neither yolo (always-approve wins) nor plan is active.
-    pub(super) fn auto_flag_visible(&self, effective_plan: bool) -> bool {
-        self.session.is_auto() && !self.session.is_yolo() && !effective_plan
-    }
     /// Whether plan content is available for preview.
     fn plan_preview_available(&self) -> bool {
         self.plan_body_for_preview().is_some()
     }
     /// Whether the "plan" status-bar chip should be rendered.
-    ///
     /// Visible while plan mode is active, or always when the user has set `show_plan_chip = true` in `pager.toml`.
     /// Hidden by default once the user exits plan mode.
     pub(super) fn should_show_plan_chip(
@@ -77,7 +72,6 @@ impl AgentView {
             .filter(|s| !s.trim().is_empty())
     }
     /// Resolve the plan body for the line-viewer preview.
-    ///
     /// Prefers content carried on the approval request (inline plan-creation or the shell-read file body), then falls back to the on-disk plan file.
     /// Request body first keeps file-backed previews working when the path resolution fails or the file disappears between intercept and open.
     pub(super) fn plan_body_for_preview(&self) -> Option<String> {
@@ -107,7 +101,6 @@ impl AgentView {
         }
     }
     /// Show the plan in the line viewer overlay or a "no plan" toast.
-    ///
     /// When plan approval is parked without a body, opens a placeholder preview.
     /// The user then always sees a decision surface (a/s/q) instead of a dead "Waiting on plan approval" line with a no-op Tab:plan.
     pub fn show_plan_preview(&mut self) {
@@ -195,7 +188,7 @@ impl AgentView {
             }
         };
         pav.send_approved();
-        self.close_plan_review(pav, "build");
+        self.close_plan_review(pav, PlanReviewOutcome::Approved);
         if let Some(text) = review_comments {
             return InputOutcome::Action(Action::Interject {
                 text,
@@ -234,7 +227,9 @@ impl AgentView {
             }
         };
         pav.send_approved_as_goal();
-        self.close_plan_review(pav, "build-as-goal");
+        // Upstream `close_plan_review` takes `PlanReviewOutcome`; wire path is
+        // still `approved_as_goal` via `send_approved_as_goal` above.
+        self.close_plan_review(pav, PlanReviewOutcome::Approved);
         if let Some(text) = review_comments {
             return InputOutcome::Action(Action::Interject {
                 text,
@@ -243,11 +238,10 @@ impl AgentView {
         }
         InputOutcome::Changed
     }
-    /// Fold freeform-only images into the session draft. Prefill clones share
-    /// `display_number` *and* payload with the session image and are dropped;
-    /// number reuse after freeform clear (Ctrl+C resets the counter) is not a
-    /// clone and must renumber-merge. New images get matching `[Image #N]` chip
-    /// text/elements so `restore` can re-bind them.
+    /// Fold freeform-only images into the session draft.
+    /// Prefill clones share `display_number` *and* payload with the session image and are dropped.
+    /// Number reuse after freeform clear (Ctrl+C resets the counter) is not a clone and must renumber-merge.
+    /// New images get matching `[Image #N]` chip text/elements so `restore` can re-bind them.
     fn merge_live_images_into_stash(
         prompt: &mut crate::views::prompt_widget::PromptWidget,
         session: &mut crate::views::prompt_widget::StashedPrompt,
@@ -257,7 +251,10 @@ impl AgentView {
             if session.images.iter().any(|s| {
                 s.display_number == img.display_number && Self::same_image_payload(s, &img)
             }) {
-                crate::prompt_images::cleanup_temp_file(&img);
+                crate::prompt_images::cleanup_image(
+                    crate::prompt_images::SessionPathPolicy::Preserve,
+                    &img,
+                );
                 continue;
             }
             session.image_counter = session.image_counter.max(
@@ -315,16 +312,13 @@ impl AgentView {
             return InputOutcome::Changed;
         };
         pav.send_abandoned();
-        self.close_plan_review(pav, "abandon");
+        self.close_plan_review(pav, PlanReviewOutcome::Abandoned);
         InputOutcome::Changed
     }
-    /// Shared teardown for the two plan-review decisions that end the review (approve and abandon).
     /// The shell leaves plan mode, but its confirming `CurrentModeUpdate("default")` is fire-and-forget and only arrives after the exit tool runs.
     /// So flip the mode indicator optimistically here; a lost update would otherwise leave the badge stuck on "plan".
-    /// Also restore the pre-review UI and log the decision.
-    ///
     /// Not for the revision path (`send_plan_feedback`): the shell stays in plan mode there, so the indicator must stay on.
-    fn close_plan_review(&mut self, pav: PlanApprovalViewState, action: &'static str) {
+    fn close_plan_review(&mut self, pav: PlanApprovalViewState, outcome: PlanReviewOutcome) {
         self.plan_mode_pending = Some(false);
         self.plan_freeform_prefill_deferred = false;
         self.latest_inline_plan_content = None;
@@ -333,7 +327,15 @@ impl AgentView {
         self.line_viewer = None;
         self.casual_commenting_range = None;
         self.casual_editing_comment_id = None;
-        log_plan_submit(action);
+        self.scrollback
+            .push_block(RenderBlock::session_event(SessionEvent::PlanReviewClosed {
+                outcome,
+                permission: self.session.permission_label(),
+            }));
+        log_plan_submit(match outcome {
+            PlanReviewOutcome::Approved => "build",
+            PlanReviewOutcome::Abandoned => "abandon",
+        });
     }
     fn send_plan_feedback(&mut self, feedback: Option<String>) -> InputOutcome {
         let Some(mut pav) = self.plan_approval_view.take() else {
@@ -710,7 +712,6 @@ impl AgentView {
         InputOutcome::Changed
     }
     /// Enter casual commenting mode from the plan preview.
-    ///
     /// If the cursor is on a comment line, enter edit mode for that comment.
     /// If the cursor is on a source line, capture the line range and enter new-comment mode.
     pub(super) fn enter_casual_plan_commenting(&mut self) -> InputOutcome {
@@ -878,23 +879,6 @@ impl AgentView {
     }
 }
 #[cfg(test)]
-mod prompt_flag_tests {
-    use super::test_fixtures::make_agent;
-    /// The prompt "auto" (classifier) mode flag shows only when the session is in Auto and neither yolo (always-approve wins) nor plan is active.
-    #[test]
-    fn auto_flag_visible_precedence() {
-        let mut agent = make_agent();
-        assert!(!agent.auto_flag_visible(false));
-        agent.session.auto_mode = true;
-        assert!(agent.auto_flag_visible(false));
-        assert!(!agent.auto_flag_visible(true));
-        agent.session.yolo_mode = true;
-        assert!(!agent.auto_flag_visible(false));
-        agent.session.yolo_mode = false;
-        assert!(agent.auto_flag_visible(false));
-    }
-}
-#[cfg(test)]
 mod plan_chip_tests {
     use super::*;
     use crate::acp::model_state::ModelState;
@@ -924,6 +908,8 @@ mod plan_chip_tests {
                 restore_degree: None,
                 rate_limited: false,
                 model_incompatible: false,
+                credit_limit_blocked: false,
+                free_usage_blocked: false,
                 available_commands: Vec::new(),
                 available_commands_generation: 0,
                 available_tools: None,
@@ -1529,6 +1515,7 @@ mod plan_approval_enter_tests {
 mod plan_approval_optimistic_mode_tests {
     use super::test_fixtures::make_agent;
     use super::*;
+    use crate::app::actions::PermissionLabel;
     use agent_client_protocol as acp;
     fn agent_in_plan_mode_with_approval() -> (
         AgentView,
@@ -1597,6 +1584,41 @@ mod plan_approval_optimistic_mode_tests {
         agent.abandon_plan();
         assert_eq!(agent.plan_mode_pending, Some(false));
         assert!(!effective_plan_mode(&agent));
+    }
+    fn plan_review_closed_rows(agent: &AgentView) -> Vec<(PlanReviewOutcome, PermissionLabel)> {
+        agent
+            .scrollback
+            .session_events()
+            .into_iter()
+            .filter_map(|event| match event {
+                SessionEvent::PlanReviewClosed {
+                    outcome,
+                    permission,
+                } => Some((outcome, permission)),
+                _ => None,
+            })
+            .collect()
+    }
+    #[test]
+    fn close_plan_review_pushes_one_closed_row_only_for_decisions() {
+        let (mut agent, _rx) = agent_in_plan_mode_with_approval();
+        agent.session.auto_mode = true;
+        agent.approve_plan();
+        assert_eq!(
+            plan_review_closed_rows(&agent),
+            vec![(PlanReviewOutcome::Approved, PermissionLabel::Auto)]
+        );
+        let (mut agent, _rx) = agent_in_plan_mode_with_approval();
+        agent.session.yolo_mode = true;
+        agent.abandon_plan();
+        assert_eq!(
+            plan_review_closed_rows(&agent),
+            vec![(PlanReviewOutcome::Abandoned, PermissionLabel::AlwaysApprove)]
+        );
+        let (mut agent, _rx) = agent_in_plan_mode_with_approval();
+        agent.send_plan_feedback(Some("tighten the rollout".into()));
+        assert!(plan_review_closed_rows(&agent).is_empty());
+        assert!(effective_plan_mode(&agent));
     }
 }
 /// Slash commands run on the plan-approval prompt and leave the overlay

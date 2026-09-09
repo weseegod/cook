@@ -44,12 +44,7 @@ pub use model::{
 };
 pub use view::{DiagnosticSnapshot, view};
 
-/// Passive input-device probe for `thanh doctor` / `/doctor`.
-///
-/// Does not open a capture stream (no macOS mic-permission prompt).
-/// When `emit_missing_issue` is true and no device exists, appends an issue finding.
-/// The TUI passes true only while voice mode is enabled.
-/// Standalone doctor uses the same finding whenever this build supports capture and the probe is missing.
+/// Passive input-device probe for `grok doctor` / `/doctor`. The TUI passes true only while voice mode is enabled.
 pub fn apply_voice_probe(report: &mut DiagnosticReport, emit_missing_issue: bool) {
     if !xai_grok_voice::AUDIO_SUPPORTED {
         return;
@@ -85,7 +80,7 @@ fn voice_missing_finding(error: String) -> DiagnosticFinding {
         automatic_remediation: None,
         note: Some(
             "Connect or select a microphone in your system sound settings. On Linux, install a \
-             supported audio recorder if none was found on PATH. Then run `/doctor` or `thanh \
+             supported audio recorder if none was found on PATH. Then run `/doctor` or `grok \
              doctor` again. Doctor can't detect denied macOS microphone access when the system \
              returns silence; follow the message shown when dictation fails."
                 .to_owned(),
@@ -125,9 +120,9 @@ pub enum WarningCategory {
     /// tmux is attached to a client it believes cannot render 24-bit color, so it rewrites every truecolor cell to the client terminfo's palette.
     TmuxColorReduced,
     SandboxProfileConflict,
-    /// The session runs over SSH without `thanh wrap` on the local end, so
-    /// clipboard forwarding and terminal-mode restore on dropped connections
-    /// are not guaranteed. Informational recommendation, not a breakage.
+    /// The session runs over SSH without `grok wrap` on the local end.
+    /// Clipboard forwarding and terminal-mode restore on dropped connections are then not guaranteed.
+    /// An informational recommendation, not a breakage.
     SshWithoutWrap,
 }
 
@@ -165,7 +160,6 @@ impl TerminalWarning {
 
 /// Summarize a list of terminal warnings into a single [`StartupWarning`] for the welcome screen.
 /// Returns `None` if there are no warnings or none are in the allow-list of categories safe to show.
-///
 /// The welcome screen doesn't need to know what's wrong, only that something is wrong and where to go for details.
 pub fn summarize_warnings(
     warnings: &[TerminalWarning],
@@ -208,7 +202,6 @@ fn actionable_warning_summary(
 }
 
 /// Collect all applicable startup warnings for the current terminal context.
-///
 /// This is the primary entry point for the diagnostics engine.
 /// It returns structured warnings as data: no stderr output, no sleep, no side effects.
 pub fn collect_startup_warnings(snapshot: &probes::ProbeSnapshot<'_>) -> Vec<TerminalWarning> {
@@ -237,7 +230,7 @@ pub(crate) fn collect_startup_warnings_from(
         );
         warning.note = Some(
             "Grok also saves each copy to the backup file shown in the copy message. To copy \
-             directly, run `thanh wrap ssh <host>` on your local computer or use a terminal that \
+             directly, run `grok wrap ssh <host>` on your local computer or use a terminal that \
              supports OSC 52. You can also use `/copy <file>` or `/minimal`."
                 .to_owned(),
         );
@@ -308,22 +301,9 @@ pub(crate) fn collect_startup_warnings_from(
     warnings
 }
 
-/// Warn when WezTerm is running without the Kitty keyboard protocol.
-///
-/// WezTerm ships `enable_kitty_keyboard = false` by default, so the pager's runtime probe fails and no enhancement flags are pushed.
-/// Without KKP, Shift+Enter arrives as a bare `CR` and submits instead of inserting a newline.
-/// WezTerm's default Alt+Enter binding (ToggleFullScreen) swallows the usual fallback chord before it reaches the PTY.
-///
-/// WezTerm is recognized two ways:
-/// - env detection (`ctx.brand`) for local sessions, and
-/// - the async XTVERSION self-report (`xtversion_payload`) for SSH sessions, where `TERM_PROGRAM` isn't forwarded and the brand is `Unknown`.
-///   The reply arrives through the event loop after startup.
-///   This path therefore lights up for `/doctor` (and any warning pass re-run after the reply landed), not the very first startup banner.
-///
-/// `kitty_flags_pushed` is the runtime negotiation outcome from `init_terminal` (passed in so this stays a pure, testable function).
-/// Returns `None` when KKP is active or the terminal isn't WezTerm.
-/// It also returns `None` when a non-WezTerm [`TerminalContext::kitty_skip_reason`] applies (e.g. tmux).
-/// In that case the wezterm.lua fix alone wouldn't help and other warnings cover it.
+/// Warn when WezTerm is running without the Kitty keyboard protocol. WezTerm ships `enable_kitty_keyboard = false`
+/// by default, so the pager's runtime probe fails and no enhancement flags are pushed. Without KKP, Shift+Enter
+/// arrives as a bare `CR` and submits instead of inserting a newline.
 pub fn wezterm_kitty_keyboard_warning(
     snapshot: &probes::ProbeSnapshot<'_>,
 ) -> Option<TerminalWarning> {
@@ -424,25 +404,9 @@ fn sandbox_profile_conflict_warning_from(conflicts: Vec<String>) -> Option<Termi
     })
 }
 
-/// Pure SSH `thanh wrap` recommendation — suggests launching the session
-/// through `thanh wrap ssh <host>` on the user's local machine, which gives a
-/// remote session reliable clipboard forwarding plus terminal-mode restore
-/// when the connection drops.
-///
-/// Gates (all must hold):
-/// - `is_ssh`: the session runs over SSH ([`TerminalContext::is_ssh`]);
-/// - `!osc52_sink_active`: no wrap is already capturing our output.
-///   `grok wrap` advertises its OSC 52 sink through the SSH hop via an env var (see `clipboard::osc52_sink_active`).
-///   Once a user adopts wrap, the hint silences itself with no further bookkeeping.
-///   The env check is stale under tmux (panes inherit the server's env at server start).
-///   A server started before wrap misses the sink and the hint fires despite wrap; one started under wrap keeps suppressing after wrap is gone.
-///   Accepted: the same exposure the SSH env checks already live with;
-/// - `!is_official_vscode_remote`: a VS Code remote integrated terminal is not a plain ssh terminal the user could wrap.
-///
-/// This detector only describes the environment.
-/// The `[ui.contextual_hints].ssh_wrap` policy gate controls the redirected ephemeral `/doctor` tip.
-/// Explicit `/doctor` lists the recommendation unconditionally.
-/// All inputs are injected so tests never touch ambient env (pattern: [`diagnose_wayland_data_control`]).
+/// Pure SSH `grok wrap` recommendation: suggests launching the session through `grok wrap ssh <host>` on the user's
+/// local machine. Gates (all must hold). This detector only describes the environment. All inputs are injected so
+/// tests never touch ambient env (pattern: [`diagnose_wayland_data_control`]).
 pub fn ssh_wrap_hint(
     is_ssh: bool,
     osc52_sink_active: bool,
@@ -454,7 +418,7 @@ pub fn ssh_wrap_hint(
     let mut warning = TerminalWarning::new(
         WarningCategory::SshWithoutWrap,
         "Use local SSH wrapping for more reliable clipboard copy and terminal recovery",
-        Some("thanh wrap ssh <host>"),
+        Some("grok wrap ssh <host>"),
         None,
     );
     warning.note = Some(
@@ -465,14 +429,9 @@ pub fn ssh_wrap_hint(
     Some(warning)
 }
 
-/// Assemble the welcome-screen startup warning list.
-///
-/// The welcome screen renders a single entry, the severity-aware pick from `startup::banner_warning` (whose doc owns the selection contract).
-/// Assemble order therefore decides precedence among Warnings.
-/// The WezTerm kitty-keyboard warning (when present) goes first: broken local input outranks the SSH clipboard advisories from [`summarize_warnings`].
-/// The Wayland no-data-control warning also shows locally ([`summarize_warnings`] is SSH-gated) but sits after WezTerm.
-/// Broken input outranks focus-dependent copies.
-/// Keeping the banner copy here (instead of at the call site) ties it to the warnings so the two can't drift.
+/// Assemble the welcome-screen startup warning list. The Wayland no-data-control warning also shows locally
+/// ([`summarize_warnings`] is SSH-gated) but sits after WezTerm. Keeping the banner copy here (instead of at the
+/// call site) ties it to the warnings so the two can't drift.
 fn actionable_assembled_warnings(
     wezterm_warning: Option<&TerminalWarning>,
     wayland_clipboard_warning: Option<&TerminalWarning>,
@@ -696,16 +655,8 @@ fn diagnose_clipboard_from_facts(
     )
 }
 
-/// Pure clipboard diagnostic logic: determines which tmux clipboard settings are misconfigured and returns structured warnings.
-///
-/// `None` for `set_clipboard` or `allow_passthrough` means the tmux query could not obtain a value (server unreachable, option unset).
-/// That is not proof the setting is disabled, so `None` does not trigger a misconfiguration warning.
-/// Only an explicit non-good value (e.g. `"off"`) produces a warning with remediation guidance.
-///
-/// - `set_clipboard`: value of `set-clipboard` (`None` means the query was unavailable).
-/// - `passthrough_exists`: whether the tmux server knows the `allow-passthrough` option (introduced in tmux 3.3; older versions don't have it).
-/// - `allow_passthrough`: value of `allow-passthrough` when it exists.
-/// - `config_path`: the tmux config file path for fix guidance.
+/// That is not proof the setting is disabled, so `None` does not trigger a misconfiguration warning. Only an
+/// explicit non-good value produces a warning with remediation guidance. older versions don't have it).
 pub fn diagnose_clipboard_from_values(
     set_clipboard: Option<&str>,
     passthrough_exists: bool,
@@ -715,7 +666,6 @@ pub fn diagnose_clipboard_from_values(
     let mut warnings = Vec::new();
 
     // set-clipboard: required for OSC 52 passthrough so the pager can write to the user's local clipboard
-    //
     // A `None` means the query failed or the value is unavailable, so do not claim it is disabled
     // Only warn when the query returned an explicit non-good value.
     if let Some(val) = set_clipboard
@@ -733,7 +683,6 @@ pub fn diagnose_clipboard_from_values(
 
     // allow-passthrough: needed for DCS passthrough of OSC 52 in nested tmux.
     // This option was introduced in tmux 3.3. Before 3.3, DCS passthrough worked unconditionally, so we only warn when the option actually exists.
-    //
     // As above, a `None` query result does not produce a warning
     if passthrough_exists
         && let Some(val) = allow_passthrough
@@ -752,14 +701,9 @@ pub fn diagnose_clipboard_from_values(
     warnings
 }
 
-/// Pure Wayland clipboard diagnostic: flags copies that depend on the terminal staying focused.
-///
-/// Warns only when the session is Wayland and the compositor lacks the data-control protocol.
-/// Without it every native write (arboard via the XWayland bridge, `wl-copy`'s fallback) needs the terminal focused until the write completes.
-/// Alt-tabbing mid-copy therefore loses the copy.
-/// When `wl-copy` is also missing, the fix suggests installing wl-clipboard.
-/// That is a partial mitigation: its verified write is the most reliable route without data-control.
-/// No warning when data-control is present (copies are focus-free) or off Wayland.
+/// Warns only when the session is Wayland and the compositor lacks the data-control protocol. That is a partial
+/// mitigation: its verified write is the most reliable route without data-control. No warning when data-control is
+/// present (copies are focus-free) or off Wayland.
 pub fn diagnose_wayland_data_control(
     is_wayland: bool,
     data_control: bool,
@@ -925,11 +869,9 @@ pub fn color_support_warning(
         return Some(warning);
     }
 
-    // Checked before the detected level is consulted at all: the level says
-    // what Grok emits, which is a different question from what survives tmux.
-    // A truecolor detection is not evidence that truecolor reaches the
-    // terminal, and a session with no color evidence (piped `thanh doctor`)
-    // still has a clamping client worth reporting.
+    // Checked before the detected level is consulted at all: the level says what Grok emits, which is a different question from what survives tmux
+    // A truecolor detection is not evidence that truecolor reaches the terminal
+    // A session with no color evidence (piped `grok doctor`) still has a clamping client worth reporting
     if color_passthrough == TmuxColorPassthrough::Reduced {
         let mut warning = TerminalWarning::new(
             WarningCategory::TmuxColorReduced,
@@ -954,7 +896,7 @@ pub fn color_support_warning(
         return None;
     }
 
-    let level_label = level.as_str();
+    let level_label = level.as_ref();
 
     if brand == TerminalName::AppleTerminal {
         let mut warning = TerminalWarning::new(
@@ -1971,10 +1913,9 @@ mod tests {
 
     #[test]
     fn xtversion_wezterm_local_not_ssh_no_warning() {
-        // Local WezTerm with TERM_PROGRAM stripped (brand falls back to Unknown) can still answer XTVERSION with "WezTerm"
-        // The XTVERSION path is SSH-only, so without is_ssh we must not emit the "over SSH" copy here
-        // That copy would be wrong (this is local) and would drop the actionable wezterm.lua fix
-        // Env-based detection covers the actionable local case; stay quiet otherwise
+        // The XTVERSION path is SSH-only, so without is_ssh we must not emit the "over SSH" copy here. That copy would be
+        // wrong (this is local) and would drop the actionable wezterm.lua fix. Env-based detection covers the actionable
+        // local case; stay quiet otherwise.
         let ctx = TerminalContext {
             is_ssh: false,
             ..Default::default()
@@ -2144,14 +2085,14 @@ mod tests {
         assert!(out[1].message.contains("sandbox settings"));
     }
 
-    // -- ssh_wrap_hint: `thanh wrap ssh` recommendation --------------------------
+    // -- ssh_wrap_hint: `grok wrap ssh` recommendation --------------------------
 
     #[test]
     fn ssh_wrap_hint_fires_over_plain_ssh() {
         // is_ssh, no sink, not VS Code remote: recommend wrap
         let w = ssh_wrap_hint(true, false, false).expect("hint must fire");
         assert_eq!(w.category, WarningCategory::SshWithoutWrap);
-        assert_eq!(w.fix.as_deref(), Some("thanh wrap ssh <host>"));
+        assert_eq!(w.fix.as_deref(), Some("grok wrap ssh <host>"));
         assert!(
             w.config_path.is_none(),
             "fix is a command, not a config line"
@@ -2172,8 +2113,7 @@ mod tests {
 
     #[test]
     fn ssh_wrap_hint_suppressed_when_sink_active() {
-        // An active OSC 52 sink means the session already runs under
-        // `thanh wrap` — adoption silences the hint by itself.
+        // An active OSC 52 sink means the session already runs under `grok wrap`; adoption silences the hint by itself
         assert!(ssh_wrap_hint(true, true, false).is_none());
     }
 
@@ -2525,7 +2465,7 @@ mod tests {
         assert!(finding.automatic_remediation.is_none());
         assert!(finding.note.as_deref().is_some_and(|note| {
             note.contains("install a supported audio recorder")
-                && note.contains("thanh doctor")
+                && note.contains("grok doctor")
                 && note.contains("can't detect denied macOS microphone access")
         }));
     }
@@ -2995,8 +2935,7 @@ mod tests {
         );
     }
 
-    /// Piped `thanh doctor` has no color evidence, but the tmux client is still
-    /// measurable, and `doctor fix` needs the finding to plan against.
+    /// Piped `grok doctor` has no color evidence, but the tmux client is still measurable, and `doctor fix` needs the finding to plan against.
     #[test]
     fn color_support_warning_reports_tmux_clamp_without_color_evidence() {
         let w = color_support_warning(
