@@ -30,10 +30,16 @@ export interface ConfigSecurity {
 }
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
+const isMock = () => !isTauri() && import.meta.env.VITE_MOCK_ACP === "1";
+
+/** The browser stand-in, loaded lazily so the mock never ships in the Tauri path. */
+async function mock() {
+  return import("./mock-transport");
+}
 
 export async function startProcess(cwd: string): Promise<StartInfo> {
   if (!isTauri()) {
-    if (import.meta.env.VITE_MOCK_ACP === "1") {
+    if (isMock()) {
       return { binaryPath: "mock://thanh", binaryVersion: "1.0.32", cwd };
     }
     throw new Error("Thanh Desktop must run inside Tauri (use pnpm tauri dev)");
@@ -45,13 +51,42 @@ export async function stopProcess(): Promise<void> {
   if (isTauri()) await invoke("acp_stop");
 }
 
+/**
+ * Unwrap the agent's `ExtMethodResult` envelope (`{ result, error }`) when present.
+ *
+ * Most `x.ai/*` methods answer with that envelope; a bare payload passes through untouched, and
+ * an `error` field becomes a rejected promise so callers never render a silent failure.
+ */
+export function unwrapExtResult<T>(value: unknown): T {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record);
+    const enveloped = keys.every((key) => key === "result" || key === "error");
+    if (enveloped && (keys.includes("result") || keys.includes("error"))) {
+      if (record.error !== undefined && record.error !== null) {
+        throw new Error(typeof record.error === "string" ? record.error : JSON.stringify(record.error));
+      }
+      return record.result as T;
+    }
+  }
+  return value as T;
+}
+
 export async function request<T>(method: string, params: unknown = {}): Promise<T> {
-  if (!isTauri()) return mockRequest<T>(method, params);
-  return invoke<T>("acp_request", { method, params });
+  // Both transports deliver the same shape: the JSON-RPC `result` field, which for most
+  // `x.ai/*` methods is the agent's `{ result, error }` envelope.
+  const value = isTauri()
+    ? await invoke<T>("acp_request", { method, params })
+    : await (await mock()).mockRequest<T>(method, params);
+  return unwrapExtResult<T>(value);
 }
 
 export async function notify(method: string, params: unknown = {}): Promise<void> {
   if (isTauri()) await invoke("acp_notify", { method, params });
+  else if (isMock()) {
+    const { mockRequest } = await mock();
+    await mockRequest(method, params);
+  }
 }
 
 export async function respond(
@@ -60,11 +95,54 @@ export async function respond(
   error?: { code: number; message: string; data?: unknown },
 ): Promise<void> {
   if (isTauri()) await invoke("acp_respond", { id, result, error });
+  else if (isMock()) {
+    const { mockRespond } = await mock();
+    mockRespond(id, error ? { error } : result);
+  }
 }
 
 export async function pickFolder(): Promise<string | null> {
   if (!isTauri()) return "/tmp/thanh-demo";
   return invoke<string | null>("pick_folder");
+}
+
+export interface FilePayload {
+  data: string;
+  mediaType: string;
+  size: number;
+}
+
+/**
+ * Native attachment picker. Returns `null` outside Tauri so the composer can fall back to a
+ * browser file input, which is the only way to get bytes there.
+ */
+export async function pickFiles(): Promise<string[] | null> {
+  if (!isTauri()) {
+    if (isMock()) return (await mock()).mockPickFiles();
+    return null;
+  }
+  return invoke<string[]>("pick_files");
+}
+
+/** Read one attached file (base64) for an ACP `image` part. */
+export async function readFilePayload(path: string): Promise<FilePayload> {
+  if (isTauri()) return invoke<FilePayload>("read_file_base64", { path });
+  return (await mock()).mockReadFilePayload(path);
+}
+
+/**
+ * OS drag-and-drop of files onto the window. Tauri intercepts native drops, so the webview never
+ * sees them as HTML5 events; this is how a dropped file keeps its path.
+ */
+export async function onFileDrop(handler: (paths: string[], phase: "over" | "drop" | "leave") => void): Promise<() => void> {
+  if (!isTauri()) return () => {};
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return getCurrentWebview().onDragDropEvent((event) => {
+    const payload = event.payload;
+    if (payload.type === "drop") handler(payload.paths, "drop");
+    else if (payload.type === "leave") handler([], "leave");
+    else handler([], "over");
+  });
 }
 
 export async function getConfigSecurity(): Promise<ConfigSecurity> {
@@ -73,7 +151,11 @@ export async function getConfigSecurity(): Promise<ConfigSecurity> {
 }
 
 export async function onMessage(handler: (message: RpcMessage) => void): Promise<UnlistenFn> {
-  if (!isTauri()) return () => undefined;
+  if (!isTauri()) {
+    if (!isMock()) return () => undefined;
+    const { subscribe } = await mock();
+    return subscribe((message) => handler(message as RpcMessage));
+  }
   const disposeSingle = await listen<RpcMessage>("acp-message", ({ payload }) => handler(payload));
   const disposeBatch = await listen<RpcMessage[]>("acp-messages", ({ payload }) => payload.forEach(handler));
   return () => { disposeSingle(); disposeBatch(); };
@@ -87,20 +169,4 @@ export async function onStatus(handler: (status: AcpStatus) => void): Promise<Un
 export async function onLog(handler: (line: string) => void): Promise<UnlistenFn> {
   if (!isTauri()) return () => undefined;
   return listen<string>("acp-log", ({ payload }) => handler(payload));
-}
-
-async function mockRequest<T>(method: string, params: unknown): Promise<T> {
-  if (import.meta.env.VITE_MOCK_ACP !== "1") throw new Error("Tauri IPC is unavailable");
-  const sessionId = "mock-session";
-  const results: Record<string, unknown> = {
-    initialize: { protocolVersion: 1, agentCapabilities: {} },
-    "session/new": { sessionId, modes: null },
-    "session/load": { modes: null },
-    "session/prompt": { stopReason: "end_turn" },
-    "x.ai/session/list": { sessions: [] },
-    "x.ai/models/list": { models: [{ id: "demo", name: "Demo model" }] },
-    "x.ai/commands/list": { commands: [] },
-  };
-  void params;
-  return (results[method] ?? {}) as T;
 }

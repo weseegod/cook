@@ -3366,6 +3366,7 @@ dependencies = [
 name = "thanh-desktop"
 version = "1.0.32"
 dependencies = [
+ "base64 0.22.1",
  "dirs",
  "libc",
  "parking_lot",

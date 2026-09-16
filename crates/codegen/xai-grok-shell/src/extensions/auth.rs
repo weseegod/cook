@@ -15,7 +15,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     match args.method.as_ref() {
         "x.ai/auth/getBearerToken" => handle_get_bearer_token(agent).await,
         "x.ai/getApiKey" => handle_get_api_key(),
-        "x.ai/setApiKey" => handle_set_api_key(args),
+        "x.ai/setApiKey" => handle_set_api_key(agent, args).await,
         "x.ai/auth/submit_code" => handle_submit_code(agent, args),
         "x.ai/auth/get_url" => handle_get_url(agent).await,
         "x.ai/auth/cancel" => handle_cancel(agent, args),
@@ -67,9 +67,31 @@ fn handle_get_api_key() -> ExtResult {
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
 }
 
-fn handle_set_api_key(args: &acp::ExtRequest) -> ExtResult {
+/// `x.ai/setApiKey` takes `key` (legacy TUI) or `apiKey` (desktop) plus an optional `provider`.
+///
+/// A key scoped to a third-party provider belongs in `[model_providers.<id>]`, not in the xAI
+/// session key store: writing it to `XAI_API_KEY`/`auth.json` would silently misroute every
+/// later request. Provider-less calls keep the v1 xAI behavior.
+async fn handle_set_api_key(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let params: serde_json::Value = parse_params(args)?;
-    let key = params.get("key").and_then(|v| v.as_str());
+    let key = params
+        .get("key")
+        .or_else(|| params.get("apiKey"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let provider = params
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    if let Some(provider) = provider {
+        crate::extensions::providers::store_provider_key(agent, provider, key.as_deref())
+            .await
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+        return ExtMethodResult::success(serde_json::json!({ "ok": true, "provider": provider }))
+            .to_ext_response()
+            .map_err(|e| acp::Error::internal_error().data(e.to_string()));
+    }
     let grok_home = crate::util::grok_home::grok_home();
     if let Some(k) = key {
         if k.is_empty() {
@@ -78,7 +100,7 @@ fn handle_set_api_key(args: &acp::ExtRequest) -> ExtResult {
             // SAFETY: ext_method is single-threaded per agent
             unsafe { std::env::remove_var("XAI_API_KEY") };
         } else {
-            xai_grok_login::store_api_key(&grok_home, k)
+            xai_grok_login::store_api_key(&grok_home, k.as_str())
                 .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
             // SAFETY: ext_method is single-threaded per agent
             unsafe { std::env::set_var("XAI_API_KEY", k) };

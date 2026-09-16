@@ -744,11 +744,20 @@ fn cwd_matches(session_cwd: &std::path::Path, target_cwd: &std::path::Path) -> b
 /// Re-reads config from disk, re-runs the `new_with_models()` resolution logic for user TOML config entries, and swaps the model list in-place.
 /// Prefetched (API) and default models are NOT re-fetched; only BYOK entries from config are updated.
 fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
-    let disk_config = crate::config::load_effective_config()
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
-
-    let toml_config = crate::agent::config::Config::new_from_toml_cfg(&disk_config)
+    let result = reload_models_from_disk(agent)
         .map_err(|e| acp::Error::internal_error().data(e))?;
+    ExtMethodResult::success(result)
+        .to_ext_response()
+        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+}
+
+/// Re-resolve the model catalog from `config.toml` and push `x.ai/models/update` to clients.
+/// Shared by the internal config-reload path and the fork's `x.ai/providers/*` writers, which
+/// must refresh the picker immediately after mutating providers.
+pub(crate) fn reload_models_from_disk(agent: &MvpAgent) -> Result<serde_json::Value, String> {
+    let disk_config = crate::config::load_effective_config().map_err(|e| e.to_string())?;
+
+    let toml_config = crate::agent::config::Config::new_from_toml_cfg(&disk_config)?;
 
     // Merge TOML-derived model fields into the agent's in-memory config
     // Runtime-only fields (#[serde(skip)]: remote_settings, endpoints, CLI flags) are preserved; only model-related TOML fields are refreshed
@@ -782,9 +791,7 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
 
     let count = agent.models_manager.models().len();
     tracing::info!(count, "model list reloaded from config.toml");
-    ExtMethodResult::success(serde_json::json!({ "models": count }))
-        .to_ext_response()
-        .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+    Ok(serde_json::json!({ "models": count }))
 }
 
 // internal/reload_models_cache

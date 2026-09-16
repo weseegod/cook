@@ -11,6 +11,7 @@ import {
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
 import type { UnlistenFn } from "@tauri-apps/api/event";
+import { buildPromptParts, imageAttachEnabled, optimisticImages, type Attachment } from "./attachments";
 import { useCatalogStore } from "../state/catalog";
 import { useSessionStore, type PendingQuestion } from "../state/session";
 import {
@@ -24,6 +25,7 @@ import {
   stopProcess,
   type RpcMessage,
 } from "./host";
+import { setDefaultModel as setDefaultModelOnAgent } from "./providers";
 import { XaiClient } from "./xai";
 
 const CLIENT_META = {
@@ -130,23 +132,43 @@ export class ThanhAcpClient {
     await this.refreshCommands();
   }
 
-  async prompt(text: string): Promise<PromptResponse> {
+  async prompt(text: string, attachments: Attachment[] = []): Promise<PromptResponse> {
     let sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) sessionId = await this.newSession();
-    useSessionStore.getState().appendOptimisticUser(text);
-    return this.dispatchPrompt(sessionId, text);
+    useSessionStore.getState().appendOptimisticUser(text, optimisticImages(attachments));
+    return this.dispatchPrompt(sessionId, this.buildParts(text, attachments));
   }
 
-  queuePrompt(text: string): void {
+  queuePrompt(text: string, attachments: Attachment[] = []): void {
     const sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) throw new Error("Start a conversation before queueing a prompt");
     // A second session/prompt RPC is the agent's authoritative queue input.
     // Keep the promise live in the background; it resolves when that queued turn finishes.
-    void this.dispatchPrompt(sessionId, text).catch(() => undefined);
+    void this.dispatchPrompt(sessionId, this.buildParts(text, attachments)).catch(() => undefined);
   }
 
-  private async dispatchPrompt(sessionId: string, text: string): Promise<PromptResponse> {
-    const params: PromptRequest = { sessionId, prompt: [{ type: "text", text }] };
+  /** Whether the active model accepts `image` prompt parts. */
+  imageAttachEnabled(): boolean {
+    const { modelId } = useSessionStore.getState();
+    const models = useCatalogStore.getState().models;
+    // Before the first session the active model is the catalog's default, so the gate still holds.
+    const active = models.find((model) => model.id === modelId) ?? models.find((model) => model.isDefault) ?? null;
+    return imageAttachEnabled(active);
+  }
+
+  /** Turn the composer's text + attachments into ACP content parts, surfacing rejections. */
+  buildParts(text: string, attachments: Attachment[]) {
+    const { parts, rejected } = buildPromptParts(text, attachments, { supportsImages: this.imageAttachEnabled() });
+    if (rejected.length > 0) {
+      useSessionStore.getState().set({
+        error: rejected.map((item) => `${item.name} was not attached: ${item.reason}`).join("; "),
+      });
+    }
+    return parts;
+  }
+
+  private async dispatchPrompt(sessionId: string, parts: PromptRequest["prompt"]): Promise<PromptResponse> {
+    const params: PromptRequest = { sessionId, prompt: parts };
     this.pendingPromptRequests += 1;
     useSessionStore.getState().set({ turnRunning: true, error: null });
     try {
@@ -175,13 +197,16 @@ export class ThanhAcpClient {
     useSessionStore.getState().set({ modelId });
   }
 
+  /** Persist the default through the agent (`[models] default`), not just localStorage. */
   async setDefaultModel(modelId: string): Promise<void> {
+    await setDefaultModelOnAgent(modelId);
     localStorage.setItem("thanh.defaultModel", modelId);
     if (useSessionStore.getState().sessionId) {
       await this.setModel(modelId);
     } else {
       useSessionStore.getState().set({ modelId });
     }
+    await this.refreshModels();
   }
 
   async setYolo(enabled: boolean): Promise<void> {
@@ -265,6 +290,10 @@ export class ThanhAcpClient {
     }
     if (method === "x.ai/folder_trust/request" && message.id !== undefined) {
       useSessionStore.getState().set({ pendingQuestion: trustInteraction(message.id, params) });
+      return;
+    }
+    if (method === "x.ai/mcp/elicit" && message.id !== undefined) {
+      useSessionStore.getState().set({ pendingQuestion: elicitInteraction(message.id, params) });
       return;
     }
     if (message.id !== undefined && message.method) {
@@ -366,6 +395,27 @@ function trustInteraction(rpcId: number | string, raw: Record<string, unknown>):
       options: [
         { id: "trust", label: "Trust workspace" },
         { id: "reject", label: "Keep restricted" },
+      ],
+    }],
+  };
+}
+
+/** `x.ai/mcp/elicit`: the agent asks the user for MCP-server input or a URL visit. */
+export function elicitInteraction(rpcId: number | string, raw: Record<string, unknown>): PendingQuestion {
+  const server = String(raw.serverName ?? raw.server_name ?? "an MCP server");
+  const message = String(raw.message ?? "This connector needs your input.");
+  const url = typeof raw.url === "string" ? raw.url : undefined;
+  const mode = String(raw.mode ?? "form");
+  return {
+    rpcId,
+    title: `${server} needs your input`,
+    kind: "elicit",
+    raw,
+    questions: [{
+      question: url ? `${message}\n\n${url}` : message,
+      options: [
+        { id: "accept", label: url ? "Open and continue" : "Accept", description: mode === "url" ? "Open the link, then continue the tool call" : "Send this input to the connector" },
+        { id: "decline", label: "Decline", description: "The connector continues without this input" },
       ],
     }],
   };

@@ -1,17 +1,26 @@
 import { Brain, HelpCircle, ShieldCheck, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
 import { Markdown } from "../chat/markdown";
+import { elicitContent, elicitFields, elicitFormComplete } from "./elicit-fields";
 
 export function InteractionModal() {
   const pending = useSessionStore((state) => state.pendingQuestion);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Record<string, string>>({});
+  const elicitSchema = pending?.kind === "elicit" ? pending.raw.requestedSchema : undefined;
+  const fields = useMemo(() => elicitFields(elicitSchema), [elicitSchema]);
   useEffect(() => {
     setAnswers({});
     setNotes({});
-  }, [pending?.rpcId]);
+    setValues(
+      Object.fromEntries(
+        elicitFields(pending?.raw.requestedSchema).map((field) => [field.name, field.default ?? ""]),
+      ),
+    );
+  }, [pending?.rpcId, pending?.raw.requestedSchema]);
   if (!pending) return null;
 
   function choose(question: string, label: string, multi: boolean) {
@@ -41,6 +50,13 @@ export function InteractionModal() {
 
   async function pickSpecial(id: string) {
     if (pending!.kind === "trust") return acpClient.answerQuestion({ outcome: id });
+    if (pending!.kind === "elicit") {
+      if (id === "decline") return acpClient.answerQuestion({ outcome: "decline" });
+      const url = pending!.raw.url;
+      if (typeof url === "string" && url.startsWith("http")) window.open(url, "_blank", "noopener");
+      const content = elicitContent(fields, values);
+      return acpClient.answerQuestion({ outcome: "accept", ...(Object.keys(content).length ? { content } : {}) });
+    }
     if (pending!.kind === "plan") {
       const feedback = id === "cancelled" ? window.prompt("What should Thanh change in the plan?") ?? undefined : undefined;
       return acpClient.answerQuestion({ outcome: id, ...(feedback ? { feedback } : {}) });
@@ -50,8 +66,8 @@ export function InteractionModal() {
   return (
     <div className="modal-backdrop">
       <section className="modal interaction-modal" role="dialog" aria-modal="true">
-        <button className="modal-close" onClick={() => void acpClient.answerQuestion(
-          pending.kind === "trust" ? { outcome: "reject" } : { outcome: "cancelled" },
+        <button className="modal-close" data-testid="interaction-close" onClick={() => void acpClient.answerQuestion(
+          pending.kind === "trust" ? { outcome: "reject" } : pending.kind === "elicit" ? { outcome: "cancel" } : { outcome: "cancelled" },
         )}><X size={17} /></button>
         <div className={`modal-icon ${pending.kind === "trust" ? "safe" : ""}`}>
           {pending.kind === "plan" ? <Brain size={23} /> : pending.kind === "trust" ? <ShieldCheck size={23} /> : <HelpCircle size={23} />}
@@ -89,6 +105,61 @@ export function InteractionModal() {
             </div>
           </fieldset>
         ))}
+        {pending.kind === "elicit" && fields.length > 0 && (
+          <div className="elicit-fields" data-testid="elicit-fields">
+            {fields.map((field) => (
+              <label key={field.name} className="elicit-field">
+                <span>
+                  {field.label}
+                  {field.required && <em aria-hidden="true"> *</em>}
+                </span>
+                {field.description && <small>{field.description}</small>}
+                {field.options ? (
+                  <select
+                    data-testid={`elicit-${field.name}`}
+                    value={values[field.name] ?? ""}
+                    onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  >
+                    <option value="">Choose…</option>
+                    {field.options.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                ) : field.type === "boolean" ? (
+                  <select
+                    data-testid={`elicit-${field.name}`}
+                    value={values[field.name] ?? ""}
+                    onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  >
+                    <option value="">Choose…</option>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                  </select>
+                ) : (
+                  <input
+                    data-testid={`elicit-${field.name}`}
+                    type={field.type === "number" ? "number" : "text"}
+                    value={values[field.name] ?? ""}
+                    onChange={(event) => setValues((current) => ({ ...current, [field.name]: event.target.value }))}
+                  />
+                )}
+              </label>
+            ))}
+          </div>
+        )}
+        {pending.kind === "elicit" && (
+          <div className="modal-actions">
+            <button className="ghost-button" data-testid="elicit-decline" onClick={() => void pickSpecial("decline")}>Decline</button>
+            <button
+              className="primary-button"
+              data-testid="elicit-accept"
+              onClick={() => void pickSpecial("accept")}
+              disabled={!elicitFormComplete(fields, values)}
+            >
+              {typeof pending.raw.url === "string" ? "Open and continue" : "Send to connector"}
+            </button>
+          </div>
+        )}
         {pending.kind === "question" && (
           <div className="modal-actions">
             <button className="ghost-button" onClick={() => void acpClient.answerQuestion({ outcome: "cancelled" })}>Cancel</button>

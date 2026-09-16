@@ -4,6 +4,8 @@ mod bin_resolve;
 use std::path::PathBuf;
 
 use acp_host::{AcpHost, RpcError, StartInfo};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -68,6 +70,75 @@ fn pick_folder(app: tauri::AppHandle) -> Option<PathBuf> {
         .and_then(|path| path.into_path().ok())
 }
 
+/// Native attachment picker: a webview file input never exposes a path, and a non-image
+/// attachment reaches the agent as a path it can `read_file`.
+#[tauri::command]
+fn pick_files(app: tauri::AppHandle) -> Vec<String> {
+    app.dialog()
+        .file()
+        .set_title("Attach files to Thanh")
+        .blocking_pick_files()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|path| path.into_path().ok())
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect()
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilePayload {
+    data: String,
+    media_type: String,
+    size: u64,
+}
+
+/// Read one attached file for an ACP `image` part, bounded so a huge file cannot wedge the UI.
+#[tauri::command]
+fn read_file_base64(path: String) -> Result<FilePayload, String> {
+    const MAX_BYTES: u64 = 25 * 1024 * 1024;
+    let source = PathBuf::from(&path);
+    let metadata = std::fs::metadata(&source).map_err(|e| format!("{path}: {e}"))?;
+    if !metadata.is_file() {
+        return Err(format!("{path} is not a file"));
+    }
+    if metadata.len() > MAX_BYTES {
+        return Err(format!("{path} is larger than 25 MB"));
+    }
+    let bytes = std::fs::read(&source).map_err(|e| format!("{path}: {e}"))?;
+    Ok(FilePayload {
+        data: BASE64.encode(&bytes),
+        media_type: media_type_for(&source).to_owned(),
+        size: bytes.len() as u64,
+    })
+}
+
+/// Media type from the extension; the agent only needs a hint, never a sniffed type.
+fn media_type_for(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "avif" => "image/avif",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "toml" => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
 #[tauri::command]
 fn config_security() -> ConfigSecurity {
     let home = std::env::var_os("THANH_HOME")
@@ -104,6 +175,8 @@ pub fn run() {
             acp_respond,
             acp_info,
             pick_folder,
+            pick_files,
+            read_file_base64,
             config_security,
         ])
         .setup(|app| {

@@ -36,7 +36,7 @@ export interface PendingPermission {
 export interface PendingQuestion {
   rpcId: number | string;
   title: string;
-  kind: "question" | "plan" | "trust";
+  kind: "question" | "plan" | "trust" | "elicit";
   questions: Array<{
     question: string;
     multiSelect?: boolean;
@@ -58,10 +58,13 @@ interface SessionState {
   usage: Record<string, unknown> | null;
   pendingPermission: PendingPermission | null;
   pendingQuestion: PendingQuestion | null;
+  /** The composer's text, owned here so the palette can drop a slash command into it. */
+  composerDraft: string;
   error: string | null;
   set: (patch: Partial<SessionState>) => void;
+  setComposerDraft: (draft: string) => void;
   resetConversation: (sessionId?: string | null) => void;
-  appendOptimisticUser: (text: string) => void;
+  appendOptimisticUser: (text: string, images?: string[]) => void;
   applyNotification: (notification: SessionNotification) => void;
 }
 
@@ -78,8 +81,10 @@ export const useSessionStore = create<SessionState>((set) => ({
   usage: null,
   pendingPermission: null,
   pendingQuestion: null,
+  composerDraft: "",
   error: null,
   set: (patch) => set(patch),
+  setComposerDraft: (composerDraft) => set({ composerDraft }),
   resetConversation: (sessionId = null) =>
     set({
       sessionId,
@@ -89,13 +94,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       usage: null,
       pendingPermission: null,
       pendingQuestion: null,
+      composerDraft: "",
       error: null,
     }),
-  appendOptimisticUser: (text) =>
+  appendOptimisticUser: (text, images = []) =>
     set((state) => ({
       blocks: [
         ...state.blocks,
-        { type: "message", id: `local-${crypto.randomUUID()}`, role: "user", text, images: [] },
+        { type: "message", id: `local-${crypto.randomUUID()}`, role: "user", text, images: [...images] },
       ],
     })),
   applyNotification: (notification) =>
