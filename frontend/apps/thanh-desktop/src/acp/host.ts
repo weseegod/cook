@@ -72,20 +72,29 @@ export function unwrapExtResult<T>(value: unknown): T {
   return value as T;
 }
 
+/**
+ * Extension methods travel as `_x.ai/...`; the agent strips the underscore and routes the call to
+ * its extension handler. Sent without it, a bare `x.ai/...` request comes back `-32601 Method not
+ * found`, which silently empties the model picker, sessions list, and every settings surface.
+ */
+export function wireMethod(method: string): string {
+  return method.startsWith("x.ai/") ? `_${method}` : method;
+}
+
 export async function request<T>(method: string, params: unknown = {}): Promise<T> {
   // Both transports deliver the same shape: the JSON-RPC `result` field, which for most
   // `x.ai/*` methods is the agent's `{ result, error }` envelope.
   const value = isTauri()
-    ? await invoke<T>("acp_request", { method, params })
-    : await (await mock()).mockRequest<T>(method, params);
+    ? await invoke<T>("acp_request", { method: wireMethod(method), params })
+    : await (await mock()).mockRequest<T>(wireMethod(method), params);
   return unwrapExtResult<T>(value);
 }
 
 export async function notify(method: string, params: unknown = {}): Promise<void> {
-  if (isTauri()) await invoke("acp_notify", { method, params });
+  if (isTauri()) await invoke("acp_notify", { method: wireMethod(method), params });
   else if (isMock()) {
     const { mockRequest } = await mock();
-    await mockRequest(method, params);
+    await mockRequest(wireMethod(method), params);
   }
 }
 

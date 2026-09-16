@@ -9,6 +9,11 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::Value;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
+use tokio::sync::oneshot;
+
+// Commands are invoked on the main thread (macOS delivers webview IPC on it via
+// `startURLSchemeTask`), so any command that blocks on the event loop, a subprocess, or a
+// pipe deadlocks the window. Everything below that can wait is an `async` command.
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,7 +24,7 @@ struct ConfigSecurity {
 }
 
 #[tauri::command]
-fn acp_start(
+async fn acp_start(
     app: tauri::AppHandle,
     host: State<'_, AcpHost>,
     cwd: PathBuf,
@@ -28,8 +33,8 @@ fn acp_start(
 }
 
 #[tauri::command]
-fn acp_stop(host: State<'_, AcpHost>) {
-    host.stop();
+async fn acp_stop(app: tauri::AppHandle) {
+    app.state::<AcpHost>().stop();
 }
 
 #[tauri::command]
@@ -42,12 +47,12 @@ async fn acp_request(
 }
 
 #[tauri::command]
-fn acp_notify(host: State<'_, AcpHost>, method: String, params: Value) -> Result<(), String> {
+async fn acp_notify(host: State<'_, AcpHost>, method: String, params: Value) -> Result<(), String> {
     host.notify(method, params)
 }
 
 #[tauri::command]
-fn acp_respond(
+async fn acp_respond(
     host: State<'_, AcpHost>,
     id: Value,
     result: Option<Value>,
@@ -61,28 +66,41 @@ fn acp_info(host: State<'_, AcpHost>) -> Option<StartInfo> {
     host.info()
 }
 
+/// Show the native workspace picker and resolve with the choice.
+///
+/// The dialog callback can only run while the event loop spins, so the command awaits a channel
+/// instead of blocking on `blocking_pick_folder` — blocking here would stall the run loop the
+/// dialog itself needs, freezing the window with no picker ever shown.
 #[tauri::command]
-fn pick_folder(app: tauri::AppHandle) -> Option<PathBuf> {
+async fn pick_folder(app: tauri::AppHandle) -> Option<PathBuf> {
+    let (sender, receiver) = oneshot::channel();
     app.dialog()
         .file()
         .set_title("Choose a workspace for Thanh")
-        .blocking_pick_folder()
-        .and_then(|path| path.into_path().ok())
+        .pick_folder(move |path| {
+            let _ = sender.send(path.and_then(|path| path.into_path().ok()));
+        });
+    receiver.await.unwrap_or(None)
 }
 
 /// Native attachment picker: a webview file input never exposes a path, and a non-image
 /// attachment reaches the agent as a path it can `read_file`.
 #[tauri::command]
-fn pick_files(app: tauri::AppHandle) -> Vec<String> {
+async fn pick_files(app: tauri::AppHandle) -> Vec<String> {
+    let (sender, receiver) = oneshot::channel();
     app.dialog()
         .file()
         .set_title("Attach files to Thanh")
-        .blocking_pick_files()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|path| path.into_path().ok())
-        .map(|path| path.to_string_lossy().into_owned())
-        .collect()
+        .pick_files(move |paths| {
+            let files = paths
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|path| path.into_path().ok())
+                .map(|path| path.to_string_lossy().into_owned())
+                .collect();
+            let _ = sender.send(files);
+        });
+    receiver.await.unwrap_or_default()
 }
 
 #[derive(serde::Serialize)]
@@ -95,9 +113,15 @@ struct FilePayload {
 
 /// Read one attached file for an ACP `image` part, bounded so a huge file cannot wedge the UI.
 #[tauri::command]
-fn read_file_base64(path: String) -> Result<FilePayload, String> {
+async fn read_file_base64(path: String) -> Result<FilePayload, String> {
+    tauri::async_runtime::spawn_blocking(move || read_file_payload(&path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn read_file_payload(path: &str) -> Result<FilePayload, String> {
     const MAX_BYTES: u64 = 25 * 1024 * 1024;
-    let source = PathBuf::from(&path);
+    let source = PathBuf::from(path);
     let metadata = std::fs::metadata(&source).map_err(|e| format!("{path}: {e}"))?;
     if !metadata.is_file() {
         return Err(format!("{path} is not a file"));

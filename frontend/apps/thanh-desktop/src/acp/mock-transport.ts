@@ -247,8 +247,18 @@ function fileRead(path: string): { result?: { content: string; size: number; typ
   return { result: { content, size: content.length, type: "text" } };
 }
 
+/**
+ * Mirrors the agent's routing: extension calls arrive as `_x.ai/...` and are dispatched by the
+ * bare name, so what the tests read back is the logical method the app asked for. A bare
+ * `x.ai/...` request is rejected exactly as the agent rejects it, so a call site that skips the
+ * wire prefix fails here instead of only against a real agent.
+ */
+const METHOD_NOT_FOUND = '{"code":-32601,"message":"Method not found"}';
+
 /** Runs one mocked call and persists the result, the way the agent's config.toml would. */
-export async function mockRequest<T>(method: string, params: unknown): Promise<T> {
+export async function mockRequest<T>(rawMethod: string, params: unknown): Promise<T> {
+  if (rawMethod.startsWith("x.ai/")) throw new Error(METHOD_NOT_FOUND);
+  const method = rawMethod.startsWith("_x.ai/") ? rawMethod.slice(1) : rawMethod;
   record(method, params);
   const value = await dispatch(method, params);
   persist();

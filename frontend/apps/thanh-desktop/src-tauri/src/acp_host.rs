@@ -137,7 +137,10 @@ impl AcpHost {
     }
 
     pub fn stop(&self) {
-        if let Some(runtime) = self.runtime.lock().take() {
+        // Take the runtime out before the shutdown handshake: the kill/wait loop below can take
+        // hundreds of milliseconds, and holding the mutex would stall any `acp_info` caller.
+        let runtime = self.runtime.lock().take();
+        if let Some(runtime) = runtime {
             if let Some(session_id) = self.live_session.lock().take() {
                 let _ = write_message(
                     &runtime.stdin,
