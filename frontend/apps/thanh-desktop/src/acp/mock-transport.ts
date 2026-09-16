@@ -64,6 +64,10 @@ export interface MockState {
   /** Non-null when the agent holds an xAI credential of its own. */
   authMethodId: string | null;
   defaultModel: string | null;
+  /** The session mode the agent would report; `/plan` flips it. */
+  sessionMode: "default" | "plan";
+  /** What the agent is holding, as `x.ai/session/info` reports it. */
+  context: { used: number; turns: number; messageCount: number };
   providers: MockProvider[];
   discoverable: MockSeedModel[];
   sessions: MockSession[];
@@ -72,6 +76,8 @@ export interface MockState {
   plugins: MockPlugin[];
   /** Force the next `providers/test` to fail, for the error-state path. */
   testFails: boolean;
+  /** Model a build that predates `x.ai/models/set_default`, which answers -32601. */
+  setDefaultUnsupported: boolean;
   /** Assistant text streamed back for each prompt. */
   reply: string;
   /** Agent-side project instruction files keyed by path. */
@@ -86,6 +92,9 @@ function defaultState(): MockState {
   return {
     authMethodId: null,
     defaultModel: null,
+    sessionMode: "default",
+    // A fresh session already holds its system prompt and tool definitions, as the real one does.
+    context: { used: 1474, turns: 0, messageCount: 1 },
     providers: [],
     discoverable: [{ id: "mock-discovered-model", name: "Mock Discovered" }],
     sessions: [
@@ -102,6 +111,7 @@ function defaultState(): MockState {
     ],
     plugins: [{ name: "thanh-core", version: "1.0.0", enabled: true }],
     testFails: false,
+    setDefaultUnsupported: false,
     reply: "Mock assistant reply.",
     files: {},
     pickedFiles: [],
@@ -204,7 +214,7 @@ function providerList() {
 function modelCatalog() {
   const models: Array<Record<string, unknown>> = [];
   if (state.authMethodId) {
-    models.push({ id: "grok-4.5", name: "Grok 4.5", provider: "xai", inputModalities: ["text", "image"], isDefault: state.defaultModel === "grok-4.5" });
+    models.push({ id: "grok-4.5", name: "Grok 4.5", provider: "xai", inputModalities: ["text", "image"], _meta: { totalContextTokens: 500_000 } });
   }
   for (const provider of state.providers) {
     for (const model of provider.models) {
@@ -213,7 +223,7 @@ function modelCatalog() {
         name: model.name ?? model.id,
         provider: provider.id,
         inputModalities: model.input ?? ["text"],
-        isDefault: state.defaultModel === model.id,
+        _meta: { totalContextTokens: 300_000 },
       });
     }
   }
@@ -265,6 +275,36 @@ export async function mockRequest<T>(rawMethod: string, params: unknown): Promis
   return value as T;
 }
 
+/**
+ * The slash commands a real agent build advertises: its own built-ins plus the skills it found.
+ * As on the wire, the usage hint is nested under `input.hint`.
+ */
+function commandList() {
+  return {
+    commands: [
+      { name: "compact", description: "Compress conversation history to save context window", input: { hint: "optional context about what to preserve" } },
+      { name: "always-approve", description: "Toggle always-approve mode (skip all permission prompts)", input: { hint: "on|off" } },
+      { name: "context", description: "Show context window usage and session stats", input: null },
+      { name: "session-info", description: "Show session details (model, turns, context usage)", input: null },
+      { name: "deep-research", description: "Research with bounded parallel agents and write a cited report", input: { hint: "<query>" }, _meta: { workflowSource: "builtin" } },
+      { name: "workflow", description: "Launch a saved workflow, list runs, or manage a run", input: { hint: "<name> | runs | pause|resume|stop|save" } },
+      { name: "goal", description: "Set, manage, or check an autonomous goal", input: { hint: "<objective> | status | pause | resume | clear" } },
+      { name: "code-review", description: "Review the current changes", input: null, _meta: { scope: "bundled" } },
+    ],
+  };
+}
+
+/** The `session/update` the agent sends when its command catalog changes. */
+function availableCommandsUpdate() {
+  return {
+    sessionId: "mock-session",
+    update: {
+      sessionUpdate: "available_commands_update",
+      availableCommands: commandList().commands,
+    },
+  };
+}
+
 async function dispatch(method: string, params: unknown): Promise<unknown> {
   const p = (params ?? {}) as Record<string, unknown>;
   const sessionId = "mock-session";
@@ -273,31 +313,103 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
   switch (method) {
     case "initialize":
       return respond({ protocolVersion: 1, agentCapabilities: {} });
-    case "session/new":
-      return respond({ sessionId, modes: null, models: { currentModelId: state.defaultModel ?? "" } });
+    case "session/new": {
+      // The agent spawns the session on `_meta.modelId`, which is how a choice made before the
+      // first prompt reaches it.
+      const meta = (p._meta ?? {}) as Record<string, unknown>;
+      if (typeof meta.modelId === "string" && modelCatalog().availableModels.some((model) => model.id === meta.modelId)) {
+        state.defaultModel = meta.modelId;
+      }
+      notify("session/update", availableCommandsUpdate());
+      return respond({
+        sessionId,
+        modes: null,
+        models: modelCatalog(),
+        configOptions: [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: modelCatalog().currentModelId,
+            options: modelCatalog().availableModels.map((model) => ({ value: model.id, name: model.name })),
+          },
+        ],
+      });
+    }
     case "session/load":
-      return respond({ modes: null });
+      notify("session/update", availableCommandsUpdate());
+      return respond({ modes: null, models: modelCatalog() });
     case "session/prompt": {
       const messageId = `mock-${requests.length}`;
+      // A real turn reports its context through `x.ai/session/info`, never an ACP `usage_update`.
+      state.context = {
+        used: state.context.used + 1234,
+        turns: state.context.turns + 1,
+        messageCount: state.context.messageCount + 2,
+      };
       notify("session/update", {
         sessionId,
         update: { sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text: state.reply } },
       });
-      notify("session/update", { sessionId, update: { sessionUpdate: "usage_update", usage: { inputTokens: 12, outputTokens: 7 } } });
       return respond({ stopReason: "end_turn" });
     }
-    case "session/set_model":
+    case "x.ai/session/info": {
+      const total = 300_000;
+      return respond({
+        sessionId,
+        cwd: "/tmp/thanh-demo",
+        agentName: "thanh",
+        model: modelCatalog().currentModelId,
+        turns: state.context.turns,
+        turnIndex: state.context.turns,
+        context: {
+          used: state.context.used,
+          total,
+          usagePct: Math.round((state.context.used / total) * 100),
+          messageCount: state.context.messageCount,
+          turnCount: state.context.turns,
+          compactionCount: 0,
+          toolDefinitionsCount: 12,
+          freeTokens: total - state.context.used,
+        },
+      });
+    }
+    case "session/set_model": {
+      const modelId = String(p.modelId ?? "");
+      if (!modelCatalog().availableModels.some((model) => model.id === modelId)) {
+        return respond({ error: `unknown model \`${modelId}\`` });
+      }
+      state.defaultModel = modelId;
+      notify("x.ai/models/update", modelCatalog());
+      return respond({ _meta: { model: modelId } });
+    }
+    case "session/set_mode": {
+      // Plan mode is an ACP session mode: the agent answers `{}` and reports the new mode.
+      const modeId = String(p.modeId ?? "");
+      if (modeId !== "plan" && modeId !== "default") {
+        return respond({ error: `unknown mode \`${modeId}\`` });
+      }
+      state.sessionMode = modeId;
+      notify("session/update", { sessionId, update: { sessionUpdate: "current_mode_update", currentModeId: modeId } });
       return respond({});
+    }
     case "x.ai/session/list":
       return respond({ sessions: state.sessions });
     case "x.ai/commands/list":
-      return respond({ commands: [{ name: "model", description: "Switch model" }, { name: "memory", description: "Memory settings" }] });
+      return respond(commandList());
     case "x.ai/auth/info":
       return respond({ result: { methodId: state.authMethodId, email: null } });
     case "x.ai/models/list":
       return respond({ result: modelCatalog() });
     case "x.ai/models/set_default": {
       const modelId = String(p.modelId ?? "");
+      // An agent build without the extension, as the shipped CLI still is.
+      if (state.setDefaultUnsupported) {
+        return respond({
+          error: { code: -32601, message: "Method not found", data: "unknown ACP extension method: x.ai/models/set_default" },
+        });
+      }
       if (!modelCatalog().availableModels.some((model) => model.id === modelId)) {
         return respond({ error: `unknown model \`${modelId}\`` });
       }
@@ -461,6 +573,14 @@ export function mockRespond(id: number | string, result: unknown): void {
 }
 
 /**
+ * The machine-wide form of `x.ai/models/update`: the catalog moved on disk, so the payload is
+ * empty and the client is expected to re-list rather than adopt an empty catalog.
+ */
+export function mockModelsUpdate(params: Record<string, unknown> = {}): void {
+  notify("_x.ai/models/update", params);
+}
+
+/**
  * Ask the renderer for input the way an MCP server would, returning the request id so a test can
  * match the answer.
  */
@@ -491,6 +611,7 @@ export interface MockControl {
   state(): MockState;
   responses(): Array<{ id: number | string; result: unknown; at: number }>;
   elicit(overrides?: Record<string, unknown>): number;
+  modelsUpdate(params?: Record<string, unknown>): void;
 }
 
 declare global {
@@ -506,5 +627,6 @@ if (typeof window !== "undefined") {
     state: mockState,
     responses: () => [...responses],
     elicit: mockElicit,
+    modelsUpdate: mockModelsUpdate,
   };
 }

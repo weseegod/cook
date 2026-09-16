@@ -55,11 +55,16 @@ interface SessionState {
   turnRunning: boolean;
   modelId: string | null;
   planMode: boolean;
+  /** `usage_update`: the tokens in context and the window they sit in. */
   usage: Record<string, unknown> | null;
+  /** Always-approve, as the agent was last told; the window persists it in localStorage. */
+  alwaysApprove: boolean;
   pendingPermission: PendingPermission | null;
   pendingQuestion: PendingQuestion | null;
   /** The composer's text, owned here so the palette can drop a slash command into it. */
   composerDraft: string;
+  /** A one-line answer to a local command (`/model`, `/plan`), cleared on the next submit. */
+  notice: string | null;
   error: string | null;
   set: (patch: Partial<SessionState>) => void;
   setComposerDraft: (draft: string) => void;
@@ -76,12 +81,14 @@ export const useSessionStore = create<SessionState>((set) => ({
   sessionTitle: "New conversation",
   blocks: [],
   turnRunning: false,
-  modelId: null,
+  modelId: localStorage.getItem("thanh.defaultModel"),
   planMode: false,
   usage: null,
+  alwaysApprove: localStorage.getItem("thanh.alwaysApprove") === "true",
   pendingPermission: null,
   pendingQuestion: null,
   composerDraft: "",
+  notice: null,
   error: null,
   set: (patch) => set(patch),
   setComposerDraft: (composerDraft) => set({ composerDraft }),
@@ -95,6 +102,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       pendingPermission: null,
       pendingQuestion: null,
       composerDraft: "",
+      notice: null,
       error: null,
     }),
   appendOptimisticUser: (text, images = []) =>
@@ -166,6 +174,7 @@ export function reduceBlocks(blocks: TranscriptBlock[], update: SessionUpdate | 
 function reduceSessionUpdate(state: SessionState, update: SessionUpdate): Partial<SessionState> {
   const raw = update as SessionUpdate & Record<string, unknown>;
   const kind = String(raw.sessionUpdate ?? "");
+  // `usage_update` carries `{ used, size, cost }`, the context the agent is holding.
   if (kind === "usage_update") return { usage: asRecord(raw.usage) ?? asRecord(raw) };
   if (kind === "current_mode_update") {
     const mode = String(raw.currentModeId ?? raw.modeId ?? "");

@@ -7,7 +7,7 @@ import { StatusBar } from "./status-bar";
 import { ToolCard } from "./tool-card";
 
 export function ChatView() {
-  const { blocks, sessionId, turnRunning, planMode } = useSessionStore();
+  const { blocks, sessionId, turnRunning, planMode, notice } = useSessionStore();
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: turnRunning ? "auto" : "smooth" });
@@ -30,6 +30,7 @@ export function ChatView() {
         {turnRunning && <div className="thinking"><span /><span /><span /></div>}
         <div ref={endRef} />
       </div>
+      {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
       <StatusBar />
       <Composer />
     </div>

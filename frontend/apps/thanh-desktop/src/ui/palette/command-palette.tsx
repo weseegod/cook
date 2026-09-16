@@ -1,6 +1,7 @@
 import { CornerDownLeft, FolderOpen, MessageSquarePlus, Settings2, ShieldCheck, Sparkles, Terminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useCatalogStore } from "../../state/catalog";
+import { slashEntries } from "../chat/slash-commands";
 import { buildPaletteItems, rankPaletteItems, type PaletteItem, type PaletteKind } from "./palette-items";
 
 const ICONS: Record<PaletteKind, ReactElement> = {
@@ -16,7 +17,8 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const items = useMemo(
-    () => rankPaletteItems(buildPaletteItems({ sessions, models, commands }), query),
+    // The window's own commands are part of the same catalog here, so Ctrl+K reaches `/plan` too.
+    () => rankPaletteItems(buildPaletteItems({ sessions, models, commands: slashEntries(commands) }), query),
     [sessions, models, commands, query],
   );
 

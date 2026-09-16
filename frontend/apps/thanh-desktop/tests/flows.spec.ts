@@ -23,6 +23,8 @@ function api(page: Page) {
       page.evaluate(() => window.__thanhMock!.responses()),
     elicit: (overrides?: Record<string, unknown>) =>
       page.evaluate((value) => window.__thanhMock!.elicit(value ?? {}), overrides ?? {}),
+    modelsUpdate: (params?: Record<string, unknown>) =>
+      page.evaluate((value) => window.__thanhMock!.modelsUpdate(value ?? {}), params ?? {}),
   };
 }
 
@@ -226,6 +228,21 @@ test.describe("chat, attachments and the model picker", () => {
     expect(errors).toEqual([]);
   });
 
+  test("re-lists the catalog when the agent broadcasts an empty models update", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const picker = page.getByLabel("Model");
+    await expect(picker).toHaveValue("gpt-5");
+    const listed = (await waitForCalls(page, "x.ai/models/list")).length;
+
+    // The machine-wide form of `x.ai/models/update` has no payload: it says the catalog moved on
+    // disk. Adopting it as a catalog would leave the picker empty and the selection dangling.
+    await mock.modelsUpdate();
+    await waitForCalls(page, "x.ai/models/list", listed + 1);
+    await expect(picker).toHaveValue("gpt-5");
+    await expect(picker.locator("option")).toHaveCount(2);
+  });
+
   test("attaches an image as a base64 image part with its media type", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
@@ -348,9 +365,9 @@ test.describe("command palette", () => {
     await expect.poll(async () => (await mock.state()).defaultModel).toBe("o4-mini");
 
     await page.keyboard.press("Control+k");
-    await page.getByTestId("palette-input").fill("memory");
-    await page.getByTestId("palette-item-command-memory").click();
-    await expect(page.getByPlaceholder("Ask Thanh anything…")).toHaveValue("/memory ");
+    await page.getByTestId("palette-input").fill("goal");
+    await page.getByTestId("palette-item-command-goal").click();
+    await expect(page.getByPlaceholder("Ask Thanh anything…")).toHaveValue("/goal ");
 
     // Settings is reachable from the palette too.
     await page.keyboard.press("Control+k");
@@ -358,6 +375,159 @@ test.describe("command palette", () => {
     await page.getByTestId("palette-item-action-settings").click();
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
     expect(errors).toEqual([]);
+  });
+});
+
+test.describe("slash commands", () => {
+  const composer = (page: Page) => page.getByPlaceholder("Ask Thanh anything…");
+  // The menu highlights the entry under the pointer, so pick the highlighted row deliberately.
+  const hoverEntry = (page: Page, name: string) => page.getByTestId(`slash-item-${name}`).hover();
+
+  test("offers the window's commands and the agent's, and completes on Tab", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+
+    await composer(page).fill("/");
+    await expect(page.getByTestId("slash-menu")).toBeVisible();
+    // The window answers `/plan` itself; `/goal` belongs to the agent and travels as a prompt.
+    await expect(page.getByTestId("slash-item-plan")).toBeVisible();
+    await expect(page.getByTestId("slash-item-goal")).toBeVisible();
+
+    await hoverEntry(page, "plan");
+    await page.keyboard.press("Tab");
+    await expect(composer(page)).toHaveValue("/plan ");
+
+    // A partial name completes on Enter rather than being sent to the agent.
+    await composer(page).fill("/goa");
+    await hoverEntry(page, "goal");
+    await page.keyboard.press("Enter");
+    await expect(composer(page)).toHaveValue("/goal ");
+
+    // Arguments close the menu: the text is the command's input, not another name.
+    await composer(page).fill("/goal status");
+    await expect(page.getByTestId("slash-menu")).toHaveCount(0);
+  });
+
+  test("runs /plan, then leaves plan mode from the status bar", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+
+    await composer(page).fill("/plan");
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByTestId("notice-banner")).toContainText("Plan mode is on");
+    await expect(page.locator(".plan-banner")).toBeVisible();
+    const modes = await waitForCalls(page, "session/set_mode");
+    expect(modes[0].params).toMatchObject({ sessionId: "mock-session", modeId: "plan" });
+    expect((await mock.state()).sessionMode).toBe("plan");
+
+    await page.getByTestId("plan-toggle").click();
+    await expect.poll(async () => (await mock.state()).sessionMode).toBe("default");
+    await expect(page.locator(".plan-banner")).toHaveCount(0);
+  });
+
+  test("sends /plan's description as the first turn once the mode is on", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await composer(page).fill("/plan add auth to the app");
+    await page.keyboard.press("Enter");
+
+    const modes = await waitForCalls(page, "session/set_mode");
+    const prompts = await waitForCalls(page, "session/prompt");
+    expect(modes[0].params.modeId).toBe("plan");
+    expect(prompts[0].params.prompt).toEqual([{ type: "text", text: "add auth to the app" }]);
+    // The turn was sent, so the window has nothing extra to say about it.
+    await expect(page.getByTestId("notice-banner")).toHaveCount(0);
+  });
+
+  test("switches the model from the composer", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+
+    await composer(page).fill("/model");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("notice-banner")).toContainText("gpt-5");
+
+    await composer(page).fill("/model o4-mini");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("notice-banner")).toContainText("Model is now o4-mini.");
+    await expect(page.getByLabel("Model")).toHaveValue("o4-mini");
+
+    // No session yet, so the choice reaches the agent when the first turn spawns one.
+    await composer(page).fill("hello");
+    await page.getByTestId("send-button").click();
+    const created = (await waitForCalls(page, "session/new"))[0];
+    expect(created.params._meta).toMatchObject({ modelId: "o4-mini" });
+    expect((await mock.state()).defaultModel).toBe("o4-mini");
+  });
+
+  test("reports context usage, and turns always-approve on where the agent can see it", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+
+    // A turn is what makes the agent report context usage; the status bar shows it from then on,
+    // out of `x.ai/session/info` — a real turn sends no `usage_update`.
+    await composer(page).fill("hello");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+    await expect(page.locator(".statusbar")).toContainText("tokens");
+    await waitForCalls(page, "x.ai/session/info");
+
+    await composer(page).fill("/context");
+    await page.keyboard.press("Enter");
+    const notice = page.getByTestId("notice-banner");
+    await expect(notice).toContainText("Session mock-session");
+    await expect(notice).toContainText("tokens");
+    // Turns and messages come from the agent's own report, not from a local guess.
+    await expect(notice).toContainText("1 turn");
+    await expect(notice).toContainText("3 messages");
+
+    await composer(page).fill("/always-approve on");
+    await page.keyboard.press("Enter");
+    await expect(notice).toContainText("Always-approve is on");
+    const notified = await waitForCalls(page, "x.ai/yolo_mode_changed");
+    expect(notified[0].params).toMatchObject({ yolo_mode: true, clientIdentifier: "grok-desktop" });
+
+    // The setting has one home: the toggle in Settings shows what the command just did.
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "About" }).click();
+    await expect(page.locator(".toggle-row", { hasText: "Always approve" }).getByRole("checkbox")).toBeChecked();
+  });
+
+  test("picks a model before the first prompt and spawns the session on it", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+
+    // No session yet, and the picker still works: the choice rides `session/new`'s `_meta.modelId`.
+    await expect(page.getByLabel("Model")).toBeEnabled();
+    await page.getByLabel("Model").selectOption("o4-mini");
+
+    await composer(page).fill("What changed?");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    const created = (await waitForCalls(page, "session/new"))[0];
+    expect(created.params._meta).toMatchObject({ modelId: "o4-mini" });
+    expect((await mock.state()).defaultModel).toBe("o4-mini");
+    await expect(page.getByLabel("Model")).toHaveValue("o4-mini");
+  });
+
+  test("keeps a default the agent cannot write, and says where it applies", async ({ page }) => {
+    const mock = api(page);
+    // The shipped CLI predates `x.ai/models/set_default`; the window must not appear to ignore it.
+    await openWorkspace(page, { ...CONNECTED_SEED, setDefaultUnsupported: true });
+
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("settings-default-model").selectOption("o4-mini");
+
+    await expect(page.getByTestId("notice-banner")).toContainText("applies to this window only");
+    await expect(page.getByTestId("settings-default-model")).toHaveValue("o4-mini");
+
+    await page.getByLabel("Close settings").click();
+    await expect(page.getByLabel("Model")).toHaveValue("o4-mini");
+    await composer(page).fill("What changed?");
+    await page.getByTestId("send-button").click();
+    const created = (await waitForCalls(page, "session/new"))[0];
+    expect(created.params._meta).toMatchObject({ modelId: "o4-mini" });
+    expect((await mock.state()).defaultModel).toBe("o4-mini");
   });
 });
 
@@ -468,6 +638,19 @@ test.describe("minimum window", () => {
 
     await expect(page.getByPlaceholder("Ask Thanh anything…")).toBeVisible();
     await expect(page.getByTestId("send-button")).toBeVisible();
+
+    // The slash menu opens upward from the composer, so the pinned minimum height must hold it.
+    await page.getByPlaceholder("Ask Thanh anything…").fill("/");
+    await expect(page.getByTestId("slash-item-plan")).toBeVisible();
+    const menu = await page.getByTestId("slash-menu").boundingBox();
+    expect(menu!.y).toBeGreaterThanOrEqual(0);
+    expect(menu!.y + menu!.height).toBeLessThanOrEqual(600);
+    // The footer hint ends before the send button rather than running under it.
+    const hint = await page.locator(".composer-hint").boundingBox();
+    const send = await page.getByTestId("send-button").boundingBox();
+    expect(hint!.x + hint!.width).toBeLessThanOrEqual(send!.x);
+    await page.getByPlaceholder("Ask Thanh anything…").fill("");
+
     await page.getByPlaceholder("Ask Thanh anything…").fill("minimum window turn");
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();

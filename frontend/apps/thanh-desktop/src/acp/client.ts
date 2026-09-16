@@ -26,7 +26,7 @@ import {
   type RpcMessage,
 } from "./host";
 import { setDefaultModel as setDefaultModelOnAgent } from "./providers";
-import { XaiClient } from "./xai";
+import { commandsFromUpdate, modelCatalog, XaiClient, type SessionInfo } from "./xai";
 
 const CLIENT_META = {
   clientIdentifier: "grok-desktop",
@@ -115,9 +115,14 @@ export class ThanhAcpClient {
     };
     const response = await request<NewSessionResponse>("session/new", params);
     useSessionStore.getState().resetConversation(response.sessionId);
-    const modelId = (response as unknown as { models?: { currentModelId?: string } }).models?.currentModelId;
-    if (modelId) useSessionStore.getState().set({ modelId });
+    // `session/new` reports the catalog it spawned with, which is authoritative for this session.
+    const catalog = modelCatalog((response as unknown as { models?: unknown }).models);
+    if (catalog.models.length > 0) {
+      useCatalogStore.getState().setModelCatalog(catalog);
+      useSessionStore.getState().set({ modelId: catalog.currentModelId });
+    }
     await this.refreshCommands();
+    void this.refreshUsage();
     return response.sessionId;
   }
 
@@ -126,10 +131,16 @@ export class ThanhAcpClient {
     if (!activeCwd) throw new Error("Session has no workspace");
     const params: LoadSessionRequest = { sessionId, cwd: activeCwd, mcpServers: [] };
     useSessionStore.getState().resetConversation(sessionId);
-    await request("session/load", params);
+    const response = await request<{ models?: unknown }>("session/load", params);
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
+    const catalog = modelCatalog(response?.models);
+    if (catalog.models.length > 0) {
+      useCatalogStore.getState().setModelCatalog(catalog);
+      useSessionStore.getState().set({ modelId: catalog.currentModelId });
+    }
     await this.refreshCommands();
+    void this.refreshUsage();
   }
 
   async prompt(text: string, attachments: Attachment[] = []): Promise<PromptResponse> {
@@ -150,9 +161,10 @@ export class ThanhAcpClient {
   /** Whether the active model accepts `image` prompt parts. */
   imageAttachEnabled(): boolean {
     const { modelId } = useSessionStore.getState();
-    const models = useCatalogStore.getState().models;
-    // Before the first session the active model is the catalog's default, so the gate still holds.
-    const active = models.find((model) => model.id === modelId) ?? models.find((model) => model.isDefault) ?? null;
+    const { models, currentModelId } = useCatalogStore.getState();
+    // Before the first session the active model is the one the agent reports, so the gate still holds.
+    const activeId = modelId ?? currentModelId;
+    const active = models.find((model) => model.id === activeId) ?? models.find((model) => model.isDefault) ?? null;
     return imageAttachEnabled(active);
   }
 
@@ -180,6 +192,7 @@ export class ThanhAcpClient {
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       useSessionStore.getState().set({ turnRunning: this.pendingPromptRequests > 0 });
       void this.refreshSessions();
+      void this.refreshUsage();
     }
   }
 
@@ -192,36 +205,61 @@ export class ThanhAcpClient {
 
   async setModel(modelId: string): Promise<void> {
     const sessionId = useSessionStore.getState().sessionId;
-    if (!sessionId) throw new Error("Start a conversation before selecting a model");
-    await request("session/set_model", { sessionId, modelId });
+    // Before the first prompt there is no session to switch, and there does not need to be: the
+    // choice rides `session/new`'s `_meta.modelId` and is applied by the agent when it spawns.
+    if (sessionId) await request("session/set_model", { sessionId, modelId });
+    localStorage.setItem("thanh.defaultModel", modelId);
     useSessionStore.getState().set({ modelId });
+    useCatalogStore.getState().setModelCatalog({
+      currentModelId: modelId,
+      models: useCatalogStore.getState().models,
+    });
   }
 
-  /** Persist the default through the agent (`[models] default`), not just localStorage. */
+  /**
+   * Persist the default, through the agent when it can.
+   *
+   * `x.ai/models/set_default` writes `[models] default` in `config.toml`. An older agent build has
+   * no such extension; the choice still reaches the next session through `_meta.modelId`, so the
+   * window keeps it and says where it will apply instead of appearing to do nothing.
+   */
   async setDefaultModel(modelId: string): Promise<void> {
-    await setDefaultModelOnAgent(modelId);
-    localStorage.setItem("thanh.defaultModel", modelId);
-    if (useSessionStore.getState().sessionId) {
-      await this.setModel(modelId);
-    } else {
-      useSessionStore.getState().set({ modelId });
+    try {
+      await setDefaultModelOnAgent(modelId);
+    } catch (error) {
+      const detail = errorMessage(error);
+      useSessionStore.getState().set({
+        notice: /-32601|method not found/i.test(detail)
+          ? "This agent build cannot write [models] default, so the choice applies to this window only."
+          : `${detail} — the default applies to this window only.`,
+      });
     }
-    await this.refreshModels();
+    await this.setModel(modelId);
   }
 
   async setYolo(enabled: boolean): Promise<void> {
     localStorage.setItem("thanh.alwaysApprove", String(enabled));
+    useSessionStore.getState().set({ alwaysApprove: enabled });
     await notify("x.ai/yolo_mode_changed", {
       yolo_mode: enabled,
       clientIdentifier: "grok-desktop",
     });
   }
 
-  async togglePlan(enabled: boolean): Promise<void> {
-    const sessionId = useSessionStore.getState().sessionId;
-    if (!sessionId) throw new Error("Start a conversation before changing modes");
-    await this.xai.togglePlanMode(sessionId, enabled);
+  /**
+   * Plan mode is a session mode, so the window creates its session here if the user reaches for the
+   * mode before the first prompt. The agent confirms with `current_mode_update`.
+   */
+  async setPlanMode(enabled: boolean): Promise<void> {
+    const sessionId = await this.ensureSession();
     useSessionStore.getState().set({ planMode: enabled });
+    await this.xai.setMode(sessionId, enabled ? "plan" : "default");
+  }
+
+  /** The session id, creating a session when the window has none yet. */
+  async ensureSession(): Promise<string> {
+    const sessionId = useSessionStore.getState().sessionId;
+    return sessionId ?? this.newSession();
   }
 
   async answerPermission(optionId?: string): Promise<void> {
@@ -246,13 +284,41 @@ export class ThanhAcpClient {
   }
 
   async refreshModels(): Promise<void> {
-    useCatalogStore.getState().setModels(await this.xai.listModels());
+    useCatalogStore.getState().setModelCatalog(await this.xai.listModels());
   }
 
   async refreshCommands(): Promise<void> {
     useCatalogStore.getState().setCommands(
       await this.xai.listCommands(useSessionStore.getState().sessionId ?? undefined),
     );
+  }
+
+  /**
+   * The agent's own view of the session, or `null` when there is no session yet or the agent
+   * build has no such extension.
+   */
+  async sessionInfo(): Promise<SessionInfo | null> {
+    const sessionId = useSessionStore.getState().sessionId;
+    if (!sessionId) return null;
+    try {
+      return await this.xai.sessionInfo(sessionId);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Feed the status bar and `/context` from `x.ai/session/info`.
+   *
+   * A real turn emits no ACP `usage_update`, so without this the token chip never moves. A failed
+   * or silent call leaves the last known numbers in place rather than blanking them.
+   */
+  private async refreshUsage(): Promise<void> {
+    const context = (await this.sessionInfo())?.context;
+    if (typeof context?.used !== "number") return;
+    useSessionStore.getState().set({
+      usage: { used: context.used, ...(typeof context.total === "number" ? { size: context.total } : {}) },
+    });
   }
 
   private async refreshCatalogs() {
@@ -263,6 +329,13 @@ export class ThanhAcpClient {
     const method = unwrapMethod(message);
     const params = unwrapParams(message);
     if (method === "session/update") {
+      // The command catalog rides `session/update`, not an extension reply: the agent re-advertises
+      // it whenever skills, plugins, or folders change mid-session.
+      if (params.update && (params.update as Record<string, unknown>).sessionUpdate === "available_commands_update") {
+        useCatalogStore.getState().setCommands(
+          commandsFromUpdate((params.update as Record<string, unknown>).availableCommands),
+        );
+      }
       useSessionStore.getState().applyNotification(params as unknown as SessionNotification);
       return;
     }
@@ -275,8 +348,13 @@ export class ThanhAcpClient {
       });
       return;
     }
-    if ((method === "x.ai/models/update" || method === "x.ai/models/list_changed")) {
-      await this.refreshModels();
+    if (method === "x.ai/models/update") {
+      // The notification carries the catalog, so the picker updates without a round trip. The
+      // machine-wide broadcast form carries no payload at all, which only means the catalog moved
+      // on disk: applying it as a catalog would empty the picker, so it re-lists instead.
+      const catalog = modelCatalog(params);
+      if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
+      else await this.refreshModels();
       return;
     }
     if (method === "x.ai/yolo_mode_changed") return;

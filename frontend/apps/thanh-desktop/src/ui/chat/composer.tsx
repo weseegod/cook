@@ -5,25 +5,55 @@ import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type At
 import { onFileDrop, pickFiles, readFilePayload } from "../../acp/host";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
+import {
+  clientCommand,
+  matchSlashCommands,
+  parseSlash,
+  slashEntries,
+  type SlashCommandHost,
+  type SlashEntry,
+} from "./slash-commands";
+
+/** The window's own half of the slash commands; the agent's half arrives as an ordinary prompt. */
+const SLASH_HOST: SlashCommandHost = {
+  setPlanMode: (enabled) => acpClient.setPlanMode(enabled),
+  setModel: (modelId) => acpClient.setModel(modelId),
+  setYolo: (enabled) => acpClient.setYolo(enabled),
+  newSession: async () => {
+    await acpClient.newSession();
+  },
+  sendPrompt: (text) => acpClient.prompt(text),
+  sessionInfo: () => acpClient.sessionInfo(),
+};
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [menuClosed, setMenuClosed] = useState(false);
+  const [active, setActive] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
   const text = useSessionStore((state) => state.composerDraft);
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
+  const sessionId = useSessionStore((state) => state.sessionId);
+  const planMode = useSessionStore((state) => state.planMode);
+  const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
+  const usage = useSessionStore((state) => state.usage);
   const modelId = useSessionStore((state) => state.modelId);
-  const models = useCatalogStore((state) => state.models);
   const commands = useCatalogStore((state) => state.commands);
+  const models = useCatalogStore((state) => state.models);
   const imagesAllowed = acpClient.imageAttachEnabled();
-  const commandQuery = text.startsWith("/") ? text.slice(1).split(/\s/, 1)[0].toLowerCase() : null;
+  // The name is still being typed while no space follows it; after that the text is arguments.
+  const slashPrefix = /^\/([^\s/\\]*)(\s[\s\S]*)?$/.exec(text.trimStart());
+  const typedName = slashPrefix ? slashPrefix[1].toLowerCase() : null;
+  const typedArgs = Boolean(slashPrefix?.[2]);
   const matching = useMemo(
-    () => commandQuery === null ? [] : commands.filter((command) => command.name.toLowerCase().includes(commandQuery)).slice(0, 8),
-    [commandQuery, commands],
+    () => (typedName === null || typedArgs || menuClosed ? [] : matchSlashCommands(slashEntries(commands), typedName)),
+    [typedName, typedArgs, commands, menuClosed],
   );
+  useEffect(() => setActive(0), [typedName]);
 
   // Native drops arrive as paths from the Tauri webview, not as HTML5 events.
   useEffect(() => {
@@ -101,29 +131,103 @@ export function Composer() {
     else await addPaths(paths);
   }
 
+  /**
+   * Run the turn.
+   *
+   * A leading `/name` the window owns (`/plan`, `/model`, `/new`) is executed here; every other
+   * slash text travels as a prompt, which is how the agent's own commands and skills arrive.
+   * Commands that produce a line of their own park it in `notice`, since they never reach the
+   * agent and so never appear in the transcript.
+   */
   async function submit() {
     const prompt = text.trim();
     if ((!prompt && attachments.length === 0) || busy) return;
+    const slash = parseSlash(prompt);
+    const command = slash && attachments.length === 0 ? clientCommand(slash.name) : undefined;
     setBusy(true);
     const sending = attachments;
     setText("");
     setAttachments([]);
+    setMenuClosed(false);
+    useSessionStore.getState().set({ notice: null, error: null });
     try {
-      if (turnRunning) acpClient.queuePrompt(prompt, sending);
-      else await acpClient.prompt(prompt, sending);
+      if (command && slash) {
+        const message = await command.run(
+          SLASH_HOST,
+          { sessionId, modelId, planMode, alwaysApprove, usage, models },
+          slash.args,
+        );
+        if (message) useSessionStore.getState().set({ notice: message });
+      } else if (turnRunning) {
+        acpClient.queuePrompt(prompt, sending);
+      } else {
+        await acpClient.prompt(prompt, sending);
+      }
+    } catch (error) {
+      useSessionStore.getState().set({
+        error: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setBusy(false);
       textarea.current?.focus();
     }
   }
 
+  function accept(entry: SlashEntry) {
+    setText(`/${entry.name} `);
+    setMenuClosed(true);
+    textarea.current?.focus();
+  }
+
+  function onComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (matching.length > 0) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setActive((index) => Math.min(index + 1, matching.length - 1));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setActive((index) => Math.max(index - 1, 0));
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setMenuClosed(true);
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        accept(matching[Math.min(active, matching.length - 1)]);
+        return;
+      }
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      // A partial name completes first; a name that already matches a command runs.
+      const complete = matching.some((entry) => entry.name.toLowerCase() === typedName);
+      if (matching.length > 0 && !complete) accept(matching[Math.min(active, matching.length - 1)]);
+      else void submit();
+    }
+  }
+
   return (
     <div className="composer-wrap">
       {matching.length > 0 && (
-        <div className="command-palette">
-          {matching.map((command) => (
-            <button key={command.name} onClick={() => setText(`/${command.name} `)}>
-              <span>/{command.name}</span><small>{command.description}</small>
+        <div className="command-palette" data-testid="slash-menu">
+          {matching.map((command, index) => (
+            <button
+              key={command.name}
+              className={index === active ? "active" : ""}
+              data-testid={`slash-item-${command.name}`}
+              onMouseEnter={() => setActive(index)}
+              onClick={() => accept(command)}
+            >
+              <span>
+                /{command.name}
+                {command.inputHint && <em> {command.inputHint}</em>}
+              </span>
+              <small>{command.source === "client" ? "window" : command.description}</small>
             </button>
           ))}
         </div>
@@ -157,7 +261,10 @@ export function Composer() {
         <textarea
           ref={textarea}
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value);
+            setMenuClosed(false);
+          }}
           onPaste={(event) => {
             const files = Array.from(event.clipboardData?.files ?? []);
             if (files.length > 0) {
@@ -165,12 +272,7 @@ export function Composer() {
               void addFiles(files);
             }
           }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void submit();
-            }
-          }}
+          onKeyDown={onComposerKeyDown}
           placeholder={turnRunning ? "Queue another prompt…" : "Ask Thanh anything…"}
           rows={1}
         />
@@ -196,7 +298,7 @@ export function Composer() {
               }}
             />
             <span className="composer-hint">
-              <WandSparkles size={13} /> Shift+Enter for a new line
+              <WandSparkles size={13} /> Shift+Enter for a new line · <code>/</code> for commands
               {imagesAllowed ? "" : " · this model is text-only"}
             </span>
           </div>

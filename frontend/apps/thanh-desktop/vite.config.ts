@@ -10,7 +10,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true,
-    watch: { ignored: ["**/src-tauri/**"] },
+    // Playwright streams trace artifacts (including `.html` snapshots) under `test-results*/`
+    // while a spec runs; Vite treats any `.html` write as a full page reload, which would reload
+    // the app mid-test and fail the whole run.
+    watch: { ignored: ["**/src-tauri/**", "**/test-results*/**"] },
   },
   envPrefix: ["VITE_", "TAURI_ENV_*"],
   build: { target: ["es2021", "chrome100", "safari13"] },
