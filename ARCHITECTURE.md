@@ -15,13 +15,17 @@ terminal-based AI coding agent. This fork ships the binary as **`thanh`**
 (the cargo artifact is `xai-grok-pager`) with its own home directory
 **`~/.thanh`**, fully isolated from the official grok CLI's `~/.grok`.
 
-The product runs in three modes, all sharing one agent runtime:
+The product runs in four modes, all sharing one agent runtime:
 
 - **Interactive TUI** — full-screen terminal UI (default).
 - **Headless single-turn** — `thanh -c "<prompt>"` for scripting/CI.
 - **Stdio / ACP agent** — `thanh agent stdio`, the
   [Agent Client Protocol](https://agentclientprotocol.com) server used by
   editor integrations.
+- **Desktop ACP client** — specified in
+  [`docs/desktop-app.md`](docs/desktop-app.md); folder
+  `frontend/apps/thanh-desktop/` (not implemented yet). Same agent process as
+  the TUI; the desktop app must not reimplement tools or sampling.
 
 System context (arrows = data flow):
 
@@ -31,14 +35,15 @@ System context (arrows = data flow):
 │  input, views, scrollback│   (AcpClientMessage ⇄       │  leader process · MvpAgent     │
 │  slash cmds, headless CLI│    AcpAgentMessage)         │  owns the conversation session │
 └──────────────────────────┘                             └───────────────┬───────────────┘
-        ▲ renders via                                    tool calls (xai-tool-runtime)  │ LLM requests
-        │ re-exports                                                   ▼                  ▼
-┌──────────────────────────┐                             ┌─────────────────────┐  ┌───────────────────┐
-│ xai-grok-pager-render    │                             │ xai-grok-tools      │  │ xai-grok-sampler  │
-│ theme · render · terminal│                             │ registry + impls    │  │ HTTP streaming +  │
-│ (draw primitives)        │  ◄── workspace backends ──  │ + computer backends │  │ retry             │
-└──────────────────────────┘                             └───────────┬─────────┘  └───────────────────┘
-                                                                     ▼
+        ▲ renders via                 ▲ ACP stdio                        │
+        │                             │                                  │
+┌──────────────────────────┐  ┌───────┴────────────────┐  tool calls     │ LLM requests
+│ xai-grok-pager-render    │  │ thanh-desktop (Tauri)  │         ▼       ▼
+│ theme · render · terminal│  │ React ACP client       │  ┌────────────┐ ┌──────────────┐
+│ (draw primitives)        │  │ docs/desktop-app.md    │  │ xai-grok-  │ │ xai-grok-    │
+└──────────────────────────┘  └────────────────────────┘  │ tools      │ │ sampler      │
+                                                          └─────┬──────┘ └──────────────┘
+                                                                ▼
                                              ┌─────────────────────────────────────┐
                                              │ xai-grok-workspace                   │
                                              │ FS (AsyncFileSystem) · VCS · exec ·  │
@@ -422,6 +427,7 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change raw drawing / terminal output | `xai-grok-pager-render/src/render/` (`draw.rs`, `highlight.rs`, overlays) |
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
+| Change / start the desktop app | Spec [`docs/desktop-app.md`](docs/desktop-app.md); empty tree `frontend/apps/thanh-desktop/`. Do **not** reimplement the agent there. |
 
 ### Agent / shell
 
@@ -497,7 +503,9 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
 - TUI UX: `/clear`, `/new` keep-model behavior, turn-status/tasks-pane tweaks
   in `xai-grok-pager`.
 - Build/release: `build.sh`, `scripts/publish_release.sh` (local builds, no
-  CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`.
+  CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
+  `docs/desktop-app.md` (desktop ACP client; code in
+  `frontend/apps/thanh-desktop/`, not a workspace crate).
 - Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D).
 
 ### Conventions every engineer should know
