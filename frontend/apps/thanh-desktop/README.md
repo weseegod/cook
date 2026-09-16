@@ -4,12 +4,14 @@ Chat-first Tauri 2 + React ACP client for the existing Thanh agent. It runs
 `thanh agent stdio`, shares `~/.thanh` with the CLI, and never calls models or
 tools from the renderer.
 
-Canonical spec: [`docs/desktop-app.md`](../../../docs/desktop-app.md).
+Architecture: [`docs/desktop-app.md`](../../../docs/desktop-app.md).  
+Production plan (providers, Claude Desktop–class features):
+[`docs/desktop-app-implement.md`](../../../docs/desktop-app-implement.md).
 
 ## Develop
 
 Prerequisites: pnpm, Rust, an installed `~/.thanh/bin/thanh` (or
-`THANH_BIN`), and the Tauri Linux packages listed in the canonical spec.
+`THANH_BIN`), and the Tauri Linux packages listed in the architecture doc.
 
 ```sh
 pnpm install

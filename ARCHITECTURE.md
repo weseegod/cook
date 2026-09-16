@@ -23,9 +23,10 @@ The product runs in four modes, all sharing one agent runtime:
   [Agent Client Protocol](https://agentclientprotocol.com) server used by
   editor integrations.
 - **Desktop ACP client** — Tauri 2 + React application in
-  `frontend/apps/thanh-desktop/`, implemented from
-  [`docs/desktop-app.md`](docs/desktop-app.md). It spawns the same agent process
-  as the TUI and does not reimplement tools or sampling.
+  `frontend/apps/thanh-desktop/`. Architecture:
+  [`docs/desktop-app.md`](docs/desktop-app.md). Production plan:
+  [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md). Same agent
+  process as the TUI; does not reimplement tools or sampling.
 
 System context (arrows = data flow):
 
@@ -427,7 +428,7 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change raw drawing / terminal output | `xai-grok-pager-render/src/render/` (`draw.rs`, `highlight.rs`, overlays) |
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
-| Change / start the desktop app | `frontend/apps/thanh-desktop/`; contract and scope in [`docs/desktop-app.md`](docs/desktop-app.md). Keep model/tool execution in `thanh agent stdio`. |
+| Change / start the desktop app | `frontend/apps/thanh-desktop/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md). Keep model/tool execution in `thanh agent stdio`. |
 
 ### Agent / shell
 
@@ -504,8 +505,8 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
   in `xai-grok-pager`.
 - Build/release: `build.sh`, `scripts/publish_release.sh` (local builds, no
   CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
-  `docs/desktop-app.md` (desktop ACP client; code in
-  `frontend/apps/thanh-desktop/`, not a workspace crate).
+  `docs/desktop-app.md` + `docs/desktop-app-implement.md` (desktop ACP
+  client; code in `frontend/apps/thanh-desktop/`, not a workspace crate).
 - Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D).
 
 ### Conventions every engineer should know

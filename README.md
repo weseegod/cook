@@ -37,7 +37,8 @@ separate from `~/.grok`, so both can run side by side.
 | Topic | Link |
 |-------|------|
 | How the repo is organized (for engineers/AI) | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| Desktop app (Tauri ACP client) | [`docs/desktop-app.md`](docs/desktop-app.md) |
+| Desktop app architecture | [`docs/desktop-app.md`](docs/desktop-app.md) |
+| Desktop production plan (providers, Claude Desktop–class) | [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md) |
 | BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
 | Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
 | Restore core surfaces after a sync (implement + test) | [`docs/post-merge-core-fix.md`](docs/post-merge-core-fix.md) |
