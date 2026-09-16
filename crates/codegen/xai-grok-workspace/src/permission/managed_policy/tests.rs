@@ -1,5 +1,6 @@
 use super::mcp::{
-    MANAGED_MCP_NAME_MAX_CHARS, MANAGED_MCP_PREFIX, mcp_name_matches, normalize_managed_name,
+    MANAGED_MCP_NAME_MAX_CHARS, MANAGED_MCP_PREFIX, mcp_name_matches, mcp_transport_known,
+    normalize_managed_name,
 };
 use super::parse::{McpPolicyList, parse_mcp_entry_list};
 use super::*;
@@ -186,7 +187,14 @@ fn parse_managed_settings_json_end_to_end() {
             .is_url_allowed("git@evil.com:org/repo.git", FOREIGN)
     );
     assert_eq!(ms.permissions.len(), 1);
-    assert_eq!(ms.permissions[0].value.action, RuleAction::Deny);
+    assert_eq!(
+        ms.permissions
+            .first()
+            .unwrap_or_else(|| panic!("expected permission"))
+            .value
+            .action,
+        RuleAction::Deny
+    );
 }
 #[test]
 fn mcp_denylist_classifies_denied_servers() {
@@ -1283,6 +1291,21 @@ fn name_argv_and_lockdown_semantics() {
         ],
     );
 }
+/// ACP 0.10 cannot construct a fourth `McpServer` variant; `known = false`
+/// is the fail-closed branch `is_server_denied` takes for one.
+#[test]
+fn deny_only_fails_closed_on_unrecognized_transport() {
+    let unlisted = h("https://other.com/mcp");
+    let deny_only = allowlist_from(serde_json::json!({
+        "deniedMcpServers": [{ "command": "npx" }]
+    }));
+    let source = deny_only.sources.first().expect("deny-only parsed");
+    assert!(mcp_transport_known(&unlisted));
+    assert!(!source.is_server_denied(&unlisted));
+    assert!(source.is_server_denied_known(&unlisted, false));
+    let unrestricted = McpServerAllowlist::new(vec![], vec![], None);
+    assert!(!unrestricted.is_server_denied_known(&unlisted, false));
+}
 /// Pins `serverName` identity: strip `grok_com_`, normalize, exact equality (empty never matches).
 /// Legacy truncation applies only to a managed name at exactly the cap, so a long entry is not a prefix grant.
 #[test]
@@ -1290,13 +1313,30 @@ fn name_argv_and_lockdown_semantics() {
 fn mcp_name_matching_semantics() {
     let max_bare = MANAGED_MCP_NAME_MAX_CHARS - MANAGED_MCP_PREFIX.len();
     let long = "a".repeat(MANAGED_MCP_NAME_MAX_CHARS * 2);
-    let long_runtime = format!("{MANAGED_MCP_PREFIX}{}", &long[..max_bare]);
+    let long_runtime = format!(
+        "{MANAGED_MCP_PREFIX}{}",
+        long.get(..max_bare).unwrap_or(long.as_str())
+    );
     let long_bare = "a".repeat(max_bare + 8);
     let entry = format!("{MANAGED_MCP_PREFIX}{long_bare}");
-    let plain_decoy = format!("{}-decoy", &long_bare[..max_bare]);
-    let at_cap = format!("{MANAGED_MCP_PREFIX}{}", &long_bare[..max_bare]);
-    let over_cap_decoy = format!("{MANAGED_MCP_PREFIX}{}-decoy", &long_bare[..max_bare]);
-    let under_cap_decoy = format!("{MANAGED_MCP_PREFIX}{}", &long_bare[..max_bare - 4]);
+    let plain_decoy = format!(
+        "{}-decoy",
+        long_bare.get(..max_bare).unwrap_or(long_bare.as_str())
+    );
+    let at_cap = format!(
+        "{MANAGED_MCP_PREFIX}{}",
+        long_bare.get(..max_bare).unwrap_or(long_bare.as_str())
+    );
+    let over_cap_decoy = format!(
+        "{MANAGED_MCP_PREFIX}{}-decoy",
+        long_bare.get(..max_bare).unwrap_or(long_bare.as_str())
+    );
+    let under_cap_decoy = format!(
+        "{MANAGED_MCP_PREFIX}{}",
+        long_bare
+            .get(..max_bare - 4)
+            .unwrap_or(long_bare.as_str())
+    );
     let corp = "corporate-approved-server-alpha-prod";
     let rows: Vec<(&str, &str, bool, &str)> = vec![
         ("foo", "foo", true, "exact bare match"),
@@ -1774,7 +1814,7 @@ fn mcp_entry_parse_fail_directions() {
         Deny,
     );
     assert!(
-        matches!(&entries[0], AllowedMcpServer::Name { name } if name == "internal-only"),
+        matches!(&entries.first().unwrap_or_else(|| panic!("expected entry")), AllowedMcpServer::Name { name } if name == "internal-only"),
         "expected a Name entry, got {entries:?}"
     );
 }
@@ -1908,8 +1948,14 @@ fn assert_expects(label: &str, ms: &ManagedSettings, expects: Vec<Expect>) {
             }
             Expect::ArgvDenied(argv, want) => {
                 assert_eq!(
-                    ms.mcp_allowlist
-                        .is_server_denied(&sa("t", argv[0], &argv[1..]), FOREIGN),
+                    ms.mcp_allowlist.is_server_denied(
+                        &sa(
+                            "t",
+                            argv.first().unwrap_or_else(|| panic!("expected argv0")),
+                            argv.get(1..).unwrap_or(&[])
+                        ),
+                        FOREIGN
+                    ),
                     want,
                     "{label}: argv denied({argv:?})"
                 )
@@ -1971,7 +2017,10 @@ fn assert_expects(label: &str, ms: &ManagedSettings, expects: Vec<Expect>) {
                 assert_eq!(ms.extra_marketplaces.len(), n, "{label}: extras count")
             }
             Expect::ExtraGit(idx, name, url, git_ref) => {
-                let extra = &ms.extra_marketplaces[idx];
+                let extra = &ms
+                    .extra_marketplaces
+                    .get(idx)
+                    .unwrap_or_else(|| panic!("expected extra marketplace {idx}"));
                 assert_eq!(extra.name, name, "{label}: extra[{idx}] name");
                 assert_eq!(
                     extra.kind,
@@ -2576,12 +2625,21 @@ fn auto_update_pin_warnings_name_the_source_and_consequence() {
 fn enterprise_ga_fixture_parses_all_entries() {
     let raw = include_str!("../../../tests/fixtures/enterprise-managed-settings-ga.json");
     let json: serde_json::Value = serde_json::from_str(raw).unwrap();
-    let expected = json["allowedMcpServers"].as_array().unwrap().len();
+    let expected = json
+        .get("allowedMcpServers")
+        .unwrap_or(&serde_json::Value::Null)
+        .as_array()
+        .unwrap()
+        .len();
     let path =
         std::path::Path::new("/Library/Application Support/ClaudeCode/managed-settings.json");
     let ms = parse_managed_settings_json(&json, path);
     assert_eq!(ms.mcp_allowlist.sources.len(), 1);
-    let source = &ms.mcp_allowlist.sources[0];
+    let source = &ms
+        .mcp_allowlist
+        .sources
+        .first()
+        .unwrap_or_else(|| panic!("expected allowlist source"));
     assert_eq!(
         source.entries().count(),
         expected,
@@ -2596,7 +2654,8 @@ fn enterprise_ga_fixture_parses_all_entries() {
         .filter(|e| matches!(e, AllowedMcpServer::Http { .. }))
         .count();
     let fixture_entries_with = |key: &str| {
-        json["allowedMcpServers"]
+        json.get("allowedMcpServers")
+            .unwrap_or(&serde_json::Value::Null)
             .as_array()
             .unwrap()
             .iter()
@@ -2642,7 +2701,13 @@ fn enterprise_ga_fixture_parses_all_entries() {
         FOREIGN
     ));
     assert_eq!(ms.extra_marketplaces.len(), 1);
-    assert_eq!(ms.extra_marketplaces[0].name, "approved-plugins");
+    assert_eq!(
+        ms.extra_marketplaces
+            .first()
+            .unwrap_or_else(|| panic!("expected extra marketplace"))
+            .name,
+        "approved-plugins"
+    );
 }
 /// A managed-only block is attributed to a lockdown source that is actually
 /// unsatisfied — never to a source whose own allowlist contains the server.
@@ -2696,12 +2761,18 @@ source = { source = "git", url = "https://github.com/user/squat.git" }
     );
     assert_eq!(ms.extra_marketplaces.len(), 1);
     assert_eq!(
-        ms.extra_marketplaces[0].ownership,
+        ms.extra_marketplaces
+            .first()
+            .unwrap_or_else(|| panic!("expected extra marketplace"))
+            .ownership,
         PolicyLayerOwnership::Admin,
         "the admin-owned vendor pin must win the name over the user squat"
     );
     assert_eq!(
-        ms.extra_marketplaces[0].kind,
+        ms.extra_marketplaces
+            .first()
+            .unwrap_or_else(|| panic!("expected extra marketplace"))
+            .kind,
         ManagedMarketplaceKind::Local {
             path: "/opt/mp".into()
         }

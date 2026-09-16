@@ -58,15 +58,25 @@ fn snap_split_idx_to_tool_boundaries(
     }
     split_idx = split_idx.min(n);
 
-    while split_idx < n && matches!(conversation[split_idx], ConversationItem::ToolResult(_)) {
+    while split_idx < n
+        && matches!(
+            conversation.get(split_idx),
+            Some(ConversationItem::ToolResult(_))
+        )
+    {
         split_idx += 1;
     }
     if split_idx < n
-        && let ConversationItem::Assistant(a) = &conversation[split_idx]
+        && let Some(ConversationItem::Assistant(a)) = conversation.get(split_idx)
         && !a.tool_calls.is_empty()
     {
         split_idx += 1;
-        while split_idx < n && matches!(conversation[split_idx], ConversationItem::ToolResult(_)) {
+        while split_idx < n
+            && matches!(
+                conversation.get(split_idx),
+                Some(ConversationItem::ToolResult(_))
+            )
+        {
             split_idx += 1;
         }
     }
@@ -83,26 +93,39 @@ fn snap_split_idx_to_tool_boundaries(
         ) {
             break;
         }
-        while split_idx < n && matches!(conversation[split_idx], ConversationItem::ToolResult(_)) {
+        while split_idx < n
+            && matches!(
+                conversation.get(split_idx),
+                Some(ConversationItem::ToolResult(_))
+            )
+        {
             split_idx += 1;
         }
     }
 
     if split_idx >= n && n > 1 {
         let mut candidate = n - 1;
-        while candidate > 1 && matches!(conversation[candidate], ConversationItem::ToolResult(_)) {
+        while candidate > 1
+            && matches!(
+                conversation.get(candidate),
+                Some(ConversationItem::ToolResult(_))
+            )
+        {
             candidate -= 1;
         }
         if candidate > 0
-            && let ConversationItem::Assistant(a) = &conversation[candidate]
+            && let Some(ConversationItem::Assistant(a)) = conversation.get(candidate)
             && !a.tool_calls.is_empty()
         {
             // The candidate already sits on an assistant `tool_calls` turn, a valid tail start
         } else if candidate > 0
-            && matches!(conversation[candidate], ConversationItem::ToolResult(_))
+            && matches!(
+                conversation.get(candidate),
+                Some(ConversationItem::ToolResult(_))
+            )
         {
             let mut i = candidate;
-            while i > 0 && matches!(conversation[i], ConversationItem::ToolResult(_)) {
+            while i > 0 && matches!(conversation.get(i), Some(ConversationItem::ToolResult(_))) {
                 i -= 1;
             }
             if matches!(
@@ -130,8 +153,8 @@ pub(crate) fn split_conversation_for_two_pass(
     split_idx = snap_split_idx_to_tool_boundaries(conversation, split_idx);
     let split_idx = split_idx.min(conversation.len());
     TwoPassSplit {
-        prefix: &conversation[..split_idx],
-        tail: &conversation[split_idx..],
+        prefix: conversation.get(..split_idx).unwrap_or(&[]),
+        tail: conversation.get(split_idx..).unwrap_or(&[]),
         split_idx,
     }
 }
@@ -148,15 +171,24 @@ fn extract_summary_block(text: &str, min_chars: usize) -> Option<String> {
     let text_bytes = text.as_bytes();
     let lower_bytes = lower.as_bytes();
     while search_from < lower_bytes.len() {
-        let Some(rel) = find_bytes(&lower_bytes[search_from..], open.as_bytes()) else {
+        let Some(rel) = lower_bytes
+            .get(search_from..)
+            .and_then(|hay| find_bytes(hay, open.as_bytes()))
+        else {
             break;
         };
         let start = search_from + rel + open.len();
-        let Some(rel_close) = find_bytes(&lower_bytes[start..], close.as_bytes()) else {
+        let Some(rel_close) = lower_bytes
+            .get(start..)
+            .and_then(|hay| find_bytes(hay, close.as_bytes()))
+        else {
             break;
         };
         let end = start + rel_close;
-        let inner = std::str::from_utf8(&text_bytes[start..end]).unwrap_or("");
+        let inner = text_bytes
+            .get(start..end)
+            .and_then(|b| std::str::from_utf8(b).ok())
+            .unwrap_or("");
         blocks.push(inner.to_string());
         search_from = end + close.len();
     }

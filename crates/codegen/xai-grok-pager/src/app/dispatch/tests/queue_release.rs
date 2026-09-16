@@ -6,6 +6,13 @@ use crate::app::agent::AgentState;
 use crate::app::agent_view::test_fixtures::simulate_task_output_wait;
 use crate::views::btw_overlay::BtwOverlayState;
 
+fn agent_ref(app: &AppView, id: AgentId) -> &AgentView {
+    let Some(agent) = app.agents.get(&id) else {
+        panic!("expected agent {id:?}");
+    };
+    agent
+}
+
 fn running_turn_app() -> AppView {
     let mut app = test_app_with_agent();
     let agent = app.agents.get_mut(&AgentId(0)).unwrap();
@@ -70,7 +77,7 @@ fn send_while_waiting_goes_through_when_btw_overlay_is_open() {
 
     assert_eq!(sent_texts(&effects), vec!["keep going".to_string()]);
     assert_eq!(
-        app.agents[&AgentId(0)]
+        agent_ref(&app, AgentId(0))
             .session
             .pending_prompts
             .iter()
@@ -79,7 +86,7 @@ fn send_while_waiting_goes_through_when_btw_overlay_is_open() {
         vec!["held"]
     );
     assert!(
-        app.agents[&AgentId(0)].btw_state.is_some(),
+        agent_ref(&app, AgentId(0)).btw_state.is_some(),
         "releasing the send must not dismiss the /btw overlay",
     );
 }
@@ -100,6 +107,7 @@ fn btw_response_does_not_flush_an_unrelated_queued_prompt() {
 
     let effects = dispatch_task_result(
         TaskResult::BtwResponse {
+            image_notice: None,
             agent_id: AgentId(0),
             result: Ok("still waiting".into()),
             minimal_request_id: None,
@@ -112,7 +120,7 @@ fn btw_response_does_not_flush_an_unrelated_queued_prompt() {
         "btw completion must not interject a pre-queued follow-up, got {effects:?}"
     );
     assert_eq!(
-        app.agents[&AgentId(0)]
+        agent_ref(&app, AgentId(0))
             .session
             .pending_prompts
             .front()
@@ -121,7 +129,7 @@ fn btw_response_does_not_flush_an_unrelated_queued_prompt() {
     );
     assert!(
         matches!(
-            app.agents[&AgentId(0)].btw_state,
+            agent_ref(&app, AgentId(0)).btw_state,
             Some(BtwOverlayState::Done { .. })
         ),
         "the overlay must still show the answer",
@@ -146,7 +154,7 @@ fn queue_mode_send_while_waiting_stays_queued() {
         "Queue must not interject during a wait, got {effects:?}"
     );
     assert_eq!(
-        app.agents[&AgentId(0)]
+        agent_ref(&app, AgentId(0))
             .session
             .pending_prompts
             .iter()
@@ -172,7 +180,7 @@ fn send_while_waiting_releases_the_new_prompt_not_an_older_queued_row() {
 
     assert_eq!(sent_texts(&effects), vec!["just typed".to_string()]);
     assert_eq!(
-        app.agents[&AgentId(0)]
+        agent_ref(&app, AgentId(0))
             .session
             .pending_prompts
             .iter()
@@ -199,7 +207,7 @@ fn queue_mode_send_while_waiting_with_empty_queue_stays_queued() {
         "Queue must not wait-interject even with an empty pile, got {effects:?}"
     );
     assert_eq!(
-        app.agents[&AgentId(0)]
+        agent_ref(&app, AgentId(0))
             .session
             .pending_prompts
             .iter()
@@ -221,5 +229,5 @@ fn send_while_thinking_stays_queued() {
         sent_texts(&effects).is_empty(),
         "a thinking turn must not interject, got {effects:?}"
     );
-    assert_eq!(app.agents[&AgentId(0)].session.pending_prompts.len(), 1);
+    assert_eq!(agent_ref(&app, AgentId(0)).session.pending_prompts.len(), 1);
 }

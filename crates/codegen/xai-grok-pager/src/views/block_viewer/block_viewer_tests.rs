@@ -367,7 +367,9 @@ fn finish_selects_last_nonempty_line() {
 #[test]
 fn pin_to_tail_skips_trailing_blanks() {
     let mut pane = running_markdown_pane("hello");
-    let hello_id = pane.items[0].id;
+    let Some(hello_id) = pane.items.first().map(|item| item.id) else {
+        panic!("expected a body line");
+    };
     pane.items.push(ContentLine {
         content: Line::default(),
         plain_text: String::new(),
@@ -392,7 +394,12 @@ fn ensure_body_cursor_drops_stale_preamble_id() {
     pane.list_state.select_by_id(u64::MAX - 5);
     pane.install_prepend_lines(&[Line::from("header")]);
     pane.prepare_for_test(area());
-    assert_eq!(pane.list_state.selected_id(), Some(pane.items[0].id));
+    let first_id = pane
+        .items
+        .first()
+        .map(|item| item.id)
+        .expect("expected a body line");
+    assert_eq!(pane.list_state.selected_id(), Some(first_id));
     assert_eq!(pane.selected_plain_text(), "hello");
 }
 

@@ -3,10 +3,12 @@ mod auth;
 mod cta_e2e;
 mod dashboard;
 mod jump;
+mod mid_text_btw;
 mod modes;
 mod notes;
 mod permissions;
 mod prompt;
+mod prompt_ack;
 mod queue_release;
 mod rewind;
 mod router;
@@ -46,6 +48,7 @@ use super::session::lifecycle::{dispatch_new_session_inner, drain_startup_action
 use super::session::load::{dispatch_load_session_with_restore, reanchor_grouped_selection};
 use super::session::modal::{
     dispatch_rename_session, dispatch_reset_session_title, dispatch_sessions_confirm_close,
+    drop_other_agents_in_minimal,
 };
 use super::settings::setters::set_default_model_inner;
 use super::settings::ui::{action_for_reset, apply_setting_rollback};
@@ -123,6 +126,7 @@ fn test_app() -> AppView {
         require_plan_approval: false,
         plan_mode: false,
         chat_mode: false,
+        post_turn_plan_review: false,
         #[cfg(feature = "local-workspace")]
         welcome_workspace_mode: crate::views::welcome::WelcomeWorkspaceMode::Sandbox,
         #[cfg(feature = "local-workspace")]
@@ -207,6 +211,7 @@ fn test_app() -> AppView {
         command_tags: std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new())),
         welcome_prompt_focused: false,
         home_session_agent: None,
+        optimistic_home_husk: None,
         welcome_tip_typing_dismissed: false,
         welcome_menu_index: None,
         welcome_menu_rects: Vec::new(),
@@ -286,6 +291,7 @@ fn test_app() -> AppView {
         workspace_dashboard_enabled: false,
         usage_visible: true,
         has_external_auth_provider: false,
+        backend_billed: false,
         tier_restricted_commands: Vec::new(),
         leader_mode: true,
         credit_balance: None,
@@ -360,6 +366,12 @@ fn make_test_agent_session(app: &AppView, id: AgentId, sid: &str) -> AgentSessio
         created_via_new: false,
     }
 }
+pub(super) fn test_agent_mut(app: &mut AppView, id: AgentId) -> &mut AgentView {
+    let Some(agent) = app.agents.get_mut(&id) else {
+        panic!("agent {id:?} is not registered");
+    };
+    agent
+}
 pub(super) fn test_app_with_agent() -> AppView {
     let mut app = test_app();
     let id = AgentId(0);
@@ -370,6 +382,12 @@ pub(super) fn test_app_with_agent() -> AppView {
     app.next_agent_id = 1;
     switch_to_agent(&mut app, id, SwitchCause::New);
     app
+}
+pub(super) fn test_agent(app: &AppView, id: AgentId) -> &AgentView {
+    match app.agents.get(&id) {
+        Some(agent) => agent,
+        None => panic!("missing agent {id:?}"),
+    }
 }
 /// Give a test agent a generated title so the dashboard renders it.
 /// The dashboard hides sessions with no real turn (`views::dashboard::row::is_empty_top_level`).
@@ -573,7 +591,7 @@ pub(super) fn last_system_text(app: &AppView, id: AgentId) -> String {
 /// Like [`last_system_text`] but takes an offset from the end.
 /// `offset = 0` is the last entry, `offset = 1` is second-to-last, etc.
 fn system_text_from_end(app: &AppView, id: AgentId, offset: usize) -> String {
-    let sb = &app.agents[&id].scrollback;
+    let sb = &test_agent(app, id).scrollback;
     let idx = sb.len() - 1 - offset;
     let entry = sb.get(idx).expect("scrollback index out of bounds");
     match &entry.block {
@@ -716,7 +734,7 @@ fn set_forked_from(app: &mut AppView, child: AgentId, parent: AgentId) {
         agent.session.forked_from = Some(parent);
     }
 }
-fn make_bg_task(task_id: &str) -> crate::app::agent::BgTaskState {
+pub(super) fn make_bg_task(task_id: &str) -> crate::app::agent::BgTaskState {
     crate::app::agent::BgTaskState {
         task_id: task_id.into(),
         tool_call_id: String::new(),
@@ -742,7 +760,10 @@ fn make_bg_task(task_id: &str) -> crate::app::agent::BgTaskState {
 /// Set up a two-agent app: agent 0 is active with "sess-A", agent 1 is inactive with "sess-B" and a bg task.
 fn two_agent_app_with_bg_task() -> AppView {
     let mut app = test_app_with_agent();
-    app.agents[&AgentId(0)].session.session_id = Some(acp::SessionId::new("sess-A"));
+    let Some(agent) = app.agents.get_mut(&AgentId(0)) else {
+        panic!("missing agent AgentId(0)");
+    };
+    agent.session.session_id = Some(acp::SessionId::new("sess-A"));
     let id1 = AgentId(1);
     let mut agent1 = AgentView::new(
         AgentSession {
@@ -960,7 +981,7 @@ const POLICY_WARNING: &str =
     xai_grok_workspace::permission::resolution::YoloPinReason::DisableBypassPermissionsMode
         .message();
 fn agent_toast(app: &AppView) -> Option<String> {
-    app.agents[&AgentId(0)]
+    test_agent(app, AgentId(0))
         .toast
         .as_ref()
         .map(|(s, _)| s.clone())

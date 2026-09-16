@@ -229,8 +229,6 @@ impl<'a> EntryRenderer<'a> {
         // Verb-group header: an aggregated "Verb N noun" label whose diamond takes the run-state color
         // An active group's glyph animates with the same wave as a running tool row's bullet
         if let Some(GroupHeaderLabel::VerbRun(vg)) = self.group_header_label {
-            use unicode_width::UnicodeWidthStr;
-
             let glyph_color = if vg.failed {
                 self.theme.accent_error
             } else if vg.running {
@@ -251,28 +249,10 @@ impl<'a> EntryRenderer<'a> {
             // It flips `›`/`⌄` with the group's fold state
             let prefix = group_header_chrome_prefix();
             let mut spans = vec![ratatui::text::Span::styled(
-                prefix.clone(),
+                prefix,
                 Style::default().fg(glyph_color),
             )];
-            let hook_start = vg
-                .line
-                .spans
-                .iter()
-                .position(|span| span.content.starts_with("  [hooks: "));
-            if let Some(hook_start) = hook_start {
-                let suffix_width: usize = vg.line.spans[hook_start..]
-                    .iter()
-                    .map(|span| UnicodeWidthStr::width(span.content.as_ref()))
-                    .sum();
-                let label_budget = usize::from(content_area.width)
-                    .saturating_sub(UnicodeWidthStr::width(prefix.as_str()))
-                    .saturating_sub(suffix_width);
-                let label = ratatui::text::Line::from(vg.line.spans[..hook_start].to_vec());
-                spans.extend(crate::render::line_utils::truncate_line(label, label_budget).spans);
-                spans.extend(vg.line.spans[hook_start..].iter().cloned());
-            } else {
-                spans.extend(vg.line.spans.iter().cloned());
-            }
+            spans.extend(vg.line.spans.iter().cloned());
             let line = ratatui::text::Line::from(spans);
             // Group-header content is registered selectable (GROUP_HEADER_RANGE_ID)
             // Its selection maps visual columns, so it must paint visual too
@@ -408,8 +388,7 @@ impl<'a> EntryRenderer<'a> {
             return lines;
         }
         // Collapsed / Truncated foldable entries render a compact ~1-line header, NOT their (often huge) hidden body
-        // Use the ENTRY-level foldability (`block.is_foldable()` OR attached hooks), matching the fold path
-        // A collapsed entry foldable only through hooks would otherwise be over-counted
+        // Use the ENTRY-level foldability, matching the fold path
         let lines = if self.entry.display_mode != DisplayMode::Expanded && self.entry.is_foldable()
         {
             1
@@ -1493,52 +1472,6 @@ mod tests {
             h_with,
             EntryRenderer::new(&with_nl, &theme).desired_height(80),
             "estimate with trailing newline still equals exact"
-        );
-    }
-
-    #[test]
-    fn estimate_uses_entry_level_foldability_for_collapsed_shortcut() {
-        let _theme = pin_theme();
-        // An AgentMessage block is NOT block-foldable, but attaching hooks makes the ENTRY foldable (matching the fold path)
-        // A Collapsed foldable entry takes the compact ~1-line shortcut; a non-foldable one estimates its body
-        use crate::scrollback::blocks::tool::hook::{
-            HookRunEntry, HookRunStatus, ToolCallHookData,
-        };
-        let theme = Theme::current();
-        // AgentMessage renders as markdown (single newlines collapse to spaces), so force a multi-row body with length, not line count
-        let body = "word ".repeat(60);
-
-        // With no hooks the entry is not foldable, so a Collapsed entry estimates its body, not the 1-line fold shortcut
-        let mut plain = ScrollbackEntry::new(RenderBlock::agent_message(body.as_str()));
-        plain.set_display_mode(DisplayMode::Collapsed);
-        let plain_est = EntryRenderer::new(&plain, &theme).estimate_height(80);
-        assert!(
-            plain_est > 1,
-            "non-foldable collapsed entry estimates its body, not the shortcut (got {plain_est})"
-        );
-
-        // With hooks the entry is foldable, so the compact shortcut applies (1 line, no vpad)
-        let mut hooked = ScrollbackEntry::new(RenderBlock::agent_message(body.as_str()));
-        hooked.set_display_mode(DisplayMode::Collapsed);
-        hooked.hook_data = Some(ToolCallHookData {
-            pre_hooks: vec![HookRunEntry {
-                name: "fmt".into(),
-                status: HookRunStatus::Success {
-                    elapsed: std::time::Duration::from_millis(1),
-                },
-                output: None,
-            }],
-            ..Default::default()
-        });
-        let hooked_est = EntryRenderer::new(&hooked, &theme).estimate_height(80);
-        assert_eq!(
-            hooked_est, 1,
-            "hook-foldable collapsed entry uses the compact shortcut"
-        );
-        assert!(
-            plain_est > hooked_est,
-            "entry-level foldability must change the collapsed estimate \
-             (plain {plain_est} vs hooked {hooked_est})"
         );
     }
 

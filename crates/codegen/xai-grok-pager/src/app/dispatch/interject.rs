@@ -318,13 +318,16 @@ mod tests {
             ] => {
                 assert_eq!(text, "look at [Image #1] please");
                 assert_eq!(blocks.len(), 2);
-                match &blocks[0] {
+                match &blocks.first().unwrap_or_else(|| panic!("missing index")) {
                     acp::ContentBlock::Text(tb) => {
                         assert!(tb.text.contains("[Image #1]"), "got {:?}", tb.text)
                     }
                     other => panic!("expected Text first, got {other:?}"),
                 }
-                assert!(matches!(&blocks[1], acp::ContentBlock::Image(_)));
+                assert!(matches!(
+                    &blocks.get(1).unwrap_or_else(|| panic!("missing index")),
+                    acp::ContentBlock::Image(_)
+                ));
             }
             other => panic!("expected SendInterject with blocks, got {other:?}"),
         }

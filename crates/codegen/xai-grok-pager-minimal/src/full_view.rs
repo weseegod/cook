@@ -56,7 +56,9 @@ pub fn pump_transcript(app: &mut AppView) {
         xai_grok_pager::appearance::cache::set_show_thinking_blocks(true);
         let start = Instant::now();
         while build.next < build.ids.len() {
-            let eid = build.ids[build.next];
+            let Some(&eid) = build.ids.get(build.next) else {
+                break;
+            };
             build.next += 1;
             // Re-resolve by id: entries removed mid-build (rewind / clear) are skipped rather than skewing positions
             if let Some(entry) = sb.index_of_id(eid).and_then(|idx| sb.entry(idx)) {
@@ -419,17 +421,19 @@ mod tests {
         buffer_to_ansi(&buf, &mut out);
         let lines: Vec<&str> = out.split('\n').collect();
         // Row 0 has content ending in a reset; row 1 is blank; trailing newline.
-        assert!(lines[0].contains('h') && lines[0].contains('i'));
-        assert!(
-            lines[0].ends_with("\x1b[0m"),
-            "row must reset: {:?}",
-            lines[0]
+        let Some(row0) = lines.first() else {
+            panic!("expected a rendered row: {lines:?}");
+        };
+        assert!(row0.contains('h') && row0.contains('i'));
+        assert!(row0.ends_with("\x1b[0m"), "row must reset: {row0:?}");
+        assert_eq!(
+            lines.get(1).copied(),
+            Some(""),
+            "blank row emits nothing but the newline"
         );
-        assert_eq!(lines[1], "", "blank row emits nothing but the newline");
         assert!(
-            !lines[0].contains("  "),
-            "trailing spaces not trimmed: {:?}",
-            lines[0]
+            !row0.contains("  "),
+            "trailing spaces not trimmed: {row0:?}"
         );
     }
 }

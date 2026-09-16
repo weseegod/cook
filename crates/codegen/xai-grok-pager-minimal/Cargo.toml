@@ -51,5 +51,8 @@ xai-token-estimation = { workspace = true }
 # (`test_agent_view`, yolo/auto setters), gated behind its test-only
 # helpers.
 xai-grok-pager = { path = "../xai-grok-pager", features = ["test-support"] }
+# The feedback-form render tests flip the pager's process-global embedded
+# modal flag and must not interleave.
+serial_test = { workspace = true }
 
 [features]

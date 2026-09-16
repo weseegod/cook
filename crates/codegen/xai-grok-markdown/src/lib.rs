@@ -25,6 +25,8 @@
 //! }
 //! ```
 
+#![deny(clippy::indexing_slicing)]
+
 mod buffers;
 pub mod checkpoint;
 mod colors;

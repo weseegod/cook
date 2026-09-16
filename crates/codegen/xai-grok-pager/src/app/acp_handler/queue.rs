@@ -87,6 +87,15 @@ impl PromptCompletePayload {
     }
 }
 
+/// Decided on the raw broadcast (before it moves into the queue mirror): listing the awaited prompt, queued or running, proves the shell holds it.
+fn broadcast_acks_watch(
+    view: Option<&AgentView>,
+    changed: &crate::app::prompt_queue::QueueChanged,
+) -> bool {
+    view.and_then(|v| v.prompt_ack.as_ref())
+        .is_some_and(|watch| crate::app::prompt_ack::queue_changed_acks(changed, watch.prompt_id()))
+}
+
 pub(super) fn handle_queue_changed(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
     let Ok(changed) =
         serde_json::from_str::<crate::app::prompt_queue::QueueChanged>(notif.params.get())
@@ -101,6 +110,13 @@ pub(super) fn handle_queue_changed(notif: &acp::ExtNotification, app: &mut AppVi
     let sid = acp::SessionId::new(session_id.clone());
     let session_match = find_session_match(app, &sid);
     if let Some(SessionMatch::Child(parent_id)) = session_match {
+        let acks_watch = broadcast_acks_watch(
+            app.agents
+                .get(&parent_id)
+                .and_then(|parent| parent.subagent_views.get(&session_id))
+                .map(|child| &**child),
+            &changed,
+        );
         let snapshot = changed.entries;
         if snapshot.is_empty() {
             app.shared_prompt_queues.remove(&session_id);
@@ -120,6 +136,12 @@ pub(super) fn handle_queue_changed(notif: &acp::ExtNotification, app: &mut AppVi
         };
         child.shared_queue = snapshot;
         child.sync_queue_pane();
+        if acks_watch {
+            child.note_prompt_ack(
+                crate::app::prompt_ack::AckSignal::QueueChanged,
+                std::time::Instant::now(),
+            );
+        }
         return is_active;
     }
 
@@ -178,6 +200,7 @@ pub(super) fn handle_queue_changed(notif: &acp::ExtNotification, app: &mut AppVi
         "received x.ai/queue/changed broadcast",
     );
 
+    let acks_watch = broadcast_acks_watch(agent_id.and_then(|aid| app.agents.get(&aid)), &changed);
     let rekeyed_echo_ids = app.apply_queue_changed(changed);
 
     // Mirror the reconciled shared queue into the owning agent
@@ -194,6 +217,12 @@ pub(super) fn handle_queue_changed(notif: &acp::ExtNotification, app: &mut AppVi
             .map(|p| p.prompt_id.clone());
         if let Some(agent) = app.agents.get_mut(&aid) {
             agent.shared_queue = snapshot;
+            if acks_watch {
+                agent.note_prompt_ack(
+                    crate::app::prompt_ack::AckSignal::QueueChanged,
+                    std::time::Instant::now(),
+                );
+            }
             // A re-keyed echo's old id is dead everywhere; only its content matched the broadcast
             // Drop it from the optimistic set and any send-now parked on it
             // The row is visible under its new id, so a fresh Enter sends it normally

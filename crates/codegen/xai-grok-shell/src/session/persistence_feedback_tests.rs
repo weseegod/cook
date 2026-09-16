@@ -51,7 +51,7 @@ fn test_feedback_jsonl_multi_line_roundtrip() {
     // `dismissed` is skipped when false; `requestId` and `submission` when absent.
     let shape = |line: &serde_json::Value| {
         (
-            line["type"].clone(),
+            line.get("type").cloned().unwrap_or(serde_json::Value::Null),
             line.get("requestId").cloned(),
             line.get("dismissed").cloned(),
             line.get("submission").is_some(),

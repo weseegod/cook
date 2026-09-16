@@ -757,10 +757,6 @@ mod tests {
         assert_eq!(report, RecoveryReport::default(), "nothing to recover");
     }
 
-    // -----------------------------------------------------------------------
-    // cleanup_stale_sessions
-    // -----------------------------------------------------------------------
-
     #[tokio::test]
     async fn cleanup_removes_stale_session_dir() {
         let home = tempfile::TempDir::new().unwrap();

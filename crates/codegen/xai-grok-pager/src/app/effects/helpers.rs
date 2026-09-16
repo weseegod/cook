@@ -3,7 +3,10 @@ use std::path::Path;
 use agent_client_protocol as acp;
 use tokio::task::JoinSet;
 use xai_acp_lib::{AcpAgentTx, acp_send};
-use super::actions::{PermissionModePersist, SubagentKillOutcome, TaskResult};
+use xai_grok_telemetry::events::ClipboardProbeDropReason;
+use super::actions::{
+    PermissionModePersist, ProbedAttachment, SubagentKillOutcome, TaskResult,
+};
 use super::agent::AgentId;
 use crate::unified_log as ulog;
 use xai_grok_shell::sampling::error::{
@@ -79,6 +82,113 @@ pub(super) const CTA_INSTALLED_DISMISS_MS: u64 = 4000;
 /// Upper bound on the off-thread clipboard-attachment probe.
 /// A wedged osascript read must not pin `paste_probe_in_flight` and silently stash every later send.
 pub(super) const CLIPBOARD_PROBE_TIMEOUT_SECS: u64 = 10;
+const _: () = assert!(
+    CLIPBOARD_PROBE_TIMEOUT_SECS > crate::clipboard::OSASCRIPT_WAIT.as_secs()
+);
+pub(super) type ClipboardProbeStage = Result<
+    (ProbedAttachment, Option<String>),
+    crate::clipboard::ProbeDrop,
+>;
+/// The blocking half of one probe: guarded pasteboard read, decode, session persist. Never runs on the render thread.
+pub(super) fn probe_clipboard_attachment_blocking(
+    change_count: Option<u64>,
+    probe_text: Option<String>,
+    probe_bracketed: bool,
+    images_dir: Option<std::path::PathBuf>,
+) -> ClipboardProbeStage {
+    let (image, file_urls) = crate::clipboard::guarded_pasteboard_read(
+        change_count,
+        crate::clipboard::clipboard_change_count,
+        || {
+            if probe_bracketed
+                && crate::terminal::terminal_context()
+                    .brand
+                    .delivers_ime_as_bracketed_paste()
+            {
+                match crate::clipboard::bracketed_payload_came_from_clipboard_result(
+                    probe_text.as_deref().unwrap_or(""),
+                ) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        return Err(ClipboardProbeDropReason::BracketedPayloadMismatch);
+                    }
+                    Err(_) => return Err(ClipboardProbeDropReason::ReadFailed),
+                }
+            }
+            crate::clipboard::system_clipboard_probe_attachments(probe_text.as_deref())
+        },
+    )?;
+    let Some(data) = image else {
+        return Ok((ProbedAttachment::NoRaster, file_urls));
+    };
+    let mut pasted = crate::prompt_images::from_clipboard_data(&data);
+    pasted.prepare_preview_blocking();
+    if let Some(dir) = images_dir
+        && let Err(error) = crate::prompt_images::persist_to_session(&mut pasted, &dir)
+    {
+        tracing::warn!(error = %error, "pasted image could not be persisted into the session");
+        return Err(crate::clipboard::ProbeDrop {
+            reason: ClipboardProbeDropReason::PersistFailed,
+            image: Some(data),
+            message: Some(error.to_string()),
+        });
+    }
+    Ok((ProbedAttachment::Image(pasted), file_urls))
+}
+/// The stage on the blocking pool under one deadline; `spawn_blocking` cannot be cancelled, so an expired deadline only stops waiting.
+pub(super) async fn clipboard_probe_stage(
+    deadline: std::time::Duration,
+    work: impl FnOnce() -> ClipboardProbeStage + Send + 'static,
+) -> ClipboardProbeStage {
+    let dropped = |reason| crate::clipboard::ProbeDrop {
+        reason,
+        image: None,
+        message: None,
+    };
+    match tokio::time::timeout(deadline, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(stage)) => stage,
+        Ok(Err(join_error)) => {
+            tracing::warn!(error = %join_error, "clipboard attachment probe task failed");
+            Err(dropped(ClipboardProbeDropReason::Panicked))
+        }
+        Err(_elapsed) => {
+            tracing::warn!("clipboard attachment probe timed out");
+            Err(dropped(ClipboardProbeDropReason::Timeout))
+        }
+    }
+}
+/// One deadline over the whole stage so a stall anywhere still completes and cannot strand a send parked behind
+/// `paste_probe_in_flight`. Drop telemetry is emitted after the deadline check so a late stage never reports twice.
+pub(super) async fn bounded_clipboard_probe(
+    deadline: std::time::Duration,
+    work: impl FnOnce() -> ClipboardProbeStage + Send + 'static,
+) -> (ProbedAttachment, Option<String>) {
+    let started = std::time::Instant::now();
+    match clipboard_probe_stage(deadline, work).await {
+        Ok(outcome) => outcome,
+        Err(dropped) => {
+            crate::clipboard::log_clipboard_probe_dropped(
+                dropped.reason,
+                dropped.image.as_ref(),
+                started,
+            );
+            let attachment = match dropped.reason {
+                ClipboardProbeDropReason::ReadFailed
+                | ClipboardProbeDropReason::Timeout
+                | ClipboardProbeDropReason::Panicked => ProbedAttachment::ProbeFailed,
+                ClipboardProbeDropReason::PersistFailed => {
+                    ProbedAttachment::PersistFailed(dropped.message.unwrap_or_default())
+                }
+                ClipboardProbeDropReason::PasteboardChangedBeforeRead
+                | ClipboardProbeDropReason::PasteboardChangedAfterRead
+                | ClipboardProbeDropReason::BracketedPayloadMismatch => {
+                    ProbedAttachment::ProbeDropped
+                }
+            };
+            (attachment, None)
+        }
+    }
+}
 /// Picker search debounce ([`Effect::DebounceSessionSearch`]): long enough to coalesce a typing burst, short enough to feel live.
 pub(super) const SESSION_SEARCH_DEBOUNCE_MS: u64 = 250;
 /// Run the `x.ai/mcp/list` read after a CTA install and map it into a `TaskResult::PluginCtaMcpsLoaded`.
@@ -184,7 +294,7 @@ pub(crate) fn compact_error(err: &acp::Error) -> CompactError {
 pub(super) fn format_restore_elapsed(d: std::time::Duration) -> String {
     let secs = d.as_secs();
     if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
+        crate::views::dock::fmt_elapsed(secs)
     } else {
         format!("{}.{:01}s", secs, d.subsec_millis() / 100)
     }
@@ -245,6 +355,18 @@ pub(crate) fn parse_session_load_running_prompt_id(
         .and_then(|m| m.get("x.ai/runningPromptId"))
         .and_then(|v| v.as_str())
         .map(String::from)
+}
+/// Parse the persistent-memory implementation pinned by the session actor.
+///
+/// `None` supports older shells that predate the metadata key. Those shells
+/// only support the legacy layout, so save call sites can safely default it.
+pub(crate) fn parse_session_memory_mode(
+    resp_meta: Option<&acp::Meta>,
+) -> Option<xai_grok_shell::config::MemoryMode> {
+    resp_meta
+        .and_then(|meta| meta.get(xai_grok_shell::session::MEMORY_MODE_META_KEY))
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 /// Whether `raw` is (or wraps) a disk-full / ENOSPC failure.
 pub(crate) fn is_disk_full_error(raw: &str) -> bool {
@@ -572,10 +694,14 @@ pub(super) fn extract_first_user_prompt(
                     })
             })
             .or_else(|| content.and_then(|c| c.as_str()).map(String::from))?;
-        if let Some(start) = text.find("<user_query>") {
-            let after = &text[start + "<user_query>".len()..];
+        if let Some(start) = text.find("<user_query>")
+            && let Some(after) = text.get(start + "<user_query>".len()..)
+        {
             let end = after.find("</user_query>").unwrap_or(after.len());
-            let query = after[..end].trim();
+            let Some(query) = after.get(..end) else {
+                continue;
+            };
+            let query = query.trim();
             if !query.is_empty() && !query.starts_with('<') {
                 return Some(query.to_string());
             }
@@ -587,7 +713,9 @@ pub(super) fn extract_first_user_prompt(
 /// Synthetic user messages (auto-continue, doom-loop) are excluded.
 pub(super) fn count_chat_history_stats(history_path: &Path) -> (usize, usize) {
     use std::io::BufRead;
-    use xai_grok_shell::sampling::{AssistantItem, ConversationItem, UserItem};
+    use xai_grok_shell::sampling::{
+        AssistantItem, ConversationItem, SyntheticReason, UserItem,
+    };
     let mut turn_count = 0usize;
     let mut tool_call_count = 0usize;
     let Ok(file) = std::fs::File::open(history_path) else {
@@ -595,9 +723,11 @@ pub(super) fn count_chat_history_stats(history_path: &Path) -> (usize, usize) {
     };
     for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
         match serde_json::from_str::<ConversationItem>(&line) {
-            Ok(ConversationItem::User(UserItem { synthetic_reason: None, .. })) => {
-                turn_count += 1;
-            }
+            Ok(
+                ConversationItem::User(
+                    UserItem { synthetic_reason: SyntheticReason::Human, .. },
+                ),
+            ) => turn_count += 1,
             Ok(ConversationItem::Assistant(AssistantItem { ref tool_calls, .. })) => {
                 tool_call_count += tool_calls.len();
             }
@@ -714,8 +844,8 @@ pub(super) async fn send_authenticate(
         "use_oauth": use_oauth,
         "request_seq": request_seq,
     });
-    if force_interactive {
-        meta["force_interactive"] = serde_json::json!(true);
+    if force_interactive && let Some(obj) = meta.as_object_mut() {
+        obj.insert("force_interactive".into(), serde_json::json!(true));
     }
     let req = acp::AuthenticateRequest::new(method_id).meta(meta.as_object().cloned());
     match acp_send(req, tx).await {

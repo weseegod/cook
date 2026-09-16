@@ -142,7 +142,10 @@ impl ClusterClient {
     /// No fixed sleeps beyond the pump tick; panics with `what` on expiry.
     /// Single-client sugar over [`pump_clients_until`] so there is exactly one pump loop.
     async fn pump_until(&mut self, what: &str, pred: impl Fn(&AppView) -> bool) {
-        pump_clients_until(&mut [self], what, |clients| pred(&clients[0].app)).await;
+        pump_clients_until(&mut [self], what, |clients| {
+            clients.first().is_some_and(|c| pred(&c.app))
+        })
+        .await;
     }
 
     /// The most recently created agent view (scenarios add tabs in order).
@@ -405,6 +408,7 @@ impl PagerLeaderCluster {
                 ClientMode::Stdio,
                 LeaderClientCapabilities {
                     client_version: Some("0.0.0-test".to_string()),
+                    user_message_echo: true,
                     ..Default::default()
                 },
             ),
@@ -425,6 +429,7 @@ impl PagerLeaderCluster {
                 },
                 LeaderClientCapabilities {
                     client_version: Some("0.0.0-test".to_string()),
+                    user_message_echo: true,
                     ..Default::default()
                 },
                 status_tx,

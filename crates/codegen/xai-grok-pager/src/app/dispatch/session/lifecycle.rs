@@ -1,14 +1,14 @@
 //! New, exit, cloud, and worktree session dispatchers plus trust and startup actions.
 use super::fork::{dispatch_startup_fork_session, worktree_persist_options};
 use super::load::dispatch_load_session;
-use super::modal::remove_agent_and_cleanup;
+use super::modal::{drop_other_agents_in_minimal, remove_agent_and_cleanup};
 use crate::acp::model_state::{EffortTokenError, ModelState};
 use crate::acp::tracker::AcpUpdateTracker;
 use crate::app::actions::{
     Action, AfterSessionDelete, Effect, PermissionModePersist, SwitchModelError,
 };
 use crate::app::agent::{AgentCommand, AgentId, AgentSession, AgentState, DeferredModelSwitch};
-use crate::app::agent_view::{ActivePane, AgentView, McpInitProgress};
+use crate::app::agent_view::{ActivePane, AgentView};
 use crate::app::app_view::{ActiveView, AppView, TrustState};
 use crate::app::cancel_latency::TurnEnd;
 use crate::app::consent::ConsentState;
@@ -365,7 +365,8 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
     app.next_agent_id += 1;
     let mut scrollback = ScrollbackState::new();
     scrollback.set_appearance(app.appearance.clone());
-    let agent = AgentView::new(
+    let agent = AgentView::from_app(
+        app,
         AgentSession {
             id: agent_id,
             acp_tx: app.acp_tx.clone(),
@@ -415,8 +416,10 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
     }
     if stay_on_welcome {
         app.home_session_agent = Some(agent_id);
+        app.optimistic_home_husk = Some(agent_id);
     } else {
         switch_to_agent(app, agent_id, SwitchCause::New);
+        effects.extend(drop_other_agents_in_minimal(app, agent_id));
     }
     if app.screen_mode.is_minimal() {
         app.minimal_state.welcome_pending = true;
@@ -450,11 +453,7 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
             agent.workspace_mode_cli_locked = locked;
         }
         agent.apply_credit_balance(app.credit_balance.clone(), app.auto_topup.clone());
-        agent.mcp_init_progress = Some(McpInitProgress {
-            total: 0,
-            connected: 0,
-            started_at: Instant::now(),
-        });
+        agent.session_starting_since = Some(Instant::now());
         agent.session.prompt_history_loading = true;
     }
     let preferred_session_id = app.deferred_startup.preferred_session_id.take();
@@ -469,8 +468,9 @@ pub(in crate::app::dispatch) fn dispatch_new_session_inner_with_id(
     (agent_id, effects)
 }
 /// Exit the current session and return to the welcome screen.
+/// Minimal has no welcome chrome, so this then opens an empty session (same as startup).
 pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<Effect> {
-    let effects =
+    let mut effects =
         unregister_session_effect(get_active_agent(app).and_then(|a| a.session.session_id.clone()));
     show_welcome(app);
     app.welcome_prompt_focused = true;
@@ -480,6 +480,9 @@ pub(in crate::app::dispatch) fn dispatch_exit_session(app: &mut AppView) -> Vec<
     app.session_picker_content_results = None;
     app.session_picker_content_loading = false;
     app.exit_session_pending = None;
+    if app.screen_mode.is_minimal() && !app.is_zdr_blocked() {
+        effects.extend(dispatch_new_session(app));
+    }
     effects
 }
 /// Aftermath for `/delete` on the active agent: dashboard overlay returns there; standalone agent sessions go home.
@@ -768,6 +771,45 @@ pub(crate) fn abandon_unused_home_session(app: &mut AppView) -> Vec<Effect> {
     let Some(id) = app.home_session_agent.take() else {
         return vec![];
     };
+    abandon_agent_as_unused_husk(app, id)
+}
+/// Drop the revealed Welcome husk when LoadSession opens a different session.
+/// An empty `/new` is not this husk. A composer draft keeps it.
+pub(crate) fn abandon_unused_empty_for_load(
+    app: &mut AppView,
+    keep_session_id: &str,
+) -> Vec<Effect> {
+    let mut effects = abandon_unused_home_session(app);
+    let Some(id) = app.optimistic_home_husk else {
+        return effects;
+    };
+    let Some(agent) = app.agents.get(&id) else {
+        app.optimistic_home_husk = None;
+        return effects;
+    };
+    if agent
+        .session
+        .session_id
+        .as_ref()
+        .is_some_and(|sid| sid.0.as_ref() == keep_session_id)
+    {
+        return effects;
+    }
+    if !crate::views::dashboard::row::is_empty_idle_top_level(agent)
+        || !agent.prompt.is_effectively_empty()
+    {
+        return effects;
+    }
+    effects.extend(abandon_agent_as_unused_husk(app, id));
+    effects
+}
+fn abandon_agent_as_unused_husk(app: &mut AppView, id: AgentId) -> Vec<Effect> {
+    if app.optimistic_home_husk == Some(id) {
+        app.optimistic_home_husk = None;
+    }
+    if app.home_session_agent == Some(id) {
+        app.home_session_agent = None;
+    }
     let (session_id, cwd) = app
         .agents
         .get(&id)
@@ -1100,7 +1142,8 @@ pub(in crate::app::dispatch) fn dispatch_new_worktree_session(
     app.next_agent_id += 1;
     let mut scrollback = ScrollbackState::new();
     scrollback.set_appearance(app.appearance.clone());
-    let mut agent = AgentView::new(
+    let mut agent = AgentView::from_app(
+        app,
         AgentSession {
             id: agent_id,
             acp_tx: app.acp_tx.clone(),
@@ -1201,6 +1244,7 @@ pub(in crate::app::dispatch) fn dispatch_new_worktree_session(
             .slash_controller
             .registry_mut()
             .set_plugins_visible(!app.appearance.disable_plugins);
+        agent.session_starting_since = Some(Instant::now());
     }
     if let Some(prompt) = prompt
         && let Some(agent) = app.agents.get_mut(&agent_id)
@@ -1208,6 +1252,7 @@ pub(in crate::app::dispatch) fn dispatch_new_worktree_session(
         agent.session.enqueue_prompt(prompt);
     }
     switch_to_agent(app, agent_id, SwitchCause::New);
+    effects.extend(drop_other_agents_in_minimal(app, agent_id));
     if from_welcome {
         take_welcome_composer_onto_agent(app, agent_id);
         if let Some(agent) = app.agents.get_mut(&agent_id) {
@@ -1270,16 +1315,19 @@ pub(in crate::app::dispatch) fn handle_session_created(
     agent_id: AgentId,
     session_id: acp::SessionId,
     new_models: Option<acp::SessionModelState>,
+    modes: Option<acp::SessionModeState>,
 ) -> Vec<Effect> {
     let identity_rebind = super::super::dashboard::WorkspaceIdentityRebind::capture(app);
     crate::app::workspace_sync::allow_loaded_session(app, session_id.0.as_ref());
     let agent_count = app.agents.len();
     let switch_hint =
         crate::views::dashboard::session_switch_hint_command(app.screen_mode.is_minimal());
+    let has_switch_target =
+        agent_count > 1 || (app.screen_mode.is_minimal() && app.next_agent_id > 1);
     if let Some(agent) = app.agents.get_mut(&agent_id) {
         let session_id_clone = session_id.clone();
         if agent.session.created_via_new
-            && agent_count > 1
+            && has_switch_target
             && let Some(cmd) = switch_hint
         {
             agent.scrollback.push_block(RenderBlock::system(format!(
@@ -1296,6 +1344,10 @@ pub(in crate::app::dispatch) fn handle_session_created(
         if let Some(m) = new_models {
             app.models = Some(m).into();
             agent.session.models = app.models.clone();
+        }
+        if agent.apply_session_modes(modes) {
+            app.default_yolo = false;
+            app.current_ui.permission_mode = Some("ask".into());
         }
         let deferred = apply_deferred_model_switch(agent, app.cli_effort_token.as_deref());
         let deferred_mode = agent.deferred_session_mode.take();
@@ -1404,6 +1456,7 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
     worktree_path: std::path::PathBuf,
     session_cwd: std::path::PathBuf,
     new_models: Option<acp::SessionModelState>,
+    modes: Option<acp::SessionModeState>,
     strategy_summary: Option<String>,
 ) -> Vec<Effect> {
     let identity_rebind = super::super::dashboard::WorkspaceIdentityRebind::capture(app);
@@ -1422,6 +1475,10 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
         if let Some(m) = new_models {
             app.models = Some(m).into();
             agent.session.models = app.models.clone();
+        }
+        if agent.apply_session_modes(modes) {
+            app.default_yolo = false;
+            app.current_ui.permission_mode = Some("ask".into());
         }
         agent.prompt.file_search.retarget(&session_cwd);
         agent.scrollback.push_block(RenderBlock::system(format!(
@@ -1541,6 +1598,9 @@ fn restore_orphan_create_draft_to_welcome(app: &mut AppView, agent_id: AgentId) 
     if app.home_session_agent == Some(agent_id) {
         app.home_session_agent = None;
     }
+    if app.optimistic_home_husk == Some(agent_id) {
+        app.optimistic_home_husk = None;
+    }
     if !matches!(app.active_view, ActiveView::Agent(id) if id == agent_id) {
         return;
     }
@@ -1620,6 +1680,7 @@ pub(in crate::app::dispatch) fn handle_session_failed(
     } else if let Some(agent) = app.agents.get_mut(&agent_id) {
         agent.pending_extensions_fetch = false;
         agent.session.prompt_history_loading = false;
+        agent.session_starting_since = None;
         agent.mcp_init_progress = None;
         agent.session.finish_command();
         let elapsed = agent.turn_elapsed();
@@ -1674,6 +1735,7 @@ pub(in crate::app::dispatch) fn handle_worktree_session_failed(
     } else if let Some(agent) = app.agents.get_mut(&agent_id) {
         agent.pending_extensions_fetch = false;
         agent.session.prompt_history_loading = false;
+        agent.session_starting_since = None;
         agent.mcp_init_progress = None;
         agent.session.finish_command();
         let elapsed = agent.turn_elapsed();
@@ -1713,6 +1775,11 @@ pub(in crate::app::dispatch) fn handle_switch_model_complete(
                 let prev_effort = agent.session.models.reasoning_effort;
                 agent.session.models.set_current(model_id.clone(), effort);
                 let resolved_effort = agent.session.models.reasoning_effort;
+                if let Some(used) = agent.context_state.as_ref().map(|c| c.used)
+                    && let Some(window) = agent.session.models.get_context_window()
+                {
+                    agent.apply_context_used(used, window);
+                }
                 let unchanged =
                     prev_model.as_ref() == Some(&model_id) && prev_effort == resolved_effort;
                 if !unchanged {

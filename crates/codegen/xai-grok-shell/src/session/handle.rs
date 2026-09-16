@@ -28,10 +28,14 @@ pub(crate) enum SessionLiveState {
     /// A load or resume is building the actor.
     Attaching,
 }
+/// `_meta` key carrying the persistent-memory implementation pinned at session spawn.
+pub const MEMORY_MODE_META_KEY: &str = "x.ai/memoryMode";
 /// Everything the `session/new` reply reads from session state; built before the actor task starts so the reply cannot wait on it.
 #[derive(Clone)]
 pub struct SpawnSnapshot {
     pub applied_tool_overrides: Option<xai_grok_sampling_types::ToolOverrides>,
+    /// Persistent-memory implementation pinned when the session was spawned.
+    pub memory_mode: Option<crate::config::MemoryMode>,
 }
 pub(crate) struct WorkGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
 impl WorkGuard {
@@ -67,9 +71,12 @@ pub struct SessionHandle {
     /// Shared gate controlling whether the session actor forwards notifications to the client via the gateway.
     /// See [`SessionActor::gateway_enabled`] for details.
     pub gateway_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// See [`SessionActor::status_line_enabled`].
-    /// Assigned by [`Self::set_status_line_wanted`] at every attach, and when a client disconnects from a session that stays resident.
-    pub status_line_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// When `false`, suppress local `background_tasks` snapshot emits.
+    /// Shared with the notification bridge and session actor; flipped off for
+    /// gateway-backed sessions so an empty local registry cannot clear remote Running.
+    pub emit_local_background_tasks: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Status-line and live user-echo gates. Shared with [`super::notifications::NotificationSender`].
+    pub(crate) client_caps: super::notifications::SessionClientCaps,
     /// MCP server configs for this session (merged local and client-provided).
     /// Stored on the handle so forked sessions can inherit the parent's MCP servers without a round-trip through the session actor.
     pub mcp_servers: Vec<acp::McpServer>,
@@ -492,7 +499,14 @@ impl SessionHandle {
     /// Assigned rather than raised and lowered from separate events.
     /// An attach that only raised the flag would leave the previous client's row enabled, and the session would keep building payloads nobody draws.
     pub(crate) fn set_status_line_wanted(&self, wanted: bool) {
-        self.status_line_enabled
+        self.client_caps
+            .status_line
+            .store(wanted, std::sync::atomic::Ordering::Relaxed);
+    }
+    /// Assigned rather than raised: an attach that only raised would leave the previous client's echo enabled.
+    pub(crate) fn set_user_message_echo_wanted(&self, wanted: bool) {
+        self.client_caps
+            .user_message_echo
             .store(wanted, std::sync::atomic::Ordering::Relaxed);
     }
     /// Ask for a fresh status-line snapshot.

@@ -198,6 +198,15 @@ pub struct WorkspaceBindMetadata {
         skip_serializing_if = "Option::is_none"
     )]
     pub yolo_mode: Option<bool>,
+    /// The tenant's attended-execution ceiling for the server's host kind, set by the hub
+    /// (never the harness). Omitted by emitters that predate it; the workspace then applies
+    /// [`ToolApprovalPolicy::GrantsAllowed`].
+    #[serde(
+        default,
+        deserialize_with = "ok_or_default",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tool_approval_policy: Option<ToolApprovalPolicy>,
     /// Optional/additive: omitted by emitters that don't yet write it.
     #[serde(
         default,
@@ -234,6 +243,21 @@ pub struct WorkspaceBindMetadata {
     pub session_root: Option<String>,
 }
 
+/// How far a bound session may go without the session owner answering a prompt. The hub's
+/// per-host-kind `tool_approval` ceiling (`desktop` / `container` / `sandbox`) reaches the
+/// workspace as one of these; reads never prompt under any value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolApprovalPolicy {
+    /// Every mutating call prompts; persisted grants and `yolo_mode` are ignored.
+    AlwaysPrompt,
+    /// Persisted per-folder grants may skip the prompt; `yolo_mode` is still ignored.
+    #[default]
+    GrantsAllowed,
+    /// As `GrantsAllowed`, and the session's `yolo_mode` is honoured (a host with no session owner).
+    UnattendedAllowed,
+}
+
 /// Deserialize a field, falling back to its default on a malformed value
 /// instead of failing the whole struct.
 fn ok_or_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
@@ -247,7 +271,7 @@ where
 
 #[cfg(test)]
 mod bind_metadata_tests {
-    use super::WorkspaceBindMetadata;
+    use super::{ToolApprovalPolicy, WorkspaceBindMetadata};
 
     #[test]
     fn serialize_omits_empty_fields() {
@@ -268,6 +292,7 @@ mod bind_metadata_tests {
                 stream_tool_progress: true,
             }),
             yolo_mode: Some(true),
+            tool_approval_policy: Some(ToolApprovalPolicy::AlwaysPrompt),
             manifest_version: Some("v1".to_owned()),
             manifest_hash: Some("abc123".to_owned()),
             system_notifications: Some(true),
@@ -275,12 +300,17 @@ mod bind_metadata_tests {
             session_root: Some("/workspace/conv-abc".to_owned()),
         };
         let value = serde_json::to_value(&md).unwrap();
+        assert_eq!(value["tool_approval_policy"], "always_prompt");
         let back: WorkspaceBindMetadata = serde_json::from_value(value).unwrap();
         assert_eq!(back.preset.as_deref(), Some("explore"));
         assert_eq!(back.capability_mode.as_deref(), Some("read_only"));
         assert_eq!(back.tools.len(), 1);
         assert!(back.viewer_ctx.unwrap().stream_tool_progress);
         assert_eq!(back.yolo_mode, Some(true));
+        assert_eq!(
+            back.tool_approval_policy,
+            Some(ToolApprovalPolicy::AlwaysPrompt)
+        );
         assert_eq!(back.manifest_version.as_deref(), Some("v1"));
         assert_eq!(back.manifest_hash.as_deref(), Some("abc123"));
         assert_eq!(back.system_notifications, Some(true));

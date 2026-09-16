@@ -242,12 +242,15 @@ impl SessionActor {
                     };
                 }
                 match xai_grok_hooks::trust::disable_hook(&hook_name) {
-                    Ok(()) => ActionOutcome {
-                        status: OutcomeStatus::Success,
-                        message: "Hook disabled.".to_owned(),
-                        requires_reload: false,
-                        requires_restart: false,
-                    },
+                    Ok(()) => {
+                        self.refresh_hook_disabled();
+                        ActionOutcome {
+                            status: OutcomeStatus::Success,
+                            message: "Hook disabled.".to_owned(),
+                            requires_reload: false,
+                            requires_restart: false,
+                        }
+                    }
                     Err(e) => ActionOutcome {
                         status: OutcomeStatus::InternalError,
                         message: format!("Failed to disable hook: {e}"),
@@ -258,12 +261,15 @@ impl SessionActor {
             }
             HooksAction::Enable { hook_name } => {
                 match xai_grok_hooks::trust::enable_hook(&hook_name) {
-                    Ok(true) => ActionOutcome {
-                        status: OutcomeStatus::Success,
-                        message: "Hook enabled.".to_owned(),
-                        requires_reload: false,
-                        requires_restart: false,
-                    },
+                    Ok(true) => {
+                        self.refresh_hook_disabled();
+                        ActionOutcome {
+                            status: OutcomeStatus::Success,
+                            message: "Hook enabled.".to_owned(),
+                            requires_reload: false,
+                            requires_restart: false,
+                        }
+                    }
                     Ok(false) => ActionOutcome {
                         status: OutcomeStatus::NotFound,
                         message: "Hook was not disabled.".to_owned(),
@@ -299,6 +305,9 @@ impl SessionActor {
                     if ok {
                         toggled += 1;
                     }
+                }
+                if toggled > 0 {
+                    self.refresh_hook_disabled();
                 }
                 let action = if disable { "Disabled" } else { "Enabled" };
                 let mut message = format!("{action} {toggled}/{} hooks", hook_names.len());
@@ -745,6 +754,7 @@ impl SessionActor {
                 *reg = Some(std::sync::Arc::new(registry));
             }
         }
+        self.refresh_hook_disabled();
         tracing::info!(hook_count, "hooks reloaded mid-session");
 
         // Notify pager about hooks change.
@@ -954,39 +964,15 @@ impl SessionActor {
             new_registry_snapshot.as_deref(),
             &self.rebuild_spec.compat,
         );
-        let (mcp_diff, dispatch_event_tx) = {
+        let (mcp_change, dispatch_event_tx) = {
             let mut mcp_state = self.mcp_state.lock().await;
-            let diff = mcp_state.update_configs_diff(new_mcp_servers);
+            let change = self.update_mcp_configs(&mut mcp_state, new_mcp_servers);
             let tx = mcp_state.client_event_tx();
-            (diff, tx)
+            (change, tx)
         };
-        let mcp_changed = if let Some(diff) = mcp_diff {
-            if (!diff.added.is_empty() || !diff.removed.is_empty())
-                && let Some(tx) = &dispatch_event_tx
-            {
-                let _ = tx.send(xai_grok_mcp::servers::McpClientEvent::ConfigDiff {
-                    added: diff.added.clone(),
-                    removed: diff.removed.clone(),
-                });
-            }
-            for name in &diff.removed {
-                let prefix = format!(
-                    "{}{}",
-                    name,
-                    crate::session::mcp_servers::MCP_TOOL_NAME_DELIMITER
-                );
-                let removed_count = self
-                    .agent
-                    .borrow()
-                    .tool_bridge()
-                    .unregister_tools_by_prefix(&prefix);
-                tracing::info!(
-                    server = name.as_str(),
-                    tools_removed = removed_count,
-                    "Unregistered tools for removed MCP server (plugin reload)"
-                );
-            }
-            self.ensure_mcp_tools_initialized().await;
+        let mcp_changed = if let Some(change) = mcp_change {
+            self.apply_mcp_config_diff(&change.diff, dispatch_event_tx);
+            self.start_mcp_servers_after_config_change(change).await;
             true
         } else {
             false

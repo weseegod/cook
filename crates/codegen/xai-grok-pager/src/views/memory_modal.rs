@@ -8,10 +8,12 @@
 //! Layout collapses to single-pane (list only) on narrow terminals (under 80 cols).
 //!
 //! `/` enters filter mode (type to search, Escape to exit).
-//! `x` deletes with double-press confirmation (session logs only).
+//! `x` deletes with double-press confirmation: v2 topics and inbox observations via the shell's
+//! `x.ai/memory/forget` (tombstone + index + manifest update), legacy session logs by unlink.
 
 use std::borrow::Cow;
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::KeyModifiers;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEventKind};
@@ -32,10 +34,69 @@ use crate::theme::Theme;
 use crate::views::modal_window::{
     self, ModalContentArea, ModalSizing, ModalWindowConfig, ModalWindowState, Shortcut,
 };
+use xai_grok_shell::extensions::memory::{MEMORY_FORGET_MAX_FILE_BYTES, MemoryForgetResponse};
+use xai_grok_shell::extensions::notification::MemoryDisabledReason;
 
 const SPLIT_MIN_WIDTH: u16 = 80;
 const LIST_WIDTH_RATIO: f64 = 0.40;
 const MAX_PREVIEW_BYTES: u64 = 1_048_576;
+const NOTICE_MAX_WIDTH: u16 = 72;
+
+// Notices use bold leads rather than `#` headings: heading text takes the theme accent color.
+/// Only advertises the actions the shell reported as available in this session.
+fn empty_state_markdown(capture_enabled: bool, dream_enabled: bool) -> String {
+    let mut text = String::from("**Nothing remembered yet.**\n\n");
+    if capture_enabled {
+        text.push_str("- Keep working. Notes are saved automatically after each completed turn.\n");
+    }
+    text.push_str("- `/remember <note>` saves something specific right now.\n");
+    if dream_enabled {
+        text.push_str("- `/dream` organizes saved notes into topics.\n");
+    }
+    text.push_str(
+        "\nGrok Build remembers conventions, decisions, and project facts across sessions so you \
+         don't have to repeat yourself. Notes live in **workspace** memory for this repository and \
+         **global** memory shared across all your projects; each has a generated `MEMORY.md` index \
+         that fills in as notes are saved.\n",
+    );
+    text
+}
+
+fn disabled_state_markdown(reason: Option<MemoryDisabledReason>) -> &'static str {
+    match reason {
+        None | Some(MemoryDisabledReason::SessionToggle) => {
+            "\
+**Memory is off for this session.**
+
+- Press **t** to turn it back on.
+- `/memory on` does the same from the prompt.
+
+While off, Grok isn't reading or saving notes; anything already remembered is kept on disk. \
+Memory carries conventions, decisions, and project facts between sessions so you don't have \
+to repeat yourself."
+        }
+        Some(MemoryDisabledReason::RolloutRestricted) => {
+            "\
+**Memory is unavailable in this session.** Start a new session to pick up your current settings.
+
+This session's memory settings were pinned when it started, and they disable memory, so it \
+can't be turned on here. `/memory status` shows the details."
+        }
+        Some(MemoryDisabledReason::NotConfigured) => {
+            "\
+**Memory isn't configured.** `/memory status` shows the details.
+
+No memory storage is set up for this session, so there is nothing to browse or turn on."
+        }
+        Some(MemoryDisabledReason::Unknown) => {
+            "\
+**Memory is off for this session.** `/memory status` shows the details.
+
+This session reports a reason this version of Grok Build doesn't recognize; run `/memory on` \
+from the prompt to try turning it back on."
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MemoryFileEntry {
@@ -47,6 +108,35 @@ pub struct MemoryFileEntry {
     /// Empty for headers.
     pub meta_display: String,
     pub is_header: bool,
+    /// Store-generated index, not a note (see `MemoryFileInfo::generated`).
+    pub generated: bool,
+    pub size_bytes: u64,
+}
+
+impl MemoryFileEntry {
+    /// What `x` may remove: v2 topics and inbox observations, or legacy session logs.
+    /// Mirrors the store's own rule so the hint never advertises a delete the shell would refuse.
+    pub fn is_deletable(&self) -> bool {
+        if self.is_header || self.generated || self.size_bytes > MEMORY_FORGET_MAX_FILE_BYTES {
+            return false;
+        }
+        match self.source.as_str() {
+            "session" => true,
+            "workspace" | "global" => {
+                let parent = self.path.parent();
+                parent.is_some_and(|p| p.ends_with("topics"))
+                    || parent.is_some_and(|p| p.ends_with("observations/_inbox"))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Status shown under the file list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoryStatusLine {
+    pub text: String,
+    pub is_error: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +162,18 @@ pub struct MemoryModalState {
     query: LineEditor,
     /// Whether memory is currently enabled for this session.
     pub memory_enabled: bool,
+    /// `None` when enabled or when the shell predates the field.
+    pub disabled_reason: Option<MemoryDisabledReason>,
+    /// Session capabilities from the shell; the empty-state copy only advertises what is on.
+    capture_enabled: bool,
+    dream_enabled: bool,
+    /// The owner holds `active_modal`, so key handlers request a close through this flag.
+    close_requested: bool,
+    /// BLAKE3 hex of the previewed bytes, sent with a delete so the store only removes what the user saw.
+    preview_hash: Option<String>,
+    /// Delete awaiting the shell's answer; blocks a second `x` meanwhile.
+    pending_delete: Option<PathBuf>,
+    pub status: Option<MemoryStatusLine>,
     /// Whether the modal is rendered in fullscreen mode (persisted to config).
     pub fullscreen: bool,
     /// Cached filtered indices.
@@ -99,6 +201,13 @@ impl MemoryModalState {
             mode: MemoryModalMode::Browse,
             query: LineEditor::default(),
             memory_enabled: true,
+            disabled_reason: None,
+            capture_enabled: true,
+            dream_enabled: true,
+            close_requested: false,
+            preview_hash: None,
+            pending_delete: None,
+            status: None,
             fullscreen: load_fullscreen_pref(),
             filtered_cache,
             preview_total_lines: 0,
@@ -110,6 +219,105 @@ impl MemoryModalState {
         state.advance_past_headers();
         state.load_preview();
         state
+    }
+
+    pub fn with_enabled(mut self, enabled: bool, reason: Option<MemoryDisabledReason>) -> Self {
+        self.memory_enabled = enabled;
+        self.disabled_reason = if enabled { None } else { reason };
+        self
+    }
+
+    pub fn with_capabilities(mut self, capture_enabled: bool, dream_enabled: bool) -> Self {
+        self.capture_enabled = capture_enabled;
+        self.dream_enabled = dream_enabled;
+        self
+    }
+
+    /// Memory is off but `/memory on` can turn it back on in this session.
+    /// `None` (shell predates the field) is assumed toggleable; `Unknown` fails closed.
+    pub fn can_enable(&self) -> bool {
+        !self.memory_enabled
+            && matches!(
+                self.disabled_reason,
+                None | Some(MemoryDisabledReason::SessionToggle)
+            )
+    }
+
+    /// At least one entry is a note rather than a store-generated index.
+    /// v2 scope init always writes both `MEMORY.md` indexes, so a store with no notes still lists two files.
+    pub fn has_notes(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|entry| !entry.is_header && !entry.generated)
+    }
+
+    /// The list has nothing to browse (disabled, or enabled with no notes yet).
+    pub fn shows_notice(&self) -> bool {
+        !self.memory_enabled || !self.has_notes()
+    }
+
+    /// Remove section headers with no files left under them.
+    fn drop_empty_headers(&mut self) {
+        let mut keep = Vec::with_capacity(self.entries.len());
+        for (i, entry) in self.entries.iter().enumerate() {
+            let header_has_files =
+                !entry.is_header || self.entries.get(i + 1).is_some_and(|next| !next.is_header);
+            keep.push(header_has_files);
+        }
+        let mut keep = keep.into_iter();
+        self.entries.retain(|_| keep.next().unwrap_or(true));
+    }
+
+    /// Deletion needs the preview hash as evidence; oversized or unreadable notes offer none.
+    fn can_delete_selected(&self) -> bool {
+        self.preview_hash.is_some() && self.selected_entry().is_some_and(|e| e.is_deletable())
+    }
+
+    pub fn take_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.close_requested)
+    }
+
+    /// Apply the shell's answer to the delete request for `path`.
+    /// Answers for a path that is no longer pending (modal reopened meanwhile) are ignored.
+    pub fn apply_forget_result(
+        &mut self,
+        path: &str,
+        result: Result<MemoryForgetResponse, String>,
+    ) {
+        if self.pending_delete.as_deref() != Some(Path::new(path)) {
+            return;
+        }
+        self.pending_delete = None;
+        self.status = Some(match result {
+            Ok(MemoryForgetResponse::Forgotten { .. }) => {
+                // The user may have moved on while the delete was in flight; keep their row.
+                let selected_path = self.selected_entry().map(|e| e.path.clone());
+                let label = self
+                    .entries
+                    .iter()
+                    .position(|e| e.path == Path::new(path))
+                    .map(|idx| self.entries.remove(idx).label);
+                self.drop_empty_headers();
+                self.invalidate_filter();
+                if let Some(pos) = selected_path.and_then(|p| {
+                    self.filtered_cache
+                        .iter()
+                        .position(|&i| self.entries.get(i).is_some_and(|e| e.path == p))
+                }) {
+                    self.selected = pos;
+                }
+                self.clamp_selected();
+                self.load_preview();
+                MemoryStatusLine {
+                    text: format!("Deleted {}.", label.unwrap_or_default()),
+                    is_error: false,
+                }
+            }
+            Ok(MemoryForgetResponse::Rejected { message, .. }) | Err(message) => MemoryStatusLine {
+                text: message,
+                is_error: true,
+            },
+        });
     }
 
     pub fn filtered_indices(&self) -> &[usize] {
@@ -153,7 +361,7 @@ impl MemoryModalState {
     fn advance_past_headers(&mut self) {
         let filtered = &self.filtered_cache;
         for (i, &orig) in filtered.iter().enumerate() {
-            if !self.entries[orig].is_header {
+            if self.entries.get(orig).is_some_and(|e| !e.is_header) {
                 self.selected = i;
                 return;
             }
@@ -178,7 +386,11 @@ impl MemoryModalState {
         let filtered = &self.filtered_cache;
         let mut next = self.selected + 1;
         while next < filtered.len() {
-            if !self.entries[filtered[next]].is_header {
+            if filtered
+                .get(next)
+                .and_then(|&i| self.entries.get(i))
+                .is_some_and(|e| !e.is_header)
+            {
                 self.selected = next;
                 return true;
             }
@@ -196,7 +408,11 @@ impl MemoryModalState {
         let filtered = &self.filtered_cache;
         let mut prev = self.selected - 1;
         loop {
-            if !self.entries[filtered[prev]].is_header {
+            if filtered
+                .get(prev)
+                .and_then(|&i| self.entries.get(i))
+                .is_some_and(|e| !e.is_header)
+            {
                 self.selected = prev;
                 return true;
             }
@@ -216,7 +432,11 @@ impl MemoryModalState {
         if filt_idx >= filtered.len() {
             return false;
         }
-        if self.entries[filtered[filt_idx]].is_header {
+        if filtered
+            .get(filt_idx)
+            .and_then(|&i| self.entries.get(i))
+            .is_some_and(|e| e.is_header)
+        {
             return false;
         }
         if self.selected == filt_idx {
@@ -237,10 +457,14 @@ impl MemoryModalState {
         if self.selected >= filtered.len() {
             self.selected = filtered.len() - 1;
         }
-        if self.entries[filtered[self.selected]].is_header {
+        if filtered
+            .get(self.selected)
+            .and_then(|&i| self.entries.get(i))
+            .is_some_and(|e| e.is_header)
+        {
             // Try forward.
             for (i, &orig) in filtered.iter().enumerate().skip(self.selected + 1) {
-                if !self.entries[orig].is_header {
+                if self.entries.get(orig).is_some_and(|e| !e.is_header) {
                     self.selected = i;
                     self.load_preview();
                     return;
@@ -248,7 +472,7 @@ impl MemoryModalState {
             }
             // Try backward.
             for (i, &orig) in filtered.iter().enumerate().take(self.selected).rev() {
-                if !self.entries[orig].is_header {
+                if self.entries.get(orig).is_some_and(|e| !e.is_header) {
                     self.selected = i;
                     self.load_preview();
                     return;
@@ -260,19 +484,27 @@ impl MemoryModalState {
 
     fn load_preview(&mut self) {
         self.preview_scroll = 0;
-        self.preview_markdown = self
+        self.preview_hash = None;
+        self.status = None;
+        let path = self
             .selected_entry()
             .filter(|e| !e.is_header)
-            .and_then(|e| {
-                let path = std::path::Path::new(&e.path);
-                match std::fs::metadata(path) {
-                    Ok(meta) if meta.len() > MAX_PREVIEW_BYTES => {
-                        Some(MarkdownContent::new("*(File too large to preview)*"))
-                    }
-                    Err(_) => None,
-                    _ => std::fs::read_to_string(path).ok().map(MarkdownContent::new),
-                }
-            });
+            .map(|e| e.path.clone());
+        self.preview_markdown = path.and_then(|path| {
+            // Bounded read: the file may grow between a size check and the read.
+            let mut bytes = Vec::new();
+            std::fs::File::open(&path)
+                .ok()?
+                .take(MAX_PREVIEW_BYTES + 1)
+                .read_to_end(&mut bytes)
+                .ok()?;
+            if bytes.len() as u64 > MAX_PREVIEW_BYTES {
+                return Some(MarkdownContent::new("*(File too large to preview)*"));
+            }
+            let text = String::from_utf8(bytes).ok()?;
+            self.preview_hash = Some(blake3::hash(text.as_bytes()).to_hex().to_string());
+            Some(MarkdownContent::new(text))
+        });
     }
 }
 
@@ -345,6 +577,8 @@ pub fn build_entries(
             path: f.path.into(),
             source: f.source,
             is_header: false,
+            generated: f.generated,
+            size_bytes: f.size_bytes,
         });
     }
 
@@ -360,6 +594,8 @@ pub fn build_entries(
                 meta_display: String::new(),
                 label: label.to_string(),
                 is_header: true,
+                generated: false,
+                size_bytes: 0,
             });
             entries.extend(items);
         }
@@ -377,7 +613,7 @@ pub fn render_memory_modal(
     compact: bool,
 ) {
     let theme = Theme::current();
-    let shortcuts = build_shortcuts(&state.mode, state.memory_enabled, state.fullscreen);
+    let shortcuts = build_shortcuts(state);
 
     let modal_config = ModalWindowConfig {
         title: "Memory",
@@ -418,6 +654,21 @@ pub fn render_memory_modal(
     };
 
     if content_area.height < 2 || content_area.width < 10 {
+        return;
+    }
+
+    if state.shows_notice() {
+        // No list or preview: clear the hit-test rects so stale mouse clicks do nothing.
+        state.list_area = Rect::default();
+        state.preview_area = Rect::default();
+        state.list_scrollbar_area = None;
+        state.preview_scrollbar_area = None;
+        let markdown = if state.memory_enabled {
+            empty_state_markdown(state.capture_enabled, state.dream_enabled)
+        } else {
+            disabled_state_markdown(state.disabled_reason).to_owned()
+        };
+        render_notice(buf, content_area, &markdown, &theme);
         return;
     }
 
@@ -469,6 +720,48 @@ pub fn render_memory_modal(
     }
 }
 
+fn render_notice(buf: &mut Buffer, area: Rect, markdown: &str, theme: &Theme) {
+    buf.set_style(area, Style::default().bg(theme.bg_base));
+    let width = area.width.min(NOTICE_MAX_WIDTH);
+    if width == 0 {
+        return;
+    }
+    let content = MarkdownContent::new(markdown);
+    content.with_wrapped_lines(width as usize, |wrapped| {
+        for (row, line) in wrapped.lines.iter().take(area.height as usize).enumerate() {
+            buf.set_line_safe(area.x, area.y + row as u16, line, width);
+        }
+    });
+}
+
+/// Returns the number of rows used (0 or 1).
+fn render_status_line(
+    buf: &mut Buffer,
+    area: Rect,
+    state: &MemoryModalState,
+    theme: &Theme,
+) -> u16 {
+    let Some(status) = state.status.as_ref() else {
+        return 0;
+    };
+    if area.height < 3 {
+        return 0;
+    }
+    let fg = if status.is_error {
+        theme.accent_error
+    } else {
+        theme.gray
+    };
+    let text = crate::render::line_utils::truncate_str(&status.text, area.width as usize);
+    buf.set_span(
+        area.x,
+        area.y + area.height - 1,
+        &Span::styled(text.as_str(), Style::default().fg(fg).bg(theme.bg_base)),
+        area.width,
+    );
+    1
+}
+
 fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, theme: &Theme) {
     let search_y = area.y;
     let filter_focused = matches!(state.mode, MemoryModalMode::FilterFocused);
@@ -491,7 +784,10 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
     } else {
         let leading;
         let visible = if filter_focused {
-            &state.query()[viewport.visible_byte_range.clone()]
+            state
+                .query()
+                .get(viewport.visible_byte_range.clone())
+                .unwrap_or("")
         } else {
             leading = crate::render::line_utils::truncate_str(state.query(), area.width as usize);
             &leading
@@ -515,8 +811,9 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
         }
     }
 
+    let status_rows = render_status_line(buf, area, state, theme);
     let entries_start_y = search_y + 1;
-    let available_height = area.height.saturating_sub(1) as usize;
+    let available_height = area.height.saturating_sub(1 + status_rows).max(1) as usize;
     if state.selected < state.scroll_offset {
         state.scroll_offset = state.selected;
     }
@@ -545,14 +842,16 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
 
     let filtered = state.filtered_indices();
     let end = filtered.len().min(state.scroll_offset + available_height);
-    let visible = &filtered[state.scroll_offset..end];
+    let visible = filtered.get(state.scroll_offset..end).unwrap_or(&[]);
 
     for (row, &orig_idx) in visible.iter().enumerate() {
         let y = entries_start_y + row as u16;
         if y >= area.y + area.height {
             break;
         }
-        let entry = &state.entries[orig_idx];
+        let Some(entry) = state.entries.get(orig_idx) else {
+            continue;
+        };
         let filt_idx = state.scroll_offset + row;
         let is_selected = filt_idx == state.selected;
 
@@ -699,7 +998,9 @@ fn render_preview(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, th
         .with_wrapped_lines(content_width, |wrapped| {
             for (row, line_idx) in (scroll..total.min(scroll + visible)).enumerate() {
                 let y = area.y + row as u16;
-                buf.set_line_safe(area.x, y, &wrapped.lines[line_idx], content_width as u16);
+                if let Some(line) = wrapped.lines.get(line_idx) {
+                    buf.set_line_safe(area.x, y, line, content_width as u16);
+                }
             }
         });
 
@@ -720,19 +1021,25 @@ pub fn handle_memory_key(state: &mut MemoryModalState, key: &KeyEvent) -> InputO
 
     // ConfirmingDelete has an "any key cancel" contract; handle it first so no other handler can silently swallow the key
     if let MemoryModalMode::ConfirmingDelete { idx } = state.mode {
-        if key.code == KeyCode::Char('x') {
-            let filtered = state.filtered_indices();
-            if let Some(&orig_idx) = filtered.get(idx) {
-                let path = state.entries[orig_idx].path.clone();
-                state.entries.remove(orig_idx);
-                state.mode = MemoryModalMode::Browse;
-                state.invalidate_filter();
-                state.clamp_selected();
-                let _ = std::fs::remove_file(&path);
-                return InputOutcome::Changed;
-            }
-        }
         state.mode = MemoryModalMode::Browse;
+        state.status = None;
+        if key.code == KeyCode::Char('x')
+            && let Some(&orig_idx) = state.filtered_indices().get(idx)
+            && let Some(entry) = state.entries.get(orig_idx)
+            && let Some(hash) = state.preview_hash.clone()
+        {
+            // The row stays until the shell confirms; the store may refuse.
+            let path = entry.path.clone();
+            state.pending_delete = Some(path.clone());
+            state.status = Some(MemoryStatusLine {
+                text: format!("Deleting {}…", entry.label),
+                is_error: false,
+            });
+            return InputOutcome::Action(Action::MemoryForget {
+                path: path.to_string_lossy().into_owned(),
+                expected_content_hash: hash,
+            });
+        }
         return InputOutcome::Changed;
     }
 
@@ -770,7 +1077,7 @@ fn select_first_visible(state: &mut MemoryModalState) {
         .take(visible_end)
         .skip(visible_start)
     {
-        if !state.entries[orig].is_header {
+        if state.entries.get(orig).is_some_and(|e| !e.is_header) {
             state.selected = i;
             state.load_preview();
             return;
@@ -803,6 +1110,15 @@ pub fn handle_memory_mouse(
     column: u16,
     row: u16,
 ) -> InputOutcome {
+    if state.shows_notice() {
+        return InputOutcome::Unchanged;
+    }
+    // Mouse input can move the selection and reload the preview hash; a pending confirm must
+    // not survive that, or the next `x` would pair the old row with the new hash.
+    if matches!(state.mode, MemoryModalMode::ConfirmingDelete { .. }) {
+        state.mode = MemoryModalMode::Browse;
+        state.status = None;
+    }
     let in_rect = |r: Rect| -> bool {
         r.width > 0
             && r.height > 0
@@ -939,6 +1255,10 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
         state.fullscreen = !state.fullscreen;
         return InputOutcome::Action(Action::PersistMemoryFullscreen(state.fullscreen));
     }
+    // A notice hides the list; only the toggle may act on it (nav/copy/delete would hit hidden entries).
+    if state.shows_notice() && key.code != KeyCode::Char('t') {
+        return InputOutcome::Unchanged;
+    }
     match key.code {
         KeyCode::Down | KeyCode::Char('j') => {
             state.select_next();
@@ -969,16 +1289,34 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
             InputOutcome::Changed
         }
         KeyCode::Char('x') if key.modifiers.is_empty() => {
-            if let Some(entry) = state.selected_entry()
-                && !entry.is_header
-                && entry.source == "session"
-            {
-                state.mode = MemoryModalMode::ConfirmingDelete {
-                    idx: state.selected,
-                };
+            if state.pending_delete.is_some() {
+                return InputOutcome::Unchanged;
+            }
+            let Some(entry) = state.selected_entry().filter(|e| e.is_deletable()) else {
+                return InputOutcome::Unchanged;
+            };
+            if state.preview_hash.is_none() {
+                state.status = Some(MemoryStatusLine {
+                    text: "Can't delete: this note couldn't be read for verification.".to_owned(),
+                    is_error: true,
+                });
                 return InputOutcome::Changed;
             }
-            InputOutcome::Unchanged
+            let scope = match entry.source.as_str() {
+                "session" => "session logs".to_owned(),
+                source => format!("{source} memory"),
+            };
+            state.status = Some(MemoryStatusLine {
+                text: format!(
+                    "Delete {} from {scope}? Dream may re-derive it from future sessions. x confirm · any other key cancels",
+                    entry.label
+                ),
+                is_error: false,
+            });
+            state.mode = MemoryModalMode::ConfirmingDelete {
+                idx: state.selected,
+            };
+            InputOutcome::Changed
         }
         KeyCode::Char('y') if key.modifiers.is_empty() => {
             if let Some(entry) = state.selected_entry()
@@ -990,15 +1328,27 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
             InputOutcome::Unchanged
         }
         KeyCode::Char('t') if key.modifiers.is_empty() => {
-            let cmd = if state.memory_enabled {
-                "/memory off"
+            if state.memory_enabled {
+                // Optimistic; the next MemoryFiles notification re-syncs if the command fails
+                state.memory_enabled = false;
+                state.disabled_reason = Some(MemoryDisabledReason::SessionToggle);
+                return InputOutcome::Action(Action::SendSlashCommandPreservingDraft(
+                    "/memory off".to_owned(),
+                ));
+            }
+            if !state.can_enable() {
+                return InputOutcome::Unchanged;
+            }
+            if state.entries.is_empty() {
+                // Opened while off: the shell sent no file list, so close instead of showing a stale empty list
+                state.close_requested = true;
             } else {
-                "/memory on"
-            };
-            // Optimistic update: the shortcut bar reflects the new state immediately
-            // The shell re-syncs via the next MemoryFiles notification if the command fails
-            state.memory_enabled = !state.memory_enabled;
-            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(cmd.to_owned()))
+                state.memory_enabled = true;
+                state.disabled_reason = None;
+            }
+            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(
+                "/memory on".to_owned(),
+            ))
         }
         // `i` aliases `/` (vim-nav "press i to search").
         KeyCode::Char('/') | KeyCode::Char('i') if key.modifiers.is_empty() => {
@@ -1018,59 +1368,48 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
     }
 }
 
-fn build_shortcuts(
-    mode: &MemoryModalMode,
-    memory_enabled: bool,
-    fullscreen: bool,
-) -> Vec<Shortcut<'static>> {
-    match mode {
+fn build_shortcuts(state: &MemoryModalState) -> Vec<Shortcut<'static>> {
+    let plain = |label: &'static str| Shortcut {
+        label,
+        clickable: false,
+        id: 0,
+    };
+    let fullscreen_label = if state.fullscreen {
+        "^F normal"
+    } else {
+        "^F fullscreen"
+    };
+    match &state.mode {
+        MemoryModalMode::Browse if !state.memory_enabled => {
+            let mut shortcuts = Vec::new();
+            if state.can_enable() {
+                shortcuts.push(plain("t turn on"));
+            }
+            shortcuts.push(plain(fullscreen_label));
+            shortcuts.push(plain("Esc close"));
+            shortcuts
+        }
+        MemoryModalMode::Browse if !state.has_notes() => {
+            vec![
+                plain("t turn off"),
+                plain(fullscreen_label),
+                plain("Esc close"),
+            ]
+        }
         MemoryModalMode::Browse => {
-            let toggle_label = if memory_enabled {
-                "t toggle (on)"
-            } else {
-                "t toggle (off)"
-            };
             let mut shortcuts = vec![
-                Shortcut {
-                    label: "\u{2191}/\u{2193} nav",
-                    clickable: false,
-                    id: 0,
-                },
-                Shortcut {
-                    label: "/ search",
-                    clickable: false,
-                    id: 0,
-                },
-                Shortcut {
-                    label: "y copy path",
-                    clickable: false,
-                    id: 0,
-                },
-                Shortcut {
-                    label: "x delete",
-                    clickable: false,
-                    id: 0,
-                },
-                Shortcut {
-                    label: toggle_label,
-                    clickable: false,
-                    id: 0,
-                },
-                Shortcut {
-                    label: if fullscreen {
-                        "^F normal"
-                    } else {
-                        "^F fullscreen"
-                    },
-                    clickable: false,
-                    id: 0,
-                },
-                Shortcut {
-                    label: "Esc close",
-                    clickable: false,
-                    id: 0,
-                },
+                plain("\u{2191}/\u{2193} nav"),
+                plain("/ search"),
+                plain("y copy path"),
             ];
+            if state.can_delete_selected() {
+                shortcuts.push(plain("x delete"));
+            }
+            shortcuts.extend([
+                plain("t turn off"),
+                plain(fullscreen_label),
+                plain("Esc close"),
+            ]);
             // Browse is nav mode (filter inactive), so append `i search` last (matching the shared pickers)
             modal_window::push_vim_nav_search_hint(&mut shortcuts, false);
             shortcuts
@@ -1106,7 +1445,7 @@ fn build_shortcuts(
 /// Delegates to `render::line_utils::byte_offset_at_width` to avoid duplicating the Unicode-width scanning logic.
 fn truncate_to_width(s: &str, max_width: usize) -> &str {
     let offset = crate::render::line_utils::byte_offset_at_width(s, max_width);
-    &s[..offset]
+    s.get(..offset).unwrap_or("")
 }
 
 fn file_label(path: &str) -> String {
@@ -1185,30 +1524,45 @@ mod tests {
                 source: "global".into(),
                 size_bytes: 100,
                 modified_epoch_secs: Some(1_700_000_000),
+                generated: false,
             },
             MemoryFileInfo {
                 path: "/workspace/MEMORY.md".into(),
                 source: "workspace".into(),
                 size_bytes: 200,
                 modified_epoch_secs: Some(1_700_000_000),
+                generated: false,
             },
             MemoryFileInfo {
                 path: "/sessions/log1.md".into(),
                 source: "session".into(),
                 size_bytes: 50,
                 modified_epoch_secs: None,
+                generated: false,
             },
         ];
 
         let entries = build_entries(files);
         assert_eq!(entries.len(), 6);
-        assert!(entries[0].is_header);
-        assert_eq!(entries[0].label, "Global");
-        assert!(!entries[1].is_header);
-        assert!(entries[2].is_header);
-        assert_eq!(entries[2].label, "Workspace");
-        assert!(entries[4].is_header);
-        assert_eq!(entries[4].label, "Sessions");
+        let Some(e0) = entries.first() else {
+            panic!("expected entries");
+        };
+        assert!(e0.is_header);
+        assert_eq!(e0.label, "Global");
+        let Some(e1) = entries.get(1) else {
+            panic!("expected workspace entry");
+        };
+        assert!(!e1.is_header);
+        let Some(e2) = entries.get(2) else {
+            panic!("expected workspace header");
+        };
+        assert!(e2.is_header);
+        assert_eq!(e2.label, "Workspace");
+        let Some(e4) = entries.get(4) else {
+            panic!("expected sessions header");
+        };
+        assert!(e4.is_header);
+        assert_eq!(e4.label, "Sessions");
     }
 
     #[test]
@@ -1229,31 +1583,184 @@ mod tests {
         state.invalidate_filter();
 
         let indices = state.filtered_indices();
-        assert_eq!(indices.len(), 2);
-        assert_eq!(indices[0], 0); // Global header
-        assert_eq!(indices[1], 1); // MEMORY.md
+        assert_eq!(indices, &[0, 1]);
+    }
+
+    /// Generated index, one topic, one inbox observation, all on disk.
+    fn v2_store_state() -> (tempfile::TempDir, MemoryModalState) {
+        use xai_grok_shell::extensions::notification::MemoryFileInfo;
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().join("workspace");
+        std::fs::create_dir_all(ws.join("topics")).unwrap();
+        std::fs::create_dir_all(ws.join("observations/_inbox")).unwrap();
+        let files = [
+            ("workspace/MEMORY.md", "# index\n", true),
+            ("workspace/topics/anyrun.md", "# Anyrun\n\nnotes\n", false),
+            (
+                "workspace/observations/_inbox/2026-09-14-x.md",
+                "obs\n",
+                false,
+            ),
+            ("workspace/topics/zulu.md", "# Zulu\n", false),
+        ];
+        let infos = files
+            .iter()
+            .map(|(rel, body, generated)| {
+                let path = dir.path().join(rel);
+                std::fs::write(&path, body).unwrap();
+                MemoryFileInfo {
+                    path: path.to_string_lossy().into_owned(),
+                    source: "workspace".into(),
+                    size_bytes: body.len() as u64,
+                    modified_epoch_secs: None,
+                    generated: *generated,
+                }
+            })
+            .collect();
+        let state = MemoryModalState::new(build_entries(infos));
+        (dir, state)
+    }
+
+    fn select_label(state: &mut MemoryModalState, label: &str) {
+        let idx = state
+            .filtered_indices()
+            .iter()
+            .position(|&i| state.entries.get(i).is_some_and(|e| e.label == label))
+            .expect("label present");
+        state.selected = idx;
+        state.load_preview();
     }
 
     #[test]
-    fn delete_only_allowed_for_session_entries() {
-        let entries = build_test_entries();
-        let mut state = MemoryModalState::new(entries);
-        // Select the global entry (index 1 in filtered, which is "MEMORY.md" source="global")
-        state.selected = 1;
-        // Try to delete: source "global" must NOT enter confirming mode
-        let key = crossterm::event::KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
-        let outcome = handle_memory_key(&mut state, &key);
-        assert!(matches!(outcome, InputOutcome::Unchanged));
-        assert_eq!(state.mode, MemoryModalMode::Browse);
+    fn v2_deletability_follows_store_layout() {
+        let (_dir, state) = v2_store_state();
+        let by_label = |label: &str| {
+            state
+                .entries
+                .iter()
+                .find(|e| e.label == label)
+                .map(|e| e.is_deletable())
+                .unwrap()
+        };
+        assert!(!by_label("MEMORY.md"), "generated index is protected");
+        assert!(by_label("anyrun.md"));
+        assert!(by_label("2026-09-14-x.md"));
 
-        // Select the session entry (index 3 in filtered, which is "session-log.md" source="session")
-        state.selected = 3;
-        let outcome = handle_memory_key(&mut state, &key);
-        assert!(matches!(outcome, InputOutcome::Changed));
+        // Legacy MEMORY.md is user content but still not deletable: it is not a topic or observation.
+        let legacy = MemoryFileEntry {
+            path: PathBuf::from("/legacy/MEMORY.md"),
+            source: "global".into(),
+            label: "MEMORY.md".into(),
+            meta_display: String::new(),
+            is_header: false,
+            generated: false,
+            size_bytes: 0,
+        };
+        assert!(!legacy.is_deletable());
+
+        // The shell refuses to hash notes above the store cap, so the modal must not offer them.
+        let oversized = MemoryFileEntry {
+            path: PathBuf::from("/store/topics/big.md"),
+            source: "global".into(),
+            label: "big.md".into(),
+            size_bytes: MEMORY_FORGET_MAX_FILE_BYTES + 1,
+            ..legacy
+        };
+        assert!(!oversized.is_deletable());
+    }
+
+    /// Two-press `x` sends the previewed bytes' hash to the shell and keeps the row until it answers.
+    #[test]
+    fn confirmed_delete_sends_forget_and_applies_reply() {
+        let (dir, mut state) = v2_store_state();
+        select_label(&mut state, "anyrun.md");
+        let topic_path = dir.path().join("workspace/topics/anyrun.md");
+        let expected_hash = blake3::hash(b"# Anyrun\n\nnotes\n").to_hex().to_string();
+
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert!(labels.contains(&"x delete"));
+
+        // Any key other than `x` cancels the confirmation.
+        handle_memory_key(&mut state, &plain_key('x'));
         assert!(matches!(
             state.mode,
             MemoryModalMode::ConfirmingDelete { .. }
         ));
+        handle_memory_key(&mut state, &plain_key('j'));
+        assert_eq!(state.mode, MemoryModalMode::Browse);
+        assert!(state.status.is_none());
+
+        // So does any mouse input, which could otherwise move the selection under the confirm.
+        handle_memory_key(&mut state, &plain_key('x'));
+        handle_memory_mouse(&mut state, MouseEventKind::ScrollDown, 0, 0);
+        assert_eq!(state.mode, MemoryModalMode::Browse);
+        assert!(state.status.is_none());
+
+        handle_memory_key(&mut state, &plain_key('x'));
+        assert!(state.status.as_ref().unwrap().text.contains("anyrun.md"));
+        let outcome = handle_memory_key(&mut state, &plain_key('x'));
+        let InputOutcome::Action(Action::MemoryForget {
+            path,
+            expected_content_hash,
+        }) = outcome
+        else {
+            panic!("expected MemoryForget action, got {outcome:?}");
+        };
+        assert_eq!(Path::new(&path), topic_path);
+        assert_eq!(expected_content_hash, expected_hash);
+        assert_eq!(state.mode, MemoryModalMode::Browse);
+        assert!(state.entries.iter().any(|e| e.label == "anyrun.md"));
+        // A second `x` while the request is in flight is ignored.
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('x')),
+            InputOutcome::Unchanged
+        ));
+
+        // A rejection keeps the row and surfaces the shell's message.
+        state.apply_forget_result(
+            &path,
+            Ok(MemoryForgetResponse::Rejected {
+                reason: xai_grok_shell::extensions::memory::MemoryForgetRejection::DreamRunning,
+                message: "Dream is organizing memory right now.".into(),
+            }),
+        );
+        assert!(state.entries.iter().any(|e| e.label == "anyrun.md"));
+        assert!(state.status.as_ref().is_some_and(|s| s.is_error));
+
+        // Retry and succeed: the row goes away, and a selection moved during the round trip stays put.
+        handle_memory_key(&mut state, &plain_key('x'));
+        handle_memory_key(&mut state, &plain_key('x'));
+        select_label(&mut state, "2026-09-14-x.md");
+        state.apply_forget_result(
+            &path,
+            Ok(MemoryForgetResponse::Forgotten {
+                was_already_forgotten: false,
+            }),
+        );
+        assert!(!state.entries.iter().any(|e| e.label == "anyrun.md"));
+        assert_eq!(
+            state.selected_entry().map(|e| e.label.as_str()),
+            Some("2026-09-14-x.md")
+        );
+        assert!(state.status.as_ref().is_some_and(|s| !s.is_error));
+
+        // A reply for a path that is not pending is ignored.
+        state.apply_forget_result(
+            "/elsewhere.md",
+            Ok(MemoryForgetResponse::Forgotten {
+                was_already_forgotten: false,
+            }),
+        );
+        assert_eq!(state.entries.iter().filter(|e| !e.is_header).count(), 3);
+    }
+
+    #[test]
+    fn deleting_last_file_in_section_drops_its_header() {
+        let mut state = MemoryModalState::new(build_test_entries());
+        state.entries.retain(|e| e.label != "session-log.md");
+        state.drop_empty_headers();
+        let labels: Vec<&str> = state.entries.iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Global", "MEMORY.md"]);
     }
 
     /// `i` aliases `/` without modifiers: from Browse it enters FilterFocused exactly like `/` (vim-nav "press i to search").
@@ -1287,12 +1794,183 @@ mod tests {
     #[test]
     fn browse_footer_advertises_i_search_under_vim() {
         crate::appearance::cache::set_vim_mode(true);
-        let vim = build_shortcuts(&MemoryModalMode::Browse, true, false);
+        let vim = build_shortcuts(&MemoryModalState::new(build_test_entries()));
         assert!(
             vim.iter().any(|s| s.label == "i search"),
             "vim-mode Browse footer must advertise `i search`"
         );
         crate::appearance::cache::set_vim_mode(false);
+    }
+
+    fn buffer_text(buf: &Buffer) -> String {
+        let area = buf.area;
+        let mut out = String::new();
+        for y in area.y..area.y + area.height {
+            for x in area.x..area.x + area.width {
+                if let Some(cell) = buf.cell((x, y)) {
+                    out.push_str(cell.symbol());
+                }
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    fn render_full(state: &mut MemoryModalState) -> String {
+        let area = Rect::new(0, 0, 120, 40);
+        let mut buf = Buffer::empty(area);
+        render_memory_modal(&mut buf, area, state, false);
+        buffer_text(&buf)
+    }
+
+    fn plain_key(c: char) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn empty_enabled_state_renders_onboarding_copy() {
+        // A fresh v2 store is not an empty list: scope init writes both MEMORY.md indexes.
+        let manifest = |scope: &str| xai_grok_shell::extensions::notification::MemoryFileInfo {
+            path: format!("/store/{scope}/MEMORY.md"),
+            source: scope.to_string(),
+            size_bytes: 183,
+            modified_epoch_secs: None,
+            generated: true,
+        };
+        let mut state = MemoryModalState::new(build_entries(vec![
+            manifest("global"),
+            manifest("workspace"),
+        ]));
+        assert!(!state.has_notes());
+        let text = render_full(&mut state);
+        assert!(text.contains("Nothing remembered yet"), "{text}");
+        assert!(text.contains("/remember"), "{text}");
+        assert!(text.contains("/dream"), "{text}");
+        assert!(text.contains("saved automatically"), "{text}");
+        assert!(!text.contains("No file selected"), "{text}");
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert_eq!(labels, vec!["t turn off", "^F fullscreen", "Esc close"]);
+
+        // Capture and manual Dream can be pinned off; the copy must not promise them.
+        let mut restricted = MemoryModalState::new(build_entries(vec![manifest("global")]))
+            .with_capabilities(false, false);
+        let text = render_full(&mut restricted);
+        assert!(text.contains("/remember"), "{text}");
+        assert!(!text.contains("/dream"), "{text}");
+        assert!(!text.contains("saved automatically"), "{text}");
+
+        // One real note brings the two-pane browser (indexes included) back.
+        let mut with_topic = MemoryModalState::new(build_entries(vec![
+            manifest("global"),
+            manifest("workspace"),
+            xai_grok_shell::extensions::notification::MemoryFileInfo {
+                path: "/store/workspace/topics/anyrun.md".into(),
+                source: "workspace".into(),
+                size_bytes: 900,
+                modified_epoch_secs: None,
+                generated: false,
+            },
+        ]));
+        assert!(with_topic.has_notes());
+        let text = render_full(&mut with_topic);
+        assert!(!text.contains("Nothing remembered yet"), "{text}");
+        assert!(text.contains("anyrun.md"), "{text}");
+
+        // Legacy MEMORY.md is user content, not a generated index; the shell leaves `generated` unset.
+        let mut legacy = MemoryModalState::new(build_entries(vec![
+            xai_grok_shell::extensions::notification::MemoryFileInfo {
+                path: "/legacy/global/MEMORY.md".into(),
+                source: "global".into(),
+                size_bytes: 2048,
+                modified_epoch_secs: None,
+                generated: false,
+            },
+        ]));
+        assert!(legacy.has_notes());
+        assert!(!render_full(&mut legacy).contains("Nothing remembered yet"));
+    }
+
+    #[test]
+    fn disabled_state_renders_turn_on_call_to_action() {
+        let mut state = MemoryModalState::new(Vec::new())
+            .with_enabled(false, Some(MemoryDisabledReason::SessionToggle));
+        let text = render_full(&mut state);
+        assert!(text.contains("Memory is off for this session"), "{text}");
+        assert!(text.contains("/memory on"), "{text}");
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert_eq!(labels, vec!["t turn on", "^F fullscreen", "Esc close"]);
+    }
+
+    #[test]
+    fn rollout_restricted_state_offers_no_toggle() {
+        let mut state = MemoryModalState::new(Vec::new())
+            .with_enabled(false, Some(MemoryDisabledReason::RolloutRestricted));
+        let text = render_full(&mut state);
+        assert!(
+            text.contains("Memory is unavailable in this session"),
+            "{text}"
+        );
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert_eq!(labels, vec!["^F fullscreen", "Esc close"]);
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Unchanged
+        ));
+        assert!(!state.take_close_request());
+
+        // A reason from a newer shell fails closed: no toggle offered.
+        let unknown = MemoryModalState::new(Vec::new())
+            .with_enabled(false, Some(MemoryDisabledReason::Unknown));
+        assert!(!unknown.can_enable());
+    }
+
+    #[test]
+    fn t_from_disabled_empty_modal_sends_on_and_closes() {
+        let mut state = MemoryModalState::new(Vec::new())
+            .with_enabled(false, Some(MemoryDisabledReason::SessionToggle));
+        let outcome = handle_memory_key(&mut state, &plain_key('t'));
+        assert!(matches!(
+            outcome,
+            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(ref cmd)) if cmd == "/memory on"
+        ));
+        assert!(state.take_close_request());
+        assert!(!state.take_close_request());
+    }
+
+    #[test]
+    fn t_round_trip_with_entries_stays_open() {
+        let mut state = MemoryModalState::new(build_test_entries());
+        let off = handle_memory_key(&mut state, &plain_key('t'));
+        assert!(matches!(
+            off,
+            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(ref cmd)) if cmd == "/memory off"
+        ));
+        assert!(!state.memory_enabled);
+        assert!(state.shows_notice());
+        assert!(!state.take_close_request());
+
+        // The hidden list must not accept hotkeys: `x` on a session entry would otherwise arm delete.
+        state.selected = 3;
+        for c in ['x', 'y', 'j', '/'] {
+            assert!(matches!(
+                handle_memory_key(&mut state, &plain_key(c)),
+                InputOutcome::Unchanged
+            ));
+        }
+        assert_eq!(state.mode, MemoryModalMode::Browse);
+        assert!(matches!(
+            handle_memory_mouse(&mut state, MouseEventKind::ScrollDown, 1, 1),
+            InputOutcome::Unchanged
+        ));
+
+        let on = handle_memory_key(&mut state, &plain_key('t'));
+        assert!(matches!(
+            on,
+            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(ref cmd)) if cmd == "/memory on"
+        ));
+        assert!(state.memory_enabled);
+        assert!(!state.shows_notice());
+        assert!(!state.take_close_request());
     }
 
     #[test]
@@ -1590,14 +2268,19 @@ mod tests {
         let theme = Theme::current();
         let mut buffer = Buffer::empty(area);
         let viewport = state.query_viewport(area.width as usize);
-        let visible = &state.query()[viewport.visible_byte_range.clone()];
+        let Some(visible) = state.query().get(viewport.visible_byte_range.clone()) else {
+            panic!("viewport out of range");
+        };
         assert!(visible.contains('中'));
         assert!(visible.contains("e\u{301}"));
         assert!(visible.contains(grapheme));
 
         render_file_list(&mut buffer, area, &mut state, &theme);
         let cursor_x = viewport.cursor_display_column as u16;
-        assert_eq!(buffer[(cursor_x, 0)].bg, theme.text_primary);
+        assert_eq!(
+            buffer.cell((cursor_x, 0)).map(|c| c.bg),
+            Some(theme.text_primary)
+        );
     }
 
     #[test]
@@ -1620,6 +2303,8 @@ mod tests {
                 meta_display: String::new(),
                 label: "Global".to_string(),
                 is_header: true,
+                generated: false,
+                size_bytes: 0,
             },
             MemoryFileEntry {
                 path: PathBuf::from("/test/MEMORY.md"),
@@ -1627,6 +2312,8 @@ mod tests {
                 meta_display: "1KB \u{00B7} 1d ago".into(),
                 label: "MEMORY.md".to_string(),
                 is_header: false,
+                generated: false,
+                size_bytes: 0,
             },
             MemoryFileEntry {
                 path: PathBuf::new(),
@@ -1634,6 +2321,8 @@ mod tests {
                 meta_display: String::new(),
                 label: "Sessions".to_string(),
                 is_header: true,
+                generated: false,
+                size_bytes: 0,
             },
             MemoryFileEntry {
                 path: PathBuf::from("/test/session.md"),
@@ -1641,6 +2330,8 @@ mod tests {
                 meta_display: "500B \u{00B7} 2d ago".into(),
                 label: "session-log.md".to_string(),
                 is_header: false,
+                generated: false,
+                size_bytes: 0,
             },
         ]
     }

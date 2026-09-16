@@ -57,7 +57,10 @@ impl UsageInfoTab {
     }
 
     pub fn from_index(i: usize) -> Self {
-        *Self::ALL.get(i).unwrap_or(&Self::ALL[0])
+        match Self::ALL.get(i) {
+            Some(&tab) => tab,
+            None => UsageInfoTab::ContextUsage,
+        }
     }
 }
 
@@ -91,8 +94,7 @@ pub struct UsageInfoModalState {
     pub session_usage_text: Option<String>,
     pub billing_loading: bool,
     pub billing_error: Option<String>,
-    /// Fetch generation stamped at open; results from an earlier open (same
-    /// session, modal reopened) are dropped instead of overwriting.
+    /// Fetch generation stamped at open; results from an earlier open (same session, modal reopened) are dropped instead of overwriting.
     pub fetch_nonce: u64,
     /// Hit rects for copyable value rows, refreshed every render.
     pub copy_hits: Vec<SessionCopyHit>,
@@ -174,7 +176,7 @@ impl UsageInfoModalState {
             session_usage_text: None,
             billing_loading: false,
             billing_error: None,
-            fetch_nonce: 0,
+            fetch_nonce: Default::default(),
             session_fields: None,
             copy_hits: Vec::new(),
             hovered_copy_line: None,
@@ -701,7 +703,7 @@ fn endpoint_at(state: &UsageInfoModalState, column: u16, row: u16) -> Option<Tex
     if line_idx >= state.plain_lines.len() {
         return None;
     }
-    let text = &state.plain_lines[line_idx];
+    let text = state.plain_lines.get(line_idx)?;
     let line_w = text.width().min(u16::MAX as usize) as u16;
     let col = column.saturating_sub(rect.x).min(line_w);
     Some(TextEndpoint { line_idx, col })
@@ -871,9 +873,9 @@ fn context_tab_lines(state: &UsageInfoModalState, theme: &Theme, width: u16) -> 
     vec![muted_line(theme, "Loading context usage\u{2026}")]
 }
 
+/// Account allowance followed by this session's token/cost totals.
 /// This session's token/cost totals (the fork strips the consumer billing
 /// allowance — BYOK sessions have no grok.com credits to show).
-/// Account allowance followed by this session's token/cost totals.
 fn usage_lines(
     state: &UsageInfoModalState,
     balance: Option<&CreditBalance>,
@@ -1083,10 +1085,10 @@ mod tests {
             UsageInfoTab::UsageLimit,
             UsageInfoContext {
                 session_id: Some("sid-123".to_string()),
-                    usage_visible: true,
-                    chat_kind: false,
-                    billing_redirect_url: None,
-                    subscription_tier: None,
+                usage_visible: true,
+                chat_kind: false,
+                billing_redirect_url: None,
+                subscription_tier: None,
             },
         )
     }
@@ -1149,6 +1151,44 @@ mod tests {
     }
 
     #[test]
+    fn usage_limit_tab_states() {
+        let theme = Theme::current();
+        let mut state = state_with_session();
+        state.billing_loading = true;
+        let lines = usage_lines(&state, None, &theme);
+        assert!(
+            lines
+                .first()
+                .is_some_and(|l| l.to_string().contains("Loading usage"))
+        );
+
+        state.ctx.billing_redirect_url = Some("https://x.example/usage".to_string());
+        let lines = usage_lines(&state, None, &theme);
+        assert!(
+            lines
+                .first()
+                .is_some_and(|l| l.to_string().contains("https://x.example/usage"))
+        );
+
+        state.ctx.usage_visible = false;
+        let lines = usage_lines(&state, None, &theme);
+        assert!(
+            lines
+                .first()
+                .is_some_and(|l| l.to_string().contains("managed by your team"))
+        );
+
+        // Gateway chat sessions show no billing at all
+        state.ctx.chat_kind = true;
+        let lines = usage_lines(&state, None, &theme);
+        assert!(
+            lines
+                .first()
+                .is_some_and(|l| l.to_string().contains("Loading session usage"))
+        );
+    }
+
+    #[test]
     fn render_smoke_shows_tabs_and_copy_shortcut() {
         let area = Rect::new(0, 0, 80, 24);
         let mut buf = Buffer::empty(area);
@@ -1159,7 +1199,7 @@ mod tests {
         let text: String = (0..area.height)
             .map(|y| {
                 (0..area.width)
-                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .filter_map(|x| buf.cell((x, y)).map(|c| c.symbol().to_string()))
                     .collect::<String>()
                     + "\n"
             })
@@ -1199,7 +1239,7 @@ mod tests {
         let text: String = (0..area.height)
             .map(|y| {
                 (0..area.width)
-                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .filter_map(|x| buf.cell((x, y)).map(|c| c.symbol().to_string()))
                     .collect::<String>()
                     + "\n"
             })
@@ -1280,7 +1320,9 @@ mod tests {
             .iter()
             .position(|l| l.contains("fp-abc"))
             .expect("hash row");
-        let line = &state.plain_lines[line_idx];
+        let Some(line) = state.plain_lines.get(line_idx) else {
+            panic!("plain line {line_idx} missing");
+        };
         let hash_col = line.find("fp-abc").expect("hash") as u16;
         let rect = state.content_rect;
         let y = rect.y + (line_idx as u16).saturating_sub(state.scroll);
@@ -1302,7 +1344,9 @@ mod tests {
         );
 
         render_usage_modal(&mut buf, area, &mut state, None, false, &theme);
-        let cell = &buf[(x0, y)];
+        let Some(cell) = buf.cell((x0, y)) else {
+            panic!("cell ({x0},{y}) missing");
+        };
         if theme.text_primary != ratatui::style::Color::Reset
             && theme.bg_base != ratatui::style::Color::Reset
         {
@@ -1401,7 +1445,9 @@ mod tests {
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Model Hash", "fp-abc", true)]);
         render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
-        let hit = state.copy_hits[0].clone();
+        let Some(hit) = state.copy_hits.first().cloned() else {
+            panic!("expected a copy hit: {:?}", state.copy_hits);
+        };
         let line = state
             .plain_lines
             .iter()
@@ -1440,7 +1486,9 @@ mod tests {
         state.set_tab(UsageInfoTab::SessionInfo);
         state.session_fields = Some(vec![field("Model Hash", "fp-abc", true)]);
         render_usage_modal(&mut buf, area, &mut state, None, false, &Theme::current());
-        let hit = state.copy_hits[0].clone();
+        let Some(hit) = state.copy_hits.first().cloned() else {
+            panic!("expected a copy hit: {:?}", state.copy_hits);
+        };
         handle_usage_modal_mouse(
             &mut state,
             MouseEventKind::Down(MouseButton::Left),

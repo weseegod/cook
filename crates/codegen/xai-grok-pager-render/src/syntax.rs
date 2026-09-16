@@ -220,8 +220,11 @@ mod tests {
         let fallback = Style::default().fg(Color::Reset);
         let spans = highlight_line("fn main() {}", &mut hl, syn, fallback);
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].content.as_ref(), "fn main() {}");
-        assert_eq!(spans[0].style.fg, Some(Color::Reset));
+        let [span] = spans.as_slice() else {
+            panic!("expected one span: {spans:?}");
+        };
+        assert_eq!(span.content.as_ref(), "fn main() {}");
+        assert_eq!(span.style.fg, Some(Color::Reset));
     }
 
     #[test]

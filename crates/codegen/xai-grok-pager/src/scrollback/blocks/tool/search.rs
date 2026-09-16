@@ -76,6 +76,8 @@ pub struct SearchToolCallBlock {
     pub started_at: Option<std::time::Instant>,
     /// Elapsed time in ms after completion.
     pub elapsed_ms: Option<i64>,
+    /// Whether this ordinary search targets a memory v2 scope.
+    pub is_memory_activity: bool,
 }
 
 impl SearchToolCallBlock {
@@ -91,7 +93,13 @@ impl SearchToolCallBlock {
             meta: SearchInputMeta::default(),
             started_at: None,
             elapsed_ms: None,
+            is_memory_activity: false,
         }
+    }
+
+    pub fn with_memory_activity(mut self) -> Self {
+        self.is_memory_activity = true;
+        self
     }
 
     pub fn with_matches(mut self, match_count: usize, file_matches: Vec<SearchFileMatch>) -> Self {
@@ -443,9 +451,9 @@ impl BlockContent for SearchToolCallBlock {
                     for path in &self.file_paths {
                         let line = if is_count {
                             // Count mode: "path:N", split at the last ':'; the path part in path color, ":N" in normal fg
-                            if let Some(colon_pos) = path.rfind(':') {
-                                let file_part = &path[..colon_pos];
-                                let count_part = &path[colon_pos..]; // includes ':'
+                            if let Some((file_part, count_part)) =
+                                path.rfind(':').and_then(|pos| path.split_at_checked(pos))
+                            {
                                 Line::from(vec![
                                     Span::styled(
                                         format!("{indent}{file_part}"),

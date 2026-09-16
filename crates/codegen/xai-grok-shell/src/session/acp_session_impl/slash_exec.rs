@@ -59,12 +59,26 @@ impl SessionActor {
             }
             BuiltinAction::FlushMemory => {
                 if self.memory.is_enabled() {
-                    let did_flush = self.run_memory_flush("slash_command", None).await;
-                    if !did_flush {
-                        tracing::info!(
-                            session_id = %self.session_info.id.0,
-                            "memory flush skipped via /flush: another flush already in progress",
-                        );
+                    if self.memory.mode() == Some(crate::config::MemoryMode::V2) {
+                        let result = self.flush_v2_capture().await;
+                        if !matches!(
+                            result,
+                            crate::session::memory::v2_capture::FlushResult::Success
+                        ) {
+                            tracing::warn!(
+                                session_id = %self.session_info.id.0,
+                                result = ?result,
+                                "memory-v2 /flush barrier did not complete",
+                            );
+                        }
+                    } else {
+                        let did_flush = self.run_memory_flush("slash_command", None).await;
+                        if !did_flush {
+                            tracing::info!(
+                                session_id = %self.session_info.id.0,
+                                "memory flush skipped via /flush: another flush already in progress",
+                            );
+                        }
                     }
                 } else {
                     tracing::warn!(
@@ -710,7 +724,7 @@ impl SessionActor {
                     }
                     Ok(outcomes) => {
                         fn short(c: Option<&str>) -> &str {
-                            c.map(|s| &s[..7.min(s.len())]).unwrap_or("?")
+                            c.and_then(|s| s.get(..7.min(s.len()))).unwrap_or("?")
                         }
                         let messages: Vec<String> = outcomes
                             .iter()
@@ -747,7 +761,13 @@ impl SessionActor {
                 ok_end_turn(0, None)
             }
             BuiltinAction::Feedback { text } => self.execute_feedback_command(text).await,
+            BuiltinAction::MemoryStatus => {
+                let status = self.memory_v2_status().await;
+                self.send_host_turn_slash_command_output(&status).await;
+                ok_end_turn(0, None)
+            }
             BuiltinAction::MemoryBrowse => {
+                let disabled_reason = self.memory.disabled_reason();
                 let file_infos = if let Some(ref storage) = *self.memory.storage.borrow() {
                     match storage.list_memory_files() {
                         Ok(files) => files
@@ -764,8 +784,12 @@ impl SessionActor {
                                         None
                                     }
                                 };
+                                let generated = storage.mode().is_v2()
+                                    && (path == storage.global_memory_file()
+                                        || path == storage.workspace_memory_file());
                                 crate::extensions::notification::MemoryFileInfo {
                                     source: storage.classify_source(&path).to_string(),
+                                    generated,
                                     path: path.display().to_string(),
                                     size_bytes: meta.as_ref().map(|m| m.len()).unwrap_or(0),
                                     modified_epoch_secs: meta
@@ -785,23 +809,37 @@ impl SessionActor {
                                 "Failed to list memory files: {e}"
                             ))
                             .await;
-                            vec![]
+                            // No modal: an empty list would render as a fresh store.
+                            return ok_end_turn(0, None);
                         }
                     }
                 } else {
-                    self.send_host_turn_slash_command_output(
-                        "Memory is not enabled for this session.",
-                    )
-                    .await;
+                    // The modal renders the disabled state (with the turn-on hint) itself.
                     vec![]
                 };
+                // Legacy saves at compaction/session end when `save_on_end`; its `/dream` is always available.
+                let v2 = &self.memory.v2_config;
+                let (capture_enabled, dream_enabled) =
+                    if self.memory.mode() == Some(crate::config::MemoryMode::V2) {
+                        (v2.capture_enabled, v2.manual_dream_enabled)
+                    } else {
+                        (self.memory.save_on_end, true)
+                    };
                 tracing::info!(
                     session_id = %self.session_info.id.0,
                     file_count = file_infos.len(),
+                    enabled = disabled_reason.is_none(),
+                    ?disabled_reason,
                     "memory browse: listing files",
                 );
-                self.send_xai_notification(XaiSessionUpdate::MemoryFiles { files: file_infos })
-                    .await;
+                self.send_xai_notification(XaiSessionUpdate::MemoryFiles {
+                    files: file_infos,
+                    enabled: disabled_reason.is_none(),
+                    disabled_reason,
+                    capture_enabled,
+                    dream_enabled,
+                })
+                .await;
                 ok_end_turn(0, None)
             }
             BuiltinAction::MemoryToggle { enabled } => {
@@ -810,16 +848,28 @@ impl SessionActor {
                     enabled,
                     "memory toggle via /memory slash command",
                 );
+                use crate::extensions::notification::MemoryDisabledReason as Reason;
                 let msg = if enabled && !self.memory.is_enabled() {
-                    if let Some(ref params) = self.memory.backend_params {
-                        let storage = crate::session::memory::MemoryStorage::new(
-                            std::path::Path::new(&self.session_info.cwd),
-                            None,
-                        );
-                        if let Err(e) = storage.ensure_initialized() {
+                    match (
+                        self.memory.disabled_reason(),
+                        self.memory.configured_storage.clone(),
+                    ) {
+                        (Some(Reason::RolloutRestricted), _) => {
+                            "Memory v2 cannot be enabled because this session's pinned rollout controls disable it."
+                                .to_owned()
+                        }
+                        (Some(Reason::SessionToggle), Some(storage)) => {
+                        if let Err(e) =
+                            crate::session::memory_state::initialize_memory_storage(storage.clone())
+                                .await
+                        {
                             tracing::warn!(error = %e, "failed to initialize memory storage on re-enable");
                             format!("Memory could not be enabled: {e}")
-                        } else {
+                        } else if self.memory.mode() == Some(crate::config::MemoryMode::V2) {
+                            *self.memory.storage.borrow_mut() = Some(storage);
+                            self.resume_v2_capture().await;
+                            "Memory v2 enabled for this session.".to_owned()
+                        } else if let Some(ref params) = self.memory.backend_params {
                             let backend =
                                 crate::session::memory::MemoryBackendImpl::from_session_params(
                                     storage.clone(),
@@ -837,11 +887,20 @@ impl SessionActor {
                             }
                             *self.memory.storage.borrow_mut() = Some(storage);
                             "Memory enabled for this session.".to_owned()
+                        } else {
+                            "Memory cannot be enabled (legacy backend not configured for this session)."
+                                .to_owned()
                         }
-                    } else {
-                        "Memory cannot be enabled (not configured for this session).".to_owned()
+                        }
+                        _ => {
+                            "Memory cannot be enabled (not configured for this session).".to_owned()
+                        }
                     }
                 } else if !enabled && self.memory.is_enabled() {
+                    if self.memory.mode() == Some(crate::config::MemoryMode::V2) {
+                        self.memory.stop_capture_worker().await;
+                        self.memory.dream_workers.cancel_and_join().await;
+                    }
                     let bridge = self.agent.borrow().tool_bridge().clone();
                     if !bridge.unregister_tool_by_name(
                         xai_grok_tools::implementations::memory::MEMORY_SEARCH_TOOL_NAME,

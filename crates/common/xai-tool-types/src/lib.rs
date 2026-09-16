@@ -26,8 +26,8 @@ pub use task::{
     builtin_subagent_by_name, default_subagent_type, format_resume_footer,
     format_subagent_auto_backgrounded, format_subagent_completed,
     format_subagent_started_background, format_wait_cap_ms, is_not_sentinel, max_wait_block_ms,
-    resolve_task_ids, sanitize_optional_arg, should_continue_parent_work, task_output_waits,
-    task_output_waits_from_json,
+    render_tool_access_fragment, resolve_task_ids, sanitize_optional_arg,
+    should_continue_parent_work, task_output_waits, task_output_waits_from_json,
 };
 pub use types::{
     ArgumentType, SchemaType, ToolArgument, ToolDescription, ValidationError, ValidationErrors,

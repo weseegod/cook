@@ -10,7 +10,7 @@ use crate::copy::{self, ParallelCopyConfig};
 use crate::git;
 use crate::worktree::CreateWorktreeResult;
 use crate::worktree::plan::WorktreePlan;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 use crate::worktree::{ArmSkip, WorktreeArm};
 use crate::{IgnoredFilesMode, WorkingTreeMode};
 
@@ -250,7 +250,7 @@ fn record_main_repo_marker(source: &Path, worktree: &Path) {
 
 /// Skip details are surfaced verbatim in a one-line strategy notice, so an
 /// anyhow chain carrying subprocess output must be flattened and capped here.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 fn arm_failed(arm: crate::worktree::WorktreeArm, err: &anyhow::Error) -> crate::worktree::ArmSkip {
     const MAX_SKIP_REASON_CHARS: usize = 200;
     let chain = format!("{err:#}");
@@ -262,6 +262,37 @@ fn arm_failed(arm: crate::worktree::WorktreeArm, err: &anyhow::Error) -> crate::
     crate::worktree::ArmSkip::new(arm, text)
 }
 
+/// The Grove rung, shared by the three per-OS ladders. `Some` is an adopted
+/// worktree carrying the skips recorded so far; `None` means fall through.
+/// A typed hard-fail (ENOSPC, in-flight dest) is returned, never swallowed.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+fn grove_arm(
+    plan: &WorktreePlan,
+    arm: WorktreeArm,
+    skipped: &mut Vec<ArmSkip>,
+    grove_lost_to_daemon: &mut bool,
+) -> Result<Option<CreateWorktreeResult>> {
+    match crate::nfs::try_grove_worktree(plan) {
+        Ok(Some(crate::nfs::GroveTry::Adopted(mut result))) => {
+            result.skipped = std::mem::take(skipped);
+            Ok(Some(*result))
+        }
+        Ok(Some(crate::nfs::GroveTry::Skipped(skip))) => {
+            *grove_lost_to_daemon |= skip.is_daemon_refusal();
+            skipped.push(ArmSkip::from_grove(arm, skip));
+            Ok(None)
+        }
+        Ok(None) => Ok(None),
+        Err(e) if crate::nfs::nfs_error_blocks_fallback(&e) => Err(e),
+        Err(e) => {
+            tracing::warn!(error = %e, arm = %arm.label(), "grove worktree failed, falling back");
+            *grove_lost_to_daemon = true;
+            skipped.push(arm_failed(arm, &e));
+            Ok(None)
+        }
+    }
+}
+
 /// Dispatch worktree creation to the strategy implied by the creation mode.
 fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktreeResult> {
     use crate::CreationMode;
@@ -270,30 +301,34 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
         CreationMode::Linked | CreationMode::Standalone => {
             // Track why fast paths were skipped so the copy fallback error
             // (if any) includes context about what was tried first.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             let mut skipped: Vec<crate::worktree::ArmSkip> = Vec::new();
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             let mut grove_lost_to_daemon = false;
 
             // macOS: grove-nfs first. Linux: overlay → btrfs → grove-fuse.
+            // Windows: grove-projfs first (the copy engine reflinks on ReFS by itself).
+            #[cfg(windows)]
+            {
+                if let Some(result) = grove_arm(
+                    &plan,
+                    WorktreeArm::GroveProjfs,
+                    &mut skipped,
+                    &mut grove_lost_to_daemon,
+                )? {
+                    return Ok(result);
+                }
+            }
+
             #[cfg(target_os = "macos")]
             {
-                match crate::nfs::try_grove_worktree(&plan) {
-                    Ok(Some(crate::nfs::GroveTry::Adopted(mut result))) => {
-                        result.skipped = skipped;
-                        return Ok(*result);
-                    }
-                    Ok(Some(crate::nfs::GroveTry::Skipped(skip))) => {
-                        grove_lost_to_daemon |= skip.is_daemon_refusal();
-                        skipped.push(ArmSkip::from_grove(WorktreeArm::GroveNfs, skip));
-                    }
-                    Ok(None) => {}
-                    Err(e) if crate::nfs::nfs_error_blocks_fallback(&e) => return Err(e),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "grove-nfs worktree failed, falling back to copy");
-                        grove_lost_to_daemon = true;
-                        skipped.push(arm_failed(WorktreeArm::GroveNfs, &e));
-                    }
+                if let Some(result) = grove_arm(
+                    &plan,
+                    WorktreeArm::GroveNfs,
+                    &mut skipped,
+                    &mut grove_lost_to_daemon,
+                )? {
+                    return Ok(result);
                 }
             }
 
@@ -337,30 +372,18 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
 
             #[cfg(target_os = "linux")]
             {
-                match crate::nfs::try_grove_worktree(&plan) {
-                    Ok(Some(crate::nfs::GroveTry::Adopted(mut result))) => {
-                        result.skipped = skipped;
-                        return Ok(*result);
-                    }
-                    Ok(Some(crate::nfs::GroveTry::Skipped(skip))) => {
-                        grove_lost_to_daemon |= skip.is_daemon_refusal();
-                        skipped.push(ArmSkip::from_grove(WorktreeArm::GroveFuse, skip));
-                    }
-                    Ok(None) => {}
-                    Err(e) if crate::nfs::nfs_error_blocks_fallback(&e) => return Err(e),
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "grove-fuse worktree failed, falling back to copy"
-                        );
-                        grove_lost_to_daemon = true;
-                        skipped.push(arm_failed(WorktreeArm::GroveFuse, &e));
-                    }
+                if let Some(result) = grove_arm(
+                    &plan,
+                    WorktreeArm::GroveFuse,
+                    &mut skipped,
+                    &mut grove_lost_to_daemon,
+                )? {
+                    return Ok(result);
                 }
             }
 
             // 3. Fall back to file-by-file copy
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             if !skipped.is_empty() {
                 tracing::info!(
                     reasons = crate::worktree::render_arm_skips(&skipped),
@@ -371,7 +394,7 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
             // Graded only when the daemon is what turned grove away: the probe is
             // a Status round-trip, and no other outcome (an overlay/btrfs win, or
             // a local skip like a missing /dev/fuse) is explained by its age.
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             let daemon_class = grove_lost_to_daemon
                 .then(|| crate::nfs::probe_daemon_capability_class(plan.nfs.as_ref()))
                 .flatten();
@@ -407,7 +430,7 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
                 CreationMode::Standalone => execute_standalone_worktree(plan),
                 _ => unreachable!(),
             }?;
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             {
                 result.skipped = skipped;
                 result.daemon_capability_class = daemon_class;
@@ -1502,7 +1525,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     #[test]
     fn skip_line_stays_one_line() {
         let err = anyhow::anyhow!("mount failed:\n  stderr: permission denied\n")

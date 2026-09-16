@@ -98,6 +98,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
             gateway_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             persistence_tx,
             disk_full: crate::session::notifications::idle_disk_full_rx(),
+            client_caps: crate::session::notifications::SessionClientCaps::new(false, true),
         },
         permissions: PermissionHandle::allow_all(),
         tool_context,
@@ -140,8 +141,14 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
             cancel: Default::default(),
         },
         memory: crate::session::memory_state::SessionMemory {
+            configured_mode: None,
+            v2_config: Default::default(),
+            configured_storage: None,
             flush_config: crate::config::MemoryFlushConfig::default(),
-            is_flushing: std::sync::atomic::AtomicBool::new(false),
+            is_flushing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            capture_worker: std::cell::RefCell::new(None),
+            dream_workers: crate::session::memory_state::V2DreamWorkers::default(),
+            last_capture_failure: std::cell::RefCell::new(None),
             last_flush_compaction: std::sync::atomic::AtomicU64::new(0),
             storage: std::cell::RefCell::new(None),
             save_on_end: true,
@@ -161,6 +168,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
             dream_count: std::sync::atomic::AtomicU64::new(0),
             dream_success_count: std::sync::atomic::AtomicU64::new(0),
             dream_error_count: std::sync::atomic::AtomicU64::new(0),
+            token_totals: Default::default(),
         },
         session_start: std::time::Instant::now(),
         inference_idle_timeout: Duration::from_secs(300),
@@ -194,6 +202,7 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         display_cwd: std::sync::OnceLock::new(),
         active_agent_type: parking_lot::Mutex::new(None),
         queue_exit_reminder_on_approved_exit: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        emit_local_background_tasks: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         active_skill: parking_lot::Mutex::new(None),
         current_prompt_mode: Arc::new(parking_lot::Mutex::new(PromptMode::Agent)),
         turn_start_prompt_mode: parking_lot::Mutex::new(PromptMode::Agent),
@@ -246,12 +255,15 @@ pub(super) async fn make_replay_send_update_fixture() -> ReplaySendUpdateFixture
         deferred_prefix: DeferredPrefix::new(),
         mcp_startup_waits: Default::default(),
         mcp_init_tasks: Default::default(),
+        weak_self: std::sync::Weak::new(),
+        startup_tasks: Default::default(),
         extension_registry: xai_agent_lifecycle::LocalExtensionRegistry::default(),
         last_announced_local_date: std::cell::Cell::new(chrono::Local::now().date_naive()),
         prefix_carries_fallback_date: std::cell::Cell::new(false),
         last_search_prompt_index: std::sync::atomic::AtomicI64::new(-1),
         last_api_request_at: std::sync::atomic::AtomicI64::new(0),
         hook_registry: std::cell::RefCell::new(None),
+        hook_disabled: Default::default(),
         turn_report: Default::default(),
         turn_abort: Default::default(),
         turn_end_tx: Default::default(),
@@ -333,7 +345,10 @@ async fn send_update_buffers_streaming_chunks_and_flush_sends_merged_notificatio
             tokio::task::yield_now().await;
             let sent_msgs = sent.lock().await.clone();
             assert_eq!(sent_msgs.len(), 1);
-            assert_eq!(extract_text(&sent_msgs[0]).as_deref(), Some("hello"));
+            let Some(first) = sent_msgs.first() else {
+                panic!("expected one sent message: {sent_msgs:?}");
+            };
+            assert_eq!(extract_text(first).as_deref(), Some("hello"));
             let mut persisted = vec![];
             while let Ok(msg) = persistence_rx.try_recv() {
                 persisted.push(msg);
@@ -495,7 +510,7 @@ async fn available_commands_update_is_forwarded_but_not_persisted() {
                 "exactly one update must be persisted; available_commands_update must be skipped",
             );
             assert!(
-                matches!(persisted[0].update, acp::SessionUpdate::AgentMessageChunk(_)),
+                matches!(persisted.first(), Some(n) if matches!(n.update, acp::SessionUpdate::AgentMessageChunk(_))),
                 "the persisted update must be the agent message, not available_commands_update",
             );
             drop(actor);

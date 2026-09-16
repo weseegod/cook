@@ -565,7 +565,9 @@ fn committed_block_uses_owning_session_cwd_for_tool_paths() {
     let mut text = String::new();
     for y in 0..height {
         for x in 0..width {
-            text.push_str(buf[(x, y)].symbol());
+            if let Some(cell) = buf.cell((x, y)) {
+                text.push_str(cell.symbol());
+            }
         }
     }
     assert!(text.contains("src/main.rs"), "rendered text: {text:?}");

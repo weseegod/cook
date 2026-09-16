@@ -51,8 +51,16 @@ impl ReadFileVersion {
         self == Self::Legacy0_4_10
     }
 }
-pub(crate) const MAX_NUM_TOKENS: usize = 25_000;
+/// Per-call token cap on the returned window.
+pub const READ_FILE_MAX_TOKENS: usize = 25_000;
+pub const READ_FILE_MAX_BYTES: usize =
+    READ_FILE_MAX_TOKENS * xai_token_estimation::BYTES_PER_TOKEN as usize;
 pub const MAX_LINES_READ: usize = 1_000;
+/// True when `text` is over the per-call token cap; the shell uses the same check to decide when a
+/// prompt must be offloaded.
+pub fn exceeds_read_cap(text: &str) -> bool {
+    xai_token_estimation::estimate_tokens(text) > READ_FILE_MAX_TOKENS as u64
+}
 pub use crate::implementations::read_file::{
     FileMetadata, PDF_MAX_PAGES_PER_READ, bytes_to_metadata, parse_page_range,
 };
@@ -173,9 +181,9 @@ fn resolve_read_start_line(file_content: &str, offset: Option<i64>) -> usize {
 fn stored_read_offset(offset: Option<i64>) -> Option<usize> {
     offset.filter(|&o| o >= 0).map(|o| o as usize)
 }
-/// Files read in full (no line/token cap): any file named exactly `SKILL.md`, plus any Markdown file with a `skills` path component so docs a
-/// `SKILL.md` references are never silently truncated. Intentionally broader than skill discovery's dir check — matches any `skills` segment
-/// (plugin/bundled/user roots), and matches it exactly (not case-folded) so near-misses like `skills-cursor` do not qualify.
+/// Files read in full (offset/limit ignored) when under `READ_FILE_MAX_TOKENS`, honoring offset/limit like any other file above it: any file named
+/// exactly `SKILL.md`, plus any Markdown file with a `skills` path component so docs a `SKILL.md` references come back whole. Intentionally broader
+/// than skill discovery's dir check: any `skills` segment (plugin/bundled/user roots), matched exactly (not case-folded) so `skills-cursor` does not qualify.
 fn is_skill_markdown(path: &std::path::Path) -> bool {
     if path.file_name().is_some_and(|n| n == "SKILL.md") {
         return true;
@@ -301,7 +309,7 @@ pub fn extract_file_content_lines(
     let mut raw_output = if first_line.is_none() || file_content.is_empty() {
         String::new()
     } else {
-        file_content[start..end].to_owned()
+        file_content.get(start..end).unwrap_or("").to_owned()
     };
     if raw_output.ends_with("\r\n") {
         raw_output.truncate(raw_output.len().saturating_sub(2));
@@ -338,6 +346,7 @@ pub(crate) async fn run_read_file(
     }
     let joined_path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.path);
     let is_skill_markdown = is_skill_markdown(&joined_path);
+    let policy_path = joined_path.clone();
     let (path, _unicode_note) = match crate::util::fs::try_canonicalize(&joined_path).await {
         Ok(p) => (p, None),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -348,6 +357,11 @@ pub(crate) async fn run_read_file(
         }
         Err(_) => (joined_path, None),
     };
+    if let Err(error) =
+        crate::types::memory_v2::validate_memory_v2_read(&resources, &policy_path).await
+    {
+        return Ok(ReadFileOutput::FileReadError(error));
+    }
     let version = ReadFileVersion::from_contract(contract_version);
     let is_legacy = version.is_legacy();
     let skip_gitignore = is_legacy && versions::legacy_0_4_10::allows_gitignored_reads();
@@ -365,7 +379,7 @@ pub(crate) async fn run_read_file(
             )));
         }
     }
-    let file_bytes = match fs.read_file(&path).await {
+    let mut file_bytes = match fs.read_file(&path).await {
         Ok(bytes) => bytes,
         Err(e) => {
             tracing::debug!(?e, "Failed to read file");
@@ -418,14 +432,35 @@ pub(crate) async fn run_read_file(
             });
         }
     };
+    if let Err(error) =
+        crate::types::memory_v2::record_memory_v2_read(&resources, &policy_path, &file_bytes).await
+    {
+        return Ok(ReadFileOutput::FileReadError(error));
+    }
     if let Ok(metadata) = bytes_to_metadata(&file_bytes)
         && metadata.is_image()
     {
-        return Ok(crate::implementations::read_file::image::image_read_output(
-            file_bytes,
-            metadata.mime_type,
-        )
-        .await);
+        if crate::implementations::read_file::should_embed_as_conversation_image(
+            &path,
+            &file_bytes,
+            &metadata.mime_type,
+        ) {
+            return Ok(crate::implementations::read_file::image::image_read_output(
+                file_bytes,
+                metadata.mime_type,
+            )
+            .await);
+        }
+        if let Some(svg_text) = crate::implementations::read_file::extract_svg_text(&file_bytes) {
+            file_bytes = svg_text.into_bytes();
+        } else {
+            return Ok(
+                ReadFileOutput::ImageSizeError(
+                    "Could not embed image in conversation: SVG or incomplete PNG preview cannot be sent as an image"
+                        .to_owned(),
+                ),
+            );
+        }
     }
     let extension = path
         .extension()
@@ -485,22 +520,24 @@ pub(crate) async fn run_read_file(
             .map(|t| t.0.max_lines_read())
             .unwrap_or_else(|| TruncationConfig::default().max_lines_read())
     };
-    let (effective_offset, effective_limit) = if is_skill_markdown {
-        (None, None)
-    } else {
-        (
-            input.offset,
-            Some(input.limit.unwrap_or(usize::MAX).min(max_lines)),
-        )
+    let skill_full = is_skill_markdown
+        .then(|| extract_file_content_lines(&file_content, None, None, total_lines))
+        .filter(|full| !exceeds_read_cap(&full.content));
+    let (extracted, stored_offset, stored_limit) = match skill_full {
+        Some(full) => (full, None, None),
+        None => (
+            extract_file_content_lines(
+                &file_content,
+                input.offset,
+                Some(input.limit.unwrap_or(usize::MAX).min(max_lines)),
+                total_lines,
+            ),
+            stored_read_offset(input.offset),
+            input.limit,
+        ),
     };
-    let extracted = extract_file_content_lines(
-        &file_content,
-        effective_offset,
-        effective_limit,
-        total_lines,
-    );
-    let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
-    if !is_skill_markdown && token_count > MAX_NUM_TOKENS {
+    if exceeds_read_cap(&extracted.content) {
+        let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
         let (grep_name, execute_name);
         {
             let res = resources.lock().await;
@@ -535,24 +572,19 @@ pub(crate) async fn run_read_file(
                 .map_or_else(|| "to end".to_string(), |v| v.to_string());
             format!(
                 "The requested line range ({offset_param}={off}, {limit_param}={lim}) contains {token_count} tokens, \
-                 which exceeds the maximum allowed tokens ({MAX_NUM_TOKENS} tokens).\n\
+                 which exceeds the maximum allowed tokens ({READ_FILE_MAX_TOKENS} tokens).\n\
                  Try a smaller `{limit_param}`, a different starting `{offset_param}`, \
                  or use the '{grep_name}' tool to search for specific content.{single_line_hint}"
             )
         } else {
             format!(
-                "File content ({token_count} tokens) exceeds maximum allowed tokens ({MAX_NUM_TOKENS} tokens).\n\
+                "File content ({token_count} tokens) exceeds maximum allowed tokens ({READ_FILE_MAX_TOKENS} tokens).\n\
                  Please use {offset_param} and {limit_param} parameters to read a shorter range, \
                  or use the '{grep_name}' to search for specific content.{single_line_hint}"
             )
         };
         return Ok(ReadFileOutput::FileTooLarge(msg));
     }
-    let (stored_offset, stored_limit) = if is_skill_markdown {
-        (None, None)
-    } else {
-        (stored_read_offset(input.offset), input.limit)
-    };
     if let Some(flag) = streamable_out {
         *flag = true;
     }
@@ -661,7 +693,7 @@ impl xai_tool_runtime::Tool for ReadFileTool {
                             }
                             if let Some(p) = xai_tool_runtime::stream_chunk(
                                 spec,
-                                &content[..window_end],
+                                content.get(..window_end).unwrap_or(&[]),
                                 window_end as u64,
                                 &mut last_total,
                                 // Full replay, no streaming loss ⇒ never truncated.
@@ -729,6 +761,22 @@ mod tests {
     use crate::types::tool_metadata::test_ctx;
     use std::sync::Arc;
     use tempfile::TempDir;
+    /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
+    /// fits, and it takes a whole extra token's worth of bytes to exceed it.
+    #[test]
+    fn exceeds_read_cap_is_token_granular() {
+        let bytes_per_token = xai_token_estimation::BYTES_PER_TOKEN as usize;
+        let cap_bytes = READ_FILE_MAX_TOKENS * bytes_per_token;
+        assert!(!exceeds_read_cap(&"Q".repeat(cap_bytes)));
+        assert!(!exceeds_read_cap(
+            &"Q".repeat(cap_bytes + bytes_per_token - 1)
+        ));
+        assert!(exceeds_read_cap(&"Q".repeat(cap_bytes + bytes_per_token)));
+        let multibyte = "路".repeat((cap_bytes + bytes_per_token).div_ceil("路".len()));
+        assert!(multibyte.len() >= cap_bytes + bytes_per_token);
+        assert!(multibyte.chars().count() < cap_bytes);
+        assert!(exceeds_read_cap(&multibyte));
+    }
     /// Set up Resources with real filesystem for tests.
     fn test_resources(cwd: &std::path::Path) -> Resources {
         let mut resources = Resources::new();
@@ -1275,15 +1323,20 @@ mod tests {
         let file_content = format!("# README\n![logo](data:image/png;base64,{payload})\n");
         let total_lines = file_content.matches('\n').count() + 1;
         let extracted = extract_file_content_lines(&file_content, None, None, total_lines);
-        assert_eq!(extracted.extracted_images.len(), 1);
-        assert_eq!(extracted.extracted_images[0].mime_type, "image/png");
-        assert_eq!(extracted.extracted_images[0].data, payload);
+        let Some(image) = extracted.extracted_images.first() else {
+            panic!(
+                "expected one extracted image: {:?}",
+                extracted.extracted_images
+            );
+        };
+        assert_eq!(image.mime_type, "image/png");
+        assert_eq!(image.data, payload);
         assert!(
             extracted
                 .content
                 .contains("[image content will be provided separately]"),
             "expected capture placeholder; got: {}",
-            &extracted.content[..extracted.content.len().min(300)]
+            crate::util::truncate_str(&extracted.content, 300)
         );
         assert!(
             !extracted.content.contains("AAAAAAAAAAAA"),
@@ -1305,8 +1358,13 @@ mod tests {
         let file_content = format!("inline data:image/png;base64,{payload} done\n");
         let total_lines = file_content.matches('\n').count() + 1;
         let extracted = extract_file_content_lines(&file_content, None, None, total_lines);
-        assert_eq!(extracted.extracted_images.len(), 1);
-        assert_eq!(extracted.extracted_images[0].data, payload);
+        let Some(image) = extracted.extracted_images.first() else {
+            panic!(
+                "expected one extracted image: {:?}",
+                extracted.extracted_images
+            );
+        };
+        assert_eq!(image.data, payload);
         assert!(
             extracted
                 .content
@@ -1393,6 +1451,68 @@ mod tests {
             mime_type: "".to_string(),
         };
         assert!(!metadata.is_image());
+    }
+    #[tokio::test]
+    async fn read_file_adobe_svg_with_truncated_png_prefix_reads_as_text() {
+        let tmp = TempDir::new().unwrap();
+        let bytes = crate::implementations::read_file::metadata::truncated_png_then_svg();
+        std::fs::write(tmp.path().join("baidu.svg"), &bytes).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "baidu.svg".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(content) => {
+                assert!(
+                    content.raw_output.contains("<svg"),
+                    "must read SVG markup, not embed the thumbnail: {content:?}"
+                );
+                assert!(content.raw_output.contains("baidu"));
+                assert!(
+                    !content.raw_output.contains('\u{FFFD}'),
+                    "PNG prefix must not leak into the text read"
+                );
+            }
+            ReadFileOutput::ImageContent(_) => {
+                panic!("Adobe SVG must not take the PNG image-embed path")
+            }
+            other => panic!("expected FileContent, got {other:?}"),
+        }
+    }
+    #[tokio::test]
+    async fn read_file_truncated_png_prefix_svg_without_markup_fails_closed() {
+        let tmp = TempDir::new().unwrap();
+        let png = crate::implementations::read_file::metadata::truncated_png_prefix();
+        std::fs::write(tmp.path().join("preview.svg"), &png).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "preview.svg".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::ImageSizeError(msg) => {
+                assert!(msg.contains("incomplete PNG") || msg.contains("SVG"));
+            }
+            ReadFileOutput::ImageContent(_) => {
+                panic!("incomplete PNG preview on .svg must not embed")
+            }
+            other => panic!("expected ImageSizeError, got {other:?}"),
+        }
     }
     fn build_gitignore(root: &std::path::Path, patterns: &[&str]) -> ignore::gitignore::Gitignore {
         let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
@@ -1902,9 +2022,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             other => panic!("Expected FileContent, got {:?}", other),
         }
     }
-    #[tokio::test]
-    async fn skill_file_skips_token_limit() {
-        let tmp = TempDir::new().unwrap();
+    fn write_oversized_skill(tmp: &TempDir) {
         let line = "x".repeat(200);
         let big_content = std::iter::repeat_n(line.as_str(), 1100)
             .collect::<Vec<_>>()
@@ -1912,6 +2030,11 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let skill_dir = tmp.path().join("skills");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), &big_content).unwrap();
+    }
+    #[tokio::test]
+    async fn skill_file_over_cap_returns_file_too_large() {
+        let tmp = TempDir::new().unwrap();
+        write_oversized_skill(&tmp);
         let tool = ReadFileTool;
         let mut resources = test_resources(tmp.path());
         resources.insert(TemplateRenderer::new(
@@ -1929,10 +2052,35 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             .await
             .unwrap();
         assert!(
-            matches!(result, ReadFileOutput::FileContent(_)),
-            "SKILL.md should not be truncated, got {:?}",
+            matches!(result, ReadFileOutput::FileTooLarge(_)),
+            "got {:?}",
             std::mem::discriminant(&result),
         );
+    }
+    #[tokio::test]
+    async fn skill_file_over_cap_honors_offset_and_limit() {
+        let tmp = TempDir::new().unwrap();
+        write_oversized_skill(&tmp);
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "skills/SKILL.md".to_string(),
+            offset: Some(3),
+            limit: Some(2),
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(fc) => {
+                assert_eq!((Some(3), Some(2)), (fc.offset, fc.limit));
+                let line = "x".repeat(200);
+                assert_eq!(format!("3→{line}\n{line}"), fc.content);
+            }
+            other => panic!("Expected FileContent, got {:?}", other),
+        }
     }
     #[tokio::test]
     async fn md_in_skills_dir_ignores_model_offset_and_limit() {
@@ -2170,7 +2318,10 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
                     match p {
                         xai_tool_runtime::ToolProgress::Custom { subkind, payload } => {
                             assert_eq!(subkind, "read_file_chunk", "unexpected subkind");
-                            deltas.push(payload["delta"].as_str().unwrap().to_owned());
+                            let Some(delta) = payload.get("delta").and_then(|v| v.as_str()) else {
+                                panic!("payload missing delta: {payload}");
+                            };
+                            deltas.push(delta.to_owned());
                         }
                         other => panic!("expected Custom progress, got {other:?}"),
                     }
@@ -2435,7 +2586,7 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
     }
     /// A single-line file that busts the whole-read token cap gets the
     /// shell-tool hint — line-based offset/limit cannot narrow one line.
-    /// ~120KB single line ≈ 30K estimated tokens > MAX_NUM_TOKENS (25K).
+    /// ~120KB single line ≈ 30K estimated tokens > READ_FILE_MAX_TOKENS (25K).
     #[tokio::test]
     async fn oversized_single_line_gets_shell_hint() {
         for content in [

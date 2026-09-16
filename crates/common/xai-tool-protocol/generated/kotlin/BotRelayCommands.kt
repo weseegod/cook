@@ -17,6 +17,7 @@ import kotlinx.serialization.json.jsonPrimitive
 val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "attachUpload",
     "authenticateMcpServer",
+    "completeGithubConnect",
     "completeMcpOAuth",
     "connectChannel",
     "countAgents",
@@ -27,6 +28,7 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "deleteAgentAutomation",
     "deleteAgents",
     "deleteBotTemplate",
+    "discardDraft",
     "disconnectChannel",
     "dismissUserForm",
     "dismissWidget",
@@ -43,10 +45,15 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "getBotTemplateExportPolicy",
     "getBotTemplateForSourceAgent",
     "getBotTemplateVersion",
+    "getCloudAgentInfo",
+    "getCursorLinkStatus",
     "getForeverBoxStatus",
     "getHostSettings",
+    "getListenerConnectUrl",
+    "getListenerIntegrations",
     "getMcpCatalog",
     "getMcpState",
+    "getPublicBotTemplate",
     "getSubagents",
     "getTeachRecordingStatus",
     "handBackForeverBox",
@@ -65,8 +72,12 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "readVoiceCallAgentContext",
     "refreshChannel",
     "refreshMcp",
+    "resolveAutoReviewApproval",
+    "resolveLocalToolPermission",
+    "resolveVirtualCardApproval",
     "respondToWidget",
     "runAgentAutomationNow",
+    "sendDraft",
     "sendPrompt",
     "setAgentAutomationEnabled",
     "setAgentAvatarBytes",
@@ -111,6 +122,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "authenticateMcpServer"
+        }
+    }
+
+    @Serializable
+    data class CompleteGithubConnect(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsCompleteGithubConnect,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "completeGithubConnect"
         }
     }
 
@@ -221,6 +243,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "deleteBotTemplate"
+        }
+    }
+
+    @Serializable
+    data class DiscardDraft(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsDiscardDraft,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "discardDraft"
         }
     }
 
@@ -401,6 +434,28 @@ sealed interface BotCommand {
     }
 
     @Serializable
+    data class GetCloudAgentInfo(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsGetCloudAgentInfo,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getCloudAgentInfo"
+        }
+    }
+
+    @Serializable
+    data class GetCursorLinkStatus(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsGetCursorLinkStatus,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getCursorLinkStatus"
+        }
+    }
+
+    @Serializable
     data class GetForeverBoxStatus(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -423,6 +478,28 @@ sealed interface BotCommand {
     }
 
     @Serializable
+    data class GetListenerConnectUrl(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsGetListenerConnectUrl,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getListenerConnectUrl"
+        }
+    }
+
+    @Serializable
+    data class GetListenerIntegrations(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsClearTrays,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getListenerIntegrations"
+        }
+    }
+
+    @Serializable
     data class GetMcpCatalog(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -441,6 +518,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "getMcpState"
+        }
+    }
+
+    @Serializable
+    data class GetPublicBotTemplate(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsGetPublicBotTemplate,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getPublicBotTemplate"
         }
     }
 
@@ -643,6 +731,39 @@ sealed interface BotCommand {
     }
 
     @Serializable
+    data class ResolveAutoReviewApproval(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsResolveAutoReviewApproval,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "resolveAutoReviewApproval"
+        }
+    }
+
+    @Serializable
+    data class ResolveLocalToolPermission(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsResolveLocalToolPermission,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "resolveLocalToolPermission"
+        }
+    }
+
+    @Serializable
+    data class ResolveVirtualCardApproval(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsResolveVirtualCardApproval,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "resolveVirtualCardApproval"
+        }
+    }
+
+    @Serializable
     data class RespondToWidget(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -661,6 +782,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "runAgentAutomationNow"
+        }
+    }
+
+    @Serializable
+    data class SendDraft(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsSendDraft,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "sendDraft"
         }
     }
 
@@ -847,6 +979,7 @@ object BotCommandSerializer :
         return when (element.jsonObject["name"]?.jsonPrimitive?.content) {
             BotCommand.AttachUpload.NAME -> BotCommand.AttachUpload.serializer()
             BotCommand.AuthenticateMcpServer.NAME -> BotCommand.AuthenticateMcpServer.serializer()
+            BotCommand.CompleteGithubConnect.NAME -> BotCommand.CompleteGithubConnect.serializer()
             BotCommand.CompleteMcpOAuth.NAME -> BotCommand.CompleteMcpOAuth.serializer()
             BotCommand.ConnectChannel.NAME -> BotCommand.ConnectChannel.serializer()
             BotCommand.CountAgents.NAME -> BotCommand.CountAgents.serializer()
@@ -857,6 +990,7 @@ object BotCommandSerializer :
             BotCommand.DeleteAgentAutomation.NAME -> BotCommand.DeleteAgentAutomation.serializer()
             BotCommand.DeleteAgents.NAME -> BotCommand.DeleteAgents.serializer()
             BotCommand.DeleteBotTemplate.NAME -> BotCommand.DeleteBotTemplate.serializer()
+            BotCommand.DiscardDraft.NAME -> BotCommand.DiscardDraft.serializer()
             BotCommand.DisconnectChannel.NAME -> BotCommand.DisconnectChannel.serializer()
             BotCommand.DismissUserForm.NAME -> BotCommand.DismissUserForm.serializer()
             BotCommand.DismissWidget.NAME -> BotCommand.DismissWidget.serializer()
@@ -873,10 +1007,15 @@ object BotCommandSerializer :
             BotCommand.GetBotTemplateExportPolicy.NAME -> BotCommand.GetBotTemplateExportPolicy.serializer()
             BotCommand.GetBotTemplateForSourceAgent.NAME -> BotCommand.GetBotTemplateForSourceAgent.serializer()
             BotCommand.GetBotTemplateVersion.NAME -> BotCommand.GetBotTemplateVersion.serializer()
+            BotCommand.GetCloudAgentInfo.NAME -> BotCommand.GetCloudAgentInfo.serializer()
+            BotCommand.GetCursorLinkStatus.NAME -> BotCommand.GetCursorLinkStatus.serializer()
             BotCommand.GetForeverBoxStatus.NAME -> BotCommand.GetForeverBoxStatus.serializer()
             BotCommand.GetHostSettings.NAME -> BotCommand.GetHostSettings.serializer()
+            BotCommand.GetListenerConnectUrl.NAME -> BotCommand.GetListenerConnectUrl.serializer()
+            BotCommand.GetListenerIntegrations.NAME -> BotCommand.GetListenerIntegrations.serializer()
             BotCommand.GetMcpCatalog.NAME -> BotCommand.GetMcpCatalog.serializer()
             BotCommand.GetMcpState.NAME -> BotCommand.GetMcpState.serializer()
+            BotCommand.GetPublicBotTemplate.NAME -> BotCommand.GetPublicBotTemplate.serializer()
             BotCommand.GetSubagents.NAME -> BotCommand.GetSubagents.serializer()
             BotCommand.GetTeachRecordingStatus.NAME -> BotCommand.GetTeachRecordingStatus.serializer()
             BotCommand.HandBackForeverBox.NAME -> BotCommand.HandBackForeverBox.serializer()
@@ -895,8 +1034,12 @@ object BotCommandSerializer :
             BotCommand.ReadVoiceCallAgentContext.NAME -> BotCommand.ReadVoiceCallAgentContext.serializer()
             BotCommand.RefreshChannel.NAME -> BotCommand.RefreshChannel.serializer()
             BotCommand.RefreshMcp.NAME -> BotCommand.RefreshMcp.serializer()
+            BotCommand.ResolveAutoReviewApproval.NAME -> BotCommand.ResolveAutoReviewApproval.serializer()
+            BotCommand.ResolveLocalToolPermission.NAME -> BotCommand.ResolveLocalToolPermission.serializer()
+            BotCommand.ResolveVirtualCardApproval.NAME -> BotCommand.ResolveVirtualCardApproval.serializer()
             BotCommand.RespondToWidget.NAME -> BotCommand.RespondToWidget.serializer()
             BotCommand.RunAgentAutomationNow.NAME -> BotCommand.RunAgentAutomationNow.serializer()
+            BotCommand.SendDraft.NAME -> BotCommand.SendDraft.serializer()
             BotCommand.SendPrompt.NAME -> BotCommand.SendPrompt.serializer()
             BotCommand.SetAgentAutomationEnabled.NAME -> BotCommand.SetAgentAutomationEnabled.serializer()
             BotCommand.SetAgentAvatarBytes.NAME -> BotCommand.SetAgentAvatarBytes.serializer()
@@ -926,6 +1069,7 @@ object BotCommandSerializer :
  */
 typealias BotCommandReplyAttachUpload = SandUploadAttachmentResult
 typealias BotCommandReplyAuthenticateMcpServer = SandMcpAuthResult
+typealias BotCommandReplyCompleteGithubConnect = SandGithubConnectCompletion
 typealias BotCommandReplyCompleteMcpOAuth = JsonElement
 typealias BotCommandReplyConnectChannel = SandChannelsView
 typealias BotCommandReplyCountAgents = Double
@@ -936,6 +1080,7 @@ typealias BotCommandReplyCreateGroup = SandCreateAgentResult
 typealias BotCommandReplyDeleteAgentAutomation = List<SandAutomation>
 typealias BotCommandReplyDeleteAgents = SandDeleteAgentResult
 typealias BotCommandReplyDeleteBotTemplate = JsonElement
+typealias BotCommandReplyDiscardDraft = SandWidgetAnswerResult
 typealias BotCommandReplyDisconnectChannel = SandChannelsView
 typealias BotCommandReplyDismissUserForm = JsonElement
 typealias BotCommandReplyDismissWidget = SandWidgetAnswerResult
@@ -952,10 +1097,15 @@ typealias BotCommandReplyGetAutomationWebhookCredential = SandAutomationWebhookC
 typealias BotCommandReplyGetBotTemplateExportPolicy = SandBotTemplateExportPolicyReply
 typealias BotCommandReplyGetBotTemplateForSourceAgent = ReplyGetBotTemplateForSourceAgent
 typealias BotCommandReplyGetBotTemplateVersion = SandBotTemplateGatewayView
+typealias BotCommandReplyGetCloudAgentInfo = SandCloudAgentInfo?
+typealias BotCommandReplyGetCursorLinkStatus = ReplyGetCursorLinkStatus
 typealias BotCommandReplyGetForeverBoxStatus = SandForeverBoxStatus?
 typealias BotCommandReplyGetHostSettings = SandHostSettings
+typealias BotCommandReplyGetListenerConnectUrl = ReplyGetListenerConnectUrl
+typealias BotCommandReplyGetListenerIntegrations = SandListenerIntegrationsView
 typealias BotCommandReplyGetMcpCatalog = List<SandMcpCatalogEntryView>
 typealias BotCommandReplyGetMcpState = SandMcpState
+typealias BotCommandReplyGetPublicBotTemplate = BotTemplateImport?
 typealias BotCommandReplyGetSubagents = List<SandSubagentInfo>
 typealias BotCommandReplyGetTeachRecordingStatus = SandTeachRecordingStatus
 typealias BotCommandReplyHandBackForeverBox = JsonElement
@@ -974,8 +1124,12 @@ typealias BotCommandReplyReadAttachmentText = ReplyReadAttachmentTextValue?
 typealias BotCommandReplyReadVoiceCallAgentContext = SandVoiceCallAgentContext
 typealias BotCommandReplyRefreshChannel = SandChannelsView
 typealias BotCommandReplyRefreshMcp = JsonElement
+typealias BotCommandReplyResolveAutoReviewApproval = JsonElement
+typealias BotCommandReplyResolveLocalToolPermission = JsonElement
+typealias BotCommandReplyResolveVirtualCardApproval = JsonElement
 typealias BotCommandReplyRespondToWidget = SandWidgetAnswerResult?
 typealias BotCommandReplyRunAgentAutomationNow = JsonElement
+typealias BotCommandReplySendDraft = SandWidgetAnswerResult
 typealias BotCommandReplySendPrompt = SandSendPromptResult?
 typealias BotCommandReplySetAgentAutomationEnabled = List<SandAutomation>
 typealias BotCommandReplySetAgentAvatarBytes = SandAgentSummary?

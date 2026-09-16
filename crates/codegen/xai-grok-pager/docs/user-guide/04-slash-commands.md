@@ -183,10 +183,13 @@ Open a preview of the current saved plan. Aliases: `/show-plan`, `/plan-view`.
 ### `/memory`
 
 Browse, view, and manage saved memories. Pass `on` or `off` to enable or disable memory. Alias: `/mem`.
+In a memory-v2 session, pass `status` to show content-free queue, lease,
+retention, and pinned-rollout diagnostics.
 
 ```
 /memory
 /memory off
+/memory status
 ```
 
 ### `/flush`
@@ -335,7 +338,7 @@ Switch the color theme. Alias: `/t`.
 
 ### `/feedback [message]`
 
-Report an issue or send feedback. Opens a report pane: `Enter` sends, `Esc` discards. A message prefills the pane so you can edit before sending. In `--minimal`, a message still sends immediately.
+Report an issue or send feedback. Bare `/feedback` opens the feedback form in every mode, including `--minimal`. Its **Write** tab is a report box: `Enter` sends, `Esc` closes. Its **Drafts** tab (`Ctrl+Tab` switches) holds reports saved for later — failed sends and feedback the agent drafted for you — and `Enter` loads one into Write so you can review, pick a type, and send it. `/feedback <message>` sends the message immediately, in any mode; if the send fails, the message is saved to Drafts.
 
 ```
 /feedback
@@ -346,8 +349,11 @@ Report an issue or send feedback. Opens a report pane: `Enter` sends, `Esc` disc
 
 Send an aside to the agent without interrupting the current task. In minimal mode (`--minimal`), the answer shows up in a dismissible panel above the prompt: `Esc` dismisses it, a finished answer is saved into native scrollback, and a late reply to an already-dismissed panel is dropped. The side question and its answer aren't part of the main turn.
 
+`/btw` can also appear mid-message: the whole message (minus the token) becomes the side question and nothing goes to the main turn. Only `/btw` works this way; other commands must start the message.
+
 ```
 /btw also check the error handling
+fix the retry loop first. /btw what does WBC stand for?
 ```
 
 ### `/mcps`

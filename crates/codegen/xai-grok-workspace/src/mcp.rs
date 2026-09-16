@@ -16,9 +16,10 @@ use xai_computer_hub_mcp_adapter::{
 use xai_computer_hub_sdk::ToolServerHandler;
 use xai_grok_mcp::rmcp;
 use xai_grok_mcp::servers::{
-    MCP_TOOL_NAME_DELIMITER, McpClient, McpClientTimeoutOverrides, McpSpawnCtx, OauthInteractivity,
-    parse_mcp_qualified_name,
+    InitClaimGuard, MCP_TOOL_NAME_DELIMITER, McpClient, McpClientTimeoutOverrides, McpSpawnCtx,
+    OauthInteractivity, SharedMcpState, parse_mcp_qualified_name,
 };
+use xai_grok_tools::util::mcp_structured_content::render_structured_content;
 use xai_tool_protocol::{SessionId, ToolId};
 use xai_tool_runtime::{ToolCallContext, ToolStream, TypedToolOutput};
 use xai_tool_types::ToolDescription;
@@ -161,28 +162,40 @@ impl McpTransport for McpClientTransportAdapter {
             .await
             .map_err(|e| xai_computer_hub_mcp_adapter::McpError::Transport(e.to_string()))?;
 
-        Ok(McpCallResult {
-            content: result
-                .content
-                .into_iter()
-                .map(|c| match c {
-                    rmcp::model::ContentBlock::Text(t) => McpContent::Text { text: t.text },
-                    rmcp::model::ContentBlock::Image(img) => McpContent::Image {
-                        mime_type: img.mime_type,
-                        data: img.data,
-                    },
-                    _ => McpContent::Text {
-                        text: "[unsupported content type]".to_string(),
-                    },
-                })
-                .collect(),
-            is_error: result.is_error.unwrap_or(false),
-        })
+        Ok(mcp_call_result_from_rmcp(result))
     }
 
     async fn close(&self) -> Result<(), xai_computer_hub_mcp_adapter::McpError> {
         // No-op: cleanup happens when McpClient is dropped.
         Ok(())
+    }
+}
+
+/// `McpCallResult` has no structured field, so `structuredContent` rides as a trailing text block.
+fn mcp_call_result_from_rmcp(result: rmcp::model::CallToolResult) -> McpCallResult {
+    let mut content: Vec<McpContent> = result
+        .content
+        .into_iter()
+        .map(|c| match c {
+            rmcp::model::ContentBlock::Text(t) => McpContent::Text { text: t.text },
+            rmcp::model::ContentBlock::Image(img) => McpContent::Image {
+                mime_type: img.mime_type,
+                data: img.data,
+            },
+            _ => McpContent::Text {
+                text: "[unsupported content type]".to_string(),
+            },
+        })
+        .collect();
+    let texts = content.iter().filter_map(|c| match c {
+        McpContent::Text { text } => Some(text.as_str()),
+        _ => None,
+    });
+    let structured = render_structured_content(result.structured_content.as_ref(), texts);
+    content.extend(structured.map(|text| McpContent::Text { text }));
+    McpCallResult {
+        content,
+        is_error: result.is_error.unwrap_or(false),
     }
 }
 
@@ -271,7 +284,6 @@ async fn record_bridge_outcome(
     session: &WorkspaceSession,
     remaining_names: &mut HashSet<String>,
     life: u64,
-    generation: u64,
 ) -> Option<Result<StartedMcpServer, McpStartFailure>> {
     match outcome {
         Ok(BridgedServer {
@@ -292,7 +304,7 @@ async fn record_bridge_outcome(
                     state.owned_clients.remove(&server_name);
                 } else {
                     state.owned_clients.insert(server_name.clone(), client);
-                    state.mark_server_ready(generation, &server_name);
+                    state.mark_server_ready(&server_name);
                 }
                 stale
             };
@@ -319,13 +331,8 @@ async fn record_bridge_outcome(
                 if session.mcp_epoch.load(std::sync::atomic::Ordering::SeqCst) == life {
                     let mut state = session.mcp_state.lock().await;
                     state.owned_clients.remove(&failure.name);
-                    state.record_init_failure(
-                        generation,
-                        &failure.name,
-                        false,
-                        Some(failure.error.clone()),
-                    );
-                    state.mark_server_ready(generation, &failure.name);
+                    state.record_init_failure(&failure.name, false, Some(failure.error.clone()));
+                    state.mark_server_ready(&failure.name);
                 }
             }
             tracing::warn!(
@@ -446,28 +453,27 @@ pub(crate) async fn drive_server_starts(
         .iter()
         .map(|config| xai_grok_mcp::servers::mcp_server_name(config).to_owned())
         .collect();
-    // Dropping the guard mid-drive releases the claim; the normal exits release it through `finish_init_if_life` first.
-    let (_init_claim, generation) = {
+    // Dropping the guard mid-drive releases the claim; the normal exits complete init through it first.
+    let init_claim = {
         let _binding = session.mcp_binding.lock().await;
         let mut state = session.mcp_state.lock().await;
-        let generation = state.generation();
-        let claim = if session.mcp_epoch.load(std::sync::atomic::Ordering::SeqCst) == life {
+        if session.mcp_epoch.load(std::sync::atomic::Ordering::SeqCst) == life {
             let claim = state.try_start_init();
-            state.mark_servers_initializing(generation, remaining_names.iter().cloned());
+            if claim.is_some() {
+                state.mark_servers_initializing(remaining_names.iter().cloned());
+            }
             claim
         } else {
             None
-        };
-        (claim, generation)
+        }
     };
     // Per-server startup watchdog sized so the WHOLE handshake (the server/discover probe phase plus the legacy phase running on this startup budget) fits the shared deadline, keeping the invariant that a hung handshake fails on its own before the deadline has to cancel it.
     // Sizing to the raw deadline would let a swallowed probe burn the legacy phase's window and convert per-server errors into the generic discovery-timeout failure.
     let deadline_secs = discovery_timeout
         .as_secs()
-        .saturating_add(u64::from(discovery_timeout.subsec_nanos() != 0))
-        .max(1);
+        .saturating_add(u64::from(discovery_timeout.subsec_nanos() != 0));
     let startup_timeout_sec =
-        xai_grok_mcp::servers::McpClient::max_startup_within_deadline(deadline_secs).max(1);
+        xai_grok_mcp::servers::McpClient::max_startup_within_deadline(deadline_secs);
     let overrides = McpClientTimeoutOverrides {
         startup_timeout_sec: Some(startup_timeout_sec),
         ..Default::default()
@@ -559,14 +565,8 @@ pub(crate) async fn drive_server_starts(
             }
             outcome = pending.next() => {
                 let Some(outcome) = outcome else { break };
-                if let Some(result) = record_bridge_outcome(
-                    outcome,
-                    session,
-                    &mut remaining_names,
-                    life,
-                    generation,
-                )
-                .await
+                if let Some(result) =
+                    record_bridge_outcome(outcome, session, &mut remaining_names, life).await
                     && outcomes.send(result).await.is_err()
                 {
                     receiver_gone = true;
@@ -579,7 +579,7 @@ pub(crate) async fn drive_server_starts(
         // Teardown or caller abort: drop the pending starts (killing their
         // children) and report nothing further.
         drop(pending);
-        finish_init_if_life(session, life, generation).await;
+        finish_init_if_life(session, life, init_claim).await;
         return if cancelled {
             Err(WorkspaceError::SessionNotFound(session_id.to_owned()))
         } else {
@@ -590,8 +590,7 @@ pub(crate) async fn drive_server_starts(
         // Outcomes that are already complete keep their real result...
         while let Some(Some(outcome)) = futures::FutureExt::now_or_never(pending.next()) {
             if let Some(result) =
-                record_bridge_outcome(outcome, session, &mut remaining_names, life, generation)
-                    .await
+                record_bridge_outcome(outcome, session, &mut remaining_names, life).await
             {
                 let _ = outcomes.send(result).await;
             }
@@ -607,14 +606,13 @@ pub(crate) async fn drive_server_starts(
                 if session.mcp_epoch.load(std::sync::atomic::Ordering::SeqCst) == life {
                     let mut state = session.mcp_state.lock().await;
                     state.record_init_failure(
-                        generation,
                         &name,
                         false,
                         Some(format!(
                             "MCP discovery timed out after {discovery_timeout:?}"
                         )),
                     );
-                    state.mark_server_ready(generation, &name);
+                    state.mark_server_ready(&name);
                 }
             }
             let _ = outcomes
@@ -625,19 +623,27 @@ pub(crate) async fn drive_server_starts(
                 .await;
         }
     }
-    finish_init_if_life(session, life, generation).await;
+    finish_init_if_life(session, life, init_claim).await;
     Ok(())
 }
 
 /// Close out the init-progress bookkeeping, but only if `life` is still the
 /// session's current MCP life — a drive outlived by a teardown+revive must
-/// not stamp the NEW life's init progress.
-async fn finish_init_if_life(session: &WorkspaceSession, life: u64, generation: u64) {
+/// not stamp the NEW life's init progress — and only while the drive still
+/// owns init; a config change's successor completes its own.
+async fn finish_init_if_life(session: &WorkspaceSession, life: u64, claim: Option<InitClaimGuard>) {
+    let Some(claim) = claim else {
+        return;
+    };
     let _binding = session.mcp_binding.lock().await;
     if session.mcp_epoch.load(std::sync::atomic::Ordering::SeqCst) == life {
-        let mut state = session.mcp_state.lock().await;
-        state.finish_init(generation);
-        state.mark_all_servers_ready(generation);
+        let _ = session
+            .mcp_state
+            .write_if_owner(claim, |state, _claim| {
+                state.finish_init();
+                state.complete_init();
+            })
+            .await;
     }
 }
 
@@ -649,7 +655,10 @@ pub(crate) fn dedupe_servers_last_wins(servers: &mut Vec<agent_client_protocol::
     // Iterate from the back so the LAST occurrence of each name is the one
     // kept, preserving its position.
     for index in (0..servers.len()).rev() {
-        let name = xai_grok_mcp::servers::mcp_server_name(&servers[index]).to_owned();
+        let Some(server) = servers.get(index) else {
+            continue;
+        };
+        let name = xai_grok_mcp::servers::mcp_server_name(server).to_owned();
         if !seen.insert(name) {
             servers.remove(index);
             dropped += 1;
@@ -1170,6 +1179,51 @@ mod tests {
         assert_eq!(handler.description().name, "server__lookup");
     }
 
+    fn bridged_texts(result: rmcp::model::CallToolResult) -> Vec<String> {
+        mcp_call_result_from_rmcp(result)
+            .content
+            .into_iter()
+            .map(|c| match c {
+                McpContent::Text { text } => text,
+                other => panic!("expected text block, got {other:?}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn bridged_result_appends_structured_content_after_a_summary() {
+        let folders = serde_json::json!({"folders": [{"id": "p1", "name": "Alpha"}]});
+        let mut result =
+            rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
+                "7 product folders, 2 custom folders",
+            )]);
+        result.structured_content = Some(folders.clone());
+        assert_eq!(
+            bridged_texts(result),
+            vec![
+                "7 product folders, 2 custom folders".to_string(),
+                folders.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn bridged_result_does_not_duplicate_inlined_structured_content() {
+        let folders = serde_json::json!({"folders": [{"id": "p1", "name": "Alpha"}]});
+        let mut result = rmcp::model::CallToolResult::success(vec![
+            rmcp::model::ContentBlock::text("7 product folders, 2 custom folders"),
+            rmcp::model::ContentBlock::text(folders.to_string()),
+        ]);
+        result.structured_content = Some(folders.clone());
+        assert_eq!(
+            bridged_texts(result),
+            vec![
+                "7 product folders, 2 custom folders".to_string(),
+                folders.to_string()
+            ]
+        );
+    }
+
     /// The client-driven configure path honors the SAME server cap as the
     /// machine-owned chokepoint — `cap_servers` is the one helper both run, keeping
     /// the first entries in config order (matching `BindMcpConfig::new`'s documented cap semantics).
@@ -1185,14 +1239,15 @@ mod tests {
         let mut servers: Vec<_> = (0..over).map(|i| http(&format!("server-{i:03}"))).collect();
         cap_servers(&mut servers);
         assert_eq!(crate::config::BindMcpConfig::MAX_SERVERS, servers.len());
+        let Some(last) = servers.last() else {
+            panic!("expected capped servers");
+        };
         assert_eq!(
             format!(
                 "server-{:03}",
                 crate::config::BindMcpConfig::MAX_SERVERS - 1
             ),
-            xai_grok_mcp::servers::mcp_server_name(
-                &servers[crate::config::BindMcpConfig::MAX_SERVERS - 1]
-            ),
+            xai_grok_mcp::servers::mcp_server_name(last),
         );
     }
 

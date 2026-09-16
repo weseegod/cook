@@ -340,6 +340,11 @@ impl CommandRegistry {
         self.set_command_visible("dashboard", visible);
     }
 
+    /// Whether `/dashboard` would run if typed, so header affordances follow the same gate as the command.
+    pub fn dashboard_dispatchable(&self) -> bool {
+        self.get_for_dispatch("dashboard").is_some()
+    }
+
     /// Show or hide the `/recap` command (shell `sessionRecap` gate).
     /// Hidden by default in [`Self::new`]; revealed from initialize meta.
     pub fn set_recap_visible(&mut self, visible: bool) {
@@ -414,7 +419,7 @@ impl CommandRegistry {
         // Remove old ACP-sourced commands.
         let mut i = 0;
         while i < self.commands.len() {
-            if self.sources[i] == CommandSource::Acp {
+            if self.sources.get(i).copied() == Some(CommandSource::Acp) {
                 self.commands.remove(i);
                 self.sources.remove(i);
             } else {
@@ -494,7 +499,9 @@ impl CommandRegistry {
         self.triggers.clear();
 
         for (idx, command) in self.commands.iter().enumerate() {
-            let source = self.sources[idx];
+            let Some(&source) = self.sources.get(idx) else {
+                continue;
+            };
             let canonical = command.name();
 
             // Skip commands gated by missing tools, using the same skip pattern as `hidden`
@@ -713,8 +720,12 @@ mod tests {
             .map(|w| w.name.as_str())
             .collect();
         assert_eq!(names, ["alpha-wf", "zeta-wf"]);
-        assert_eq!(registry.saved_workflows()[0].description, "Alpha");
-        assert_eq!(registry.saved_workflows()[1].description, "Zeta");
+        let workflows = registry.saved_workflows();
+        let [alpha, zeta] = workflows else {
+            panic!("expected two saved workflows: {workflows:?}");
+        };
+        assert_eq!(alpha.description, "Alpha");
+        assert_eq!(zeta.description, "Zeta");
 
         registry.set_acp_commands(&[]);
         assert!(registry.saved_workflows().is_empty());
@@ -731,9 +742,12 @@ mod tests {
             registry.get("theme").is_some(),
             "pager builtin keeps the name"
         );
-        assert_eq!(registry.saved_workflows().len(), 1);
-        assert_eq!(registry.saved_workflows()[0].name, "theme");
-        assert_eq!(registry.saved_workflows()[0].description, "colliding name");
+        let workflows = registry.saved_workflows();
+        let [theme] = workflows else {
+            panic!("expected one saved workflow: {workflows:?}");
+        };
+        assert_eq!(theme.name, "theme");
+        assert_eq!(theme.description, "colliding name");
     }
 
     #[test]

@@ -59,11 +59,11 @@ async fn handle_list() -> ExtResult {
         })
         .collect();
     let mut results = Vec::with_capacity(scan_handles.len());
-    for (i, handle) in scan_handles.into_iter().enumerate() {
+    for (i, (source, handle)) in sources.iter().zip(scan_handles).enumerate() {
         let (scan, catalog_loaded) = handle.await.unwrap_or_else(|e| {
             (
                 MarketplaceScanResult {
-                    source_name: sources[i].name.clone(),
+                    source_name: source.name.clone(),
                     source_kind: String::new(),
                     source_url_or_path: String::new(),
                     plugins: Vec::new(),
@@ -82,7 +82,7 @@ async fn handle_list() -> ExtResult {
             None,
             Some(serde_json::json!({
                 "source_index": i,
-                "source_name": sources[i].name,
+                "source_name": source.name,
                 "scan_ms": 0, // per-source timing is unavailable when scans run in parallel
                 "plugin_count": scan.plugins.len(),
                 "catalog_loaded": catalog_loaded,
@@ -1246,9 +1246,12 @@ mod official_source_tests {
 
         let sources = read_sources(&config_path);
         assert_eq!(sources.len(), 1);
-        assert_eq!(sources[0].name, "my-plugins");
+        let Some(source) = sources.first() else {
+            panic!("expected one source: {sources:?}");
+        };
+        assert_eq!(source.name, "my-plugins");
         assert!(matches!(
-            &sources[0].kind,
+            &source.kind,
             xai_grok_plugin_marketplace::SourceKind::Local { path } if path == &dir
         ));
         // The path must not be mangled into a git URL.
@@ -1277,8 +1280,11 @@ mod official_source_tests {
             1,
             "respelled URL must dedupe, got {sources:?}"
         );
+        let Some(source) = sources.first() else {
+            panic!("expected one source: {sources:?}");
+        };
         assert!(matches!(
-            &sources[0].kind,
+            &source.kind,
             xai_grok_plugin_marketplace::SourceKind::Git { url, .. }
                 if url == "https://github.com/org/repo.git"
         ));
@@ -1333,12 +1339,15 @@ mod official_source_tests {
 
         let sources = read_sources(&config_path);
         assert_eq!(sources.len(), 1);
+        let Some(source) = sources.first() else {
+            panic!("expected one source: {sources:?}");
+        };
         assert_eq!(
-            sources[0].name,
+            source.name,
             xai_grok_plugin_marketplace::OFFICIAL_SOURCE_NAME
         );
         assert!(matches!(
-            &sources[0].kind,
+            &source.kind,
             xai_grok_plugin_marketplace::SourceKind::Git { url, .. }
                 if url == xai_grok_plugin_marketplace::OFFICIAL_SOURCE_GIT_URL
         ));
@@ -1818,10 +1827,10 @@ mod conversion_tests {
         assert_eq!(dto.remote_subdir.as_deref(), Some("plugins/acme"));
         let components = dto.components.expect("components passed through");
         assert_eq!(components.skills.len(), 1);
-        assert_eq!(components.skills[0].name, "code-review");
-        assert_eq!(
-            components.skills[0].description.as_deref(),
-            Some("Review staged changes")
-        );
+        let Some(skill) = components.skills.first() else {
+            panic!("expected one skill: {:?}", components.skills);
+        };
+        assert_eq!(skill.name, "code-review");
+        assert_eq!(skill.description.as_deref(), Some("Review staged changes"));
     }
 }

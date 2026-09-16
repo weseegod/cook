@@ -289,9 +289,18 @@ pub async fn spawn_grok_shell(
 
     xai_grok_shell::agent::app::apply_otel_config(&auth_manager, &agent_config.grok_com_config);
 
-    xai_grok_shell::agent::models::startup_prefetch::begin_before_policy_gate(&agent_config);
-
+    // Policy repair must finish before any authenticated settings load.
     xai_grok_shell::managed_config::ensure_managed_policy_present(&auth_manager).await;
+    // This worker is a current-thread runtime. Resolve settings here so the
+    // sync bootstrap below observes a finished wait instead of falling open.
+    let mut agent_config = agent_config;
+    let boot = xai_grok_shell::agent::init::resolve_boot_startup_settings(
+        &mut agent_config,
+        cancel,
+        true,
+        auth_manager.current(),
+    )
+    .await?;
 
     // On a blocking thread so the connect `select!` can preempt `bootstrap`'s synchronous I/O. A child of the connect
     // token so a user cancel stops the worker, but a timeout drop does not cancel the parent (the embedded fallback
@@ -305,6 +314,7 @@ pub async fn spawn_grok_shell(
             &bootstrap_auth,
             None,
             &worker_cancel,
+            Some(boot),
         )
     })
     .await?
@@ -399,8 +409,12 @@ pub(super) async fn spawn_runtime_thread(
     // A caller dropped while it waits for the build drops `start_tx`, so the thread exits instead of running `body` detached.
     let (start_tx, start_rx) = tokio::sync::oneshot::channel::<()>();
     let thread_name = name.to_owned();
+    // `block_on` inlines the agent's async state machine on this stack; a debug build of the
+    // agent worker overflows the 2 MB default at the first prompt (macOS spawns with 512 KB)
+    const RUNTIME_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
     let handle = thread::Builder::new()
         .name(name.to_owned())
+        .stack_size(RUNTIME_THREAD_STACK_SIZE)
         .spawn(move || -> Result<()> {
             let mut builder = tokio::runtime::Builder::new_current_thread();
             let built = xai_tty_utils::runtime::build_with_blocking_pool(builder.enable_all())

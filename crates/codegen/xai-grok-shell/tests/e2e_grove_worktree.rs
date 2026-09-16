@@ -1,7 +1,5 @@
-//! Product E2E: ACP `create_from_worktree_sync` through a live grove daemon.
 //!
 //! Session `-w` / fork / resume never call `ensure_daemon`; the daemon is
-//! started out of band. This process isolates `GROVE_CONTROL_SOCK` and
 //! `XDG_RUNTIME_DIR`; `run_agent_test` isolates `GROK_HOME`. The daemon child
 //! also gets a private HOME/XDG.
 

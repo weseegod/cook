@@ -60,9 +60,7 @@ impl TitleManager {
         self.composed.clear();
         let mut has_parts = false;
 
-        // Iterate by index: TitleItem is Copy, so indexing avoids borrowing self.items while we mutate self.composed
-        for i in 0..self.items.len() {
-            let item = self.items[i];
+        for item in self.items.iter().copied() {
             if write_item(
                 &mut self.composed,
                 &mut has_parts,
@@ -127,8 +125,11 @@ fn write_item(
             if !state.is_busy && state.activity.is_none() {
                 return false;
             }
+            let Some(&ch) = TITLE_SPINNER.get(spinner_frame) else {
+                return false;
+            };
             push_separator(buf, has_parts);
-            buf.push(TITLE_SPINNER[spinner_frame]);
+            buf.push(ch);
         }
         TitleItem::Activity => {
             if let Some(activity) = state.activity {

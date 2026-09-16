@@ -24,6 +24,7 @@ mod modes;
 pub(crate) mod notes;
 mod permissions;
 mod prompt;
+mod prompt_ack;
 mod queue;
 mod rewind;
 mod router;
@@ -49,6 +50,7 @@ pub(crate) use prompt::dispatch_initial_prompt;
 pub(in crate::app) use prompt::{
     present_export_copy_tip, show_small_screen_tip, show_ssh_wrap_tip,
 };
+pub(crate) use prompt_ack::reconcile_overdue_prompt_acks;
 pub(super) use queue::{
     apply_turn_start_shim, arm_send_now_and_paint, maybe_drain_queue_and_note_peek,
     note_peek_page_flip, shim_renders_own_user_block,

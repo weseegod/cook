@@ -97,8 +97,9 @@ pub(super) fn build_selection_meta(
         };
     if let Some(h) = perm.bash_highlights.as_ref().filter(|_| count > 0) {
         // Arrow word-scope: a literal command prefix, never a glob.
+        let command_parts = h.highlighted_words.get(..count)?;
         return serde_json::to_value(BashCommandSelectedTerms {
-            command_parts: h.highlighted_words[..count].to_vec(),
+            command_parts: command_parts.to_vec(),
             is_glob: false,
         })
         .ok()

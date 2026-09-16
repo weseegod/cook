@@ -59,7 +59,12 @@ fn drafts_send_request_round_trips_the_pager_body() {
 
     // Absent optionals must round-trip as absent, not `null`.
     let mut minimal = full;
-    let edited_body = minimal["edited_body"].as_object_mut().unwrap();
+    let Some(edited_body) = minimal
+        .get_mut("edited_body")
+        .and_then(|v| v.as_object_mut())
+    else {
+        panic!("edited_body missing: {minimal:?}");
+    };
     for optional in [
         "area",
         "task_category",

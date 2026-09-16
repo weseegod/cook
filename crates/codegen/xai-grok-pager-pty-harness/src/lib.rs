@@ -3,7 +3,7 @@
 //! The same layered API serves three consumers:
 //!
 //! 1. **Regression scenarios** (e.g. `scenarios::plan_approval_resume`) assert screen contents and multi-process resume behavior.
-//!    They run via `tests/` in this crate and via `pty-scenario` YAML under `xai-grok-pager/tests/scenarios/`.
+//!    They run via `tests/` in this crate and via `pty-scenario` YAML under `tests/scenarios/`.
 //! 2. **Benchmarks** (`benches/pty_bench.rs`) run timing scenarios, collect per-frame timings, emit JSON, and compare against baselines.
 //! 3. **Ad-hoc scenario runs** spin up the harness to reproduce issues locally.
 //!
@@ -39,7 +39,7 @@ pub use content::{
 };
 pub use env::pager_binary;
 pub use flows::{
-    inference_request_count, oauth_credential_ops, seed_fake_oauth,
+    inference_request_count, inference_requests, oauth_credential_ops, seed_fake_oauth,
     seed_fake_oauth_coding_data_opted_out, seed_fake_oauth_team_member, seed_fake_oauth_zdr_team,
     submit_turn, wait_for_labels_absent, wait_for_model_via_new_sessions,
 };

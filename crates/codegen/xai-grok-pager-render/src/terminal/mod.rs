@@ -19,7 +19,10 @@ pub mod tmux;
 pub mod tmux_probe;
 pub mod xtversion;
 
-pub use tmux::{passthrough_available, should_wrap_osc11, tmux_passthrough, tmux_passthrough_str};
+pub use tmux::{
+    passthrough_available, should_emit_synchronized_output, should_wrap_osc11, tmux_passthrough,
+    tmux_passthrough_str,
+};
 
 pub use embedded_editor::{EmbeddedEditor, embedded_editor_from_env};
 pub use hyperlinks::{
@@ -922,7 +925,7 @@ fn parse_tmux_major_minor(version: &str) -> Option<(u32, u32)> {
     let minor_end = minor_str
         .find(|c: char| !c.is_ascii_digit())
         .unwrap_or(minor_str.len());
-    let minor: u32 = minor_str[..minor_end].parse().ok()?;
+    let minor: u32 = minor_str.get(..minor_end)?.parse().ok()?;
     Some((major, minor))
 }
 

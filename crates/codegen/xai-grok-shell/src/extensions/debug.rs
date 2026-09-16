@@ -100,9 +100,10 @@ async fn handle_trigger_feedback(agent: &MvpAgent, args: &acp::ExtRequest) -> Ex
 fn handle_arm_auto_compact(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let params: serde_json::Value = parse_params(args)?;
 
-    let session_id_str = params["sessionId"]
-        .as_str()
-        .or_else(|| params["session_id"].as_str())
+    let session_id_str = params
+        .get("sessionId")
+        .and_then(|v| v.as_str())
+        .or_else(|| params.get("session_id").and_then(|v| v.as_str()))
         .ok_or_else(|| acp::Error::invalid_params().data("sessionId required"))?;
     let session_id = acp::SessionId::new(session_id_str);
 

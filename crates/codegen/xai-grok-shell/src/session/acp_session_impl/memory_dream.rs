@@ -78,6 +78,14 @@ impl SessionActor {
             xai_grok_telemetry::memory_telemetry::MemorySessionSummary {
                 session_id: self.session_info.id.to_string(),
                 memory_enabled: self.memory.is_enabled(),
+                memory_mode: match self.memory.mode() {
+                    Some(crate::config::MemoryMode::V2) => {
+                        xai_grok_telemetry::memory_telemetry::MemoryMode::V2
+                    }
+                    Some(crate::config::MemoryMode::Legacy) | None => {
+                        xai_grok_telemetry::memory_telemetry::MemoryMode::Legacy
+                    }
+                },
                 session_duration_secs: self.session_start.elapsed().as_secs(),
                 flush_count: telem.flush_count,
                 flush_success_count: telem.flush_success_count,
@@ -91,6 +99,13 @@ impl SessionActor {
                 dream_count: telem.dream_count,
                 dream_success_count: telem.dream_success_count,
                 dream_error_count: telem.dream_error_count,
+                capture_prompt_tokens: telem.capture_prompt_tokens,
+                capture_completion_tokens: telem.capture_completion_tokens,
+                capture_cost_usd_ticks: telem.capture_cost_usd_ticks,
+                dream_prompt_tokens: telem.dream_prompt_tokens,
+                dream_completion_tokens: telem.dream_completion_tokens,
+                dream_cost_usd_ticks: telem.dream_cost_usd_ticks,
+                injected_bytes: telem.injected_bytes,
             },
         );
     }
@@ -113,7 +128,9 @@ impl SessionActor {
         }
         let mut session_end_result = "disabled";
         let mut total_chunks_at_end = 0usize;
-        if let Some(storage) = self.memory.storage() {
+        if self.memory.uses_legacy_pipeline()
+            && let Some(storage) = self.memory.storage()
+        {
             let _save = session_end::timed_child(timer, Phase::MemorySave, span.span());
             let conversation = self.chat_state_handle.get_conversation().await;
             let result = crate::session::memory::hooks::on_session_end(
@@ -170,12 +187,15 @@ impl SessionActor {
         std::path::PathBuf,
         String,
     )> {
+        if !self.memory.uses_legacy_pipeline() {
+            return None;
+        }
         let storage = self.memory.storage()?;
         let workspace_dir = storage.workspace_dir();
         let lock = crate::session::memory::dream_lock::DreamLock::new(workspace_dir);
         let sessions_dir = storage.sessions_dir();
         let sid = &self.session_info.id.0;
-        let sid8 = sid[..8.min(sid.len())].to_owned();
+        let sid8 = sid.get(..8.min(sid.len())).unwrap_or(sid).to_owned();
         Some((storage, lock, sessions_dir, sid8))
     }
 
@@ -228,7 +248,11 @@ impl SessionActor {
     }
 
     /// Run dream from the `/dream` slash command, bypassing the time and session gates.
-    pub(super) async fn run_dream_slash_command(&self) {
+    pub(super) async fn run_dream_slash_command(self: &Arc<Self>) {
+        if self.memory.mode() == Some(crate::config::MemoryMode::V2) {
+            self.run_v2_dream_slash_command().await;
+            return;
+        }
         use crate::session::memory::dream_lock::sessions_since;
 
         let Some((storage, lock, sessions_dir, sid8)) = self.dream_context() else {
@@ -501,6 +525,14 @@ impl SessionActor {
         snapshot: Option<MemoryFlushSnapshot>,
     ) -> bool {
         use xai_grok_memory::flush::*;
+
+        if !self.memory.uses_legacy_pipeline() {
+            tracing::debug!(
+                target: xai_grok_telemetry::memory_log::TARGET,
+                "MEMORY_FLUSH: legacy flush is disabled for this memory mode (trigger={trigger})"
+            );
+            return false;
+        }
 
         // Atomically acquire the flushing lock. If another flush is already running (idle timer, pre-compaction, or user-requested), skip.
         if !self.memory.try_acquire_flush_lock() {

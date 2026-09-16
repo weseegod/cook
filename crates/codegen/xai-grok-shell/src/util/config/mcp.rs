@@ -1965,7 +1965,7 @@ args = ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
             "transport-less entry is dropped, not kept"
         );
         assert!(servers.contains_key("linear"));
-        assert!(servers["linear"].enabled);
+        assert!(servers.get("linear").is_some_and(|s| s.enabled));
         let problem = problems
             .iter()
             .find(|p| p.server == "github")
@@ -2031,7 +2031,7 @@ command = ""
         let config = mcp_config_from_json_value(&value);
         assert!(!config.mcp_servers.contains_key("bad"));
         assert!(config.mcp_servers.contains_key("good"));
-        assert!(config.mcp_servers["good"].enabled);
+        assert!(config.mcp_servers.get("good").is_some_and(|s| s.enabled));
     }
 
     #[test]
@@ -2498,7 +2498,10 @@ expose_image_base64 = true
 
         let servers = load_mcp_json_file(&mcp_path);
         assert_eq!(servers.len(), 1);
-        match &servers[0] {
+        let Some(server) = servers.first() else {
+            panic!("expected one server: {servers:?}");
+        };
+        match server {
             acp::McpServer::Http(acp::McpServerHttp { url, .. }) => {
                 assert_eq!(url, "https://fallback.example.com/mcp");
             }
@@ -2583,14 +2586,12 @@ enabled = false
         std::fs::remove_file(&path).unwrap();
         save_mcp_preferences_to(&path, &prefs).await.unwrap();
         let loaded = load_mcp_preferences_from(&path).file();
-        assert_eq!(loaded.servers["acme"].values["site"], "us5");
+        let Some(acme) = loaded.servers.get("acme") else {
+            panic!("expected acme server: {:?}", loaded.servers);
+        };
+        assert_eq!(acme.values.get("site").map(String::as_str), Some("us5"));
         assert_eq!(
-            loaded.servers["acme"]
-                .source
-                .as_ref()
-                .unwrap()
-                .plugin
-                .as_deref(),
+            acme.source.as_ref().and_then(|s| s.plugin.as_deref()),
             Some("acme")
         );
     }
@@ -2613,7 +2614,7 @@ enabled = true
             .and_then(|v| v.as_array())
             .expect("disabled_mcp_servers array");
         assert_eq!(disabled.len(), 1);
-        assert_eq!(disabled[0].as_str(), Some("local"));
+        assert_eq!(disabled.first().and_then(|v| v.as_str()), Some("local"));
         assert_eq!(
             table
                 .get("mcp_servers")
@@ -2650,7 +2651,10 @@ enabled = true
             .and_then(|v| v.as_array())
             .expect("disabled_mcp_servers array");
         assert_eq!(disabled.len(), 1);
-        assert_eq!(disabled[0].as_str(), Some("grok_com_slack"));
+        assert_eq!(
+            disabled.first().and_then(|v| v.as_str()),
+            Some("grok_com_slack")
+        );
         assert!(table.get("mcp_servers").is_none());
 
         apply_mcp_server_enabled(table, "grok_com_slack", true);

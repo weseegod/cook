@@ -311,11 +311,19 @@ Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) 
 
 ### Memory
 
-Persist knowledge across sessions. Enable memory with `GROK_MEMORY=1`, `[memory] enabled = true`, or managed remote settings.
+Persist knowledge across sessions. New users should opt into memory v2 with
+`[memory_v2] enabled = true`. Existing `GROK_MEMORY=1`, `[memory] enabled =
+true`, and managed `memory_enabled` settings continue to enable legacy memory
+unless the v2 gate is enabled.
 
 ```toml
+[memory_v2]
+enabled = true                        # primary memory-v2 switch
+capture_status_enabled = false        # expandable capture diagnostics
+
+# Legacy memory compatibility settings:
 [memory]
-enabled = false                       # enable memory
+enabled = false
 
 [memory.session]
 save_on_end = true                    # write metadata summary on session end

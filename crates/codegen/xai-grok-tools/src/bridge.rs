@@ -640,6 +640,15 @@ impl ToolBridge {
         }
     }
 
+    /// Metadata-only task listing for background_tasks snapshots (no stdout).
+    pub async fn list_tasks_metadata(&self) -> Option<Vec<TaskSnapshot>> {
+        if let Some(terminal) = &self.terminal {
+            Some(terminal.list_tasks_metadata().await)
+        } else {
+            None
+        }
+    }
+
     /// Drain newly-completed bash background tasks not yet reported. Marks returned tasks in
     /// [`ReportedTaskCompletions`] to prevent duplicate reminders from [`TaskCompletionReminder`].
     /// Reserved IDs stay unreported for a later genuine user turn.

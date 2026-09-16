@@ -395,6 +395,19 @@ pub trait TerminalBackend: Send + Sync {
     /// Used for context compaction to include task state in summaries.
     async fn list_tasks(&self) -> Vec<TaskSnapshot>;
 
+    /// Metadata-only listing for durable background_tasks snapshots.
+    /// Skips log reads and omits stdout; default clears output after
+    /// [`Self::list_tasks`].
+    async fn list_tasks_metadata(&self) -> Vec<TaskSnapshot> {
+        let mut tasks = self.list_tasks().await;
+        for task in &mut tasks {
+            task.output.clear();
+            task.output_total_bytes = 0;
+            task.truncated = false;
+        }
+        tasks
+    }
+
     /// Return the persistent shell's current working directory, if persistent
     /// shell state is enabled. Returns `None` when persistence is off or the
     /// backend doesn't support it (e.g. ACP/remote).

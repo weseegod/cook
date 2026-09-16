@@ -25,7 +25,7 @@ pub enum ClassifierSecurityFinding {
     FileWrite,
     /// Dangerous command segment (`rm`, `chmod`, `git push`, …).
     DangerousCommand,
-    /// Special executable/disclosure surface (`rg --pre`, Git drivers/pagers, kubectl config/auth overrides, process-environment dump).
+    /// Special executable/disclosure surface (`rg` unsafe flags, Git drivers/pagers, kubectl config/auth overrides, process-environment dump).
     SpecialExecSurface,
 }
 

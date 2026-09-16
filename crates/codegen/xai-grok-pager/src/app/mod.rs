@@ -26,10 +26,12 @@ use xai_grok_telemetry::region::Parent;
 pub mod edit_highlight_worker;
 /// Off-thread Mermaid diagram render worker (out of process) + per-session cache.
 pub mod mermaid_worker;
+pub(crate) mod prompt_ack;
 pub use xai_prompt_queue as prompt_queue;
 mod acp_handler;
 mod connect_timeout;
 mod csi_filter;
+mod dashboard_session_picker;
 mod dispatch;
 pub mod roster;
 pub mod session_startup;
@@ -43,10 +45,12 @@ pub(crate) mod worktree_session;
 pub(crate) use dispatch::dashboard_stop_readiness;
 /// Display-refresh probe + motion cadence + terminal telemetry at startup.
 mod display_refresh_startup;
-mod effects;
+pub(crate) mod effects;
 pub(crate) mod error_display;
 mod x10_filter;
-pub(crate) use effects::sanitize_user_error;
+pub(crate) use effects::{cancel_notification_meta, sanitize_user_error};
+#[cfg(test)]
+pub(crate) mod agent_test_fixtures;
 mod event_loop;
 mod event_loop_stall;
 mod exit_timeout;
@@ -432,6 +436,19 @@ pub(crate) struct ExitSummary {
     /// `None` when the newest prompt is still unanswered.
     pub last_response: Option<String>,
 }
+/// Seed this process's UI caches from remote settings. `None` restores defaults.
+fn seed_remote_ui_caches(remote_settings: Option<&xai_grok_shell::util::config::RemoteSettings>) {
+    xai_grok_shell::util::config::cache_remote_auto_mode(
+        remote_settings.and_then(|s| s.auto_mode.clone()),
+    );
+    xai_grok_shell::util::config::cache_remote_prompt_suggestions(
+        remote_settings.and_then(|s| s.prompt_suggestions.clone()),
+    );
+    xai_grok_shell::util::config::set_remote_campaigns_from_settings(remote_settings);
+}
+/// Resolve leader mode, reporting both why it is off and what turned it off.
+///
+/// Precedence, highest first: `--no-leader`, `--leader`, eligibility, local config `use_leader`, remote `leader_mode` (release-dist), default off.
 /// `requested_confinement` then vetoes leader use when `Some` (in-process tools stay under the OS sandbox) without reclaiming a shared leader.
 /// `policy_disable_reason` is `Some("config"|"remote")` only when leader mode is *definitively* off by policy.
 /// Never reclaim a leader on an unknown signal.
@@ -552,10 +569,14 @@ struct ConnectFailure {
     timeout_secs: Option<u64>,
     longest_step: Option<crate::acp::StartupPhase>,
 }
+/// Slice the connect wait so a launch-profile escalation can extend the budget
+/// without parking on the original timeout.
+const CONNECT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 /// Bound connect so a hung leader/spawn cannot blank-screen forever.
 async fn bounded_connect(
     cancel: &CancellationToken,
     timeout: std::time::Duration,
+    connect_ui_timeout_env: Option<&str>,
     target: crate::acp::AgentKind,
     attempt: startup_failure::ConnectAttempt,
     timer: &crate::acp::StartupTimer,
@@ -571,44 +592,70 @@ async fn bounded_connect(
         ),
         log_path: xai_grok_telemetry::unified_log::path(),
     };
-    tokio::select! {
-        biased;
-        () = cancel.cancelled() => Err(ConnectFailure {
-            outcome: StartupOutcome::Cancelled,
-            error: anyhow::Error::new(startup_failure::StartupFailure::cancelled(context())),
-            timeout_secs: None,
-            longest_step: None,
-        }),
-        connected = connect => connected.map_err(|error| ConnectFailure {
-            outcome: StartupOutcome::Error,
-            error,
-            timeout_secs: None,
-            longest_step: None,
-        }),
-        () = tokio::time::sleep(timeout) => {
-            let timings = timer.phase_snapshot();
-            let longest_step = timings.longest_step();
-            // `connect_target`: tracing reserves bare `target=`.
-            tracing::error!(
-                connect_target = target.label(),
-                stuck_in = timings.stuck_in(),
-                phases = %timings.summary(),
-                timeout_secs = timeout.as_secs(),
-                "connect timed out"
-            );
-            Err(ConnectFailure {
-                outcome: StartupOutcome::Timeout,
-                error: anyhow::Error::new(startup_failure::StartupFailure::timed_out(
-                    context(),
-                    // Measured, not the budget: a synchronous step can overrun it.
-                    timer.elapsed(),
-                    timings,
-                )),
-                timeout_secs: Some(timeout.as_secs()),
-                longest_step,
-            })
+    let started = std::time::Instant::now();
+    let mut deadline = started + timeout;
+    let mut connect = std::pin::pin!(connect);
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        let slice = remaining.min(CONNECT_POLL_INTERVAL);
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(ConnectFailure {
+                outcome: StartupOutcome::Cancelled,
+                error: anyhow::Error::new(startup_failure::StartupFailure::cancelled(context())),
+                timeout_secs: None,
+                longest_step: None,
+            }),
+            connected = connect.as_mut() => {
+                return connected.map_err(|error| ConnectFailure {
+                    outcome: StartupOutcome::Error,
+                    error,
+                    timeout_secs: None,
+                    longest_step: None,
+                });
+            }
+            () = tokio::time::sleep(slice) => {
+                let profile = xai_grok_shell::managed_config::startup_profile();
+                let floor = connect_timeout::resolve(connect_ui_timeout_env, profile);
+                let escalated = started + floor;
+                if escalated > deadline {
+                    tracing::info!(
+                        timeout_secs = floor.as_secs(),
+                        "connect budget extended after launch profile escalated to managed"
+                    );
+                    deadline = escalated;
+                }
+            }
         }
     }
+    let timings = timer.phase_snapshot();
+    let longest_step = timings.longest_step();
+    let timeout_secs = timeout.as_secs();
+    tracing::error!(
+        connect_target = target.label(),
+        stuck_in = timings.stuck_in(),
+        phases = %timings.summary(),
+        timeout_secs,
+        "connect timed out"
+    );
+    Err(ConnectFailure {
+        outcome: StartupOutcome::Timeout,
+        error: anyhow::Error::new(startup_failure::StartupFailure::timed_out(
+            context(),
+            timer.elapsed(),
+            timings,
+        )),
+        timeout_secs: Some(
+            deadline
+                .saturating_duration_since(started)
+                .as_secs()
+                .max(timeout_secs),
+        ),
+        longest_step,
+    })
 }
 /// Main entry point: connect to agent, init terminal, run event loop, restore.
 /// If a session ID is provided via `--resume` / `--load` / `--continue`, the pager skips the welcome screen and immediately loads that session.
@@ -654,12 +701,17 @@ pub async fn run(
     )
     .await
     .unwrap_or(None);
-    let had_prefetch = match refreshed_auth {
-        Some(auth) => xai_grok_shell::agent::models::startup_prefetch::begin_with_auth(Some(auth)),
-        None => {
-            xai_grok_shell::agent::models::startup_prefetch::begin(Some(grok_com_config.clone()))
-        }
-    };
+    let settings_query = xai_grok_shell::agent::remote_config::settings_get::SettingsQuery::resolve(
+        refreshed_auth,
+        Some(grok_com_config.clone()),
+    );
+    let had_prefetch =
+        xai_grok_shell::agent::remote_config::settings_get::is_eligible(&settings_query);
+    if had_prefetch {
+        xai_grok_shell::agent::remote_config::settings_get::warm_startup_settings(
+            settings_query.clone(),
+        );
+    }
     xai_grok_shell::agent::mvp_agent::warm_async_http_client();
     tokio::task::spawn_blocking(|| {});
     if let Ok(cwd) = std::env::current_dir() {
@@ -668,24 +720,41 @@ pub async fn run(
     let prefetch_wait_started = std::time::Instant::now();
     let remote_settings = if had_prefetch {
         let _wait_span = region!("startup.prefetch_join_wait", Parent::Inherit);
-        let settings =
-            xai_grok_shell::agent::models::startup_prefetch::wait_settings(EARLY_PREFETCH_WAIT);
+        let warmed_auth = settings_query.auth().cloned();
+        let wait = {
+            let _settings = region!(
+                "startup.prefetch_join_wait.settings",
+                Parent::Explicit(_wait_span.span())
+            );
+            xai_grok_shell::agent::remote_config::settings_get::await_startup_settings(
+                settings_query,
+                EARLY_PREFETCH_WAIT,
+                &tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+        };
+        let settings = xai_grok_shell::agent::remote_config::settings_get::consume_wait(
+            wait,
+            warmed_auth.as_ref(),
+            &grok_com_config,
+        );
         xai_grok_telemetry::startup::record_prefetch_wait(prefetch_wait_started.elapsed());
         settings
     } else {
         None
     };
-    xai_grok_shell::util::config::cache_remote_auto_mode(
-        remote_settings.as_ref().and_then(|s| s.auto_mode.clone()),
-    );
-    xai_grok_shell::util::config::cache_remote_prompt_suggestions(
-        remote_settings
-            .as_ref()
-            .and_then(|s| s.prompt_suggestions.clone()),
-    );
-    xai_grok_shell::util::config::set_remote_campaigns_from_settings(remote_settings.as_ref());
+    seed_remote_ui_caches(remote_settings.as_ref());
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
+    xai_grok_shell::config::cache_standalone_memory_mode(
+        xai_grok_shell::config::MemoryConfig::resolve(
+            args.experimental_memory,
+            args.no_memory,
+            &raw_config,
+            remote_settings.as_ref(),
+        )
+        .mode,
+    );
     let prefetch_elapsed = startup_start.elapsed();
     let requested_confinement = xai_grok_sandbox::requested_confinement_profile();
     let LeaderMode {
@@ -944,7 +1013,7 @@ pub async fn run(
         connect_ui_timeout_env.as_deref(),
         xai_grok_shell::managed_config::startup_profile(),
     );
-    if let Some(raw) = connect_ui_timeout_env {
+    if let Some(ref raw) = connect_ui_timeout_env {
         crate::unified_log::write_direct_info(
             "startup connect budget from env",
             Some(serde_json::json!({
@@ -975,6 +1044,7 @@ pub async fn run(
     let connect_result = bounded_connect(
         &cancel,
         connect_ui_timeout,
+        connect_ui_timeout_env.as_deref(),
         primary_target,
         startup_failure::ConnectAttempt::First,
         &timer,
@@ -1000,6 +1070,7 @@ pub async fn run(
             let fallback = bounded_connect(
                 &cancel,
                 connect_ui_timeout,
+                connect_ui_timeout_env.as_deref(),
                 target,
                 startup_failure::ConnectAttempt::AfterFallback(startup_failure::EarlierAttempt {
                     target: primary_target,
@@ -1807,17 +1878,7 @@ mod tests {
         );
     }
     fn test_terminal_and_writer_thread() -> (PagerTerminal, WriterThread) {
-        use ratatui::{TerminalOptions, Viewport};
-        let (tx, _rx) = std::sync::mpsc::channel::<crate::render::draw::WriterPayload>();
-        let sync = WriterSync::new();
-        let backend = CrosstermBackend::new(TermWriter::new(tx, sync).expect("single test writer"));
-        let terminal = xai_ratatui_inline::Terminal::with_options(
-            backend,
-            TerminalOptions {
-                viewport: Viewport::Fixed(ratatui::layout::Rect::new(0, 0, 80, 24)),
-            },
-        )
-        .expect("test terminal");
+        let (terminal, _frame_rx) = crate::test_util::test_terminal();
         let (writer_tx, _writer_sync, _events, writer_thread) =
             crate::render::draw::spawn_writer_thread().expect("spawn test writer thread");
         drop(writer_tx);

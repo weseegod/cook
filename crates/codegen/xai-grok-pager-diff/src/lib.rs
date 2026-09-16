@@ -3,6 +3,8 @@
 //! Turns edit-tool output into line-tagged [`DiffHunk`]s for the pager to render, and back into unified-diff text.
 //! The input is structured `SearchReplaceEditDetail` records, ACP `ToolCall` payloads, or plain before/after text.
 
+#![deny(clippy::indexing_slicing)]
+
 use similar::{ChangeTag, TextDiff};
 use xai_grok_tools::types::output::SearchReplaceEditDetail;
 
@@ -127,7 +129,9 @@ pub fn build_diff_hunks(details: &[SearchReplaceEditDetail]) -> Vec<DiffHunk> {
         }
 
         while start < end {
-            let entry = &diff_lines[start];
+            let Some(entry) = diff_lines.get(start) else {
+                break;
+            };
             if entry.tag == ChangeTag::Equal && entry.text.trim_ascii().is_empty() {
                 start += 1;
             } else {
@@ -135,7 +139,9 @@ pub fn build_diff_hunks(details: &[SearchReplaceEditDetail]) -> Vec<DiffHunk> {
             }
         }
         while start < end {
-            let entry = &diff_lines[end - 1];
+            let Some(entry) = end.checked_sub(1).and_then(|i| diff_lines.get(i)) else {
+                break;
+            };
             if entry.tag == ChangeTag::Equal && entry.text.trim_ascii().is_empty() {
                 end -= 1;
             } else {
@@ -143,8 +149,10 @@ pub fn build_diff_hunks(details: &[SearchReplaceEditDetail]) -> Vec<DiffHunk> {
             }
         }
 
-        if start < end {
-            hunks.push(diff_lines[start..end].to_vec());
+        if start < end
+            && let Some(slice) = diff_lines.get(start..end)
+        {
+            hunks.push(slice.to_vec());
         }
     }
     hunks
@@ -219,11 +227,12 @@ fn stitch_hunk_pair(a: &DiffHunk, b: &DiffHunk) -> Option<DiffHunk> {
     let mut max_ln = a_max;
     let mut i = 0;
     while i < b.len() {
-        let row = &b[i];
+        let Some(row) = b.get(i) else { break };
         if row.ln > max_ln {
             // Past the stitched coverage, `b` is the sole source for this tail, so splice its remaining rows in verbatim
             // Rendered rows must stay contiguous
-            for rest in &b[i..] {
+            let tail = b.get(i..)?;
+            for rest in tail {
                 if rest.tag != ChangeTag::Delete {
                     if rest.ln != max_ln + 1 {
                         return None;
@@ -237,7 +246,7 @@ fn stitch_hunk_pair(a: &DiffHunk, b: &DiffHunk) -> Option<DiffHunk> {
         match row.tag {
             ChangeTag::Equal => {
                 let pos = render_pos(&out, row.ln)?;
-                if trimmed(&out[pos].text) != trimmed(&row.text) {
+                if trimmed(&out.get(pos)?.text) != trimmed(&row.text) {
                     return None;
                 }
                 i += 1;
@@ -249,18 +258,22 @@ fn stitch_hunk_pair(a: &DiffHunk, b: &DiffHunk) -> Option<DiffHunk> {
                     return None;
                 }
                 let pos = render_pos(&out, row.ln)?;
-                if trimmed(&out[pos].text) != trimmed(&row.text) {
+                if trimmed(&out.get(pos)?.text) != trimmed(&row.text) {
                     return None;
                 }
-                match out[pos].tag {
+                match out.get(pos)?.tag {
                     // A context line the later call edited: show its -/+ pair.
                     ChangeTag::Equal => {
-                        out[pos] = row.clone();
+                        if let Some(slot) = out.get_mut(pos) {
+                            *slot = row.clone();
+                        }
                         out.insert(pos + 1, next.clone());
                     }
                     // Same line edited twice: keep the earlier delete (if any), drop the intermediate text, keep the final insert
                     ChangeTag::Insert => {
-                        out[pos] = next.clone();
+                        if let Some(slot) = out.get_mut(pos) {
+                            *slot = next.clone();
+                        }
                     }
                     ChangeTag::Delete => unreachable!("render_pos skips deletes"),
                 }
@@ -394,6 +407,13 @@ mod tests {
     use super::*;
     use similar::ChangeTag;
 
+    fn only_hunk(hunks: &[DiffHunk]) -> &DiffHunk {
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk, have {}", hunks.len());
+        };
+        hunk
+    }
+
     #[test]
     fn simple_replacement() {
         let details = vec![SearchReplaceEditDetail {
@@ -409,7 +429,9 @@ mod tests {
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
 
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
         // The hunk holds context_before, the delete, the insert, then context_after
         assert!(hunk.len() >= 3, "got {} lines", hunk.len());
 
@@ -418,8 +440,16 @@ mod tests {
         let inserts: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
         assert_eq!(deletes.len(), 1);
         assert_eq!(inserts.len(), 1);
-        assert!(deletes[0].text.contains("let x = 1;"));
-        assert!(inserts[0].text.contains("let x = 2;"));
+        assert!(
+            deletes
+                .first()
+                .is_some_and(|l| l.text.contains("let x = 1;"))
+        );
+        assert!(
+            inserts
+                .first()
+                .is_some_and(|l| l.text.contains("let x = 2;"))
+        );
     }
 
     #[test]
@@ -480,7 +510,9 @@ mod tests {
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
 
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
         let equal_lines: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Equal).collect();
         // Equal lines come from both context_before and context_after
         assert!(
@@ -503,7 +535,9 @@ mod tests {
         }];
 
         let hunks = build_diff_hunks(&details);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
         let delete = hunk.iter().find(|l| l.tag == ChangeTag::Delete).unwrap();
         assert_eq!(delete.lo, 10);
         let insert = hunk.iter().find(|l| l.tag == ChangeTag::Insert).unwrap();
@@ -524,11 +558,16 @@ mod tests {
         }];
 
         let hunks = build_diff_hunks(&details);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
         let ctx: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Equal).collect();
         assert_eq!(ctx.len(), 2);
-        assert_eq!(ctx[0].lo, 3);
-        assert_eq!(ctx[1].lo, 4);
+        let [c0, c1] = ctx.as_slice() else {
+            panic!("expected 2 context lines: {ctx:?}");
+        };
+        assert_eq!(c0.lo, 3);
+        assert_eq!(c1.lo, 4);
     }
 
     #[test]
@@ -547,7 +586,9 @@ mod tests {
 
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
 
         // Collect all `ln` values that appear in the "new" column.
         let new_column: Vec<usize> = hunk
@@ -557,25 +598,28 @@ mod tests {
             .collect();
 
         // No new-column line number should repeat.
-        for i in 1..new_column.len() {
+        for (i, w) in new_column.windows(2).enumerate() {
+            let [prev, next] = w else { continue };
             assert_ne!(
-                new_column[i - 1],
-                new_column[i],
-                "duplicate new-line number {} at positions {} and {}",
-                new_column[i],
-                i - 1,
-                i,
+                prev,
+                next,
+                "duplicate new-line number {next} at positions {i} and {}",
+                i + 1,
             );
         }
 
         // Context_before "anchor line" should be at ln = 4 (old_line - 1).
         let ctx: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Equal).collect();
-        assert_eq!(ctx[0].ln, 4, "context_before should be at new_line - 1");
+        assert_eq!(
+            ctx.first().map(|l| l.ln),
+            Some(4),
+            "context_before should be at new_line - 1"
+        );
 
         // Insert should be at ln = 5 (new_line).
         let ins: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
         assert_eq!(ins.len(), 1);
-        assert_eq!(ins[0].ln, 5);
+        assert_eq!(ins.first().map(|l| l.ln), Some(5));
     }
 
     #[test]
@@ -594,7 +638,9 @@ mod tests {
 
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
 
         // Expected layout: 3 3 fn main() { (context_before). 4 4 // setup (context_before). 5 let x = 1; (delete). 5 let x
         // = 42; (insert). 6 6 let y = x + 1; (context_after). 7 7 } (context_after).
@@ -605,22 +651,25 @@ mod tests {
             .take_while(|l| l.tag == ChangeTag::Equal)
             .collect();
         assert_eq!(ctx_before.len(), 2);
-        assert_eq!(ctx_before[0].lo, 3);
-        assert_eq!(ctx_before[0].ln, 3);
-        assert_eq!(ctx_before[1].lo, 4);
-        assert_eq!(ctx_before[1].ln, 4);
+        let [b0, b1] = ctx_before.as_slice() else {
+            panic!("expected 2 context_before lines: {ctx_before:?}");
+        };
+        assert_eq!(b0.lo, 3);
+        assert_eq!(b0.ln, 3);
+        assert_eq!(b1.lo, 4);
+        assert_eq!(b1.ln, 4);
 
         // Delete: old line 5
         let del: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Delete).collect();
         assert_eq!(del.len(), 1);
-        assert_eq!(del[0].lo, 5);
-        assert!(del[0].text.contains("let x = 1;"));
+        assert_eq!(del.first().map(|l| l.lo), Some(5));
+        assert!(del.first().is_some_and(|l| l.text.contains("let x = 1;")));
 
         // Insert: new line 5
         let ins: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
         assert_eq!(ins.len(), 1);
-        assert_eq!(ins[0].ln, 5);
-        assert!(ins[0].text.contains("let x = 42;"));
+        assert_eq!(ins.first().map(|l| l.ln), Some(5));
+        assert!(ins.first().is_some_and(|l| l.text.contains("let x = 42;")));
 
         // Context after: lines 6/6, 7/7
         let ctx_after: Vec<_> = hunk
@@ -632,10 +681,13 @@ mod tests {
             .rev()
             .collect::<Vec<_>>();
         assert_eq!(ctx_after.len(), 2);
-        assert_eq!(ctx_after[0].lo, 6);
-        assert_eq!(ctx_after[0].ln, 6);
-        assert_eq!(ctx_after[1].lo, 7);
-        assert_eq!(ctx_after[1].ln, 7);
+        let [a0, a1] = ctx_after.as_slice() else {
+            panic!("expected 2 context_after lines: {ctx_after:?}");
+        };
+        assert_eq!(a0.lo, 6);
+        assert_eq!(a0.ln, 6);
+        assert_eq!(a1.lo, 7);
+        assert_eq!(a1.ln, 7);
 
         // Old column should be monotonically increasing (no duplicates).
         let old_column: Vec<usize> = hunk
@@ -643,13 +695,10 @@ mod tests {
             .filter(|l| l.tag != ChangeTag::Insert)
             .map(|l| l.lo)
             .collect();
-        for i in 1..old_column.len() {
-            assert!(
-                old_column[i] > old_column[i - 1],
-                "old column not monotonic: {:?}",
-                old_column,
-            );
-        }
+        assert!(
+            old_column.windows(2).all(|w| matches!(w, [a, b] if b > a)),
+            "old column not monotonic: {old_column:?}",
+        );
 
         // New column should be monotonically increasing (no duplicates).
         let new_column: Vec<usize> = hunk
@@ -657,13 +706,10 @@ mod tests {
             .filter(|l| l.tag != ChangeTag::Delete)
             .map(|l| l.ln)
             .collect();
-        for i in 1..new_column.len() {
-            assert!(
-                new_column[i] > new_column[i - 1],
-                "new column not monotonic: {:?}",
-                new_column,
-            );
-        }
+        assert!(
+            new_column.windows(2).all(|w| matches!(w, [a, b] if b > a)),
+            "new column not monotonic: {new_column:?}",
+        );
     }
 
     #[test]
@@ -671,13 +717,15 @@ mod tests {
         let hunks = diff_hunks_from_strings("hello\nworld\n", "hello\nearth\n", 1);
         assert_eq!(hunks.len(), 1);
 
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
         let deletes: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Delete).collect();
         let inserts: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
         assert_eq!(deletes.len(), 1);
         assert_eq!(inserts.len(), 1);
-        assert!(deletes[0].text.contains("world"));
-        assert!(inserts[0].text.contains("earth"));
+        assert!(deletes.first().is_some_and(|l| l.text.contains("world")));
+        assert!(inserts.first().is_some_and(|l| l.text.contains("earth")));
     }
 
     #[test]
@@ -685,10 +733,10 @@ mod tests {
         // Simulates creating a new file
         let hunks = diff_hunks_from_strings("", "new content\n", 1);
         assert_eq!(hunks.len(), 1);
-        let inserts: Vec<_> = hunks[0]
-            .iter()
-            .filter(|l| l.tag == ChangeTag::Insert)
-            .collect();
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
+        let inserts: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
         assert!(!inserts.is_empty());
     }
 
@@ -712,10 +760,10 @@ mod tests {
             "blank line insert should produce a visible hunk"
         );
 
-        let inserts: Vec<_> = hunks[0]
-            .iter()
-            .filter(|l| l.tag == ChangeTag::Insert)
-            .collect();
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
+        let inserts: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
         assert_eq!(
             inserts.len(),
             1,
@@ -810,7 +858,7 @@ mod tests {
         let stitched = stitch_overlapping_hunks(hunks);
         assert_eq!(stitched.len(), 1, "overlapping hunks stitch into one");
         assert_eq!(
-            stitch_rows(&stitched[0]),
+            stitch_rows(only_hunk(&stitched)),
             vec![
                 (ChangeTag::Delete, 1, 1, "line one"),
                 (ChangeTag::Insert, 2, 1, "LINE ONE"),
@@ -832,9 +880,15 @@ mod tests {
         let first = build_diff_hunks(&[edit_detail("a", "b", 1, "", "x\n")]);
         let second = build_diff_hunks(&[edit_detail("b", "c", 1, "", "x\n")]);
 
-        let stitched = stitch_overlapping_hunks(vec![first[0].clone(), second[0].clone()]);
+        let Some(first_hunk) = first.first() else {
+            panic!("expected first hunk: {first:?}");
+        };
+        let Some(second_hunk) = second.first() else {
+            panic!("expected second hunk: {second:?}");
+        };
+        let stitched = stitch_overlapping_hunks(vec![first_hunk.clone(), second_hunk.clone()]);
         assert_eq!(stitched.len(), 1);
-        let rows: Vec<(ChangeTag, usize, &str)> = stitched[0]
+        let rows: Vec<(ChangeTag, usize, &str)> = only_hunk(&stitched)
             .iter()
             .map(|l| (l.tag, l.ln, l.text.trim_end()))
             .collect();
@@ -871,8 +925,8 @@ mod tests {
 
         let stitched = stitch_overlapping_hunks(vec![a.clone(), b.clone()]);
         assert_eq!(stitched.len(), 2, "disagreement keeps hunks separate");
-        assert_eq!(stitch_rows(&stitched[0]), stitch_rows(&a));
-        assert_eq!(stitch_rows(&stitched[1]), stitch_rows(&b));
+        assert_eq!(stitched.first().map(stitch_rows), Some(stitch_rows(&a)));
+        assert_eq!(stitched.get(1).map(stitch_rows), Some(stitch_rows(&b)));
     }
 
     #[test]
@@ -882,7 +936,10 @@ mod tests {
         // The unpaired-Insert arm must keep both hunks unmodified
         let a = build_diff_hunks(&[edit_detail("beta", "BETA", 2, "alpha\n", "gamma\n")]);
         let b = build_diff_hunks(&[edit_detail("", "inserted", 3, "BETA\n", "gamma\n")]);
-        let (a, b) = (a[0].clone(), b[0].clone());
+        let (a, b) = match (a.first(), b.first()) {
+            (Some(a), Some(b)) => (a.clone(), b.clone()),
+            _ => panic!("expected hunks in both diffs"),
+        };
 
         let stitched = stitch_overlapping_hunks(vec![a.clone(), b.clone()]);
         assert_eq!(stitched, vec![a, b], "insert-only overlap keeps both hunks");
@@ -894,7 +951,10 @@ mod tests {
         // The pair rule (a Delete immediately followed by its same-`ln` Insert) declines, so both hunks survive unmodified
         let a = build_diff_hunks(&[edit_detail("alpha", "ALPHA", 1, "", "beta\ngamma\n")]);
         let b = build_diff_hunks(&[edit_detail("beta", "", 2, "ALPHA\n", "gamma\n")]);
-        let (a, b) = (a[0].clone(), b[0].clone());
+        let (a, b) = match (a.first(), b.first()) {
+            (Some(a), Some(b)) => (a.clone(), b.clone()),
+            _ => panic!("expected hunks in both diffs"),
+        };
 
         let stitched = stitch_overlapping_hunks(vec![a.clone(), b.clone()]);
         assert_eq!(stitched, vec![a, b], "delete-only overlap keeps both hunks");
@@ -903,8 +963,8 @@ mod tests {
         // It keeps the line count but is not the single-line pair shape the stitcher trusts
         let base = edit_detail("alpha", "ALPHA", 1, "", "beta\ngamma\ndelta\n");
         let multi = edit_detail("beta\ngamma", "BETA\nGAMMA", 2, "ALPHA\n", "delta\n");
-        let a = build_diff_hunks(&[base])[0].clone();
-        let b = build_diff_hunks(&[multi])[0].clone();
+        let a = only_hunk(&build_diff_hunks(&[base])).clone();
+        let b = only_hunk(&build_diff_hunks(&[multi])).clone();
 
         let stitched = stitch_overlapping_hunks(vec![a.clone(), b.clone()]);
         assert_eq!(stitched, vec![a, b], "replacement run keeps both hunks");
@@ -939,7 +999,9 @@ mod tests {
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
 
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
         let equal_lines: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Equal).collect();
         assert!(
             equal_lines.len() >= 2,
@@ -1007,12 +1069,16 @@ mod tests {
         assert_eq!(count, 1);
 
         // Verify the hunk has correct content
-        let deletes: Vec<_> = hunks[0]
+        let deletes: Vec<_> = only_hunk(&hunks)
             .iter()
             .filter(|l| l.tag == ChangeTag::Delete)
             .collect();
         assert_eq!(deletes.len(), 1);
-        assert!(deletes[0].text.contains("let x = 1;"));
+        assert!(
+            deletes
+                .first()
+                .is_some_and(|l| l.text.contains("let x = 1;"))
+        );
     }
 
     #[test]
@@ -1097,12 +1163,12 @@ mod tests {
         assert_eq!(count, 1);
 
         // Line numbers should be absolute (42), not relative (1).
-        let del = hunks[0]
+        let del = only_hunk(&hunks)
             .iter()
             .find(|l| l.tag == ChangeTag::Delete)
             .unwrap();
         assert_eq!(del.lo, 42, "old_line should be absolute");
-        let ins = hunks[0]
+        let ins = only_hunk(&hunks)
             .iter()
             .find(|l| l.tag == ChangeTag::Insert)
             .unwrap();
@@ -1137,12 +1203,12 @@ mod tests {
         assert_eq!(count, 1);
 
         // Line numbers should use start_line=50 from meta, not 1.
-        let del = hunks[0]
+        let del = only_hunk(&hunks)
             .iter()
             .find(|l| l.tag == ChangeTag::Delete)
             .unwrap();
         assert_eq!(del.lo, 50, "old_line should come from meta");
-        let ins = hunks[0]
+        let ins = only_hunk(&hunks)
             .iter()
             .find(|l| l.tag == ChangeTag::Insert)
             .unwrap();
@@ -1164,7 +1230,9 @@ mod tests {
 
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
 
         // Context before should have exactly 2 lines, not 3 (no phantom blank).
         let ctx: Vec<_> = hunk
@@ -1206,7 +1274,9 @@ mod tests {
 
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
 
         let del: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Delete).collect();
         let ins: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
@@ -1215,14 +1285,16 @@ mod tests {
 
         // Both changed lines must start with the 12-space prefix.
         assert!(
-            del[0].text.starts_with("            .filter"),
+            del.first()
+                .is_some_and(|l| l.text.starts_with("            .filter")),
             "delete line should have leading indent, got: {:?}",
-            del[0].text,
+            del.first().map(|l| &l.text),
         );
         assert!(
-            ins[0].text.starts_with("            .filter"),
+            ins.first()
+                .is_some_and(|l| l.text.starts_with("            .filter")),
             "insert line should have leading indent, got: {:?}",
-            ins[0].text,
+            ins.first().map(|l| &l.text),
         );
 
         // Context lines already have their own indent (from the file).
@@ -1245,7 +1317,9 @@ mod tests {
 
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
-        let hunk = &hunks[0];
+        let Some(hunk) = hunks.first() else {
+            panic!("expected a hunk: {hunks:?}");
+        };
 
         let dels: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Delete).collect();
         let inss: Vec<_> = hunk.iter().filter(|l| l.tag == ChangeTag::Insert).collect();
@@ -1254,26 +1328,30 @@ mod tests {
 
         // First delete/insert line: prefix applied.
         assert!(
-            dels[0].text.starts_with("    call_a"),
+            dels.first()
+                .is_some_and(|l| l.text.starts_with("    call_a")),
             "first delete should have prefix, got: {:?}",
-            dels[0].text,
+            dels.first().map(|l| &l.text),
         );
         assert!(
-            inss[0].text.starts_with("    call_x"),
+            inss.first()
+                .is_some_and(|l| l.text.starts_with("    call_x")),
             "first insert should have prefix, got: {:?}",
-            inss[0].text,
+            inss.first().map(|l| &l.text),
         );
 
         // Second delete/insert line: NO extra prefix (already a full file line).
         assert!(
-            dels[1].text.starts_with("    call_b"),
+            dels.get(1)
+                .is_some_and(|l| l.text.starts_with("    call_b")),
             "second delete should keep original indent, got: {:?}",
-            dels[1].text,
+            dels.get(1).map(|l| &l.text),
         );
         assert!(
-            inss[1].text.starts_with("    call_y"),
+            inss.get(1)
+                .is_some_and(|l| l.text.starts_with("    call_y")),
             "second insert should keep original indent, got: {:?}",
-            inss[1].text,
+            inss.get(1).map(|l| &l.text),
         );
     }
 
@@ -1293,11 +1371,11 @@ mod tests {
         let hunks = build_diff_hunks(&details);
         assert_eq!(hunks.len(), 1);
 
-        let del = hunks[0]
+        let del = only_hunk(&hunks)
             .iter()
             .find(|l| l.tag == ChangeTag::Delete)
             .unwrap();
-        let ins = hunks[0]
+        let ins = only_hunk(&hunks)
             .iter()
             .find(|l| l.tag == ChangeTag::Insert)
             .unwrap();

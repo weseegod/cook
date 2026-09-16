@@ -64,7 +64,7 @@ fn new_filtered_debouncer<F: notify_debouncer_mini::DebounceEventHandler>(
 pub enum ConfigChangeEvent {
     AuthChanged,
     GlobalConfigChanged,
-    /// `~/.grok/models_cache.json` changed — the on-disk `/v1/models` catalog cache was rewritten, possibly by **another** grok process sharing the same `~/.grok` (the writer may also be this process; the [`ModelsManager`](crate::agent::models::ModelsManager) dedupes by content before applying).
+    /// `~/.grok/models_cache.json` changed — the on-disk `/v1/models` catalog cache was rewritten, possibly by **another** grok process sharing the same `~/.grok` (the writer may also be this process; the [`ModelsManager`](crate::agent::remote_config::ModelsManager) dedupes by content before applying).
     ModelsCacheChanged,
     ProjectConfigChanged {
         path: PathBuf,
@@ -753,16 +753,20 @@ mod tests {
         let dirs = project_grok_refresh_dirs(project);
 
         assert_eq!(dirs.len(), 4);
-        assert_eq!(dirs[0], (grok.clone(), RecursiveMode::NonRecursive));
+        let [first, rest @ ..] = dirs.as_slice() else {
+            panic!("expected four refresh dirs: {dirs:?}");
+        };
+        assert_eq!(first, &(grok.clone(), RecursiveMode::NonRecursive));
         assert_eq!(
-            &dirs[1..],
+            rest,
             [
                 (grok.join("skills"), RecursiveMode::Recursive),
                 (grok.join("commands"), RecursiveMode::NonRecursive),
                 (grok.join("workflows"), RecursiveMode::NonRecursive),
             ]
+            .as_slice()
         );
-        assert_eq!(dirs[1..], vendor_skill_refresh_dirs(&grok));
+        assert_eq!(rest, vendor_skill_refresh_dirs(&grok).as_slice());
     }
 
     #[test]

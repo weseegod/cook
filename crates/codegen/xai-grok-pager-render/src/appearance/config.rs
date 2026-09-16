@@ -1533,15 +1533,48 @@ fn parse_hex_color(hex: &str) -> Result<Color, String> {
     let hex = hex.trim_start_matches('#');
     let (r, g, b) = match hex.len() {
         3 => {
-            let r = u8::from_str_radix(&hex[0..1], 16).map_err(|e| e.to_string())? * 17;
-            let g = u8::from_str_radix(&hex[1..2], 16).map_err(|e| e.to_string())? * 17;
-            let b = u8::from_str_radix(&hex[2..3], 16).map_err(|e| e.to_string())? * 17;
+            let r = u8::from_str_radix(
+                hex.get(..1)
+                    .ok_or_else(|| format!("invalid hex color: #{hex}"))?,
+                16,
+            )
+            .map_err(|e| e.to_string())?
+                * 17;
+            let g = u8::from_str_radix(
+                hex.get(1..2)
+                    .ok_or_else(|| format!("invalid hex color: #{hex}"))?,
+                16,
+            )
+            .map_err(|e| e.to_string())?
+                * 17;
+            let b = u8::from_str_radix(
+                hex.get(2..3)
+                    .ok_or_else(|| format!("invalid hex color: #{hex}"))?,
+                16,
+            )
+            .map_err(|e| e.to_string())?
+                * 17;
             (r, g, b)
         }
         6 => {
-            let r = u8::from_str_radix(&hex[0..2], 16).map_err(|e| e.to_string())?;
-            let g = u8::from_str_radix(&hex[2..4], 16).map_err(|e| e.to_string())?;
-            let b = u8::from_str_radix(&hex[4..6], 16).map_err(|e| e.to_string())?;
+            let r = u8::from_str_radix(
+                hex.get(..2)
+                    .ok_or_else(|| format!("invalid hex color: #{hex}"))?,
+                16,
+            )
+            .map_err(|e| e.to_string())?;
+            let g = u8::from_str_radix(
+                hex.get(2..4)
+                    .ok_or_else(|| format!("invalid hex color: #{hex}"))?,
+                16,
+            )
+            .map_err(|e| e.to_string())?;
+            let b = u8::from_str_radix(
+                hex.get(4..6)
+                    .ok_or_else(|| format!("invalid hex color: #{hex}"))?,
+                16,
+            )
+            .map_err(|e| e.to_string())?;
             (r, g, b)
         }
         _ => return Err(format!("invalid hex color: #{hex}")),

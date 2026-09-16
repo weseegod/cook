@@ -77,9 +77,10 @@ use workflow_ingest::ingest_workflow_update;
 pub(crate) use session_notification::apply_child_view_session_event;
 #[cfg(test)]
 pub(crate) use session_notification::apply_session_event_for_test;
+pub(crate) use session_notification::detect_plan_mode_change_replayed;
 pub(crate) use session_notification::drop_unexpected_replay;
 use session_notification::{
-    PlanModeTransition, advance_reconnect_cursor, confirm_context_used, detect_plan_mode_change,
+    PlanModeTransition, advance_reconnect_cursor, confirm_context_used,
     handle_session_notification, handle_session_notification_with_origin,
 };
 
@@ -148,6 +149,17 @@ fn is_replay_bash_execute(update: &acp::SessionUpdate) -> bool {
         == Some(true)
 }
 
+/// Any live update stamped with the awaited prompt id proves the shell accepted it, whichever branch applies it.
+fn ack_prompt_from_update(view: &mut AgentView, meta: &NotificationMeta) {
+    if !meta.is_replay {
+        view.ack_prompt_if_named(
+            meta.prompt_id.as_deref(),
+            crate::app::prompt_ack::AckSignal::SessionUpdate,
+            std::time::Instant::now(),
+        );
+    }
+}
+
 pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
     match msg {
         AcpClientMessage::SessionNotification(notif) => {
@@ -175,6 +187,7 @@ pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
                     {
                         agent.last_applied_event_seq = Some(seq);
                     }
+                    ack_prompt_from_update(agent, &meta);
 
                     if drop_unexpected_replay(
                         agent,
@@ -227,6 +240,12 @@ pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
                         agent.mark_reload_todo_update();
                         advance_reconnect_cursor(agent, &mut meta);
                         !meta.is_replay && !agent.session.loading_replay
+                    } else if let acp::SessionUpdate::UsageUpdate(ref usage) = notif.request.update
+                    {
+                        // The context bar reads this; a replayed one is as current as the history it closes
+                        agent.apply_context_used(usage.used, usage.size);
+                        advance_reconnect_cursor(agent, &mut meta);
+                        is_active
                     } else if let acp::SessionUpdate::ToolCallUpdate(ref tcu) = notif.request.update
                         && route_bg_task_stdout(tcu, &mut agent.session)
                     {
@@ -297,7 +316,11 @@ pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
                             agent.note_streaming_wake_turn(notif_pid);
                         }
 
-                        let plan_transition = detect_plan_mode_change(&notif.request.update, agent);
+                        let plan_transition = detect_plan_mode_change_replayed(
+                            &notif.request.update,
+                            agent,
+                            meta.is_replay,
+                        );
                         plan_mode_modal_refresh_needed |= plan_transition.is_some();
                         // User-driven entries already got a banner or toast; a replay must not duplicate the row
                         if plan_transition == Some(PlanModeTransition::EnteredByAgent)
@@ -322,10 +345,18 @@ pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
                             (false, false)
                         };
                         let user_echo = matches!(update, acp::SessionUpdate::UserMessageChunk(_));
-                        let changed =
+                        let swallow_send_now_echo = user_echo
+                            && !meta.is_replay
+                            && user_message_text(&update).is_some_and(|text| {
+                                agent.take_send_now_user_echo(text, meta.prompt_id.as_deref())
+                            });
+                        let changed = if swallow_send_now_echo {
+                            false
+                        } else {
                             agent
                                 .session
-                                .handle_update(update, &meta, &mut agent.scrollback);
+                                .handle_update(update, &meta, &mut agent.scrollback)
+                        };
                         if meta.is_replay
                             && let Some(pid) = meta.prompt_id.as_ref()
                         {
@@ -406,8 +437,13 @@ pub(crate) fn handle(msg: AcpClientMessage, app: &mut AppView) -> bool {
                         let child_view = parent
                             .child_view_for_live_update_mut(child_key)
                             .expect("find_session_match returned an existing subagent_views key");
+                        // An overlay prompt arms the watch on this child, so the child's own updates must disarm it
+                        ack_prompt_from_update(child_view, &meta);
                         if let Some(tokens) = meta.total_tokens {
                             confirm_context_used(child_view, tokens);
+                        }
+                        if let acp::SessionUpdate::UsageUpdate(ref usage) = notif.request.update {
+                            child_view.apply_context_used(usage.used, usage.size);
                         }
                         if let Some(ts) = meta.turn_start_ms {
                             child_view.turn_start_ms = Some(ts);
@@ -602,6 +638,16 @@ fn handle_version_mismatch(notif: &acp::ExtNotification, app: &mut AppView) -> b
     true
 }
 
+fn user_message_text(update: &acp::SessionUpdate) -> Option<&str> {
+    let acp::SessionUpdate::UserMessageChunk(chunk) = update else {
+        return None;
+    };
+    match &chunk.content {
+        acp::ContentBlock::Text(text) => Some(text.text.as_str()),
+        _ => None,
+    }
+}
+
 fn handle_interjection(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(notif.params.get()) else {
         tracing::warn!("Failed to parse x.ai/session/interjection");
@@ -631,6 +677,7 @@ fn handle_interjection(notif: &acp::ExtNotification, app: &mut AppView) -> bool 
         if agent.is_self_originated_prompt(iid)
             && let Some((entry_id, _)) = agent.send_now_painted_blocks.remove(iid)
         {
+            agent.send_now_echo_pending.remove(iid);
             agent.clear_send_now_expectation();
             if let Some(index) = agent.scrollback.index_of_id(entry_id)
                 && let Some(RenderBlock::UserPrompt(block)) = agent

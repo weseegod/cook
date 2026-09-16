@@ -452,6 +452,19 @@ pub(crate) fn deliver_doctor_message(app: &mut AppView, preferred: AgentId, mess
     });
 }
 pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec<Effect> {
+    let result = match result {
+        TaskResult::WithPinnedMemoryMode {
+            agent_id,
+            memory_mode,
+            result,
+        } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id) {
+                agent.memory_mode = memory_mode;
+            }
+            *result
+        }
+        result => result,
+    };
     if result.ends_startup() {
         app.finish_startup(xai_grok_telemetry::startup::StartupOutcome::Ok);
     }
@@ -466,11 +479,15 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         crate::app::workspace_sync::request(app);
     }
     match result {
+        TaskResult::WithPinnedMemoryMode { .. } => {
+            unreachable!("pinned memory mode wrapper is removed before task-result dispatch")
+        }
         TaskResult::SessionCreated {
             agent_id,
             session_id,
             models: new_models,
-        } => handle_session_created(app, agent_id, session_id, new_models),
+            modes,
+        } => handle_session_created(app, agent_id, session_id, new_models, modes),
         TaskResult::SessionFailed { agent_id, error } => {
             handle_session_failed(app, agent_id, error)
         }
@@ -480,6 +497,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             worktree_path,
             session_cwd,
             models: new_models,
+            modes,
             strategy_summary,
         } => handle_worktree_session_created(
             app,
@@ -488,6 +506,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             worktree_path,
             session_cwd,
             new_models,
+            modes,
             strategy_summary,
         ),
         TaskResult::WorktreeForked {
@@ -592,6 +611,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             session_id,
             models: new_models,
+            modes,
             code_restored,
             restore_summary,
             restore_degree,
@@ -601,6 +621,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             session_id,
             new_models,
+            modes,
             code_restored,
             restore_summary,
             restore_degree,
@@ -886,6 +907,14 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             tracing::trace!("Cancel notification sent successfully");
             vec![]
         }
+        TaskResult::SetSessionModeFailed { session_id } => {
+            if let Some(agent) = find_agent_by_session_id(&mut app.agents, session_id.0.as_ref()) {
+                agent.plan_mode_pending = None;
+                agent.session_mode_pending = None;
+                agent.pending_post_turn_commit = None;
+            }
+            vec![]
+        }
         TaskResult::ConsentPersistFailed { error } => {
             tracing::warn!(%error, "consent answer not persisted; the notice re-arms next launch");
             app.show_toast(
@@ -1166,6 +1195,19 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         }
         TaskResult::PluginsListLoaded { agent_id, result } => {
             handle_plugins_list_loaded(app, agent_id, result)
+        }
+        TaskResult::MemoryForgetResult {
+            agent_id,
+            path,
+            result,
+        } => {
+            if let Some(agent) = app.agents.get_mut(&agent_id)
+                && let Some(crate::views::modal::ActiveModal::MemoryBrowser { state }) =
+                    agent.active_modal.as_mut()
+            {
+                state.apply_forget_result(&path, result);
+            }
+            vec![]
         }
         TaskResult::HooksActionResult { agent_id, result }
         | TaskResult::PluginsActionResult { agent_id, result }
@@ -1726,11 +1768,14 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         TaskResult::FeedbackFailed {
             agent_id,
             origin,
+            feedback_text,
+            image_count,
             error,
         } => {
             let Some(agent) = app.agents.get_mut(&agent_id) else {
                 return vec![];
             };
+            let failure = format!("Couldn't send feedback: {error}");
             if let crate::app::actions::FeedbackSendOrigin::Modal {
                 submission_id,
                 modal_id,
@@ -1738,23 +1783,29 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             } = origin
             {
                 let _ = agent.take_parked_feedback_trace_consent(submission_id);
-                if is_draft
-                    && let Some(modal) = agent
+                if is_draft {
+                    if let Some(modal) = agent
                         .feedback_modal
                         .as_mut()
                         .filter(|modal| modal.matches_id(modal_id))
-                {
-                    modal.mark_draft_send_error(format!(
-                        "Couldn't send feedback: {error}. The draft was kept."
-                    ));
+                    {
+                        modal.mark_draft_send_error(format!("{failure}. The draft was kept."));
+                    } else {
+                        agent
+                            .scrollback
+                            .push_block(crate::scrollback::block::RenderBlock::system(failure));
+                    }
                     return vec![];
                 }
             }
-            agent
-                .scrollback
-                .push_block(crate::scrollback::block::RenderBlock::system(format!(
-                    "Couldn't send feedback: {error}"
-                )));
+            super::notes::keep_unsent_feedback_report(
+                agent,
+                super::notes::UnsentFeedbackReport {
+                    text: &feedback_text,
+                    image_count,
+                    failure: &failure,
+                },
+            );
             vec![]
         }
         TaskResult::FeedbackDraftListComplete {
@@ -1948,7 +1999,8 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             agent_id,
             result,
             minimal_request_id,
-        } => handle_btw_response(app, agent_id, result, minimal_request_id),
+            image_notice,
+        } => handle_btw_response(app, agent_id, result, minimal_request_id, image_notice),
         TaskResult::InterjectQueued { .. } => vec![],
         TaskResult::RecapRequested {
             session_id,

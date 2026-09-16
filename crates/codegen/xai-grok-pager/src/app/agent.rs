@@ -206,7 +206,12 @@ impl BgTaskState {
         } else {
             let end =
                 crate::render::line_utils::floor_char_boundary(&new_stdout, BG_TASK_MAX_STDOUT);
-            self.stdout = new_stdout[..end].to_string();
+            let Some(head) = new_stdout.get(..end) else {
+                self.stdout = new_stdout;
+                self.stdout_line_count = self.stdout.lines().count();
+                return;
+            };
+            self.stdout = head.to_string();
             self.truncated = true;
         }
         self.stdout_line_count = self.stdout.lines().count();
@@ -225,8 +230,10 @@ impl BgTaskState {
             while start < self.stdout.len() && !self.stdout.is_char_boundary(start) {
                 start += 1;
             }
-            self.stdout = self.stdout[start..].to_string();
-            self.truncated = true;
+            if let Some(tail) = self.stdout.get(start..) {
+                self.stdout = tail.to_string();
+                self.truncated = true;
+            }
         }
         self.stdout_line_count = self.stdout.lines().count();
     }
@@ -272,7 +279,9 @@ impl BgTaskState {
                 &snapshot.output,
                 BG_TASK_MAX_STDOUT,
             );
-            tombstone.set_stdout(snapshot.output[..end].to_string());
+            if let Some(head) = snapshot.output.get(..end) {
+                tombstone.set_stdout(head.to_string());
+            }
             if end < snapshot.output.len() {
                 tombstone.truncated = true;
             }
@@ -1329,11 +1338,35 @@ mod tests {
         let id_b = s.enqueue_prompt("b".into());
         let id_c = s.enqueue_prompt("c".into());
         s.swap_prompt_up(id_b);
-        assert_eq!(s.pending_prompts[0].id, id_b);
-        assert_eq!(s.pending_prompts[1].id, id_a);
-        assert_eq!(s.pending_prompts[2].id, id_c);
+        assert_eq!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_b
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_a
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(2)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_c
+        );
         s.swap_prompt_up(id_b);
-        assert_eq!(s.pending_prompts[0].id, id_b);
+        assert_eq!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_b
+        );
     }
     #[test]
     fn swap_prompt_down() {
@@ -1342,11 +1375,35 @@ mod tests {
         let id_b = s.enqueue_prompt("b".into());
         let id_c = s.enqueue_prompt("c".into());
         s.swap_prompt_down(id_b);
-        assert_eq!(s.pending_prompts[0].id, id_a);
-        assert_eq!(s.pending_prompts[1].id, id_c);
-        assert_eq!(s.pending_prompts[2].id, id_b);
+        assert_eq!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_a
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_c
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(2)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_b
+        );
         s.swap_prompt_down(id_b);
-        assert_eq!(s.pending_prompts[2].id, id_b);
+        assert_eq!(
+            s.pending_prompts
+                .get(2)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_b
+        );
     }
     #[test]
     fn ids_never_reuse_after_drain() {
@@ -1392,10 +1449,34 @@ mod tests {
         let id_p = s.enqueue_prompt("prompt".into());
         let id_b = s.enqueue_bash_command("ls".into());
         s.swap_prompt_up(id_b);
-        assert_eq!(s.pending_prompts[0].id, id_b);
-        assert_eq!(s.pending_prompts[0].kind, QueueEntryKind::BashCommand);
-        assert_eq!(s.pending_prompts[1].id, id_p);
-        assert_eq!(s.pending_prompts[1].kind, QueueEntryKind::Prompt);
+        assert_eq!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_b
+        );
+        assert_eq!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .kind,
+            QueueEntryKind::BashCommand
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_p
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .kind,
+            QueueEntryKind::Prompt
+        );
     }
     /// `wire_matches_display` splits interjectable rows from client-expanded payloads (`/imagine`, `/loop`) that must run as their own turn.
     /// Interjectable rows have no payload, or a raw skill slash payload equal to the display text.
@@ -1528,10 +1609,34 @@ mod tests {
             ..QueuedPrompt::plain(id_skill, "/commit", QueueEntryKind::Prompt)
         });
         s.swap_prompt_up(id_skill);
-        assert_eq!(s.pending_prompts[0].id, id_skill);
-        assert!(s.pending_prompts[0].wire_blocks.is_some());
-        assert_eq!(s.pending_prompts[1].id, id_normal);
-        assert!(s.pending_prompts[1].wire_blocks.is_none());
+        assert_eq!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_skill
+        );
+        assert!(
+            s.pending_prompts
+                .front()
+                .unwrap_or_else(|| panic!("missing index"))
+                .wire_blocks
+                .is_some()
+        );
+        assert_eq!(
+            s.pending_prompts
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .id,
+            id_normal
+        );
+        assert!(
+            s.pending_prompts
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .wire_blocks
+                .is_none()
+        );
     }
     #[test]
     fn mixed_queue_with_wire_blocks_drains_fifo() {
@@ -1626,7 +1731,11 @@ mod tests {
         s.enqueue_prompt("first".into());
         s.enqueue_prompt("second".into());
         s.enqueue_prompt("third".into());
-        let second_id = s.pending_prompts[1].id;
+        let second_id = s
+            .pending_prompts
+            .get(1)
+            .unwrap_or_else(|| panic!("missing index"))
+            .id;
         let merged = s.dequeue_combined_prompt(Some(second_id)).unwrap();
         assert_eq!(
             merged.text, "first",
@@ -1650,7 +1759,11 @@ mod tests {
         s.enqueue_prompt("first".into());
         s.enqueue_prompt("second".into());
         s.enqueue_prompt("third".into());
-        let third_id = s.pending_prompts[2].id;
+        let third_id = s
+            .pending_prompts
+            .get(2)
+            .unwrap_or_else(|| panic!("missing index"))
+            .id;
         let merged = s.dequeue_combined_prompt(Some(third_id)).unwrap();
         assert_eq!(merged.text, "first\n\nsecond");
         assert_eq!(s.queue_len(), 1, "only the edited row stays queued");
@@ -1705,9 +1818,23 @@ mod tests {
         let merged = s.dequeue_combined_prompt(None).unwrap();
         assert_eq!(merged.text, "first\n\nsecond!");
         assert_eq!(merged.chip_elements.len(), 2);
-        assert_eq!(merged.chip_elements[0].range, 0..5);
-        assert_eq!(merged.chip_elements[1].range, 9..13);
-        assert_eq!(&merged.text[9..13], "cond");
+        assert_eq!(
+            merged
+                .chip_elements
+                .first()
+                .unwrap_or_else(|| panic!("missing index"))
+                .range,
+            0..5
+        );
+        assert_eq!(
+            merged
+                .chip_elements
+                .get(1)
+                .unwrap_or_else(|| panic!("missing index"))
+                .range,
+            9..13
+        );
+        assert_eq!(merged.text.get(9..13), Some("cond"));
     }
     /// An image-bearing follower must not be folded in.
     /// Merging two image sets would require renumbering `[Image #N]` placeholders, which the merge does not do.

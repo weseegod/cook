@@ -543,8 +543,10 @@ fn looks_like_local_path(s: &str) -> bool {
     if s.starts_with('/') || s.starts_with('.') || s.starts_with('~') || s.starts_with('\\') {
         return true;
     }
-    let b = s.as_bytes();
-    b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'/' || b[2] == b'\\')
+    matches!(
+        s.as_bytes(),
+        [drive, b':', b'/' | b'\\', ..] if drive.is_ascii_alphabetic()
+    )
 }
 
 /// Classify an install error for telemetry (the canonical category strings).
@@ -771,7 +773,13 @@ fn plan_install(
         Some(qualifier) => {
             let index = install_resolve::resolve_qualified_source(qualifier, sources)
                 .map_err(|e| map_qualifier_resolve_error(qualifier, sources, e))?;
-            let source = &sources[index];
+            let Some(source) = sources.get(index) else {
+                return Err(map_qualifier_resolve_error(
+                    qualifier,
+                    sources,
+                    install_resolve::QualifierResolveError::Unknown,
+                ));
+            };
             let entry = scan(source)
                 .map_err(|detail| MarketplaceInstallError::Sync {
                     source_display: source.name.clone(),
@@ -805,9 +813,10 @@ fn plan_install(
             }
             let scanned: Vec<install_resolve::ScannedEntry> = owned
                 .iter()
-                .map(|(index, entry)| install_resolve::ScannedEntry {
-                    source: &sources[*index],
-                    entry,
+                .filter_map(|(index, entry)| {
+                    sources
+                        .get(*index)
+                        .map(|source| install_resolve::ScannedEntry { source, entry })
                 })
                 .collect();
             let selection = match install_resolve::select_bare_name(name, &scanned) {
@@ -836,7 +845,7 @@ fn plan_install(
                     }
                     let candidates = matched
                         .iter()
-                        .map(|&i| candidate_label(scanned[i].source, name))
+                        .filter_map(|&i| scanned.get(i).map(|e| candidate_label(e.source, name)))
                         .collect();
                     drop(scanned);
                     return Err(MarketplaceInstallError::NameAmbiguous {
@@ -845,10 +854,15 @@ fn plan_install(
                     });
                 }
             };
-            let chosen_source_index = owned[selection.chosen].0;
-            let chosen_is_official = match &sources[chosen_source_index].kind {
-                SourceKind::Git { url, .. } => is_official_source_url(url),
-                SourceKind::Local { .. } => false,
+            let Some(&(chosen_source_index, _)) = owned.get(selection.chosen) else {
+                return Err(MarketplaceInstallError::NameNotFound {
+                    name: name.to_string(),
+                    skipped_sources,
+                });
+            };
+            let chosen_is_official = match sources.get(chosen_source_index).map(|s| &s.kind) {
+                Some(SourceKind::Git { url, .. }) => is_official_source_url(url),
+                _ => false,
             };
             let other_copies_note = (selection.other_count > 0).then(|| {
                 format!(
@@ -912,7 +926,12 @@ fn install_marketplace_plugin_with(
             .map(|root| scan_marketplace(&root.path).entries)
     })?;
 
-    let source = &sources[plan.source_index];
+    let Some(source) = sources.get(plan.source_index) else {
+        return Err(MarketplaceInstallError::NameNotFound {
+            name: name.to_string(),
+            skipped_sources: plan.skipped_sources,
+        });
+    };
     let root = resolve_source_root_for_install(source, cache_root).map_err(|detail| {
         MarketplaceInstallError::Sync {
             source_display: source.name.clone(),
@@ -951,7 +970,13 @@ fn resolve_marketplace_source_name_with(
         resolve_source_root_for_install(source, cache_root)
             .map(|root| scan_marketplace(&root.path).entries)
     })?;
-    Ok(sources[plan.source_index].name.clone())
+    let Some(source) = sources.get(plan.source_index) else {
+        return Err(MarketplaceInstallError::NameNotFound {
+            name: name.to_string(),
+            skipped_sources: plan.skipped_sources,
+        });
+    };
+    Ok(source.name.clone())
 }
 
 pub fn resolve_qualified_source_name(qualifier: &str) -> Result<String, MarketplaceInstallError> {
@@ -965,7 +990,14 @@ fn resolve_qualified_source_name_with(
 ) -> Result<String, MarketplaceInstallError> {
     let index = install_resolve::resolve_qualified_source(qualifier, sources)
         .map_err(|e| map_qualifier_resolve_error(qualifier, sources, e))?;
-    Ok(sources[index].name.clone())
+    let Some(source) = sources.get(index) else {
+        return Err(map_qualifier_resolve_error(
+            qualifier,
+            sources,
+            install_resolve::QualifierResolveError::Unknown,
+        ));
+    };
+    Ok(source.name.clone())
 }
 
 /// A qualifier that misses the filtered sources but resolves against the unfiltered list was
@@ -990,7 +1022,10 @@ fn reclassify_policy_dropped_qualifier_with(
     let Ok(index) = install_resolve::resolve_qualified_source(qualifier, unfiltered) else {
         return err;
     };
-    let identity = unfiltered[index].identity();
+    let Some(source) = unfiltered.get(index) else {
+        return err;
+    };
+    let identity = source.identity();
     let reason = policy
         .add_block_reason(&identity)
         .unwrap_or_else(|| "source not in strictKnownMarketplaces".to_string());
@@ -1012,7 +1047,10 @@ fn map_qualifier_resolve_error(
         },
         QualifierResolveError::Ambiguous(indices) => MarketplaceInstallError::AmbiguousQualifier {
             qualifier: qualifier.to_string(),
-            sources: indices.iter().map(|&i| sources[i].name.clone()).collect(),
+            sources: indices
+                .iter()
+                .filter_map(|&i| sources.get(i).map(|s| s.name.clone()))
+                .collect(),
         },
     }
 }
@@ -1196,20 +1234,23 @@ pub fn add_marketplace_source(
     };
     if !already_present {
         let mut entry = toml_edit::Table::new();
-        entry["name"] = toml_edit::value(name.to_string());
+        entry.insert("name", toml_edit::value(name.to_string()));
         match source {
             MarketplaceAddInput::GitUrl(git_url) => {
-                entry["git"] = toml_edit::value(git_url.to_string());
+                entry.insert("git", toml_edit::value(git_url.to_string()));
             }
             MarketplaceAddInput::LocalPath(path) => {
-                entry["path"] = toml_edit::value(path.display().to_string());
+                entry.insert("path", toml_edit::value(path.display().to_string()));
             }
         }
         sources.push(entry);
     }
 
     if set_official_flag {
-        marketplace["official_marketplace_auto_installed"] = toml_edit::value(true);
+        marketplace.insert(
+            "official_marketplace_auto_installed",
+            toml_edit::value(true),
+        );
     }
 
     crate::util::config::atomic_write_string(config_path, &doc.to_string())
@@ -1328,7 +1369,7 @@ pub(crate) fn set_marketplace_bool_flag_in_toml(
                 "[marketplace] is not a table",
             )
         })?;
-    marketplace[key] = toml_edit::value(true);
+    marketplace.insert(key, toml_edit::value(true));
 
     Ok(doc.to_string())
 }

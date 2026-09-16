@@ -364,10 +364,14 @@ mod links {
         let mut payload = String::new();
         let mut rest = out;
         while let Some(i) = rest.find(&open) {
-            let after = &rest[i + open.len()..];
+            let Some(after) = rest.get(i + open.len()..) else {
+                break;
+            };
             let end = after.find(close).expect("OSC 8 close after id=1 open");
-            payload.push_str(&after[..end]);
-            rest = &after[end + close.len()..];
+            if let Some(chunk) = after.get(..end) {
+                payload.push_str(chunk);
+            }
+            rest = after.get(end + close.len()..).unwrap_or("");
         }
         payload
     }

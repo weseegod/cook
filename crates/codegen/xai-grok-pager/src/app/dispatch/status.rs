@@ -18,7 +18,7 @@ pub(super) fn dispatch_share_session(app: &mut AppView) -> Vec<Effect> {
     vec![]
 }
 
-/// Monotonic generation for usage-modal fetches, shared by the agent-hosted and dashboard-hosted modal.
+/// Monotonic generation for usage-modal fetches, shared by every surface that opens the modal.
 /// A reply from a previous open (modal closed and reopened) then can't overwrite newer results.
 /// `0` is reserved for background refreshes (minimal-mode paths, startup/login `FetchAppBilling`), which never settle a modal.
 static USAGE_FETCH_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

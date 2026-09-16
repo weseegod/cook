@@ -15,18 +15,103 @@ Without memory, each Grok session starts fresh: the model knows nothing about pr
 
 Memory is experimental and disabled by default.
 
+### Memory v2 (opt in)
+
+Memory v2 is an isolated observation-and-topic pipeline. Enable it only for new
+sessions:
+
+```toml
+[memory_v2]
+enabled = true
+```
+
+It uses `~/.grok/memory-v2/global/` and
+`~/.grok/memory-v2/workspaces/<workspace-id>/`; it never reads, migrates, or
+falls back to legacy `~/.grok/memory/`. Each scope has generated `MEMORY.md`,
+`topics/`, immutable `observations/_inbox/`, `archive/`, `memory_state.sqlite`,
+and `index.sqlite`. `MEMORY.md` is a bounded generated pointer index whose
+entries are absolute paths (so the model never has to resolve a relative path
+against the scope root); edit
+ordinary Markdown files under `topics/` through the restricted memory file
+workflow instead of editing the manifest.
+
+V2 captures successful completed turns asynchronously. `/flush` freezes the
+current requested cursor and waits for capture and indexing. Event-driven Dream
+claims a fixed inbox snapshot under a fenced lease, evaluates a no-tools model
+plan, atomically updates curated topics, then archives its claimed observations.
+Capture published during Dream remains pending for the next claim.
+
+Use `/memory status` for content-free local diagnostics: pinned controls,
+cursors, queue counts, pending age, Dream lease/snapshot, last outcomes, and
+archive/tombstone counts. The existing `/memory`, `/memory on`, and `/memory
+off` behavior is unchanged.
+
+`memory_v2.enabled` is the primary v2 switch. When it is true, v2 takes
+precedence over the legacy `[memory] enabled` setting. When it is false or
+absent, the legacy setting is resolved unchanged so existing memory users are
+not migrated unexpectedly. If neither setting enables memory, memory remains
+off. An explicit `[memory] enabled = false` in your TOML turns off both
+implementations, including a v2 rollout enabled remotely; only an explicit
+`[memory_v2] enabled = true` in the same TOML overrides it.
+
+Advanced rollout stages are pinned when a session starts:
+
+- `off`: no v2 reads, capture, Dream, or v2 file writes.
+- `record_only`: persist observations, but hide them from manifests/indexes and
+  never mutate curated topics.
+- `shadow`: additionally evaluate consolidation plans, without committing topic
+  changes.
+- `active`: full capture, manifest, index, and Dream behavior.
+
+Most users should only set `enabled = true`; it selects the full `active`
+behavior. The rollout and component switches exist for staged production
+validation and emergency rollback. A remote change affects only newly spawned
+sessions. A disabled v2 component fails closed; it never invokes legacy search,
+flush, Dream, or storage. Managed remote behavioral controls can only make
+local settings more restrictive: kill switches are any-deny-wins, rollout uses
+the less permissive stage, and retention uses the shorter duration.
+
+Capture lifecycle notifications (`queued`, `running`, `completed`, retries, and
+failures) are debug output and hidden from the UI by default. Telemetry and the
+dedicated memory debug log are still recorded. To display these messages while
+debugging, set `capture_status_enabled = true` under `[memory_v2]`. A successful
+capture then appears as a collapsed row; expand it to inspect each generated
+memory and open its committed observation file. These debug notifications are
+live-only and are not added to session replay history.
+
+Archived observation files and terminal capture-job metadata have bounded
+retention (`archived_retention_days` and `job_retention_days`). Explicit
+forgetting is currently exposed as a narrow library boundary: callers must
+provide one exact v2 Markdown path and the hash of bytes they deliberately
+read. The operation records a durable content-free tombstone and audit record
+before deletion. Broad requests, stale evidence, traversal, symlinks, protected
+files, unknown archives, and active/stale Dream leases are rejected. A future UI
+may wrap this API after it can preserve the same exact-evidence boundary.
+
+Memory-v2 product telemetry contains only fixed enums, booleans, counts, and
+durations. It never includes prompts, statements, topic names, keywords,
+paths, model output, or free-form errors.
+
 ---
 
 ## Enabling Memory
 
-### Environment Variable
+### Memory v2 (Recommended)
+
+```toml
+# ~/.grok/config.toml
+[memory_v2]
+enabled = true
+```
+
+### Legacy Environment Variable
 
 ```bash
 export GROK_MEMORY=1
 thanh
 ```
 
-### Config File (Persistent)
+### Legacy Config (Persistent)
 
 ```toml
 # ~/.thanh/config.toml
@@ -57,11 +142,21 @@ You can also toggle from inside the `/memory` modal by pressing `t`.
 
 ### Priority Order
 
-1. Hidden deprecated compatibility flag, when supplied
-2. `GROK_MEMORY` env var: `1`/`true` enables, `0`/`false` disables
-3. `[memory]` section in effective TOML
-4. Managed remote settings
-5. Default: disabled
+1. A process-wide force-disable (`--no-memory` compatibility flag or
+   `GROK_MEMORY=0`) disables both implementations.
+2. An explicit `[memory] enabled = false` in effective TOML disables both
+   implementations, unless the same TOML also sets `[memory_v2] enabled = true`.
+   A remote v2 gate alone cannot override a local opt-out.
+3. `memory_v2.enabled` resolves from effective TOML, then the dedicated
+   `grok_build_memory_v2_enabled` managed setting. If true, v2 is selected
+   regardless of legacy `memory_enabled`.
+4. Otherwise, legacy enablement resolves through its existing compatibility
+   CLI, `GROK_MEMORY`, effective TOML, and managed-remote tiers.
+5. If neither gate is enabled, memory is disabled.
+
+All managed v2 behavior comes from the dedicated
+`grok_build_memory_v2_settings` object. Memory v2 does not consume fields from
+the legacy `grok_build_settings` object.
 
 ---
 

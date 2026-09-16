@@ -710,8 +710,9 @@ impl SessionActor {
                 &monitor_events,
                 Some(task_output_tool_name),
             ),
-        ) {
-            sections[index] = vec![acp::ContentBlock::Text(acp::TextContent::new(batch))];
+        ) && let Some(slot) = sections.get_mut(index)
+        {
+            *slot = vec![acp::ContentBlock::Text(acp::TextContent::new(batch))];
         }
 
         let mut blocks = Vec::new();
@@ -1055,8 +1056,10 @@ mod live_orphan_hook_tests {
                 let (actor, sub_dir, mut persistence_rx) =
                     actor_with_orphan(id, Some(running_inspection(id))).await;
                 let listed = actor.list_running_subagents().await;
-                assert_eq!(listed.len(), 1);
-                assert_eq!(listed[0].snapshot.subagent_id, id);
+                let [listed_one] = listed.as_slice() else {
+                    panic!("expected one listed subagent: {listed:?}");
+                };
+                assert_eq!(listed_one.snapshot.subagent_id, id);
 
                 let reread: SubagentMeta = serde_json::from_str(
                     &std::fs::read_to_string(sub_dir.join("meta.json")).unwrap(),

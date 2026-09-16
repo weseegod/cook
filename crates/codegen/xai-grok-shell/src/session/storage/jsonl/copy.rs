@@ -481,6 +481,8 @@ impl JsonlStorageAdapter {
             &source_info.id,
         )?;
 
+        self.persist_fork_status(source_info, target_info, &target_dir, &options);
+
         Ok(CopySessionResult {
             chat_messages_copied: num_chat_messages,
             agent_id: minted_agent_id,
@@ -493,6 +495,31 @@ impl JsonlStorageAdapter {
             compaction_segments_copied,
             compaction_checkpoints_copied,
         })
+    }
+
+    fn persist_fork_status(
+        &self,
+        source_info: &Info,
+        target_info: &Info,
+        target_dir: &std::path::Path,
+        options: &CopySessionOptions,
+    ) {
+        let kind = options.session_kind.as_deref().unwrap_or("fork");
+        if !crate::session::fork_status::should_persist(
+            kind,
+            options.fork_context_source.as_deref(),
+        ) {
+            return;
+        }
+        let status = crate::session::fork_status::capture(
+            kind,
+            &source_info.cwd,
+            &target_info.cwd,
+            options.source_workspace_dir.as_deref(),
+            options.prompt_display_cwd.as_deref(),
+            options.target_prompt_index.is_some(),
+        );
+        crate::session::fork_status::persist(target_dir, &status);
     }
 }
 

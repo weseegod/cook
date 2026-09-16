@@ -26,10 +26,13 @@ use crate::types::{
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum WorkspaceEvent {
-    /// Filesystem watcher fired.
+    /// Filesystem watcher fired: every path that changed the same way within one settle window,
+    /// coalesced so a checkout is one frame per session rather than one per file (the producer
+    /// splits a window past ~1024 paths into several frames). A `Renamed` batch is `[from, to]`
+    /// when the watcher saw both halves, or the one path it saw.
     FsChanged {
-        /// Affected path (absolute).
-        path: PathBuf,
+        /// Affected paths (absolute).
+        paths: Vec<PathBuf>,
         kind: FsEventKind,
     },
     /// Git HEAD moved.
@@ -235,7 +238,7 @@ mod tests {
     fn topic_classification_matches_variants() {
         assert_eq!(
             WorkspaceEvent::FsChanged {
-                path: PathBuf::from("x"),
+                paths: vec![PathBuf::from("x")],
                 kind: FsEventKind::Created,
             }
             .topic(),

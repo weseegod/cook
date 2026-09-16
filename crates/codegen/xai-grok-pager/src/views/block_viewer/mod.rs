@@ -1332,7 +1332,9 @@ impl BlockViewerPane {
 
     #[cfg(test)]
     pub(crate) fn select_body_line_for_test(&mut self, body_idx: usize) {
-        let id = self.items[body_idx].id;
+        let Some(id) = self.items.get(body_idx).map(|item| item.id) else {
+            return;
+        };
         self.list_state.select_by_id(id);
         self.rebuild_unified_cache();
         let area = self.last_content_area;

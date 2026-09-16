@@ -179,6 +179,16 @@ where
     }
 }
 
+fn front_back<T>(pair: &[T; 2], current: usize) -> (&T, &T) {
+    let [a, b] = pair;
+    if current == 0 { (a, b) } else { (b, a) }
+}
+
+fn front_back_mut<T>(pair: &mut [T; 2], current: usize) -> (&mut T, &mut T) {
+    let [a, b] = pair;
+    if current == 0 { (a, b) } else { (b, a) }
+}
+
 impl<B> Terminal<B>
 where
     B: Backend,
@@ -238,7 +248,15 @@ where
 
     /// Gets the current buffer as a mutable reference.
     pub fn current_buffer_mut(&mut self) -> &mut Buffer {
-        &mut self.buffers[self.current]
+        front_back_mut(&mut self.buffers, self.current).0
+    }
+
+    /// The buffer of the most recently completed frame, as [`Self::draw`] hands back in its `CompletedFrame`.
+    /// Test support for callers that drive [`Self::flush`] and [`Self::swap_buffers`] themselves and want to inspect
+    /// what was painted. Blank after [`Self::clear`] or [`Self::reset_back_buffer`] until the next swap.
+    #[cfg(feature = "test-support")]
+    pub fn completed_buffer(&self) -> &Buffer {
+        front_back(&self.buffers, self.current).1
     }
 
     /// Gets the backend
@@ -255,8 +273,7 @@ where
     /// the flat cell index to `u16` before computing `(x, y)`, which silently wraps around when `width * height > 65 535`. On
     /// extra-large terminals (e.g. 420×160 = 67 200 cells) this causes the entire UI to be rendered into a tiny corner.
     pub fn flush(&mut self) -> io::Result<bool> {
-        let previous_buffer = &self.buffers[1 - self.current];
-        let current_buffer = &self.buffers[self.current];
+        let (current_buffer, previous_buffer) = front_back(&self.buffers, self.current);
         let updates = diff_large(previous_buffer, current_buffer);
         let has_changes = !updates.is_empty();
         if let Some((col, row, _)) = updates.last() {
@@ -274,10 +291,10 @@ where
         let width = area.width as usize;
         let len = width * (area.height as usize);
 
-        let ids = &mut self.link_ids[self.current];
+        let ids = front_back_mut(&mut self.link_ids, self.current).0;
         ids.clear();
         ids.resize(len, 0);
-        let table = &mut self.link_tables[self.current];
+        let table = front_back_mut(&mut self.link_tables, self.current).0;
         table.clear();
 
         let mut next = 0u32;
@@ -301,8 +318,8 @@ where
             let row = (span.row - area.y) as usize;
             for col in start..end {
                 let idx = row * width + (col - area.x) as usize;
-                if idx < ids.len() {
-                    ids[idx] = id;
+                if let Some(slot) = ids.get_mut(idx) {
+                    *slot = id;
                 }
             }
         }
@@ -316,35 +333,35 @@ where
         B: Write,
     {
         let cur = self.current;
-        let prev = 1 - cur;
 
         // Fast path: no hyperlinks in either the current or previous frame. The link layer can't affect the diff or emission, so
         // fall back to the plain cell diff + draw — byte-for-byte identical to `flush` with zero per-cell link resolution. This
         // keeps the overwhelmingly common link-free frame (streaming output, etc.) as cheap as before.
-        if self.link_tables[cur].is_empty() && self.link_tables[prev].is_empty() {
+        let no_links = {
+            let (cur_tables, prev_tables) = front_back(&self.link_tables, cur);
+            cur_tables.is_empty() && prev_tables.is_empty()
+        };
+        if no_links {
             return self.flush();
         }
 
+        let (cur_buf, prev_buf) = front_back(&self.buffers, cur);
+        let (cur_ids, prev_ids) = front_back(&self.link_ids, cur);
+        let (cur_tables, prev_tables) = front_back(&self.link_tables, cur);
         let updates = diff_large_with_links(
-            &self.buffers[prev],
-            &self.buffers[cur],
-            &self.link_ids[prev],
-            &self.link_ids[cur],
-            &self.link_tables[prev],
-            &self.link_tables[cur],
+            prev_buf,
+            cur_buf,
+            prev_ids,
+            cur_ids,
+            prev_tables,
+            cur_tables,
         );
         let has_changes = !updates.is_empty();
         if let Some((col, row, _)) = updates.last() {
             self.last_known_cursor_pos = Position { x: *col, y: *row };
         }
-        let area = self.buffers[cur].area;
-        emit_frame_with_links(
-            &mut self.backend,
-            &updates,
-            &self.link_ids[cur],
-            &self.link_tables[cur],
-            area,
-        )?;
+        let area = cur_buf.area;
+        emit_frame_with_links(&mut self.backend, &updates, cur_ids, cur_tables, area)?;
         Ok(has_changes)
     }
 
@@ -446,7 +463,7 @@ where
         self.backend.flush()?;
 
         let completed_frame = CompletedFrame {
-            buffer: &self.buffers[1 - self.current],
+            buffer: front_back(&self.buffers, self.current).1,
             area: self.last_known_area,
             count: self.frame_count,
         };
@@ -517,7 +534,7 @@ where
             }
         }
         // Reset the back buffer to make sure the next update will redraw everything.
-        self.buffers[1 - self.current].reset();
+        front_back_mut(&mut self.buffers, self.current).1.reset();
         self.reset_back_links();
         Ok(())
     }
@@ -525,22 +542,27 @@ where
     /// Reset the inactive (back) hyperlink layer in lockstep with the back cell
     /// buffer, so a stale link can never survive a buffer reset.
     fn reset_back_links(&mut self) {
-        for id in self.link_ids[1 - self.current].iter_mut() {
+        for id in front_back_mut(&mut self.link_ids, self.current)
+            .1
+            .iter_mut()
+        {
             *id = 0;
         }
-        self.link_tables[1 - self.current].clear();
+        front_back_mut(&mut self.link_tables, self.current)
+            .1
+            .clear();
     }
 
     /// Resets the back buffer without clearing the screen
     /// This is useful when you want to queue clear commands yourself
     pub fn reset_back_buffer(&mut self) {
-        self.buffers[1 - self.current].reset();
+        front_back_mut(&mut self.buffers, self.current).1.reset();
         self.reset_back_links();
     }
 
     /// Clears the inactive buffer and swaps it with the current buffer
     pub fn swap_buffers(&mut self) {
-        self.buffers[1 - self.current].reset();
+        front_back_mut(&mut self.buffers, self.current).1.reset();
         self.reset_back_links();
         self.current = 1 - self.current;
     }
@@ -718,7 +740,12 @@ where
 
             // Redraw the top line of the viewport.
             let width = self.viewport_area.width as usize;
-            let top_line = self.buffers[1 - self.current].content[0..width].to_vec();
+            let back = front_back(&self.buffers, self.current).1;
+            let top_line = back
+                .content
+                .get(..width)
+                .unwrap_or(back.content.as_slice())
+                .to_vec();
             self.draw_lines_over_cleared(0, 1, &top_line)?;
             return Ok(());
         }
@@ -831,7 +858,7 @@ fn diff_large<'a>(prev: &Buffer, next: &'a Buffer) -> Vec<(u16, u16, &'a Cell)> 
             // Safe coordinate conversion: divide in usize, then narrow to u16.
             let x = area.x + (i % width) as u16;
             let y = area.y + (i / width) as u16;
-            updates.push((x, y, &next_buffer[i]));
+            updates.push((x, y, current));
         }
 
         to_skip = current.symbol().width().saturating_sub(1);
@@ -872,7 +899,7 @@ fn diff_large_with_links<'a>(
         {
             let x = area.x + (i % width) as u16;
             let y = area.y + (i / width) as u16;
-            updates.push((x, y, &next_buffer[i]));
+            updates.push((x, y, current));
         }
 
         to_skip = current.symbol().width().saturating_sub(1);
@@ -904,28 +931,33 @@ fn emit_frame_with_links<B: Backend + Write>(
         // Invariant: `i < updates.len()` (loop guard) and below `i < j <= updates.len()`, so `updates[i]` and the slice
         // `updates[i..j]` never panic. `resolve` indexes via `cur_ids.get(..)` (bounds-safe) and the coordinates come from
         // `diff_large_with_links` as `area.{x,y} +..`, so `(y - area.y)` / `(x - area.x)` cannot underflow.
-        let (x, y, _) = updates[i];
+        let Some(&(x, y, _)) = updates.get(i) else {
+            break;
+        };
         let link = resolve(x, y);
 
         // Extend the run while the resolved link is identical.
         let mut j = i + 1;
         while j < updates.len() {
-            let (nx, ny, _) = updates[j];
+            let Some(&(nx, ny, _)) = updates.get(j) else {
+                break;
+            };
             if resolve(nx, ny) != link {
                 break;
             }
             j += 1;
         }
 
+        let Some(run) = updates.get(i..j) else { break };
         if let Some(link) = link {
             write_osc8_open(backend, &link.url, link.id)?;
             // Always close the hyperlink, even if the cell draw errors, so a
             // dangling OSC 8 open can never be flushed to the terminal.
-            let drawn = backend.draw(updates[i..j].iter().copied());
+            let drawn = backend.draw(run.iter().copied());
             write_osc8_close(backend)?;
             drawn?;
         } else {
-            backend.draw(updates[i..j].iter().copied())?;
+            backend.draw(run.iter().copied())?;
         }
 
         i = j;
@@ -1015,8 +1047,9 @@ impl<B: Backend> Terminal<B> {
 
     /// HACK: this is made pub
     pub fn set_viewport_area(&mut self, area: Rect) {
-        self.buffers[self.current].resize(area);
-        self.buffers[1 - self.current].resize(area);
+        let [front, back] = &mut self.buffers;
+        front.resize(area);
+        back.resize(area);
         let len = (area.width as usize) * (area.height as usize);
         for layer in self.link_ids.iter_mut() {
             layer.clear();

@@ -52,6 +52,7 @@ pub fn hook_disabled_for_display_with(
 
 /// One-shot snapshot of the disabled-hooks file, for callers that evaluate many specs per pass (dispatch loops, the stop-gate guard).
 /// One `load()` replaces a file read per spec.
+#[derive(Debug, Default)]
 pub struct DisabledHooks(std::collections::HashSet<String>);
 
 impl DisabledHooks {

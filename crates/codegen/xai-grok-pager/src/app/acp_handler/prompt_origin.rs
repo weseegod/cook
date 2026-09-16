@@ -163,6 +163,7 @@ pub(super) fn finish_wake_turn(agent: &mut AgentView, prompt_id: &str, terminal:
                 elapsed_ms,
                 agent_result,
                 send_now_cancel,
+                cancel_trigger,
                 cancellation_category,
                 // Failures were handled above, so the Error arm is unreachable here
                 error_kind: None,
@@ -170,10 +171,7 @@ pub(super) fn finish_wake_turn(agent: &mut AgentView, prompt_id: &str, terminal:
             },
         ),
     };
-    if event.is_some() {
-        crate::app::turn_completion::push_turn_terminal_marker(agent, event, Some(prompt_id));
-    }
-    // Wake turns are synthetic and never gated, so no hook detail exists here.
+    crate::app::turn_completion::push_turn_terminal_marker(agent, event);
     crate::app::turn_completion::note_hook_blocked_turn(
         agent,
         Some(prompt_id),

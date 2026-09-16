@@ -227,3 +227,5 @@ See the [Plugins guide](09-plugins.md) for more on installing plugins that provi
 5. **Version-control project skills.** Commit `.grok/skills/` to your repository so the whole team benefits. User skills in `~/.thanh/skills/` stay personal and unshared.
 
 6. **Test by running it.** Invoke `/name` and confirm the skill works before you rely on automatic invocation.
+
+7. **Keep the body under the file-read cap.** Grok inlines at most the first 25,000 tokens of a skill body (the same cap as `read_file`). Put long reference material in sibling files and tell Grok to read them with a line offset and limit.

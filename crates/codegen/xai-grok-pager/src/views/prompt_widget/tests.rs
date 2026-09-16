@@ -2,6 +2,13 @@
     use super::*;
     use crate::input::key::key;
 
+    fn at<'a, T>(xs: &'a [T], i: usize) -> &'a T {
+        match xs.get(i) {
+            Some(v) => v,
+            None => panic!("index {i} out of {}", xs.len()),
+        }
+    }
+
     #[test]
     fn submit_via_try_send() {
         let mut pw = PromptWidget::new();
@@ -111,7 +118,7 @@
         let images = pw.drain_images();
         assert_eq!(images.len(), 1, "restored image must drain for submission");
         let (bytes, mime) =
-            crate::prompt_images::load_for_send(&images[0]).expect("restored image loads");
+            crate::prompt_images::load_for_send(at(&images, 0)).expect("restored image loads");
         assert_eq!(bytes, vec![0u8; 16]);
         assert_eq!(mime, "image/png");
     }
@@ -411,7 +418,7 @@
             "source path must not appear in the buffer chip: {full:?}"
         );
         assert_eq!(
-            pw.images[0].source_path.as_deref(),
+            at(&pw.images, 0).source_path.as_deref(),
             Some(std::path::Path::new("/tmp/grok-test-image.png")),
             "source_path retained on the PastedImage record"
         );
@@ -768,7 +775,7 @@
         let normalized = "line1\nline2\nline3\nline4";
         assert_eq!(pw.textarea.text(), normalized);
         assert_eq!(pw.textarea.elements().len(), 1);
-        assert_eq!(pw.textarea.elements()[0].kind, KIND_PASTE);
+        assert_eq!(at(pw.textarea.elements(), 0).kind, KIND_PASTE);
     }
 
     #[test]
@@ -778,15 +785,15 @@
         assert_eq!(pw.handle_paste(text), PromptEvent::Edited);
         assert_eq!(pw.textarea.text(), text);
         assert_eq!(pw.textarea.elements().len(), 1);
-        assert_eq!(pw.textarea.elements()[0].kind, KIND_PASTE);
+        assert_eq!(at(pw.textarea.elements(), 0).kind, KIND_PASTE);
     }
 
     /// Display label of the single paste chip in the buffer, e.g. `[Pasted: 4 lines]`.
     fn paste_chip_label(pw: &PromptWidget) -> String {
         let elems = pw.textarea.elements();
         assert_eq!(elems.len(), 1);
-        assert_eq!(elems[0].kind, KIND_PASTE);
-        elems[0]
+        assert_eq!(at(elems, 0).kind, KIND_PASTE);
+        at(elems, 0)
             .display
             .as_ref()
             .expect("chip has a display label")
@@ -824,7 +831,7 @@
         assert_eq!(text.lines().count(), 1, "fixture must be a single line");
         assert_eq!(pw.handle_paste(&text), PromptEvent::Edited);
         assert_eq!(pw.textarea.elements().len(), 1);
-        assert_eq!(pw.textarea.elements()[0].kind, KIND_PASTE);
+        assert_eq!(at(pw.textarea.elements(), 0).kind, KIND_PASTE);
     }
 
     #[test]
@@ -849,8 +856,8 @@
         assert_eq!(pw.handle_paste(&text), PromptEvent::Edited);
         let elems = pw.textarea.elements();
         assert_eq!(elems.len(), 1);
-        assert_eq!(elems[0].kind, KIND_PASTE);
-        let label: String = elems[0]
+        assert_eq!(at(elems, 0).kind, KIND_PASTE);
+        let label: String = at(elems, 0)
             .display
             .as_ref()
             .expect("chip has a display label")
@@ -886,7 +893,7 @@
         assert_eq!(pw.handle_paste(&text), PromptEvent::Edited);
         let elems = pw.textarea.elements();
         assert_eq!(elems.len(), 1);
-        let label: String = elems[0]
+        let label: String = at(elems, 0)
             .display
             .as_ref()
             .expect("chip has a display label")
@@ -936,7 +943,7 @@
         let text = "line1\nline2\nline3\nline4";
         pw.handle_paste(text);
         // insert_element leaves the cursor one past the chip; the preview must still show at the moment the chip is created
-        assert_eq!(pw.textarea.cursor(), pw.textarea.elements()[0].range.end);
+        assert_eq!(pw.textarea.cursor(), at(pw.textarea.elements(), 0).range.end);
         assert_eq!(pw.paste_element_for_preview(), Some(text));
     }
 
@@ -968,10 +975,10 @@
         let elems = pw.textarea.elements();
         assert_eq!(elems.len(), 2);
         assert_eq!(
-            elems[0].range.end, elems[1].range.start,
+            at(elems, 0).range.end, at(elems, 1).range.start,
             "chips must be adjacent"
         );
-        let boundary = elems[0].range.end;
+        let boundary = at(elems, 0).range.end;
         // At the shared boundary the cursor sits ON the second chip, which wins over the left-adjacent first chip
         pw.textarea.set_cursor(boundary);
         assert_eq!(pw.paste_element_for_preview(), Some(second));
@@ -981,7 +988,7 @@
     fn paste_element_for_preview_none_right_after_image_chip() {
         let mut pw = PromptWidget::new();
         pw.insert_image(test_image()).unwrap();
-        let end = pw.textarea.elements()[0].range.end;
+        let end = at(pw.textarea.elements(), 0).range.end;
         // Right-adjacent fallback is gated on KIND_PASTE: an image chip ending at the cursor must not trigger a paste preview
         pw.textarea.set_cursor(end);
         assert_eq!(pw.paste_element_for_preview(), None);
@@ -1008,7 +1015,7 @@
     fn image_for_preview_dismissed_past_trailing_space() {
         let mut pw = PromptWidget::new();
         pw.insert_image(test_image()).unwrap();
-        let end = pw.textarea.elements()[0].range.end;
+        let end = at(pw.textarea.elements(), 0).range.end;
         pw.set_cursor(end + 1);
         assert!(
             pw.image_for_preview().is_none(),
@@ -1079,8 +1086,8 @@
             .collect();
         assert_eq!(elements.len(), 2);
         assert_eq!(
-            elements[0].range.end + 1,
-            elements[1].range.start,
+            at(&elements, 0).range.end + 1,
+            at(&elements, 1).range.start,
             "one editable spacer must separate repeated image chips"
         );
     }
@@ -1089,7 +1096,7 @@
     fn image_preview_uses_cursor_or_hover_after_post_insert_dismissal() {
         let mut pw = PromptWidget::new();
         pw.insert_image(test_image()).unwrap();
-        let image_id = pw.images[0].element_id;
+        let image_id = at(&pw.images, 0).element_id;
         pw.handle_key(&key!('x').to_key_event());
         assert!(pw.image_for_preview().is_none());
 
@@ -1127,7 +1134,10 @@
         let mut second = PromptWidget::new();
         first.insert_image(ready_image()).unwrap();
         second.insert_image(ready_image()).unwrap();
-        assert_eq!(first.images[0].element_id, second.images[0].element_id);
+        assert_eq!(
+            at(&first.images, 0).element_id,
+            at(&second.images, 0).element_id
+        );
 
         let area = Rect::new(0, 20, 60, 3);
         let overlay = Rect::new(0, 0, 60, 20);
@@ -1180,13 +1190,13 @@
         pw.insert_image(test_image()).unwrap();
         let elems = pw.textarea.elements();
         assert_eq!(elems.len(), 2);
-        assert_eq!(elems[0].kind, KIND_PASTE);
-        assert_eq!(elems[1].kind, KIND_IMAGE);
+        assert_eq!(at(elems, 0).kind, KIND_PASTE);
+        assert_eq!(at(elems, 1).kind, KIND_IMAGE);
         assert_eq!(
-            elems[0].range.end, elems[1].range.start,
+            at(elems, 0).range.end, at(elems, 1).range.start,
             "image chip must start at the paste chip's end"
         );
-        let boundary = elems[0].range.end;
+        let boundary = at(elems, 0).range.end;
         // On-chip match of any kind wins: at the boundary the cursor sits ON the image chip, so no paste preview paints under the image preview
         pw.textarea.set_cursor(boundary);
         assert_eq!(pw.paste_element_for_preview(), None);
@@ -1299,7 +1309,7 @@
         assert!(pw.textarea.elements().is_empty());
         assert!(pw.textarea.undo());
         assert_eq!(pw.textarea.elements().len(), 1);
-        assert_eq!(pw.textarea.elements()[0].kind, KIND_PASTE);
+        assert_eq!(at(pw.textarea.elements(), 0).kind, KIND_PASTE);
         assert_eq!(pw.textarea.text(), text);
     }
 
@@ -1388,7 +1398,7 @@
 
         let mut pw = PromptWidget::new();
         pw.handle_paste("line1\nline2\nline3\nline4");
-        let elem_end = pw.textarea.elements()[0].range.end;
+        let elem_end = at(pw.textarea.elements(), 0).range.end;
         pw.textarea.insert_str("\n/impl");
         pw.textarea.set_cursor(pw.textarea.text().len());
 
@@ -1405,14 +1415,14 @@
             token_range.start >= elem_end,
             "slash range must not point inside the paste element (would replace the pill on Tab)"
         );
-        assert_eq!(&raw[token_range], "/impl");
+        assert_eq!(raw.get(token_range.clone()).unwrap_or(""), "/impl");
     }
 
     #[test]
     fn map_clean_offset_skips_paste_element_body() {
         let mut pw = PromptWidget::new();
         pw.handle_paste("aaa\nbbb\nccc\nddd");
-        let elem_end = pw.textarea.elements()[0].range.end;
+        let elem_end = at(pw.textarea.elements(), 0).range.end;
         pw.textarea.insert_str(" /x");
         let raw = pw.textarea.text().to_string();
         let slash_clean_start = strip_all_elements(&raw, raw.len(), &pw.textarea)
@@ -1424,7 +1434,7 @@
             mapped >= elem_end,
             "mapped offset {mapped} must be at or after paste element end {elem_end}"
         );
-        assert_eq!(&raw[mapped..mapped + 2], "/x");
+        assert_eq!(raw.get(mapped..mapped + 2).unwrap_or(""), "/x");
     }
 
     // -- PromptStyle prefix_override tests --
@@ -1680,9 +1690,9 @@
         assert!(pw.accept_slash_completion(&models));
         let elements = pw.textarea.elements();
         assert_eq!(elements.len(), 1, "paste chip must survive the accept");
-        assert_eq!(elements[0].kind, KIND_PASTE);
+        assert_eq!(at(elements, 0).kind, KIND_PASTE);
         assert_eq!(
-            pw.textarea.element_text(elements[0].id),
+            pw.textarea.element_text(at(elements, 0).id),
             Some(pasted),
             "chip content must be untouched"
         );
@@ -1908,7 +1918,7 @@
         pw.handle_paste("a\nb\nc\nd");
         assert_eq!(pw.textarea.text(), "a\nb\nc\nd");
         assert_eq!(pw.textarea.elements().len(), 1);
-        assert_eq!(pw.textarea.elements()[0].kind, KIND_PASTE);
+        assert_eq!(at(pw.textarea.elements(), 0).kind, KIND_PASTE);
     }
 
     #[test]
@@ -1927,7 +1937,7 @@
         pw.handle_paste("a\nb");
         assert_eq!(pw.textarea.text(), "a\nb");
         assert_eq!(pw.textarea.elements().len(), 1);
-        assert_eq!(pw.textarea.elements()[0].kind, KIND_PASTE);
+        assert_eq!(at(pw.textarea.elements(), 0).kind, KIND_PASTE);
     }
 
     #[test]
@@ -2023,11 +2033,11 @@
         assert!(pw.insert_image(test_image()).is_ok());
 
         assert_eq!(pw.textarea.elements().len(), 1);
-        let elem = &pw.textarea.elements()[0];
+        let elem = &at(pw.textarea.elements(), 0);
         assert_eq!(elem.kind, KIND_IMAGE);
         assert_eq!(pw.textarea.text(), "[Image #1] ");
         assert_eq!(pw.images.len(), 1);
-        assert_eq!(pw.images[0].display_number, 1);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
     }
 
     #[test]
@@ -2060,9 +2070,9 @@
         pw.insert_image(test_image()).unwrap();
 
         assert_eq!(pw.images.len(), 3);
-        assert_eq!(pw.images[0].display_number, 1);
-        assert_eq!(pw.images[1].display_number, 2);
-        assert_eq!(pw.images[2].display_number, 3);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
+        assert_eq!(at(&pw.images, 1).display_number, 2);
+        assert_eq!(at(&pw.images, 2).display_number, 3);
         assert!(pw.textarea.text().contains("[Image #1]"));
         assert!(pw.textarea.text().contains("[Image #2]"));
         assert!(pw.textarea.text().contains("[Image #3]"));
@@ -2154,14 +2164,14 @@
 
         // Delete the first element via textarea (simulates backspace)
         pw.textarea.set_cursor(0);
-        let first_id = pw.textarea.elements()[0].id;
+        let first_id = at(pw.textarea.elements(), 0).id;
         pw.textarea.inline_element(first_id);
         // Now there's one image element left, but images vec still has 2
 
         let drained = pw.drain_images();
         // Reconciliation should have removed the stale entry
         assert_eq!(drained.len(), 1);
-        assert_eq!(drained[0].display_number, 2);
+        assert_eq!(at(&drained, 0).display_number, 2);
         assert!(pw.images.is_empty());
     }
 
@@ -2177,14 +2187,14 @@
         );
 
         // Move cursor onto the element itself (range.start) where the overlay should show
-        let elem_start = pw.textarea.elements()[0].range.start;
+        let elem_start = at(pw.textarea.elements(), 0).range.start;
         pw.textarea.set_cursor(elem_start);
         let img = pw.image_at_cursor().unwrap();
         assert_eq!(img.display_number, 1);
         assert_eq!(img.mime_type, "image/png");
 
         // Cursor at range.end (the trailing space) does NOT show overlay.
-        let elem_end = pw.textarea.elements()[0].range.end;
+        let elem_end = at(pw.textarea.elements(), 0).range.end;
         pw.textarea.set_cursor(elem_end);
         assert!(
             pw.image_at_cursor().is_none(),
@@ -2204,8 +2214,8 @@
         assert_eq!(pw.images.len(), 2);
 
         // Delete the higher-numbered chip (#2). After deletion live==[#1] but the counter must remain 2 so the next insert lands at #3.
-        let second_id = pw.textarea.elements()[1].id;
-        let second_range_start = pw.textarea.elements()[1].range.start;
+        let second_id = at(pw.textarea.elements(), 1).id;
+        let second_range_start = at(pw.textarea.elements(), 1).range.start;
         pw.textarea.set_cursor(second_range_start);
         pw.textarea.inline_element(second_id);
 
@@ -2220,7 +2230,7 @@
         );
         // Only `#1` survived.
         assert_eq!(pw.images.len(), 1);
-        assert_eq!(pw.images[0].display_number, 1);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
 
         // Next insert lands at #3, NOT a reused #2.
         pw.insert_image(test_image()).unwrap();
@@ -2255,7 +2265,7 @@
             "only #1 chip should survive; text = {:?}",
             pw.textarea.text(),
         );
-        assert_eq!(pw.images[0].display_number, 1);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
         assert_eq!(
             pw.image_counter, 2,
             "high-water counter must survive the natural Backspace \
@@ -2273,8 +2283,8 @@
         pw.insert_image(test_image()).unwrap(); // #2
 
         // Transient delete of `[Image #2]` mid-prompt.
-        let id2 = pw.textarea.elements()[1].id;
-        let r2_start = pw.textarea.elements()[1].range.start;
+        let id2 = at(pw.textarea.elements(), 1).id;
+        let r2_start = at(pw.textarea.elements(), 1).range.start;
         pw.textarea.set_cursor(r2_start);
         pw.textarea.inline_element(id2);
         pw.sync_images_with_textarea();
@@ -2294,7 +2304,13 @@
             .elements()
             .iter()
             .filter(|e| e.kind == KIND_IMAGE)
-            .map(|e| parse_image_display_number(&pw.textarea.text()[e.range.clone()]).unwrap_or(0))
+            .map(|e| {
+                pw.textarea
+                    .text()
+                    .get(e.range.clone())
+                    .and_then(parse_image_display_number)
+                    .unwrap_or(0)
+            })
             .collect();
         assert_eq!(
             live_image_numbers,
@@ -2312,12 +2328,14 @@
         pw.insert_image(test_image()).unwrap(); // #2
         assert_eq!(pw.images.len(), 2);
         assert_ne!(
-            pw.images[0].element_id, pw.images[1].element_id,
+            at(&pw.images, 0).element_id, at(&pw.images, 1).element_id,
             "insert_image must issue unique element_ids",
         );
 
         // Corrupt: assign `display_number = 1` to the second image, mimicking a future regression that assigned identical numbers
-        pw.images[1].display_number = 1;
+        if let Some(slot) = pw.images.get_mut(1) {
+            slot.display_number = 1;
+        }
 
         // The textarea still has two elements with distinct element_ids; the corruption is purely in the `PastedImage` records
         assert_eq!(pw.textarea.elements().len(), 2);
@@ -2372,7 +2390,7 @@
             .map(|e| e.id)
             .collect();
         assert_eq!(elem_ids.len(), 2);
-        assert_ne!(elem_ids[0], elem_ids[1]);
+        assert_ne!(at(&elem_ids, 0), at(&elem_ids, 1));
 
         // Two PastedImage records in the same source order.
         let mut img_a = test_image();
@@ -2383,16 +2401,16 @@
 
         // Each PastedImage got its OWN element id.
         assert_eq!(pw.images.len(), 2);
-        assert_eq!(pw.images[0].element_id, elem_ids[0]);
-        assert_eq!(pw.images[1].element_id, elem_ids[1]);
-        assert_ne!(pw.images[0].element_id, pw.images[1].element_id);
+        assert_eq!(at(&pw.images, 0).element_id, *at(&elem_ids, 0));
+        assert_eq!(at(&pw.images, 1).element_id, *at(&elem_ids, 1));
+        assert_ne!(at(&pw.images, 0).element_id, at(&pw.images, 1).element_id);
 
         // Survive a sync_images_with_textarea: both chips must still be there, neither collapsed onto the other's id
         pw.sync_images_with_textarea();
         assert_eq!(pw.images.len(), 2);
         let post_sync_ids: Vec<_> = pw.images.iter().map(|i| i.element_id).collect();
-        assert_eq!(post_sync_ids[0], elem_ids[0]);
-        assert_eq!(post_sync_ids[1], elem_ids[1]);
+        assert_eq!(at(&post_sync_ids, 0), at(&elem_ids, 0));
+        assert_eq!(at(&post_sync_ids, 1), at(&elem_ids, 1));
 
         // Pin the range-identity binding
         // A regression that mapped both PastedImages to distinct-but-wrong element_ids would pass the `assert_ne!` above but break this check
@@ -2400,7 +2418,7 @@
             .textarea
             .elements()
             .iter()
-            .find(|e| e.id == pw.images[0].element_id)
+            .find(|e| e.id == at(&pw.images, 0).element_id)
             .unwrap()
             .range
             .clone();
@@ -2409,7 +2427,7 @@
             .textarea
             .elements()
             .iter()
-            .find(|e| e.id == pw.images[1].element_id)
+            .find(|e| e.id == at(&pw.images, 1).element_id)
             .unwrap()
             .range
             .clone();
@@ -2505,12 +2523,14 @@
         let mut survivors_sorted = survivors.clone();
         survivors_sorted.sort();
         let expected_lowest = total - PromptWidget::IMAGE_CAP * 2 + 1;
-        assert_eq!(survivors_sorted[0], expected_lowest);
+        assert_eq!(at(&survivors_sorted, 0), &expected_lowest);
         assert_eq!(*survivors_sorted.last().unwrap(), total);
 
         // The 3 evicted entries (display_number 1, 2, 3) had their staged temp files cleaned up
-        for n in 1..=3 {
-            let evicted_path = &temp_paths[n - 1];
+        for n in 1..=3usize {
+            let Some(evicted_path) = n.checked_sub(1).and_then(|i| temp_paths.get(i)) else {
+                panic!("expected temp path");
+            };
             assert!(
                 !evicted_path.exists(),
                 "evicted stash entry's staged temp file must be cleaned up; \
@@ -2520,7 +2540,9 @@
         }
         // Survivors' files remain on disk.
         for n in 4..=total {
-            let kept_path = &temp_paths[n - 1];
+            let Some(kept_path) = n.checked_sub(1).and_then(|i| temp_paths.get(i)) else {
+                panic!("expected temp path");
+            };
             assert!(
                 kept_path.exists(),
                 "surviving stash entry must keep its staged temp file; \
@@ -2543,8 +2565,8 @@
         // Buffer order is now `[Image #2] [Image #1] ` but `self.images` is chronological: [#1, #2]
         pw.textarea.set_cursor(0);
         pw.insert_image(test_image()).unwrap();
-        assert_eq!(pw.images[0].display_number, 1);
-        assert_eq!(pw.images[1].display_number, 2);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
+        assert_eq!(at(&pw.images, 1).display_number, 2);
         // textarea elements are sorted by buffer position: [#2, #1].
         let elems_in_buf_order: Vec<usize> = pw
             .textarea
@@ -2553,7 +2575,9 @@
             .filter(|e| e.kind == KIND_IMAGE)
             .map(|e| {
                 let text = pw.textarea.text();
-                parse_image_display_number(&text[e.range.clone()]).unwrap()
+                text.get(e.range.clone())
+                    .and_then(parse_image_display_number)
+                    .unwrap_or(0)
             })
             .collect();
         assert_eq!(
@@ -2563,14 +2587,14 @@
         );
 
         // Capture the current binding before the drain/restore round-trip.
-        let pre_drain_eid_1 = pw.images[0].element_id;
-        let pre_drain_eid_2 = pw.images[1].element_id;
+        let pre_drain_eid_1 = at(&pw.images, 0).element_id;
+        let pre_drain_eid_2 = at(&pw.images, 1).element_id;
 
         // Simulate the rewind-restore round-trip
         // Drain images (chronological order), capture chip elements (buffer order), set_text back, restore_chip_elements, set_images
         let images = pw.drain_images();
-        assert_eq!(images[0].display_number, 1);
-        assert_eq!(images[1].display_number, 2);
+        assert_eq!(at(&images, 0).display_number, 1);
+        assert_eq!(at(&images, 1).display_number, 2);
         let chip_elements: Vec<crate::app::agent::ChipElement> = pw
             .textarea
             .elements()
@@ -2596,7 +2620,9 @@
                 .iter()
                 .find(|e| e.id == img.element_id)
                 .expect("PastedImage.element_id must match a live element");
-            let parsed = parse_image_display_number(&buf[elem.range.clone()]);
+            let parsed = buf
+                .get(elem.range.clone())
+                .and_then(parse_image_display_number);
             assert_eq!(
                 parsed,
                 Some(img.display_number),
@@ -2695,9 +2721,9 @@
         img2.display_number = 0;
         pw.insert_image(img2).unwrap();
         assert_eq!(pw.images.len(), 2);
-        assert_eq!(pw.images[1].display_number, 2);
+        assert_eq!(at(&pw.images, 1).display_number, 2);
         assert_eq!(
-            pw.images[1].source_path.as_deref(),
+            at(&pw.images, 1).source_path.as_deref(),
             Some(bar_path.as_path())
         );
         let buf_before = pw.textarea.text().to_string();
@@ -2707,12 +2733,12 @@
         );
 
         // Move past the spacer so Backspace targets the chip.
-        let end = pw.textarea.elements()[1].range.end;
+        let end = at(pw.textarea.elements(), 1).range.end;
         pw.textarea.set_cursor(end + 1);
         pw.handle_key(&key!(Backspace).to_key_event());
         pw.handle_key(&key!(Backspace).to_key_event());
         assert_eq!(pw.images.len(), 1, "chip #2 should be deleted");
-        assert_eq!(pw.images[0].display_number, 1);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
 
         pw.handle_key(&key!('z', CONTROL).to_key_event());
         pw.sync_images_with_textarea();
@@ -2764,7 +2790,7 @@
         );
 
         pw.insert_image(test_image()).unwrap();
-        assert_eq!(pw.images[0].display_number, 1);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
         assert_eq!(pw.textarea.text(), "[Image #1] ");
     }
 
@@ -2780,7 +2806,7 @@
 
         pw.insert_image(test_image()).unwrap();
         assert_eq!(pw.image_counter, 1);
-        assert_eq!(pw.images[0].display_number, 1);
+        assert_eq!(at(&pw.images, 0).display_number, 1);
         assert_eq!(pw.textarea.text(), "[Image #1] ");
     }
 
@@ -3182,7 +3208,7 @@
 
         // Delete first element by inlining (simulates backspace removal path).
         pw.textarea.set_cursor(0);
-        let first_id = pw.textarea.elements()[0].id;
+        let first_id = at(pw.textarea.elements(), 0).id;
         pw.textarea.inline_element(first_id);
 
         // Drain and build content blocks.
@@ -3250,7 +3276,7 @@
         pw.handle_key(&key!('z', CONTROL | SHIFT).to_key_event());
 
         assert_eq!(pw.textarea.elements().len(), 1);
-        let restored_id = pw.images[0].element_id;
+        let restored_id = at(&pw.images, 0).element_id;
 
         // Simulate mouse hover on the restored image element.
         pw.hovered_image_element_id = Some(restored_id);
@@ -3290,7 +3316,7 @@
         // The next inserted image continues from the high-water mark.
         pw.insert_image(test_image()).unwrap();
         assert_eq!(pw.textarea.text(), "[Image #2] ");
-        assert_eq!(pw.images[0].display_number, 2);
+        assert_eq!(at(&pw.images, 0).display_number, 2);
     }
 
     // ── File search Right Arrow (drill-down) ────────────────────────────
@@ -3717,8 +3743,8 @@
             assert_eq!(texts, expected, "{plan_label:?} + {permission:?}");
         }
         let flags = mode_flags(Some("plan"), PermissionLabel::Auto, &theme);
-        assert_eq!(flags[0].color, Some(theme.accent_plan));
-        assert_eq!(flags[1].color, Some(theme.accent_system));
+        assert_eq!(at(&flags, 0).color, Some(theme.accent_plan));
+        assert_eq!(at(&flags, 1).color, Some(theme.accent_system));
     }
 
     /// The "plan" mode flag on the bottom divider keeps its accent color on the terminal theme: the
@@ -3753,7 +3779,7 @@
                 if let Some(byte_x) = row.find("plan") {
                     // Byte offset → cell column (borders are multi-byte,
                     // all glyphs on this row are single-width).
-                    let x = row[..byte_x].chars().count() as u16;
+                    let x = row.get(..byte_x).map(|s| s.chars().count()).unwrap_or(0) as u16;
                     return buf.cell((x, y)).unwrap().style();
                 }
             }
@@ -3815,7 +3841,7 @@
             for y in 0..area.height {
                 let row = buf_text_at(&buf, 0, area.width, y);
                 if let Some(byte_x) = row.find(needle) {
-                    let x = row[..byte_x].chars().count() as u16;
+                    let x = row.get(..byte_x).map(|s| s.chars().count()).unwrap_or(0) as u16;
                     return buf.cell((x, y)).unwrap().style();
                 }
             }
@@ -3862,7 +3888,7 @@
             for y in 0..area.height {
                 let row = buf_text_at(&buf, 0, area.width, y);
                 if let Some(byte_x) = row.find(needle) {
-                    let x = row[..byte_x].chars().count() as u16;
+                    let x = row.get(..byte_x).map(|s| s.chars().count()).unwrap_or(0) as u16;
                     return buf.cell((x, y)).unwrap().style();
                 }
             }
@@ -4432,7 +4458,7 @@
     fn completion_splice_and_fill_reject_range_clipping_paste_chip() {
         let mut pw = PromptWidget::new();
         pw.handle_paste("line one\nline two\nline three\nline four");
-        let chip = pw.textarea.elements()[0].range.clone();
+        let chip = at(pw.textarea.elements(), 0).range.clone();
         let text_before = pw.textarea.text().to_owned();
 
         let clipping = chip.start..chip.start + 2;

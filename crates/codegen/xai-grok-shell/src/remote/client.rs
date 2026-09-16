@@ -540,7 +540,7 @@ pub enum SettingsFetch {
     /// Credential unambiguously rejected (401): the remote policy will never reach this leader, so the gate may open without waiting.
     Rejected,
     /// Transient/ambiguous (network, 5xx exhausted, 403/429/other 4xx, unparseable 2xx): outcome unknown.
-    /// Leave the gate closed (fail-closed), retry later.
+    /// A completed fetch that failed: the gate may open on local policy.
     Retry,
 }
 impl SettingsFetch {
@@ -800,6 +800,10 @@ pub(crate) fn parse_remote_model_value(
             .or_else(|| obj.get("input"))
             .or_else(|| meta.and_then(|m| m.get("inputModalities")))
             .and_then(|v| xai_grok_sampling_types::parse_input_modalities(v)),
+        reasoning_summary: obj
+            .get("reasoningSummary")
+            .or_else(|| obj.get("reasoning_summary"))
+            .and_then(|v| serde_json::from_value(v.clone()).ok()),
         laziness_detector: get_object(obj, "lazinessDetector")
             .or_else(|| get_object(obj, "laziness_detector"))
             .or_else(|| meta.and_then(|m| get_object(m, "lazinessDetector")))
