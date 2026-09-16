@@ -22,10 +22,10 @@ The product runs in four modes, all sharing one agent runtime:
 - **Stdio / ACP agent** — `thanh agent stdio`, the
   [Agent Client Protocol](https://agentclientprotocol.com) server used by
   editor integrations.
-- **Desktop ACP client** — specified in
-  [`docs/desktop-app.md`](docs/desktop-app.md); folder
-  `frontend/apps/thanh-desktop/` (not implemented yet). Same agent process as
-  the TUI; the desktop app must not reimplement tools or sampling.
+- **Desktop ACP client** — Tauri 2 + React application in
+  `frontend/apps/thanh-desktop/`, implemented from
+  [`docs/desktop-app.md`](docs/desktop-app.md). It spawns the same agent process
+  as the TUI and does not reimplement tools or sampling.
 
 System context (arrows = data flow):
 
@@ -427,7 +427,7 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change raw drawing / terminal output | `xai-grok-pager-render/src/render/` (`draw.rs`, `highlight.rs`, overlays) |
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
-| Change / start the desktop app | Spec [`docs/desktop-app.md`](docs/desktop-app.md); empty tree `frontend/apps/thanh-desktop/`. Do **not** reimplement the agent there. |
+| Change / start the desktop app | `frontend/apps/thanh-desktop/`; contract and scope in [`docs/desktop-app.md`](docs/desktop-app.md). Keep model/tool execution in `thanh agent stdio`. |
 
 ### Agent / shell
 

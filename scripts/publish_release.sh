@@ -26,10 +26,15 @@ cd "$REPO_DIR"
 VERSION_FILE="crates/codegen/xai-grok-version/Cargo.toml"
 PAGER_FILE="crates/codegen/xai-grok-pager-bin/Cargo.toml"
 LOCK_FILE="Cargo.lock"
+DESKTOP_DIR="frontend/apps/thanh-desktop"
+DESKTOP_PACKAGE="$DESKTOP_DIR/package.json"
+DESKTOP_CARGO="$DESKTOP_DIR/src-tauri/Cargo.toml"
+DESKTOP_LOCK="$DESKTOP_DIR/src-tauri/Cargo.lock"
+DESKTOP_CONFIG="$DESKTOP_DIR/src-tauri/tauri.conf.json"
 APP="thanh"
 REPO="weseegod/thanh"
 
-if [ ! -f "$VERSION_FILE" ] || [ ! -f "$PAGER_FILE" ]; then
+if [ ! -f "$VERSION_FILE" ] || [ ! -f "$PAGER_FILE" ] || [ ! -f "$DESKTOP_PACKAGE" ]; then
   echo "ERROR: lockstepped Cargo.toml files not found" >&2
   exit 1
 fi
@@ -59,6 +64,12 @@ for f in "$VERSION_FILE" "$PAGER_FILE"; do
   sed -i -E "s/^version = \"[^\"]+\"/version = \"$new\"/" "$f"
 done
 
+# Keep the desktop shell in the same major/version train as the CLI gate.
+sed -i -E "0,/\"version\": \"[^\"]+\"/s//\"version\": \"$new\"/" "$DESKTOP_PACKAGE"
+sed -i -E "0,/^version = \"[^\"]+\"/s//version = \"$new\"/" "$DESKTOP_CARGO"
+sed -i -E "0,/\"version\": \"[^\"]+\"/s//\"version\": \"$new\"/" "$DESKTOP_CONFIG"
+cargo metadata --manifest-path "$DESKTOP_CARGO" --format-version 1 --no-deps >/dev/null
+
 # Bump the same two entries in Cargo.lock (portable via awk).
 awk -v new="$new" '
   /^name = "xai-grok-version"$/ || /^name = "xai-grok-pager-bin"$/ { name=1 }
@@ -66,7 +77,8 @@ awk -v new="$new" '
   { print }
 ' "$LOCK_FILE" > "$LOCK_FILE.tmp" && mv "$LOCK_FILE.tmp" "$LOCK_FILE"
 
-git add "$VERSION_FILE" "$PAGER_FILE" "$LOCK_FILE"
+git add "$VERSION_FILE" "$PAGER_FILE" "$LOCK_FILE" \
+  "$DESKTOP_PACKAGE" "$DESKTOP_CARGO" "$DESKTOP_LOCK" "$DESKTOP_CONFIG"
 git commit -m "Release v$new"
 git tag "v$new"
 
@@ -89,24 +101,55 @@ shasum -a 256 "$asset" > "$asset.sha256"
 printf '%s\n' "$new" > stable
 printf '%s\n' "$new" > alpha
 
+# Build the native desktop artifact locally on supported v1 release hosts.
+desktop_assets=()
+case "$platform" in
+  linux-x86_64)
+    (cd "$DESKTOP_DIR" && pnpm install --frozen-lockfile && pnpm tauri build --bundles appimage,deb)
+    desktop_built="$(find "$DESKTOP_DIR/src-tauri/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
+    if [ -n "$desktop_built" ]; then
+      desktop_asset="thanh-desktop-$new-linux-x86_64.AppImage"
+      cp "$desktop_built" "$desktop_asset"
+      desktop_assets+=("$desktop_asset")
+    fi
+    deb_built="$(find "$DESKTOP_DIR/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)"
+    if [ -n "$deb_built" ]; then
+      deb_asset="thanh-desktop-$new-linux-x86_64.deb"
+      cp "$deb_built" "$deb_asset"
+      desktop_assets+=("$deb_asset")
+    fi
+    ;;
+  macos-aarch64)
+    (cd "$DESKTOP_DIR" && pnpm install --frozen-lockfile && pnpm tauri build --bundles dmg)
+    desktop_built="$(find "$DESKTOP_DIR/src-tauri/target/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+    if [ -n "$desktop_built" ]; then
+      desktop_asset="thanh-desktop-$new-macos-aarch64.dmg"
+      cp "$desktop_built" "$desktop_asset"
+      desktop_assets+=("$desktop_asset")
+    fi
+    ;;
+esac
+
+release_assets=("$asset" "$asset.sha256" stable alpha "${desktop_assets[@]}")
+
 git push origin main
 git push origin "v$new"
 
 cleanup() {
-  rm -f "$asset" "$asset.sha256" stable alpha
+  rm -f "${release_assets[@]}"
 }
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "==> v$new tagged & pushed; asset built: $asset"
   echo "==> 'gh' not found. Install + authenticate, then run:"
   echo "      gh auth login"
-  echo "      gh release create v$new $asset $asset.sha256 stable alpha \\"
+  echo "      gh release create v$new ${release_assets[*]} \\"
   echo "          --repo $REPO --title v$new --generate-notes"
   echo "    (then: rm -f $asset $asset.sha256 stable alpha)"
   exit 0
 fi
 
-gh release create "v$new" "$asset" "$asset.sha256" stable alpha \
+gh release create "v$new" "${release_assets[@]}" \
   --repo "$REPO" --title "v$new" --generate-notes
 cleanup
 echo "==> Released v$new. Users get it via \`thanh update\` (Ctrl+U)."

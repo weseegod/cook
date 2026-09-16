@@ -4,8 +4,8 @@ Thanh Desktop is a **chat-first ACP client** for the existing `thanh` agent.
 It is not a Cursor-class IDE and it does not reimplement the agent.
 
 This document is the canonical spec. The app path is
-`frontend/apps/thanh-desktop/` (folder tree only; **implementation has not
-started**). The agent remains `thanh agent stdio` (`xai-grok-shell` /
+`frontend/apps/thanh-desktop/` (**implemented**). The agent remains
+`thanh agent stdio` (`xai-grok-shell` /
 `MvpAgent`).
 
 Related: [`ARCHITECTURE.md`](../ARCHITECTURE.md) (runtime map),
@@ -284,8 +284,8 @@ frontend/apps/thanh-desktop/
 `Cargo.toml` members list. Give it an empty `[workspace]` so `cargo` in that
 directory does not join the 93-crate workspace.
 
-**Announcements / updater tests.** Today they point at
-`frontend/apps/grok-desktop`. When the app exists, retarget:
+**Announcements / updater tests.** These integrations are retargeted to
+`frontend/apps/thanh-desktop`:
 
 - `crates/codegen/xai-grok-announcements/generate.sh` `DESKTOP_DIR`
 - `crates/codegen/xai-grok-update/tests/test_install_sh.rs`
@@ -419,11 +419,12 @@ Do not start PR 3 until the host round-trips `initialize` reliably.
 ## 11. Current repo state
 
 - Spec: this file, linked from `README.md` and `ARCHITECTURE.md`.
-- Folders: `frontend/apps/thanh-desktop/` (see that directory’s README).
-- **No application code yet.** Do not expect `pnpm tauri dev` to work until
-  PR 1.
+- Application: `frontend/apps/thanh-desktop/` (see that directory’s README).
+- The v1 Tauri host, ACP client, chat/session/settings UI, tests, and alpha
+  packaging path are implemented. v1.1/v2 items remain intentionally deferred
+  as listed above.
 
-## 12. Dev loop (after PR 1)
+## 12. Dev loop
 
 ```sh
 # CLI agent (already installed by ./build.sh)
