@@ -358,6 +358,7 @@ fn set_test_env(grok_home: &std::path::Path, server_url: &str) {
 /// Runs `body` against a mock inference server with `GROK_HOME` isolated to a
 /// temp dir. `body` gets the cwd and the mock, and opens its own connection,
 /// since each test wants a different `acp::Client`.
+#[allow(dead_code)]
 pub fn run_agent_test<F, Fut>(body: F)
 where
     F: FnOnce(std::path::PathBuf, std::rc::Rc<xai_grok_test_support::MockInferenceServer>) -> Fut,

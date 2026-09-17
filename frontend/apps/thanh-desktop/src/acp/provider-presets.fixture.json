@@ -1,0 +1,328 @@
+[
+  {
+    "id": "openai",
+    "label": "OpenAI",
+    "baseUrl": "https://api.openai.com/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "OPENAI_API_KEY",
+    "help": "Create a key at platform.openai.com/api-keys",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "gpt-5",
+        "model": "gpt-5",
+        "name": "GPT-5",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "gpt-4.1",
+        "model": "gpt-4.1",
+        "name": "GPT-4.1",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "o4-mini",
+        "model": "o4-mini",
+        "name": "o4-mini",
+        "input": [
+          "text"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "anthropic",
+    "label": "Anthropic",
+    "baseUrl": "https://api.anthropic.com/v1",
+    "apiBackend": "messages",
+    "envKey": "ANTHROPIC_API_KEY",
+    "help": "Create a key at console.anthropic.com",
+    "discover": true,
+    "extraHeaders": {
+      "anthropic-version": "2023-06-01"
+    },
+    "models": [
+      {
+        "id": "claude-opus-4-6",
+        "model": "claude-opus-4-6",
+        "name": "Claude Opus",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "model": "claude-sonnet-4-6",
+        "name": "Claude Sonnet",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "claude-haiku-4-5",
+        "model": "claude-haiku-4-5",
+        "name": "Claude Haiku",
+        "input": [
+          "text",
+          "image"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "openrouter",
+    "label": "OpenRouter",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "OPENROUTER_API_KEY",
+    "help": "Create a key at openrouter.ai/keys",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "anthropic/claude-sonnet-4.6",
+        "model": "anthropic/claude-sonnet-4.6",
+        "name": "Claude Sonnet 4.6",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "deepseek/deepseek-chat",
+        "model": "deepseek/deepseek-chat",
+        "name": "DeepSeek Chat",
+        "input": [
+          "text"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "deepseek",
+    "label": "DeepSeek",
+    "baseUrl": "https://api.deepseek.com",
+    "apiBackend": "chat_completions",
+    "envKey": "DEEPSEEK_API_KEY",
+    "help": "Create a key at platform.deepseek.com",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "deepseek-chat",
+        "model": "deepseek-chat",
+        "name": "DeepSeek Chat",
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "deepseek-reasoner",
+        "model": "deepseek-reasoner",
+        "name": "DeepSeek Reasoner",
+        "input": [
+          "text"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "zai",
+    "label": "Z.ai",
+    "baseUrl": "https://api.z.ai/api/paas/v4/",
+    "apiBackend": "chat_completions",
+    "envKey": "ZAI_API_KEY",
+    "help": "Create a key at z.ai",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "glm-5.1",
+        "model": "glm-5.1",
+        "name": "GLM-5.1",
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "glm-5",
+        "model": "glm-5",
+        "name": "GLM-5",
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "glm-4.7",
+        "model": "glm-4.7",
+        "name": "GLM-4.7",
+        "input": [
+          "text"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "xai",
+    "label": "xAI",
+    "baseUrl": "https://api.x.ai/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "XAI_API_KEY",
+    "help": "Create a key at console.x.ai, or run `thanh login` for session auth",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "grok-4.5",
+        "model": "grok-4.5",
+        "name": "Grok 4.5",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "grok-4.5-mini",
+        "model": "grok-4.5-mini",
+        "name": "Grok 4.5 Mini",
+        "input": [
+          "text",
+          "image"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "google",
+    "label": "Google Gemini",
+    "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "apiBackend": "chat_completions",
+    "envKey": "GEMINI_API_KEY",
+    "help": "Create a key at aistudio.google.com/apikey",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "gemini-2.5-pro",
+        "model": "gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "gemini-2.5-flash",
+        "model": "gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash",
+        "input": [
+          "text",
+          "image"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "groq",
+    "label": "Groq",
+    "baseUrl": "https://api.groq.com/openai/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "GROQ_API_KEY",
+    "help": "Create a key at console.groq.com/keys",
+    "discover": true,
+    "extraHeaders": {},
+    "models": []
+  },
+  {
+    "id": "mistral",
+    "label": "Mistral",
+    "baseUrl": "https://api.mistral.ai/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "MISTRAL_API_KEY",
+    "help": "Create a key at console.mistral.ai",
+    "discover": true,
+    "extraHeaders": {},
+    "models": []
+  },
+  {
+    "id": "moonshot",
+    "label": "Moonshot / Kimi",
+    "baseUrl": "https://api.moonshot.ai/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "MOONSHOT_API_KEY",
+    "help": "Create a key at platform.moonshot.ai",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "kimi-k2.6",
+        "model": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "kimi-k3",
+        "model": "kimi-k3",
+        "name": "Kimi K3",
+        "input": [
+          "text"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "together",
+    "label": "Together",
+    "baseUrl": "https://api.together.xyz/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "TOGETHER_API_KEY",
+    "help": "Create a key at api.together.ai/settings/api-keys",
+    "discover": true,
+    "extraHeaders": {},
+    "models": []
+  },
+  {
+    "id": "fireworks",
+    "label": "Fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "FIREWORKS_API_KEY",
+    "help": "Create a key at fireworks.ai/account/api-keys",
+    "discover": true,
+    "extraHeaders": {},
+    "models": []
+  },
+  {
+    "id": "ollama",
+    "label": "Ollama (local)",
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "apiBackend": "chat_completions",
+    "envKey": null,
+    "help": "Runs locally; no API key required",
+    "discover": true,
+    "extraHeaders": {},
+    "models": []
+  },
+  {
+    "id": "custom",
+    "label": "OpenAI-compatible",
+    "baseUrl": null,
+    "apiBackend": "chat_completions",
+    "envKey": null,
+    "help": "Any OpenAI-compatible endpoint: paste its base URL and a model id",
+    "discover": true,
+    "extraHeaders": {},
+    "models": []
+  }
+]

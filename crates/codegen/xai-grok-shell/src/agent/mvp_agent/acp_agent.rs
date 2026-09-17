@@ -1977,6 +1977,14 @@ impl acp::Agent for MvpAgent {
             "x.ai/models/list" => {
                 crate::agent::handlers::models::handle(self, &args).await
             }
+            "x.ai/models/set_default" => {
+                crate::extensions::providers::handle(self, &args).await
+            }
+            "x.ai/providers/list" | "x.ai/providers/presets" | "x.ai/providers/upsert"
+            | "x.ai/providers/delete" | "x.ai/providers/test"
+            | "x.ai/providers/discover_models" => {
+                crate::extensions::providers::handle(self, &args).await
+            }
             "x.ai/session/updates" => {
                 crate::extensions::session_updates::handle(&args, &self.gateway).await
             }

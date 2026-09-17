@@ -1,29 +1,38 @@
-# thanh-desktop
+# Thanh Desktop
 
-Folder layout for **Thanh Desktop**. **Not implemented yet** — no Tauri/React
-code, no `package.json`, no Cargo crate.
+Chat-first Tauri 2 + React ACP client for the existing Thanh agent. It runs
+`thanh agent stdio`, shares `~/.thanh` with the CLI, and never calls models or
+tools from the renderer.
 
-Canonical spec: [`docs/desktop-app.md`](../../../docs/desktop-app.md).
+Architecture: [`docs/desktop-app.md`](../../../docs/desktop-app.md).  
+Production plan (providers, Claude Desktop–class features):
+[`docs/desktop-app-implement.md`](../../../docs/desktop-app-implement.md).
 
-```
-thanh-desktop/
-  scripts/                 # install.sh (packaging PR)
-  src/
-    acp/                   # ACP client + x.ai/* types
-      generated/           # ts-rs bindings (do not edit)
-    state/                 # session + catalog stores
-    ui/
-      chat/
-      permissions/
-      sessions/
-      settings/
-      welcome/
-    theme/                 # tokens mapped from TUI appearance
-  src-tauri/
-    binaries/              # optional thanh sidecar (stable, not alpha)
-    capabilities/          # Tauri 2 allowlist
-    src/                   # Rust host: spawn agent stdio, ACP mux
+## Develop
+
+Prerequisites: pnpm, Rust, an installed `~/.thanh/bin/thanh` (or
+`THANH_BIN`), and the Tauri Linux packages listed in the architecture doc.
+
+```sh
+pnpm install
+pnpm test
+pnpm tauri dev
 ```
 
-When implementation starts, follow the PR sequence in the spec (scaffold →
-ACP host → first turn). Do not add `src-tauri` to the root Cargo workspace.
+The app and CLI major versions must match. `src-tauri` deliberately contains
+an empty `[workspace]` and is not a member of the generated root workspace.
+
+## Test and package
+
+```sh
+pnpm build
+pnpm test:e2e
+cargo test --manifest-path src-tauri/Cargo.toml
+pnpm tauri build --bundles appimage,deb   # Linux
+```
+
+Alpha packages discover the existing CLI and do not bundle or overwrite it.
+See [`scripts/install.sh`](scripts/install.sh) for local artifact installation.
+
+Advanced BYOK model configuration remains in `~/.thanh/config.toml`; the API
+key form uses `x.ai/setApiKey` rather than implementing another TOML writer.

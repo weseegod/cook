@@ -81,11 +81,82 @@ pub fn compact_json<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
+/// Compact JSON for traces without exposing credentials or other bearer material.
+///
+/// ACP request tracing is useful during local debugging, but extension calls may carry an API
+/// key in their params. Keep the normal serializer for callers that explicitly need the raw
+/// payload; gateway traces should use this redacted variant instead.
+pub fn redacted_compact_json<T: serde::Serialize>(value: &T) -> String {
+    let Ok(mut value) = serde_json::to_value(value) else {
+        return String::new();
+    };
+    redact_json_value(&mut value);
+    serde_json::to_string(&value).unwrap_or_default()
+}
+
+fn redact_json_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object.iter_mut() {
+                if is_sensitive_key(key) {
+                    *child = serde_json::Value::String("***".to_owned());
+                } else {
+                    redact_json_value(child);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_json_value(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn is_sensitive_key(key: &str) -> bool {
+    let normalized: String = key
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "apikey"
+            | "authorization"
+            | "password"
+            | "privatekey"
+            | "refreshtoken"
+            | "secret"
+            | "token"
+            | "xapikey"
+    )
+}
+
 #[cfg(test)]
 mod channel_failure_tests {
     use super::{
         AcpChannelFailure, acp, acp_channel_failure, acp_channel_failure_error, acp_internal_error,
+        redacted_compact_json,
     };
+
+    #[test]
+    fn trace_json_redacts_nested_credentials() {
+        let payload = serde_json::json!({
+            "apiKey": "sk-live-secret",
+            "nested": {
+                "env_key": "SAFE_NAME",
+                "authorization": "Bearer secret-token",
+                "items": [{"private_key": "private-secret"}]
+            }
+        });
+        let trace = redacted_compact_json(&payload);
+        assert!(!trace.contains("sk-live-secret"));
+        assert!(!trace.contains("Bearer secret-token"));
+        assert!(!trace.contains("private-secret"));
+        assert!(trace.contains("SAFE_NAME"));
+        assert_eq!(trace.matches("***").count(), 3);
+    }
 
     #[test]
     fn classifier_round_trips_both_kinds() {
