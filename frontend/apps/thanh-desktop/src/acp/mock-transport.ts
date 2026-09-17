@@ -8,6 +8,7 @@
  */
 import { PROVIDER_PRESETS } from "./provider-presets";
 import type { ProviderPreset } from "./providers";
+import type { FilePreview, ReviewSnapshot, WorkspaceEntry } from "./workspace";
 
 export interface RecordedRequest {
   method: string;
@@ -60,6 +61,12 @@ export interface MockPlugin {
   enabled: boolean;
 }
 
+export interface MockWorkspaceState {
+  entries: Record<string, WorkspaceEntry[]>;
+  files: Record<string, FilePreview>;
+  review: ReviewSnapshot;
+}
+
 export interface MockState {
   /** Non-null when the agent holds an xAI credential of its own. */
   authMethodId: string | null;
@@ -90,6 +97,7 @@ export interface MockState {
   pickedFiles: string[];
   /** Base64 payloads keyed by path, as `read_file_base64` would return them. */
   filePayloads: Record<string, { data: string; mediaType: string; size: number }>;
+  workspace: MockWorkspaceState;
 }
 
 function defaultState(): MockState {
@@ -122,6 +130,32 @@ function defaultState(): MockState {
     files: {},
     pickedFiles: [],
     filePayloads: {},
+    workspace: {
+      entries: {
+        "": [
+          { name: "src", path: "src", kind: "directory", size: null },
+          { name: "README.md", path: "README.md", kind: "file", size: 420 },
+        ],
+        src: [
+          { name: "main.tsx", path: "src/main.tsx", kind: "file", size: 960 },
+          { name: "theme", path: "src/theme", kind: "directory", size: null },
+        ],
+        "src/theme": [{ name: "app.css", path: "src/theme/app.css", kind: "file", size: 1400 }],
+      },
+      files: {
+        "README.md": { path: "README.md", content: "# Thanh Desktop\n\nWorkspace preview.\n", size: 38, truncated: false, binary: false },
+        "src/main.tsx": { path: "src/main.tsx", content: "import { AppShell } from \"./ui/app-shell\";\n\nexport default AppShell;\n", size: 72, truncated: false, binary: false },
+        "src/theme/app.css": { path: "src/theme/app.css", content: ".app-frame { display: flex; }\n", size: 32, truncated: false, binary: false },
+      },
+      review: {
+        base: "HEAD",
+        isGitRepo: true,
+        branch: "main",
+        additions: 3,
+        deletions: 1,
+        files: [{ path: "src/main.tsx", status: "modified", additions: 3, deletions: 1, diff: "diff --git a/src/main.tsx b/src/main.tsx\n@@ -1,2 +1,4 @@\n import { AppShell } from \"./ui/app-shell\";\n+\n+export const ready = true;\n" }],
+      },
+    },
     ...seedFromWindow(),
     // Whatever the agent already wrote wins: the renderer's own memory is not the source of truth.
     ...persisted(),
@@ -579,6 +613,22 @@ export function mockReadFilePayload(path: string): { data: string; mediaType: st
   const payload = state.filePayloads[path];
   if (!payload) throw new Error(`${path}: no such file`);
   return { ...payload };
+}
+
+export function mockWorkspaceList(relativePath = ""): WorkspaceEntry[] {
+  const entries = state.workspace.entries[relativePath];
+  if (!entries) throw new Error(`directory not found: ${relativePath || "."}`);
+  return structuredClone(entries);
+}
+
+export function mockWorkspaceReadFile(relativePath: string): FilePreview {
+  const preview = state.workspace.files[relativePath];
+  if (!preview) throw new Error(`file not found: ${relativePath}`);
+  return structuredClone(preview);
+}
+
+export function mockWorkspaceReview(): ReviewSnapshot {
+  return structuredClone(state.workspace.review);
 }
 
 /** Records what the renderer answered to a reverse request (permission / question / elicit). */

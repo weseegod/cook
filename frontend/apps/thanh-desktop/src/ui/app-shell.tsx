@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun } from "lucide-react";
+import { AlertCircle, FolderOpen, Moon, PanelLeftClose, PanelLeftOpen, PanelRight, RefreshCw, Sun, X } from "lucide-react";
 import { acpClient } from "../acp/client";
 import { pickFolder, request } from "../acp/host";
 import { shouldShowConnectProvider } from "../acp/provider-presets";
@@ -11,6 +11,7 @@ import { CommandPalette } from "./palette/command-palette";
 import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
 import { SettingsPanel } from "./settings/settings-panel";
+import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
 import { useTheme } from "./theme/theme";
@@ -21,6 +22,7 @@ type SettingsTab = "general" | "providers" | "models" | "connectors" | "context"
 export function AppShell() {
   const { cwd, connection, error } = useSessionStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [utilityPanelOpen, setUtilityPanelOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [settingsCloseRequest, setSettingsCloseRequest] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -108,7 +110,7 @@ export function AppShell() {
 
   return (
     <div className="app-frame">
-      {sidebarOpen && cwd && <SessionSidebar />}
+      {sidebarOpen && cwd && <SessionSidebar onOpenSettings={() => openSettings("general")} />}
       <main className="main-column">
         <header className="titlebar">
           <button className="icon-button" onClick={() => setSidebarOpen((open) => !open)} aria-label="Toggle sessions">
@@ -129,10 +131,37 @@ export function AppShell() {
             >
               {resolvedTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
             </button>
-            <button className="icon-button" onClick={() => openSettings("general")} aria-label="Settings"><Settings size={18} /></button>
+            {cwd && !utilityPanelOpen && (
+              <button
+                className="icon-button"
+                onClick={() => setUtilityPanelOpen((open) => !open)}
+                aria-label="Open tools panel"
+                title="Open tools panel"
+              >
+                <PanelRight size={17} />
+              </button>
+            )}
           </div>
         </header>
-        {error && <div className="error-banner">{error}</div>}
+        {error && (
+          <div className="error-banner" role="alert" data-testid="error-banner">
+            <AlertCircle size={15} aria-hidden="true" />
+            <div className="error-copy">
+              <strong>Something went wrong</strong>
+              <span>{error}</span>
+            </div>
+            <div className="error-actions">
+              {connection === "error" && cwd && (
+                <button type="button" className="error-retry" onClick={() => void acpClient.connect(cwd).catch(() => undefined)}>
+                  <RefreshCw size={13} /> Retry
+                </button>
+              )}
+              <button type="button" className="error-dismiss" aria-label="Dismiss error" onClick={() => useSessionStore.getState().set({ error: null })}>
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+        )}
         {!cwd ? (
           <Welcome onChooseWorkspace={chooseWorkspace} />
         ) : needsConnect ? (
@@ -152,6 +181,7 @@ export function AppShell() {
           <ChatView />
         )}
       </main>
+      {cwd && utilityPanelOpen && <UtilityPanel onClose={() => setUtilityPanelOpen(false)} />}
       {settingsTab && <SettingsPanel initialTab={settingsTab} closeRequest={settingsCloseRequest} onClose={() => setSettingsTab(null)} />}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSelect={runPaletteAction} />}
     </div>

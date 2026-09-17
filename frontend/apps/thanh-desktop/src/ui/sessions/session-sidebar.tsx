@@ -1,12 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Folder, MessageSquarePlus, Pencil, Search, Trash2 } from "lucide-react";
+import { CircleHelp, Folder, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
 import { useDeferredValue, useState } from "react";
 import { acpClient } from "../../acp/client";
 import type { SessionSummary } from "../../acp/xai";
 import { useSessionStore } from "../../state/session";
 import { ConfirmDialog, Dialog, DialogActions } from "../components/dialog";
 
-export function SessionSidebar() {
+export function SessionSidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
   const activeId = useSessionStore((state) => state.sessionId);
   const cwd = useSessionStore((state) => state.cwd);
   const connection = useSessionStore((state) => state.connection);
@@ -95,6 +95,12 @@ export function SessionSidebar() {
         <div className="session-list">
           <div className="session-list-heading"><span>Conversations</span>{sessions.data && <small>{sessions.data.length}</small>}</div>
           {sessions.isLoading && <div className="sidebar-hint">Loading sessions…</div>}
+          {sessions.isError && (
+            <div className="sidebar-error" role="alert">
+              <span>Couldn’t load conversations.</span>
+              <button type="button" onClick={() => void sessions.refetch()}>Retry</button>
+            </div>
+          )}
           {sessions.data?.map((session) => (
             <div key={session.id} className={`session-row ${activeId === session.id ? "active" : ""}`}>
               <button className="session-open" onClick={() => void acpClient.loadSession(session.id, session.cwd)}>
@@ -110,8 +116,14 @@ export function SessionSidebar() {
           {sessions.data?.length === 0 && <div className="sidebar-hint">No conversations found.</div>}
         </div>
         <footer className="sidebar-footer">
-          <span><span className={`status-dot status-${connection}`} /> {connection === "ready" ? "Connected" : "Reconnecting"}</span>
-          <small title={cwd ?? undefined}>Ready to work</small>
+          <button type="button" className="sidebar-account" onClick={onOpenSettings} aria-label="Account" title="Account">
+            <span className="sidebar-avatar">T</span>
+            <span className="sidebar-account-copy"><strong>Thanh</strong><small>{connection === "ready" ? "Connected" : "Reconnecting"}</small></span>
+          </button>
+          <div className="sidebar-footer-actions">
+            <button type="button" className="sidebar-footer-button" onClick={onOpenSettings} aria-label="Settings" title="Settings"><Settings size={15} /></button>
+            <button type="button" className="sidebar-footer-button" aria-label="Help" title="Help"><CircleHelp size={15} /></button>
+          </div>
         </footer>
       </aside>
       {dialog === "rename" && target && (

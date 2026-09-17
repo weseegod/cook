@@ -1,48 +1,39 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Brain, Copy, FileCode2 } from "lucide-react";
 import { acpClient } from "../../acp/client";
-import { useSessionStore, type MessageBlock, type PlanBlock } from "../../state/session";
+import { useSessionStore, type MessageBlock, type PlanBlock, type SessionEventBlock } from "../../state/session";
 import { PermissionModal } from "../permissions/permission-modal";
 import { InteractionModal } from "../permissions/interaction-modal";
 import { Composer } from "./composer";
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
 import { StatusBar } from "./status-bar";
-import { ActivityGroup, LiveActivityRail } from "./tool-card";
+import { TurnStatus } from "./turn-status";
+import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
 import { projectTranscript } from "./transcript-projection";
 
 export function ChatView() {
-  const { blocks, sessionId, turnRunning, turnStartedAt, planMode, notice, pendingPermission, pendingQuestion, setComposerDraft } = useSessionStore();
+  const blocks = useSessionStore((state) => state.blocks);
+  const sessionId = useSessionStore((state) => state.sessionId);
+  const turnRunning = useSessionStore((state) => state.turnRunning);
+  const planMode = useSessionStore((state) => state.planMode);
+  const notice = useSessionStore((state) => state.notice);
+  const pendingPermission = useSessionStore((state) => state.pendingPermission);
+  const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
+  const setComposerDraft = useSessionStore((state) => state.setComposerDraft);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
-  const [now, setNow] = useState(Date.now());
   const projected = useMemo(() => projectTranscript(blocks), [blocks]);
-  const liveActivities = projected.filter((block): block is Extract<typeof block, { type: "activity" }> => block.type === "activity" && block.status === "running");
-  const turnElapsedMs = turnStartedAt === null ? null : Math.max(0, now - turnStartedAt);
-  useEffect(() => {
-    if (!turnRunning && liveActivities.length === 0) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [turnRunning, liveActivities.length]);
+  const interactionPending = Boolean(pendingPermission || pendingQuestion);
+
   useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript || !stickToBottom.current) return;
     transcript.scrollTo({ top: transcript.scrollHeight, behavior: turnRunning ? "auto" : "smooth" });
   }, [blocks, turnRunning]);
 
-  const last = projected.at(-1);
-  const hasLiveOutput = last?.type === "activity"
-    ? last.status === "running"
-    : last?.type === "message" && last.role === "assistant" && last.streaming;
-
   return (
     <div className="chat-layout">
-      {planMode && <div className="plan-banner"><Brain size={15} /> Plan mode — Thanh will inspect and propose before changing files.</div>}
-      <LiveActivityRail
-        activities={liveActivities}
-        turnElapsedMs={turnElapsedMs}
-        onCancel={() => void acpClient.cancel()}
-      />
       <div
         className="transcript"
         ref={transcriptRef}
@@ -62,23 +53,37 @@ export function ChatView() {
             </div>
           </div>
         ) : projected.map((block) => {
-          if (block.type === "message") return <Message key={`${block.role}-${block.id}`} block={block} />;
-          if (block.type === "activity") return <ActivityGroup key={block.id} activity={block} />;
+          if (block.type === "message") {
+            if (block.role === "thought") return <ThinkingRow key={block.id} block={block} />;
+            return <Message key={`${block.role}-${block.id}`} block={block} />;
+          }
+          if (block.type === "verb-group") return <VerbGroupRow key={block.id} tools={block.tools} />;
+          if (block.type === "tool") return <ToolRow key={block.id} tool={block.tool} />;
+          if (block.type === "session-event") return <SessionEvent key={block.id} block={block} />;
           return <Plan key={block.id} plan={block as PlanBlock} />;
         })}
-        {turnRunning && !hasLiveOutput && <div className="turn-activity"><span className="activity-pulse" /> Waiting for response…</div>}
       </div>
-      {(pendingPermission || pendingQuestion) && (
+      <TurnStatus />
+      {planMode && <div className="plan-banner"><Brain size={15} /> Plan mode — Thanh will inspect and propose before changing files.</div>}
+      {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
+      {interactionPending && (
         <div className="chat-prompt-dock">
           <PermissionModal />
           <InteractionModal />
         </div>
       )}
-      {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
-      <Composer />
+      {/* The card replaces the prompt slot visually; the composer stays mounted behind it so a
+          half-written draft and its attachments survive the interruption. */}
+      <div className={interactionPending ? "prompt-slot stashed" : "prompt-slot"}>
+        <Composer />
+      </div>
       <StatusBar />
     </div>
   );
+}
+
+function SessionEvent({ block }: { block: SessionEventBlock }) {
+  return <div className="session-event" data-testid={`session-event-${block.id}`}>{block.text}</div>;
 }
 
 function Message({ block }: { block: MessageBlock }) {

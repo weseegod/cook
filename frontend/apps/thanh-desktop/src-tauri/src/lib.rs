@@ -1,11 +1,12 @@
 mod acp_host;
 mod bin_resolve;
+mod workspace;
 
 use std::path::PathBuf;
 
 use acp_host::{AcpHost, RpcError, StartInfo};
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine as _;
 use serde_json::Value;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -115,6 +116,44 @@ struct FilePayload {
 #[tauri::command]
 async fn read_file_base64(path: String) -> Result<FilePayload, String> {
     tauri::async_runtime::spawn_blocking(move || read_file_payload(&path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn workspace_list(
+    host: State<'_, AcpHost>,
+    relative_path: String,
+) -> Result<Vec<workspace::WorkspaceEntry>, String> {
+    let root = host.workspace_root()?;
+    tauri::async_runtime::spawn_blocking(move || workspace::list(root, relative_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn workspace_read_file(
+    host: State<'_, AcpHost>,
+    relative_path: String,
+) -> Result<workspace::FilePreview, String> {
+    let root = host.workspace_root()?;
+    tauri::async_runtime::spawn_blocking(move || workspace::read_file(root, relative_path))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn workspace_review(host: State<'_, AcpHost>) -> Result<workspace::ReviewSnapshot, String> {
+    let root = host.workspace_root()?;
+    tauri::async_runtime::spawn_blocking(move || workspace::review(root))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn workspace_open(host: State<'_, AcpHost>, relative_path: String) -> Result<(), String> {
+    let root = host.workspace_root()?;
+    tauri::async_runtime::spawn_blocking(move || workspace::open(root, relative_path))
         .await
         .map_err(|error| error.to_string())?
 }
@@ -238,6 +277,10 @@ pub fn run() {
             pick_folder,
             pick_files,
             read_file_base64,
+            workspace_list,
+            workspace_read_file,
+            workspace_review,
+            workspace_open,
             open_path,
             config_security,
         ])

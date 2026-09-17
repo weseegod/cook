@@ -307,6 +307,8 @@ test.describe("chat, attachments and the model picker", () => {
     });
     await expect(page.getByTestId("attachment-row")).toHaveCount(0);
     await expect(page.locator(".error-banner")).toContainText("cannot read images");
+    await page.getByLabel("Dismiss error").click();
+    await expect(page.getByTestId("error-banner")).toHaveCount(0);
     expect(callsTo(await mock.requests(), "session/prompt")).toHaveLength(0);
   });
 

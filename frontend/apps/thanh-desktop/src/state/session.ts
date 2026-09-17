@@ -1,5 +1,6 @@
 import type { RequestPermissionRequest, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { create } from "zustand";
+import { formatDuration } from "../ui/chat/format-duration";
 
 export interface MessageBlock {
   type: "message";
@@ -9,6 +10,17 @@ export interface MessageBlock {
   text: string;
   images: string[];
   streaming: boolean;
+  /** Thinking rows only: local clock frozen on finish; drives `Thought for 1.2s`. */
+  startedAt?: number;
+  elapsedMs?: number | null;
+}
+
+/** Turn marker row (`Worked for 1.2s`, cancel/fail variants) — `blocks/session_event.rs`. */
+export interface SessionEventBlock {
+  type: "session-event";
+  id: string;
+  turnId: string;
+  text: string;
 }
 
 export interface ToolBlock {
@@ -35,7 +47,13 @@ export interface PlanBlock {
   content?: unknown;
 }
 
-export type TranscriptBlock = MessageBlock | ToolBlock | PlanBlock;
+export type TranscriptBlock = MessageBlock | ToolBlock | PlanBlock | SessionEventBlock;
+
+/** Terminal outcome of a turn, as the visible marker presents it (`turn_completion.rs`). */
+export type TurnOutcome =
+  | { kind: "completed" }
+  | { kind: "cancelled"; phrase?: string }
+  | { kind: "failed"; error?: string };
 
 export interface TranscriptCursor {
   turnId: string | null;
@@ -76,12 +94,17 @@ interface SessionState {
   transcriptCursor: TranscriptCursor;
   turnRunning: boolean;
   turnStartedAt: number | null;
+  /** Time inside this turn that a question card held the clock still (`QuestionViewState.opened_at`). */
+  turnPausedMs: number;
+  questionOpenedAt: number | null;
   modelId: string | null;
   planMode: boolean;
   usage: Record<string, unknown> | null;
   alwaysApprove: boolean;
   pendingPermission: PendingPermission | null;
   pendingQuestion: PendingQuestion | null;
+  /** Prompts the user sent while a turn was already running (drained one per finishing turn). */
+  queuedPromptCount: number;
   composerDraft: string;
   notice: string | null;
   error: string | null;
@@ -91,7 +114,17 @@ interface SessionState {
   appendOptimisticUser: (text: string, images?: string[]) => void;
   applyNotification: (notification: SessionNotification) => void;
   applyNotifications: (notifications: SessionNotification[]) => void;
-  finishTurn: () => void;
+  finishTurn: (outcome?: TurnOutcome) => void;
+}
+
+/** Turn clock with question-card pauses netted out, in the shared `formatDuration` unit. */
+export function turnElapsedMs(
+  state: Pick<SessionState, "turnStartedAt" | "turnPausedMs" | "questionOpenedAt">,
+  now = Date.now(),
+): number | null {
+  if (state.turnStartedAt === null) return null;
+  const openPause = state.questionOpenedAt === null ? 0 : Math.max(0, now - state.questionOpenedAt);
+  return Math.max(0, now - state.turnStartedAt - state.turnPausedMs - openPause);
 }
 
 const emptyCursor = (): TranscriptCursor => ({
@@ -111,16 +144,33 @@ export const useSessionStore = create<SessionState>((set) => ({
   transcriptCursor: emptyCursor(),
   turnRunning: false,
   turnStartedAt: null,
+  turnPausedMs: 0,
+  questionOpenedAt: null,
   modelId: localStorage.getItem("thanh.defaultModel"),
   planMode: false,
   usage: null,
   alwaysApprove: localStorage.getItem("thanh.alwaysApprove") === "true",
   pendingPermission: null,
   pendingQuestion: null,
+  queuedPromptCount: 0,
   composerDraft: "",
   notice: null,
   error: null,
-  set: (patch) => set(patch),
+  set: (patch) =>
+    set((state) => {
+      const next: Partial<SessionState> = { ...patch };
+      // A question card holds the turn clock still while it is open, so answering a prompt
+      // does not inflate the marker or the turn-status timer.
+      if ("pendingQuestion" in patch) {
+        if (state.questionOpenedAt === null && patch.pendingQuestion) {
+          next.questionOpenedAt = Date.now();
+        } else if (state.questionOpenedAt !== null && !patch.pendingQuestion) {
+          next.turnPausedMs = state.turnPausedMs + Math.max(0, Date.now() - state.questionOpenedAt);
+          next.questionOpenedAt = null;
+        }
+      }
+      return next;
+    }),
   setComposerDraft: (composerDraft) => set({ composerDraft }),
   resetConversation: (sessionId = null) =>
     set({
@@ -130,9 +180,12 @@ export const useSessionStore = create<SessionState>((set) => ({
       sessionTitle: "New conversation",
       turnRunning: false,
       turnStartedAt: null,
+      turnPausedMs: 0,
+      questionOpenedAt: null,
       usage: null,
       pendingPermission: null,
       pendingQuestion: null,
+      queuedPromptCount: 0,
       composerDraft: "",
       notice: null,
       error: null,
@@ -148,19 +201,60 @@ export const useSessionStore = create<SessionState>((set) => ({
         ],
         transcriptCursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: localId },
         turnStartedAt: Date.now(),
+        turnPausedMs: 0,
       };
     }),
   applyNotification: (notification) =>
     set((state) => reduceNotifications(state, [notification])),
   applyNotifications: (notifications) =>
     set((state) => reduceNotifications(state, notifications)),
-  finishTurn: () =>
-    set((state) => ({
-      blocks: finishStreamingBlocks(state.blocks),
-      transcriptCursor: emptyCursor(),
-      turnStartedAt: null,
-    })),
+  finishTurn: (outcome = { kind: "completed" }) =>
+    set((state) => {
+      const finished = finishStreamingBlocks(state.blocks);
+      return {
+        blocks: appendTurnMarker(finished, state, outcome),
+        transcriptCursor: emptyCursor(),
+        turnStartedAt: null,
+        turnPausedMs: 0,
+        questionOpenedAt: null,
+        pendingPermission: null,
+        pendingQuestion: null,
+      };
+    }),
 }));
+
+/**
+ * The TUI writes one marker row per turn (`blocks/session_event.rs`): `Worked for {duration}` on
+ * success, cancel/fail variants otherwise. Returns the transcript untouched when no turn was open
+ * or when the agent already closed it.
+ */
+function appendTurnMarker(
+  blocks: TranscriptBlock[],
+  state: Pick<SessionState, "turnStartedAt" | "turnPausedMs" | "questionOpenedAt" | "transcriptCursor">,
+  outcome: TurnOutcome,
+): TranscriptBlock[] {
+  const turnId = state.transcriptCursor.turnId;
+  if (!turnId) return blocks;
+  const last = blocks.at(-1);
+  if (!last || last.turnId !== turnId) return blocks;
+  if (last.type === "session-event") return blocks;
+  const text = turnMarkerText(outcome, turnElapsedMs(state));
+  return [...blocks, { type: "session-event", id: `event-${turnId}`, turnId, text }];
+}
+
+export function turnMarkerText(outcome: TurnOutcome, elapsedMs: number | null): string {
+  const duration = elapsedMs === null ? null : formatDuration(elapsedMs);
+  if (outcome.kind === "cancelled") {
+    const phrase = outcome.phrase ?? "Turn cancelled by user";
+    return duration ? `${phrase} in ${duration}.` : `${phrase}.`;
+  }
+  if (outcome.kind === "failed") {
+    const detail = outcome.error?.trim();
+    if (duration) return `Turn failed in ${duration}: ${detail ?? "unknown error"}`;
+    return `Turn failed: ${detail ?? "unknown error"}`;
+  }
+  return duration ? `Worked for ${duration}` : "Turn completed.";
+}
 
 export function reduceTranscript(
   transcript: TranscriptState,
@@ -271,14 +365,16 @@ function reduceMessageChunk(
   const text = content?.type === "text" && typeof content.text === "string" ? content.text : "";
   const image = contentImage(content);
   if (!text && !image) return transcript;
+  // First agent text closes the thinking segment, exactly like the tracker's `current_thinking`.
+  const source = role === "assistant" ? finishOpenThoughts(transcript.blocks) : transcript.blocks;
 
   const activeId = role === "assistant" ? transcript.cursor.assistantId : transcript.cursor.thoughtId;
   const activeIndex = activeId
-    ? transcript.blocks.findIndex((block) => block.type === "message" && block.id === activeId)
+    ? source.findIndex((block) => block.type === "message" && block.id === activeId)
     : -1;
   if (activeIndex >= 0) {
     return {
-      blocks: transcript.blocks.map((block, index) =>
+      blocks: source.map((block, index) =>
         index === activeIndex && block.type === "message"
           ? { ...block, text: block.text + text, images: image ? [...block.images, image] : block.images }
           : block,
@@ -288,11 +384,20 @@ function reduceMessageChunk(
   }
 
   if (!text.trim() && !image) return transcript;
-  const turnId = transcript.cursor.turnId ?? `turn-orphan-${transcript.blocks.length}`;
-  const id = `${role}-${turnId}-${transcript.blocks.length}`;
-  const block: MessageBlock = { type: "message", id, turnId, role, text, images: image ? [image] : [], streaming: true };
+  const turnId = transcript.cursor.turnId ?? `turn-orphan-${source.length}`;
+  const id = `${role}-${turnId}-${source.length}`;
+  const block: MessageBlock = {
+    type: "message",
+    id,
+    turnId,
+    role,
+    text,
+    images: image ? [image] : [],
+    streaming: true,
+    ...(role === "thought" ? { startedAt: Date.now(), elapsedMs: null } : {}),
+  };
   return {
-    blocks: [...transcript.blocks, block],
+    blocks: [...source, block],
     cursor: {
       ...transcript.cursor,
       turnId,
@@ -300,6 +405,26 @@ function reduceMessageChunk(
       thoughtId: role === "thought" ? id : null,
     },
   };
+}
+
+/** Freeze every streaming thinking row (and drop empty ones) before assistant prose opens. */
+function finishOpenThoughts(blocks: TranscriptBlock[]): TranscriptBlock[] {
+  let changed = false;
+  const next: TranscriptBlock[] = [];
+  for (const block of blocks) {
+    if (block.type === "message" && block.role === "thought") {
+      if (!block.text.trim()) {
+        changed = true;
+        continue;
+      }
+      const finished = finishThought(block);
+      if (finished !== block) changed = true;
+      next.push(finished);
+      continue;
+    }
+    next.push(block);
+  }
+  return changed ? next : blocks;
 }
 
 function reduceTool(transcript: TranscriptState, raw: Record<string, unknown>): TranscriptState {
@@ -326,7 +451,7 @@ function reduceTool(transcript: TranscriptState, raw: Record<string, unknown>): 
     elapsedMs,
     ...metadata,
   };
-  const sourceBlocks = isStart ? finishStreamingBlocks(transcript.blocks) : transcript.blocks;
+  const sourceBlocks = isStart ? finishMessageSegments(transcript.blocks) : transcript.blocks;
   const blocks = sourceBlocks.map((block, blockIndex) =>
     blockIndex === index ? next : block,
   );
@@ -358,23 +483,52 @@ function reducePlan(transcript: TranscriptState, raw: Record<string, unknown>): 
 }
 
 function finishStreamingBlocks(blocks: TranscriptBlock[]): TranscriptBlock[] {
-  let changed = false;
-  const next = blocks.map((block) => {
-    if (block.type === "message" && block.streaming) {
-      changed = true;
-      return { ...block, streaming: false };
-    }
+  const next: TranscriptBlock[] = [];
+  for (const block of finishMessageSegments(blocks)) {
     if (block.type === "tool" && !isTerminalToolStatus(block.status)) {
-      changed = true;
-      return {
+      next.push({
         ...block,
         status: "cancelled",
         elapsedMs: block.elapsedMs ?? Math.max(0, Date.now() - block.startedAt),
-      };
+      });
+      continue;
     }
-    return block;
-  });
+    next.push(block);
+  }
+  return next;
+}
+
+/**
+ * Close the streaming prose/thinking segments without touching tool rows: a tool call ends the
+ * assistant segment (and the tracker's `current_thinking`), but sibling tools keep running.
+ */
+function finishMessageSegments(blocks: TranscriptBlock[]): TranscriptBlock[] {
+  const next: TranscriptBlock[] = [];
+  for (const block of blocks) {
+    if (block.type === "message" && block.role === "thought") {
+      // Pre-created/empty thinking is removed rather than rendered as "Thought for 0.0s".
+      if (!block.text.trim()) continue;
+      next.push(finishThought(block));
+      continue;
+    }
+    if (block.type === "message" && block.streaming) {
+      next.push({ ...block, streaming: false });
+      continue;
+    }
+    next.push(block);
+  }
+  const changed = next.length !== blocks.length || next.some((block, index) => block !== blocks[index]);
   return changed ? next : blocks;
+}
+
+/** Freeze a thinking row's clock; the local timer wins while live (`thinking.rs::finish`). */
+function finishThought(block: MessageBlock): MessageBlock {
+  if (!block.streaming) return block;
+  return {
+    ...block,
+    streaming: false,
+    elapsedMs: block.elapsedMs ?? (block.startedAt === undefined ? null : Math.max(0, Date.now() - block.startedAt)),
+  };
 }
 
 function isTurnActivity(kind: string): boolean {

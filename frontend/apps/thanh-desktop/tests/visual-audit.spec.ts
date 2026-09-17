@@ -49,8 +49,33 @@ test.describe("visual audit", () => {
 
     await page.getByPlaceholder("Ask Thanh anything…").fill("Review this project and suggest the next step.");
     await capture(page, "chat-composer");
+    await page.getByLabel("Open tools panel").click();
+    await expect(page.getByTestId("utility-panel")).toBeVisible();
+    await expect(page.getByTestId("utility-panel")).toContainText("Review");
+    await expect(page.getByTestId("utility-panel")).toContainText("Files");
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-right-panel");
+    await page.getByTestId("utility-panel").getByRole("button", { name: /^Review/ }).click();
+    await expect(page.getByTestId("review-view")).toBeVisible();
+    await expect(page.getByTestId("review-view")).toContainText("1 files");
+    await expect(page.getByTestId("review-view")).toContainText("src/main.tsx");
+    await expect(page.getByTestId("diff-preview")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-review-panel");
+    await page.getByRole("button", { name: "Tools", exact: true }).click();
+    await page.getByTestId("utility-panel").getByRole("button", { name: /^Files/ }).click();
+    await expect(page.getByTestId("files-view")).toBeVisible();
+    await page.getByRole("button", { name: "src" }).click();
+    await page.getByRole("button", { name: "main.tsx" }).click();
+    await expect(page.getByTestId("file-preview")).toContainText("src/main.tsx");
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-files-panel");
+    await page.getByLabel("Close tools panel").click();
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+    // Turn end writes the TUI marker and the live row goes away.
+    await expect(page.locator(".session-event").last()).toContainText("Worked for");
+    await expect(page.getByTestId("turn-status")).toHaveCount(0);
     await capture(page, "chat-transcript");
     await page.getByText("Read 2 files").click();
     await capture(page, "chat-activity-expanded");
@@ -102,7 +127,7 @@ test.describe("visual audit", () => {
     await capture(page, "connect-zai");
   });
 
-  test("shows the TUI live rail and inline decisions without a modal", async ({ page }) => {
+  test("shows the live turn-status row and inline decisions without a modal", async ({ page }) => {
     await openWorkspace(page, {
       ...CONNECTED_SEED,
       promptDelayMs: 1200,
@@ -113,16 +138,35 @@ test.describe("visual audit", () => {
     });
     await page.getByPlaceholder("Ask Thanh anything…").fill("Run the integration tests");
     await page.getByTestId("send-button").click();
-    await expect(page.getByTestId("live-activity-rail")).toBeVisible();
-    await expect(page.getByTestId("live-activity-rail")).toContainText("pnpm test:e2e");
-    await expect(page.getByTestId("live-activity-rail")).toContainText("0.");
+    const turnStatus = page.getByTestId("turn-status");
+    await expect(turnStatus).toBeVisible();
+    await expect(turnStatus).toContainText("Run pnpm test:e2e");
+    await expect(turnStatus.locator(".turn-status-phase")).toHaveText(/\d/);
+    await expect(turnStatus.getByRole("button", { name: "[stop]" })).toBeVisible();
+    // Region order matches the TUI stack: scrollback → turn-status → prompt slot.
+    const [transcriptBox, statusBox, slotBox] = await Promise.all([
+      page.locator(".transcript").boundingBox(),
+      turnStatus.boundingBox(),
+      page.locator(".prompt-slot").boundingBox(),
+    ]);
+    expect(statusBox!.y).toBeGreaterThanOrEqual(transcriptBox!.y + transcriptBox!.height - 1);
+    expect(slotBox!.y).toBeGreaterThanOrEqual(statusBox!.y + statusBox!.height - 1);
+    // No pinned tool rail: the live activity is the row above the prompt slot.
+    await expect(page.getByTestId("live-activity-rail")).toHaveCount(0);
     await page.evaluate(() => window.__thanhMock?.permission());
     await expect(page.getByTestId("inline-permission")).toBeVisible();
+    // The card replaces the prompt slot rather than stacking above a live composer.
+    await expect(page.locator(".prompt-slot")).toBeHidden();
+    const [transcriptAfter, cardBox] = await Promise.all([
+      page.locator(".transcript").boundingBox(),
+      page.locator(".chat-prompt-dock").boundingBox(),
+    ]);
+    expect(cardBox!.y).toBeGreaterThanOrEqual(transcriptAfter!.y + transcriptAfter!.height - 1);
     await expect(page.locator(".modal-backdrop")).toHaveCount(0);
     await page.getByTestId("inline-permission").getByRole("button", { name: /Allow once/ }).click();
     await page.evaluate(() => window.__thanhMock?.plan());
     await expect(page.getByTestId("inline-interaction")).toContainText("Implementation plan");
     await expect(page.getByTestId("inline-interaction")).toContainText("Approve");
-    await capture(page, "chat-live-rail-inline-decisions");
+    await capture(page, "chat-turn-status-inline-decisions");
   });
 });

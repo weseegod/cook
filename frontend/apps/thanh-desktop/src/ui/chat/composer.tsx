@@ -1,9 +1,10 @@
-import { CornerDownLeft, FileText, LoaderCircle, Paperclip, Square, X } from "lucide-react";
+import { ChevronDown, CornerDownLeft, FileText, LoaderCircle, Mic, Plus, Shield, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type Attachment } from "../../acp/attachments";
 import { onFileDrop, pickFiles, readFilePayload } from "../../acp/host";
-import { useCatalogStore } from "../../state/catalog";
+import { groupByProvider } from "../../acp/xai";
+import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import {
   clientCommand,
@@ -45,6 +46,7 @@ export function Composer() {
   const modelId = useSessionStore((state) => state.modelId);
   const commands = useCatalogStore((state) => state.commands);
   const models = useCatalogStore((state) => state.models);
+  const { id: selectedModel, known: selectedModelKnown } = useModelSelection();
   const imagesAllowed = acpClient.imageAttachEnabled();
   // The name is still being typed while no space follows it; after that the text is arguments.
   const slashPrefix = /^\/([^\s/\\]*)(\s[\s\S]*)?$/.exec(text.trimStart());
@@ -219,6 +221,10 @@ export function Composer() {
     }
   }
 
+  function reportError(error: unknown) {
+    useSessionStore.getState().set({ error: error instanceof Error ? error.message : String(error) });
+  }
+
   return (
     <div className="composer-wrap">
       {matching.length > 0 && (
@@ -298,7 +304,7 @@ export function Composer() {
               onClick={() => void openPicker()}
               disabled={interactionPending}
             >
-              <Paperclip size={15} />
+              <Plus size={16} />
             </button>
             <input
               ref={filePicker}
@@ -318,18 +324,44 @@ export function Composer() {
               <kbd>↵</kbd> Send <kbd>⇧↵</kbd> New line <kbd>/</kbd> Commands
             </span>
           </div>
-          {turnRunning ? (
-            <div className="composer-running">
-              <button type="button" className="stop-button" onClick={() => void acpClient.cancel()} disabled={interactionPending}><Square size={13} /> Stop</button>
+          <div className="composer-submit">
+            <button
+              type="button"
+              className={`access-toggle ${alwaysApprove ? "active" : ""}`}
+              aria-pressed={alwaysApprove}
+              title={alwaysApprove ? "Tools can run without an approval prompt" : "Ask before a tool changes your workspace"}
+              onClick={() => void acpClient.setYolo(!alwaysApprove).catch(reportError)}
+            >
+              <Shield size={13} /> {alwaysApprove ? "Full access" : "Ask before edits"}
+            </button>
+            <label className="composer-model" title={selectedModel || "Select model"}>
+              <select
+                value={selectedModel}
+                disabled={models.length === 0}
+                onChange={(event) => void acpClient.setModel(event.target.value).catch(reportError)}
+                aria-label="Model"
+              >
+                {!selectedModelKnown && <option value={selectedModel} disabled>{models.length === 0 ? "Loading models…" : selectedModel || "Select model"}</option>}
+                {groupByProvider(models).map(([provider, entries]) => (
+                  <optgroup key={provider} label={provider}>
+                    {entries.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+              <span className="composer-model-effort">High</span>
+              <ChevronDown size={12} aria-hidden="true" />
+            </label>
+            <button type="button" className="composer-voice" aria-label="Voice input" title="Voice input is not available yet" disabled><Mic size={14} /></button>
+            {turnRunning ? (
               <button type="button" className="send-button" disabled={interactionPending || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
               </button>
-            </div>
-          ) : (
-            <button type="button" className="send-button" disabled={interactionPending || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()} data-testid="send-button">
-              {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Send
-            </button>
-          )}
+            ) : (
+              <button type="button" className="send-button" disabled={interactionPending || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()} data-testid="send-button">
+                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Send
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

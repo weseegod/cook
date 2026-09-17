@@ -261,6 +261,13 @@ impl AcpHost {
             cwd: runtime.cwd.clone(),
         })
     }
+
+    pub fn workspace_root(&self) -> Result<PathBuf, String> {
+        self.workspace
+            .lock()
+            .clone()
+            .ok_or_else(|| "no active workspace".to_owned())
+    }
 }
 
 fn write_message(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), String> {

@@ -13,7 +13,7 @@ import {
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { buildPromptParts, imageAttachEnabled, optimisticImages, type Attachment } from "./attachments";
 import { useCatalogStore } from "../state/catalog";
-import { useSessionStore, type PendingQuestion } from "../state/session";
+import { useSessionStore, type PendingQuestion, type TurnOutcome } from "../state/session";
 import {
   notify,
   onLog,
@@ -155,27 +155,13 @@ export class ThanhAcpClient {
     return this.dispatchPrompt(sessionId, this.buildParts(text, attachments));
   }
 
-  /** Re-run a terminal command through the agent's direct-bash ACP path. */
-  async rerunCommand(command: string): Promise<PromptResponse> {
-    const clean = command.trim();
-    if (!clean) throw new Error("Command is empty");
-    let sessionId = useSessionStore.getState().sessionId;
-    if (!sessionId) sessionId = await this.newSession();
-    const text = `! ${clean}`;
-    useSessionStore.getState().appendOptimisticUser(text);
-    return this.dispatchPrompt(sessionId, [{
-      type: "text",
-      text,
-      _meta: { bash_command: clean },
-    }]);
-  }
-
   queuePrompt(text: string, attachments: Attachment[] = []): void {
-    const sessionId = useSessionStore.getState().sessionId;
-    if (!sessionId) throw new Error("Start a conversation before queueing a prompt");
+    const store = useSessionStore.getState();
+    if (!store.sessionId) throw new Error("Start a conversation before queueing a prompt");
+    store.set({ queuedPromptCount: store.queuedPromptCount + 1 });
     // A second session/prompt RPC is the agent's authoritative queue input.
     // Keep the promise live in the background; it resolves when that queued turn finishes.
-    void this.dispatchPrompt(sessionId, this.buildParts(text, attachments)).catch(() => undefined);
+    void this.dispatchPrompt(store.sessionId, this.buildParts(text, attachments)).catch(() => undefined);
   }
 
   /** Whether the active model accepts `image` prompt parts. */
@@ -203,16 +189,23 @@ export class ThanhAcpClient {
     const params: PromptRequest = { sessionId, prompt: parts };
     this.pendingPromptRequests += 1;
     useSessionStore.getState().set({ turnRunning: true, error: null });
+    let outcome: TurnOutcome = { kind: "completed" };
     try {
       return await request<PromptResponse>("session/prompt", params);
     } catch (error) {
-      useSessionStore.getState().set({ error: errorMessage(error) });
+      const message = errorMessage(error);
+      outcome = { kind: "failed", error: message };
+      useSessionStore.getState().set({ error: message });
       throw error;
     } finally {
       await this.inboundMessages;
-      useSessionStore.getState().finishTurn();
+      useSessionStore.getState().finishTurn(outcome);
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
-      useSessionStore.getState().set({ turnRunning: this.pendingPromptRequests > 0 });
+      const store = useSessionStore.getState();
+      store.set({
+        turnRunning: this.pendingPromptRequests > 0,
+        queuedPromptCount: Math.max(0, store.queuedPromptCount - 1),
+      });
       void this.refreshSessions();
       void this.refreshUsage();
     }
@@ -223,7 +216,7 @@ export class ThanhAcpClient {
     if (!sessionId) return;
     await notify("session/cancel", { sessionId });
     await this.inboundMessages;
-    useSessionStore.getState().finishTurn();
+    useSessionStore.getState().finishTurn({ kind: "cancelled" });
     useSessionStore.getState().set({ turnRunning: false });
   }
 

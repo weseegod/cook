@@ -225,7 +225,8 @@ Other key trees:
   `agents_modal.rs`, `question_view.rs`, `session_picker.rs`, `dashboard/`, …
 - `src/scrollback/` — conversation display: `render.rs`, `wrappers/`,
   `blocks/` (per-content-type renderers, incl. `blocks/markdown_content.rs`),
-  `state/` (layout/nav/selection).
+  `state/` (layout/nav/selection). Presentation catalog:
+  [`docs/tui-presentation.md`](docs/tui-presentation.md).
 - `src/slash/` — slash-command registry (`registry.rs`) + one file per command
   under `slash/commands/` (70+ commands).
 - `src/acp/` — ACP connection: `AcpConnection { tx, rx }` over
@@ -428,7 +429,8 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change raw drawing / terminal output | `xai-grok-pager-render/src/render/` (`draw.rs`, `highlight.rs`, overlays) |
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
-| Change / start the desktop app | `frontend/apps/thanh-desktop/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md). Keep model/tool execution in `thanh agent stdio`. |
+| Read the TUI presentation catalog (screens, realtime, timers, tool rows, folds, cards) | [`docs/tui-presentation.md`](docs/tui-presentation.md) |
+| Change / start the desktop app | `frontend/apps/thanh-desktop/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md). Keep model/tool execution in `thanh agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). |
 
 ### Agent / shell
 

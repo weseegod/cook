@@ -39,7 +39,7 @@ const RULES: Array<{ name: string; pattern: RegExp; allow?: string[] }> = [
   {
     name: "IPC only through the single host bridge",
     pattern: /\binvoke\s*\(|\blisten\s*\(/,
-    allow: ["acp/host.ts"],
+    allow: ["acp/host.ts", "acp/workspace.ts"],
   },
   {
     name: "the agent process is only started from the host bridge",

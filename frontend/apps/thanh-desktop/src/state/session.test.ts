@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { reduceTranscript, type TranscriptState } from "./session";
+import {
+  reduceTranscript,
+  turnElapsedMs,
+  turnMarkerText,
+  useSessionStore,
+  type MessageBlock,
+  type TranscriptState,
+} from "./session";
 
 const empty = (): TranscriptState => ({
   blocks: [],
@@ -182,5 +189,128 @@ describe("session transcript reducer", () => {
   it("removes an active plan", () => {
     const transcript = reduceTranscript(empty(), { sessionUpdate: "plan", planId: "p1", entries: [] });
     expect(reduceTranscript(transcript, { sessionUpdate: "plan_removed", planId: "p1" }).blocks).toEqual([]);
+  });
+});
+
+describe("thinking segments", () => {
+  it("opens a thinking row, then freezes it when assistant prose starts", () => {
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Considering the boundary" },
+    });
+    expect(transcript.blocks[0]).toMatchObject({ role: "thought", streaming: true });
+    expect((transcript.blocks[0] as MessageBlock).startedAt).toBeTypeOf("number");
+
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "The answer" },
+    });
+    expect(transcript.blocks.map((block) => block.type)).toEqual(["message", "message"]);
+    expect(transcript.blocks[0]).toMatchObject({ role: "thought", streaming: false });
+    expect((transcript.blocks[0] as MessageBlock).elapsedMs).not.toBeNull();
+    expect(transcript.blocks[1]).toMatchObject({ role: "assistant", text: "The answer", streaming: true });
+  });
+
+  it("drops an empty thinking row instead of showing Thought for 0.0s", () => {
+    const transcript: TranscriptState = {
+      blocks: [{ type: "message", id: "thought-1", turnId: "turn-1", role: "thought", text: "   ", images: [], streaming: true }],
+      cursor: { turnId: "turn-1", assistantId: null, thoughtId: "thought-1", optimisticUserId: null },
+    };
+    const next = reduceTranscript(transcript, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Answer" },
+    });
+    expect(next.blocks).toHaveLength(1);
+    expect(next.blocks[0]).toMatchObject({ role: "assistant" });
+  });
+
+  it("closes prose and thinking on a tool call without cancelling sibling tools", () => {
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "Thinking about it" },
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Reading now" },
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Read a.ts",
+      status: "pending",
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "tool_call",
+      toolCallId: "t2",
+      title: "Read b.ts",
+      status: "pending",
+    });
+    expect(transcript.blocks.map((block) => block.type)).toEqual(["message", "message", "tool", "tool"]);
+    expect(transcript.blocks[0]).toMatchObject({ role: "thought", streaming: false });
+    expect(transcript.blocks[1]).toMatchObject({ role: "assistant", streaming: false });
+    // A parallel burst keeps both tools pending; only turn finalize cancels leftovers.
+    expect(transcript.blocks[2]).toMatchObject({ status: "pending" });
+    expect(transcript.blocks[3]).toMatchObject({ status: "pending" });
+  });
+});
+
+describe("turn markers", () => {
+  it("formats the TUI marker strings", () => {
+    expect(turnMarkerText({ kind: "completed" }, 5_200)).toBe("Worked for 5.2s");
+    expect(turnMarkerText({ kind: "completed" }, null)).toBe("Turn completed.");
+    expect(turnMarkerText({ kind: "cancelled" }, 1_500)).toBe("Turn cancelled by user in 1.5s.");
+    expect(turnMarkerText({ kind: "cancelled", phrase: "Turn cancelled because the session closed" }, null))
+      .toBe("Turn cancelled because the session closed.");
+    expect(turnMarkerText({ kind: "failed", error: "provider 500" }, 32_000)).toBe("Turn failed in 32s: provider 500");
+    expect(turnMarkerText({ kind: "failed" }, null)).toBe("Turn failed: unknown error");
+  });
+
+  it("appends one marker per turn and never twice", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-1");
+    useSessionStore.getState().appendOptimisticUser("hello");
+    useSessionStore.getState().set({ turnStartedAt: Date.now() - 5_200 });
+
+    useSessionStore.getState().finishTurn();
+    let blocks = useSessionStore.getState().blocks;
+    expect(blocks.at(-1)).toMatchObject({ type: "session-event", text: "Worked for 5.2s" });
+
+    useSessionStore.getState().finishTurn();
+    blocks = useSessionStore.getState().blocks;
+    expect(blocks.filter((block) => block.type === "session-event")).toHaveLength(1);
+  });
+
+  it("writes a cancel marker when the user stops the turn", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-2");
+    useSessionStore.getState().appendOptimisticUser("hello");
+    useSessionStore.getState().set({ turnStartedAt: Date.now() - 1_500 });
+
+    useSessionStore.getState().finishTurn({ kind: "cancelled" });
+    expect(useSessionStore.getState().blocks.at(-1)).toMatchObject({
+      type: "session-event",
+      text: "Turn cancelled by user in 1.5s.",
+    });
+  });
+});
+
+describe("turn clock", () => {
+  it("nets question-card time out of the turn clock", () => {
+    expect(turnElapsedMs({ turnStartedAt: 0, turnPausedMs: 5_000, questionOpenedAt: null }, 100_000)).toBe(95_000);
+    expect(turnElapsedMs({ turnStartedAt: 0, turnPausedMs: 0, questionOpenedAt: 90_000 }, 100_000)).toBe(90_000);
+    expect(turnElapsedMs({ turnStartedAt: null, turnPausedMs: 0, questionOpenedAt: null }, 100_000)).toBeNull();
+  });
+
+  it("pauses while a question card is open and resumes after it closes", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-3");
+    useSessionStore.getState().appendOptimisticUser("hello");
+    useSessionStore.getState().set({ pendingQuestion: { rpcId: 1, title: "Pick", kind: "question", questions: [], raw: {} } });
+    expect(useSessionStore.getState().questionOpenedAt).not.toBeNull();
+
+    useSessionStore.getState().set({ pendingQuestion: null });
+    expect(useSessionStore.getState().questionOpenedAt).toBeNull();
+    expect(useSessionStore.getState().turnPausedMs).toBeGreaterThanOrEqual(0);
+    expect(turnElapsedMs(useSessionStore.getState())).not.toBeNull();
   });
 });

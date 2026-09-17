@@ -10,6 +10,8 @@ It does not reimplement sampling, tools, or session storage.
 Production work (providers, Claude Desktop–class features, packaging) lives in
 [`docs/desktop-app-implement.md`](desktop-app-implement.md). BYOK TOML:
 [`docs/byok-models.md`](byok-models.md). Runtime map: [`ARCHITECTURE.md`](../ARCHITECTURE.md).
+TUI presentation (screens, realtime, timers, tool rows — source of truth to copy, not §5.4):
+[`docs/tui-presentation.md`](tui-presentation.md).
 
 ---
 
@@ -177,32 +179,60 @@ implement doc.
 
 ### 5.4 Transcript presentation
 
-ACP notifications are an event stream, not presentation-ready chat rows. The
-desktop client keeps a turn-scoped streaming cursor like the TUI tracker:
+Desktop copies the TUI's presentation, catalogued in
+[`docs/tui-presentation.md`](tui-presentation.md). That catalog is the source of
+truth for the strings, clocks, folds, and flows below; this section only maps
+them onto the Desktop client. Do not invent chrome it does not list.
+
+**Streaming machine (catalog §4).** A turn-scoped tracker, not a blinking caret.
+`current_agent_msg` / `current_thinking` / `pending_tools` live in
+`src/state/session.ts`:
 
 - adjacent `AgentMessageChunk` updates append to the active assistant segment;
   clients must not require a `messageId`, because standard ACP chunks do not
   guarantee one;
-- a tool call closes the active prose segment, updates in place by
-  `toolCallId`, and consecutive thought/tool events project into one compact
-  activity group;
-- prompt completion, cancellation, load completion, or failure finalizes all
-  active segments before syntax highlighting and Mermaid rendering;
+- `AgentThoughtChunk` opens a thinking row (`Thinking…`); the first non-empty
+  agent text freezes it into `Thought for 1.2s`. Thinking uses its own
+  formatter, not the turn formatter;
+- a tool call closes the thinking and prose segments, updates in place by
+  `toolCallId`, and leaves sibling pending tools alone;
+- prompt completion, cancellation, load completion, or failure finalizes every
+  running segment before syntax highlighting and Mermaid rendering, and writes
+  the turn marker `Worked for {duration}` (catalog §7.3);
 - replay and live updates use the same reducer so loading a session cannot
   produce a different transcript shape.
 
-The chat surface also keeps the TUI's operational affordances visible without
-turning the transcript into a stream of noisy cards:
+**Live activity is the turn-status row (catalog §6).** One row between the
+scrollback and the prompt slot, hidden while idle. It carries the spinner
+(braille, ~7.5 fps), the activity label with the exact strings from catalog §6.2
+(`Thinking…`, `Responding…`, `Run {cmd}`, `Search {query}`, `Fetch {url}`,
+`Waiting for response…`, `Cancelling…`, …), a timer for the current phase on the
+left, and the turn timer, optional `⇣12k` tokens and `[stop]` on the right.
+Phase and turn clocks use `format_duration` (catalog §5.1) — no spaces, e.g.
+`0.5s`, `32s`, `1m20s`, `1h2m`. A permission, question, trust, or plan card
+swaps the spinner for the pulsing `◆` and replaces the prompt slot; the composer
+stays mounted but hidden so a draft and its attachments survive. Question time
+is netted out of the turn clock.
 
-- active tools stay in a pinned activity rail with command/path labels and a
-  live elapsed timer; completed work collapses into one verb-group summary;
-- permission, question, trust, and plan prompts render inline above the
-  composer, locking input until the decision is made instead of opening a
-  blocking modal;
-- tool output, assistant messages, plans, commands, and paths expose compact
-  copy actions; command reruns go back through the agent's ACP session rather
-  than spawning a renderer-side shell, while paths use the native desktop
-  opener.
+**Transcript rows (catalog §7).** Each block paints its own collapsed one-liner
+(`Read path`, `$ cmd`, `Edit path +N/-M`, `Message sent to …`). Tool rows do not
+show elapsed time — elapsed exists for stats, and only `SentMessage` surfaces it
+(expanded, ≥100 ms). Running rows use an animated accent bullet, not a per-row
+spinner. Expansion shows the body, diff, or output.
+
+**Verb-group folding (catalog §8).** Consecutive collapsed foldable tools
+(`File`, `Skill`, `Search`, `Dir`, `WebFetch`, `WebSearch`, `MemorySearch`,
+`IntegrationSearch`, `Subagent`) collapse under one aggregated header whose
+label rebuilds every frame: `Read 2 files, Searched 1 pattern`,
+`Reading 1 file, Searching 1 pattern`, `Read 3 files · 2 failed`. `Execute`,
+`Edit`, `UseTool`, `Message`, and `Other` keep their own rows.
+
+**Forbidden chrome.** Desktop must not add any of these, because the TUI does
+not have them: a pinned live-tool activity rail, per-tool elapsed on collapsed
+rows, in-transcript command rerun/Execute, a `Waiting…` row inside the
+transcript, or a 1 s timer tick. Command output, assistant messages, plans,
+paths, commands and queries expose copy actions; opening a path uses the native
+desktop opener.
 
 The visual language intentionally follows VS Code Dark Modern for density,
 typography, controls, focus states, and colors. This does not change the product
@@ -243,6 +273,10 @@ Announcements and updater tests target this path:
 7. Alpha requires the CLI binary; stable may bundle a sidecar. The app never
    overwrites `~/.thanh/bin/thanh`.
 8. Renderer does not merge `config.toml`.
+
+9. The right tools panel uses native, read-only workspace commands for Git
+   review and file browsing. Paths are resolved relative to the active workspace;
+   symlinks and traversal outside that root are rejected.
 9. This fork is BYOK: no xAI subscription required.
 
 ---

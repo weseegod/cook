@@ -1,111 +1,106 @@
 import {
-  CheckCircle2,
   ChevronRight,
-  CircleEllipsis,
   Clipboard,
   Copy,
   FileCode2,
   Files,
   FolderOpen,
   Globe2,
-  Play,
   Search,
   Terminal,
-  X,
-  XCircle,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { acpClient } from "../../acp/client";
+import { useState } from "react";
 import { openPath } from "../../acp/host";
 import { useSessionStore, type ToolBlock } from "../../state/session";
 import { Markdown } from "./markdown";
 import { copyText, displayPath } from "./clipboard";
-import {
-  activityElapsedMs,
-  activityLabel,
-  isLiveTool,
-  toolCategory,
-  type ActivityBlock,
-  type ActivityStatus,
-} from "./transcript-projection";
+import { formatThinkingDuration } from "./format-duration";
+import { isLiveTool, isTerminalToolStatus } from "./transcript-projection";
+import { verbGroupLabel } from "./verb-group";
 
-export function ActivityGroup({ activity }: { activity: ActivityBlock }) {
-  const [now, setNow] = useState(Date.now());
-  const open = activity.status === "failed" || activity.status === "running";
+/** Header text for a collapsed tool row (`scrollback/blocks/tool/*`). */
+export function toolHeader(tool: ToolBlock): { prefix?: string; text: string } {
+  if (tool.description) return { text: tool.description };
+  if (isExecute(tool) && tool.command) return { prefix: "$ ", text: tool.command };
+  const path = tool.paths[0] ? displayPath(tool.paths[0]) : null;
+  const kind = (tool.kind ?? "").toLowerCase();
+  if (path && isGenericTitle(tool.title, kind)) {
+    if (["edit", "write", "write_file"].includes(kind)) return { text: `${kind === "write" || kind === "write_file" ? "Creating" : "Edit"} ${path}` };
+    if (["list", "list_dir", "list_directory"].includes(kind)) return { text: `List ${path}` };
+    if (["read", "file"].includes(kind)) return { text: `Read ${path}` };
+  }
+  return { text: tool.title };
+}
 
-  useEffect(() => {
-    if (activity.status !== "running") return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [activity.status]);
+function isGenericTitle(title: string, kind: string): boolean {
+  const value = title.trim().toLowerCase();
+  return value.length === 0 || value === "tool" || value === kind || ["read", "edit", "write", "list", "file"].includes(value);
+}
 
+function isExecute(tool: ToolBlock): boolean {
+  return (tool.kind ?? "").toLowerCase() === "execute" || /^(bash|shell|run|execute)\b/i.test(tool.title ?? "");
+}
+
+/**
+ * A verb-group run: one aggregated header replaces its member rows
+ * (`scrollback/state/groups.rs::project_verb_run`). The label rebuilds from status every render.
+ */
+export function VerbGroupRow({ tools }: { tools: ToolBlock[] }) {
+  const running = tools.some(isLiveTool);
+  const failed = tools.some((tool) => ["failed", "error"].includes(tool.status.toLowerCase()));
+  const state = running ? "running" : failed ? "failed" : "completed";
   return (
-    <details className={`activity-group activity-${activity.status}`} open={open}>
+    <details className={`verb-group verb-${state}`} data-testid="verb-group">
       <summary>
-        <span className="activity-chevron"><ChevronRight size={13} /></span>
-        <span className="activity-state">{statusIcon(activity.status)}</span>
-        <strong>{activityLabel(activity)}</strong>
-        <span className="activity-meta">
-          {formatElapsed(activityElapsedMs(activity, now))}
-          {activity.tools.length > 0 && ` · ${activity.tools.length} ${activity.tools.length === 1 ? "tool" : "tools"}`}
-        </span>
+        <span className="row-chevron"><ChevronRight size={13} /></span>
+        <span className={`row-bullet${running ? " animated" : ""}`} aria-hidden="true" />
+        <strong>{verbGroupLabel(tools)}</strong>
       </summary>
-      <div className="activity-details">
-        {activity.thoughts.map((thought) => (
-          <div className="activity-thought" key={thought.id}>
-            <span>Reasoning</span>
-            <Markdown text={thought.text} streaming={thought.streaming} />
-          </div>
-        ))}
-        {activity.tools.map((tool) => <ToolDetail key={tool.id} tool={tool} />)}
+      <div className="verb-group-body">
+        {tools.map((tool) => <ToolRow key={tool.id} tool={tool} />)}
       </div>
     </details>
   );
 }
 
-export function LiveActivityRail({ activities, turnElapsedMs, onCancel }: {
-  activities: ActivityBlock[];
-  turnElapsedMs: number | null;
-  onCancel: () => void;
-}) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (activities.length === 0 && turnElapsedMs === null) return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [activities.length, turnElapsedMs]);
-  if (activities.length === 0 && turnElapsedMs === null) return null;
-
+/** One tool block, collapsed by default; no elapsed in the row and no rerun control. */
+export function ToolRow({ tool }: { tool: ToolBlock }) {
+  const header = toolHeader(tool);
+  const running = isLiveTool(tool);
   return (
-    <section className="live-activity-rail" aria-label="Live activity" data-testid="live-activity-rail">
-      <div className="live-activity-heading">
-        <span><CircleEllipsis className="spin" size={13} /> Working</span>
-        <span className="live-activity-turn-time">{formatElapsed(turnElapsedMs ?? 0, now)}</span>
-        <button type="button" className="text-button danger-text" onClick={onCancel}>Cancel</button>
-      </div>
-      <div className="live-activity-items">
-        {activities.flatMap((activity) => activity.tools.filter(isLiveTool).map((tool) => (
-          <LiveToolRow key={tool.id} tool={tool} now={now} />
-        )))}
-      </div>
-    </section>
+    <details className={`tool-row tool-${running ? "running" : normalizedStatus(tool.status)}`} data-testid={`tool-row-${tool.id}`}>
+      <summary>
+        <span className="row-chevron"><ChevronRight size={13} /></span>
+        <span className={`row-bullet${running ? " animated" : ""}`} aria-hidden="true" />
+        <span className="row-icon">{toolIcon(tool)}</span>
+        <strong title={tool.title}>
+          {header.prefix && <span className="row-prefix">{header.prefix}</span>}
+          {header.text}
+        </strong>
+      </summary>
+      <ToolDetail tool={tool} />
+    </details>
   );
 }
 
-function LiveToolRow({ tool, now }: { tool: ToolBlock; now: number }) {
+/** Thinking row: `Thinking…` while running, `Thought for 1.2s` once frozen. */
+export function ThinkingRow({ block }: { block: { id: string; text: string; streaming: boolean; elapsedMs?: number | null } }) {
+  const time = block.elapsedMs ?? null;
+  const header = block.streaming ? "Thinking…" : time === null ? "Thought" : `Thought for ${formatThinkingDuration(time)}`;
   return (
-    <div className="live-activity-row">
-      <span className="activity-state">{statusIcon("running")}</span>
-      <span className="live-tool-icon">{toolIcon(tool)}</span>
-      <strong title={tool.command ?? tool.title}>{tool.description || tool.command || tool.title}</strong>
-      <code>{formatElapsed(tool.elapsedMs ?? Math.max(0, now - tool.startedAt), now)}</code>
-    </div>
+    <details className="thinking-row" data-testid={`thinking-${block.id}`} open={block.streaming}>
+      <summary>
+        <span className="row-chevron"><ChevronRight size={13} /></span>
+        <span className={`row-bullet${block.streaming ? " animated" : ""}`} aria-hidden="true" />
+        <strong>{header}</strong>
+      </summary>
+      <div className="thinking-body"><Markdown text={block.text} streaming={block.streaming} /></div>
+    </details>
   );
 }
 
-function ToolDetail({ tool }: { tool: ToolBlock }) {
+export function ToolDetail({ tool }: { tool: ToolBlock }) {
   const [copied, setCopied] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const text = tool.content.map(contentText).filter(Boolean).join("\n");
   const images = tool.content.flatMap(contentImages);
   const pathText = tool.paths.map(displayPath).join("\n");
@@ -115,39 +110,20 @@ function ToolDetail({ tool }: { tool: ToolBlock }) {
     try {
       await copyText(value);
       setCopied(label);
-      window.setTimeout(() => setCopied((current) => current === label ? null : current), 1200);
+      window.setTimeout(() => setCopied((current) => (current === label ? null : current)), 1200);
     } catch {
       setCopied("error");
     }
   }
 
-  async function execute() {
-    if (!tool.command || busy) return;
-    setBusy(true);
-    try {
-      await acpClient.rerunCommand(tool.command);
-    } catch (error) {
-      useError(error);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   return (
-    <section className={`tool-detail tool-${tool.status}`} data-testid={`tool-detail-${tool.id}`}>
-      <header>
-        {toolIcon(tool)}
-        <strong title={tool.title}>{tool.description || tool.title}</strong>
-        <span className="tool-status">{statusIcon(normalizedStatus(tool.status))} {tool.status.replaceAll("_", " ")}</span>
-        <span className="tool-elapsed">{formatElapsed(tool.elapsedMs ?? Math.max(0, Date.now() - tool.startedAt))}</span>
-      </header>
+    <div className="tool-detail">
       {(tool.command || pathText || text) && (
         <div className="tool-actions" aria-label="Tool actions">
           {tool.command && <button type="button" onClick={() => void copy("command", tool.command!)}><Copy size={12} /> {copied === "command" ? "Copied" : "Copy command"}</button>}
           {pathText && <button type="button" onClick={() => void copy("path", pathText)}><Clipboard size={12} /> {copied === "path" ? "Copied" : "Copy path"}</button>}
-          {tool.command && <button type="button" onClick={() => void execute()} disabled={busy || isLiveTool(tool)}><Play size={12} /> {busy ? "Running…" : "Execute"}</button>}
           {text && <button type="button" onClick={() => void copy("output", text)}><Files size={12} /> {copied === "output" ? "Copied" : "Copy output"}</button>}
-          {tool.paths[0] && <button type="button" onClick={() => void openPath(displayPath(tool.paths[0])).catch(useError)}><FolderOpen size={12} /> Open</button>}
+          {tool.paths[0] && <button type="button" onClick={() => void openPath(displayPath(tool.paths[0])).catch(reportError)}><FolderOpen size={12} /> Open</button>}
         </div>
       )}
       {tool.command && <pre className="tool-command"><span className="shell-prefix">$ </span>{tool.command}</pre>}
@@ -160,7 +136,7 @@ function ToolDetail({ tool }: { tool: ToolBlock }) {
       )}
       {images.length > 0 && <div className="tool-images">{images.map((src, index) => <img key={`${src.slice(-20)}-${index}`} src={src} alt="Tool output" />)}</div>}
       {tool.paths.length > 0 && <div className="tool-locations">{tool.paths.map((path) => <code key={path} title={displayPath(path)}>{displayPath(path)}</code>)}</div>}
-    </section>
+    </div>
   );
 }
 
@@ -197,38 +173,23 @@ function looksLikeDiff(text: string) {
 }
 
 function toolIcon(tool: ToolBlock) {
-  const category = toolCategory(tool);
-  if (category === "execute") return <Terminal size={14} />;
-  if (category === "search") return <Search size={14} />;
-  if (category === "read" || category === "edit") return <FileCode2 size={14} />;
-  if (category === "fetch") return <Globe2 size={14} />;
+  const value = `${tool.kind ?? ""} ${tool.title}`.toLowerCase();
+  if (/\b(execute|bash|shell|terminal|command|run)\b/.test(value)) return <Terminal size={14} />;
+  if (/\b(search|grep|find|glob|rg)\b/.test(value)) return <Search size={14} />;
+  if (/\b(read|cat|edit|write|file)\b/.test(value)) return <FileCode2 size={14} />;
+  if (/\b(web|fetch|url|browser)\b/.test(value)) return <Globe2 size={14} />;
   return <Files size={14} />;
 }
 
-function normalizedStatus(status: string): ActivityStatus {
-  if (["failed", "error"].includes(status.toLowerCase())) return "failed";
-  if (["cancelled", "canceled"].includes(status.toLowerCase())) return "cancelled";
-  if (["completed", "complete"].includes(status.toLowerCase())) return "completed";
+function normalizedStatus(status: string): string {
+  const value = status.toLowerCase();
+  if (["failed", "error"].includes(value)) return "failed";
+  if (["cancelled", "canceled"].includes(value)) return "cancelled";
+  if (isTerminalToolStatus(value)) return "completed";
   return "running";
 }
 
-function statusIcon(status: ActivityStatus) {
-  if (status === "completed") return <CheckCircle2 size={13} />;
-  if (status === "failed") return <XCircle size={13} />;
-  if (status === "cancelled") return <X size={13} />;
-  return <CircleEllipsis className="spin" size={13} />;
-}
-
-function formatElapsed(milliseconds: number, now?: number): string {
-  const value = Math.max(0, now === undefined ? milliseconds : milliseconds);
-  if (value < 1000) return "0.0s";
-  const seconds = value / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}m ${Math.floor(seconds % 60)}s`;
-}
-
-function useError(error: unknown) {
+function reportError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   useSessionStore.getState().set({ error: message });
 }

@@ -16,11 +16,14 @@ Shipped and usable as a local ACP chat shell:
 - Tauri host spawns `thanh agent stdio`, JSON-RPC mux, crash restart
 - Folder picker, session sidebar (list / search / rename / delete / resume)
 - Streaming chat with turn-scoped coalescing, markdown + deferred Shiki/mermaid,
-  TUI-style activity groups, pinned live command rail, inline plans, and copy
-  actions
+  TUI-copied turn-status row, verb-group folding, collapsed tool rows, inline
+  plans, and copy actions ([`docs/tui-presentation.md`](tui-presentation.md);
+  there is no pinned tool rail and no in-transcript rerun)
 - Permission / ask-user / folder-trust inline decision cards, YOLO, slash
   palette, queue
 - Model picker from `x.ai/models/list`, settings panel, `chmod 600` warning
+- Codex-style right tools panel: Review reads `HEAD` versus the local working
+  tree; Files browses and previews the active workspace read-only.
 - Alpha AppImage/deb path; CLI still required at runtime
 
 **Not production yet.** Settings “Bring your own key” is a single text field
@@ -54,6 +57,7 @@ expose it without a terminal.
 | Model picker (Opus / Sonnet / Haiku) | Catalog from `x.ai/models/list` grouped by provider |
 | Conversation sidebar + search | Already in v1; add pin, export, fork UI |
 | Projects | Workspace folder + optional project instructions (`.thanh` / `AGENTS.md` already exist) |
+| Right tools | Review current Git changes and browse/read workspace files |
 | Attach files / images / screenshots | Composer drop + paste → ACP content parts |
 | Connectors / MCP | Settings → Connectors: list, toggle, add stdio/HTTP, OAuth elicit |
 | Artifacts | Preview panel: mermaid, HTML, images, diffs |
