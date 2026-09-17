@@ -106,12 +106,16 @@ v1: one window ↔ one agent process.
 - Calling the LLM or tools from React or from a Tauri command.
 - Workspace FS via `@tauri-apps/plugin-fs` except folder pick / reveal-in-finder.
 - A second session store. Canonical records stay `events.jsonl` + agent SQLite.
-- A second `config.toml` writer in the renderer. Mutations go through the agent.
+- A `config.toml` writer in the renderer. The renderer holds no credentials: it
+  hands the typed credential to the Rust host, which owns the write, or lets the
+  agent write through `x.ai/providers/*`.
 
 **Allowed in the Rust host**
 
 - Spawn/restart the sidecar, stdio, JSON-RPC id map, notification coalescing.
 - Native folder dialog, notifications, window state, app updater, OIDC deep link.
+- Locked, atomic `~/.thanh/config.toml` edits for providers and models
+  (`provider_config.rs`), and the credential-carrying `/models` probe.
 
 Unknown `x.ai/*` methods: log and ignore. Never crash the host.
 
@@ -138,8 +142,9 @@ Unknown `x.ai/*` methods: log and ignore. Never crash the host.
 ```
 
 `grok-desktop` maps to `ClientType::Desktop` in
-`xai-grok-workspace` (`permission/types.rs`). Alias `thanh-desktop` must keep
-the same behavior (permission prompts, MCP apps, folder trust).
+`xai-grok-workspace` (`permission/types.rs`). The client sends that identifier
+as-is, so the agent needs no fork-side alias: permission prompts, MCP apps, and
+folder trust all come from the upstream mapping.
 
 `terminal: true` is advertised even when the UI stubs PTY, so the agent can
 emit terminal methods.
@@ -266,7 +271,8 @@ Announcements and updater tests target this path:
 1. Desktop is an ACP client. Reuse `thanh agent stdio` and `~/.thanh`.
 2. Tauri 2 + React + Vite + TypeScript.
 3. Chat-first, not an IDE.
-4. `clientIdentifier: grok-desktop`; `thanh-desktop` is an alias.
+4. `clientIdentifier: grok-desktop` — upstream's desktop value, sent verbatim so
+   the agent needs no fork-side change.
 5. Path `frontend/apps/thanh-desktop/` avoids colliding with upstream
    `grok-desktop` if that tree is ever merged.
 6. `src-tauri` stays out of the Cargo workspace.

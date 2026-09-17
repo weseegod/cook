@@ -87,7 +87,7 @@ impl ClientType {
             Some("grok-web") => Self::GrokWeb,
             Some("nebula") => Self::Nebula,
             Some("grok-code-extension") => Self::Extension,
-            Some("grok-desktop" | "thanh-desktop") => Self::Desktop,
+            Some("grok-desktop") => Self::Desktop,
             Some("grok-pager") => Self::GrokPager,
             _ => Self::Generic,
         }
@@ -924,15 +924,5 @@ mod tests {
             serde_json::from_value::<ClientType>("generic".into()).unwrap(),
             ClientType::Generic,
         );
-    }
-
-    #[test]
-    fn thanh_desktop_identifier_is_a_desktop_alias() {
-        assert_eq!(
-            ClientType::from_client_identifier(Some("thanh-desktop")),
-            ClientType::Desktop,
-        );
-        assert_eq!(ClientType::Desktop.user_agent_label(), "grok-desktop");
-        assert!(ClientType::Desktop.can_present_permission_prompt());
     }
 }

@@ -464,12 +464,9 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       state.authMethodId = null;
       return respond({ result: { ok: true } });
     case "x.ai/setApiKey": {
-      const provider = state.providers.find((entry) => entry.id === String(p.provider ?? ""));
-      if (provider) {
-        provider.apiKey = typeof p.apiKey === "string" && p.apiKey ? p.apiKey : undefined;
-        provider.apiKeyPresent = Boolean(provider.apiKey);
-        if (!provider.apiKey) provider.envKey = undefined;
-      }
+      // Upstream keys on `key` and stores the xAI session key only, so the desktop's legacy shape
+      // (`apiKey`, optional `provider`) is a no-op there. Provider credentials never travel this
+      // way: the provider form hands them to the Tauri host, which writes config.toml.
       return respond({ result: { ok: true } });
     }
     case "x.ai/models/list":

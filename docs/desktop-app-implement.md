@@ -35,7 +35,7 @@ and auto-update are missing.
 
 | Bug | Detail |
 |---|---|
-| `setApiKey` param mismatch | UI sends `{ apiKey, provider }`; agent reads `params.key` and writes **only** `XAI_API_KEY` / `auth.json`. `provider` is ignored. DeepSeek/OpenRouter keys never land in `[model_providers.*]`. |
+| `setApiKey` param mismatch | **Resolved by dropping the path.** The desktop no longer calls `x.ai/setApiKey` for BYOK: the provider form hands the typed credential to the Rust host, which writes `[model_providers.<id>]`. The agent handler is upstream's, unchanged. |
 | No provider catalog | User must hand-edit `~/.thanh/config.toml` (see [`byok-models.md`](byok-models.md)). Claude Desktop does not make you write JSON to chat. |
 | Prompt is text-only | `session/prompt` sends `[{ type: "text" }]`. No image/file parts, so vision models and “drop a PDF” are dead. |
 | `mcpServers: []` on every `session/new` | Relies on agent-side config discovery. Fine if that works; still no UI to enable/disable/add connectors. |
@@ -83,8 +83,10 @@ Anthropic, Gemini, Groq, local Ollama, or a custom OpenAI-compatible URL
 ### 3.1 Do not use `x.ai/setApiKey` for BYOK
 
 That method is xAI-session keyed (`store_api_key` / `XAI_API_KEY`). Production
-adds **fork-owned** ACP extensions. The agent remains the only writer of
-`~/.thanh/config.toml`.
+adds **fork-owned** ACP extensions. The renderer still writes nothing: the Rust
+host performs the locked, atomic `~/.thanh/config.toml` edit with the credential
+it was handed, and the agent extensions write the same file for callers that
+reach the agent directly.
 
 | Method | Role |
 |---|---|
@@ -174,7 +176,7 @@ Ship in layers. Each layer is independently reviewable.
 1. **Transcript parity with TUI:** coalesce ACP chunks without relying on
    `messageId`, group consecutive thought/tools, finalize on turn boundaries,
    and use the same projection for replay.
-2. **Fix `setApiKey` mismatch** (or stop calling it from BYOK UI).
+2. **Fix `setApiKey` mismatch** — done by not calling it from the BYOK UI.
 3. **Provider ACP + wizard + Settings → Providers** (§3).
 4. **Persist default model** via agent, not only `localStorage`.
 5. **Onboarding** when no provider works.
@@ -252,7 +254,7 @@ turns follow TUI grouping rather than rendering every ACP update as a card.
 
 | PR | Title | Scope | Depends |
 |---|---|---|---|
-| D1 | Fix BYOK key plumbing | Align `x.ai/setApiKey` params **or** stop using it; no user-visible wizard yet | — |
+| D1 | Fix BYOK key plumbing | Resolved by stopping the BYOK UI from calling `x.ai/setApiKey`: credentials go renderer → Rust host → `config.toml`. Agent handler kept upstream. | — |
 | D2 | Provider ACP | `x.ai/providers/{list,presets,upsert,delete,test,discover_models}`, `x.ai/models/set_default`; tests; no TS UI | D1 |
 | D3 | Provider UI + onboarding | Cards, key/env, test, default model, Settings → Providers | D2 |
 | D4 | Attachments | Paste/drop/paperclip → ACP parts; hide image attach on text-only models | — |

@@ -340,28 +340,6 @@ fn provider_acp_round_trip() {
                 "the provider is gone: {listed}"
             );
 
-            // ── legacy setApiKey routes a provider key to the provider ──
-            ok(
-                &conn,
-                "x.ai/setApiKey",
-                json!({"apiKey": "sk-openrouter-abcdef123456", "provider": "openrouter"}),
-            )
-            .await;
-            let on_disk = std::fs::read_to_string(&config_path).unwrap();
-            assert!(
-                on_disk.contains("api_key = \"sk-openrouter-abcdef123456\""),
-                "a provider-scoped key lands in the provider table: {on_disk}"
-            );
-            assert!(
-                !on_disk.contains("env_key = \"PROVIDER_ACP_TEST_OPENROUTER_KEY\""),
-                "the replaced env_key is cleared: {on_disk}"
-            );
-            let listed = ok(&conn, "x.ai/providers/list", json!({})).await;
-            let openrouter = provider(&listed, "openrouter");
-            assert_eq!(openrouter["inlineKey"], json!(true));
-            assert_eq!(openrouter["envKey"], json!(null));
-            assert!(!listed.to_string().contains("sk-openrouter-abcdef123456"));
-
             // ── pre-existing user content survived every write ──────
             let on_disk = std::fs::read_to_string(&config_path).unwrap();
             assert!(on_disk.contains("# hand-written note: keep me"), "{on_disk}");

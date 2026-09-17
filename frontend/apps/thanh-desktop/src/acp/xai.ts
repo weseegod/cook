@@ -107,10 +107,6 @@ export class XaiClient {
     return extractArray(value, ["commands", "availableCommands", "items"]).map(normalizeCommand);
   }
 
-  setApiKey(apiKey: string, provider?: string) {
-    return this.call("x.ai/setApiKey", { apiKey, ...(provider ? { provider } : {}) });
-  }
-
   resetPermissions(sessionId: string) {
     return this.call("x.ai/permissions/reset", { sessionId });
   }

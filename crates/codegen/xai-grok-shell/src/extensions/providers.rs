@@ -1356,45 +1356,52 @@ fn preset_api_version_header(id: &str, api_backend: &str) -> Option<(&'static st
 
 /// Re-resolve the model catalog from disk and push `x.ai/models/update` to every client.
 fn reload_models(agent: &MvpAgent) -> anyhow::Result<()> {
-    crate::extensions::session_admin::reload_models_from_disk(agent)
-        .map(|_| ())
-        .map_err(anyhow::Error::msg)
+    reload_models_from_disk(agent).map_err(anyhow::Error::msg)
 }
 
-/// Provider-scoped key write for the legacy `x.ai/setApiKey` bridge (D1 plumbing fix).
-pub(crate) async fn store_provider_key(
-    agent: &MvpAgent,
-    provider_id: &str,
-    key: Option<&str>,
-) -> anyhow::Result<()> {
-    let provider_id = provider_id.to_owned();
-    let key = key.map(str::trim).filter(|k| !k.is_empty()).map(str::to_owned);
-    mutate_user_config(move |doc| {
-        let providers = child_table(doc, "model_providers")?;
-        if !providers.contains_key(&provider_id) {
-            anyhow::bail!(
-                "no provider `{provider_id}` is configured; add it from Settings → Providers first"
-            );
-        }
-        let provider = providers
-            .get_mut(&provider_id)
-            .and_then(|item| item.as_table_mut())
-            .ok_or_else(|| {
-                anyhow::anyhow!("[model_providers.{provider_id}] is not a table")
-            })?;
-        match &key {
-            Some(key) => {
-                provider.insert("api_key", toml_edit::value(key.clone()));
-                provider.remove("env_key");
-            }
-            None => {
-                provider.remove("api_key");
-            }
-        }
-        Ok(())
-    })
-    .await?;
-    reload_models(agent)?;
+/// Re-resolve the model list from `config.toml` after this module wrote it.
+///
+/// Mirrors the agent's `internal/reload_models` path: prefetched (API) and default models are not
+/// re-fetched, only the user's TOML entries are re-resolved. Kept fork-local so the extension stays
+/// self-contained: upstream's `session_admin` reload is on the watcher path, and the fork cannot
+/// wait for the watcher to notice its own write.
+fn reload_models_from_disk(agent: &MvpAgent) -> Result<(), String> {
+    let disk_config = crate::config::load_effective_config().map_err(|e| e.to_string())?;
+    let toml_config = crate::agent::config::Config::new_from_toml_cfg(&disk_config)
+        .map_err(|e| e.to_string())?;
+
+    // Merge TOML-derived model fields into the agent's in-memory config. Runtime-only fields
+    // (#[serde(skip)]: remote_settings, endpoints, CLI flags) are preserved.
+    {
+        let agent_config = agent.cfg.borrow();
+        let overrides = crate::config::ModelOverrideConfig::resolve(
+            agent_config.web_search_model_override.as_deref(),
+            agent_config.session_summary_model_override.as_deref(),
+            &disk_config,
+            agent_config.remote_settings.as_ref(),
+        );
+        drop(agent_config);
+        let mut agent_config = agent.cfg.borrow_mut();
+        agent_config.models = toml_config.models.clone();
+        agent_config.config_models = toml_config.config_models.clone();
+        agent_config.web_search_model = overrides.web_search;
+        agent_config.session_summary_model = overrides.session_summary;
+        agent_config.image_description_model = overrides.image_description;
+        agent_config.prompt_suggest_model_pin = overrides.prompt_suggestion;
+    }
+    // `new_from_toml_cfg` cleared the campaign overlay and `pre_campaign_default`; recompute them so
+    // a reload matches spawn.
+    {
+        let mut agent_config = agent.cfg.borrow_mut();
+        crate::util::config::sync_campaign_fields(&mut agent_config);
+    }
+    let merged_config = agent.cfg.borrow().clone();
+
+    agent.models_manager.apply_config(merged_config);
+    agent.sync_process_static_api_key(None);
+
+    let count = agent.models_manager.models().len();
+    tracing::info!(count, "model list reloaded from config.toml");
     Ok(())
 }
 
