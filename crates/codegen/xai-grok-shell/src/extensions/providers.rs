@@ -290,6 +290,21 @@ const PRESETS: &[ProviderPreset] = &[
         ],
     },
     ProviderPreset {
+        id: "zai",
+        label: "Z.ai",
+        base_url: Some("https://api.z.ai/api/paas/v4/"),
+        api_backend: "chat_completions",
+        env_key: Some("ZAI_API_KEY"),
+        help: "Create a key at z.ai",
+        discover: true,
+        extra_headers: &[],
+        models: &[
+            seed("glm-5.1", "glm-5.1", "GLM-5.1", TEXT),
+            seed("glm-5", "glm-5", "GLM-5", TEXT),
+            seed("glm-4.7", "glm-4.7", "GLM-4.7", TEXT),
+        ],
+    },
+    ProviderPreset {
         id: "xai",
         label: "xAI",
         base_url: Some("https://api.x.ai/v1"),

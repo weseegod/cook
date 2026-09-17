@@ -1,4 +1,4 @@
-import { CornerDownLeft, FileText, LoaderCircle, Paperclip, Square, WandSparkles, X } from "lucide-react";
+import { CornerDownLeft, FileText, LoaderCircle, Paperclip, Square, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type Attachment } from "../../acp/attachments";
@@ -54,6 +54,13 @@ export function Composer() {
     [typedName, typedArgs, commands, menuClosed],
   );
   useEffect(() => setActive(0), [typedName]);
+
+  useEffect(() => {
+    const node = textarea.current;
+    if (!node) return;
+    node.style.height = "auto";
+    node.style.height = `${Math.min(Math.max(node.scrollHeight, 56), 180)}px`;
+  }, [text]);
 
   // Native drops arrive as paths from the Tauri webview, not as HTML5 events.
   useEffect(() => {
@@ -214,11 +221,13 @@ export function Composer() {
   return (
     <div className="composer-wrap">
       {matching.length > 0 && (
-        <div className="command-palette" data-testid="slash-menu">
+        <div className="slash-menu" data-testid="slash-menu">
           {matching.map((command, index) => (
-            <button
+              <button
+                type="button"
               key={command.name}
               className={index === active ? "active" : ""}
+              title={command.source === "client" ? "Built-in command" : command.description}
               data-testid={`slash-item-${command.name}`}
               onMouseEnter={() => setActive(index)}
               onClick={() => accept(command)}
@@ -227,7 +236,6 @@ export function Composer() {
                 /{command.name}
                 {command.inputHint && <em> {command.inputHint}</em>}
               </span>
-              <small>{command.source === "client" ? "window" : command.description}</small>
             </button>
           ))}
         </div>
@@ -251,7 +259,7 @@ export function Composer() {
                   ? <img src={attachment.previewUrl} alt={attachment.name} />
                   : <FileText size={14} />}
                 <span>{attachment.name}</span>
-                <button aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}>
+                <button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}>
                   <X size={12} />
                 </button>
               </li>
@@ -274,11 +282,13 @@ export function Composer() {
           }}
           onKeyDown={onComposerKeyDown}
           placeholder={turnRunning ? "Queue another prompt…" : "Ask Thanh anything…"}
+          aria-label="Message"
           rows={1}
         />
         <div className="composer-footer">
           <div className="composer-tools">
             <button
+              type="button"
               className="icon-button"
               aria-label="Attach files"
               data-testid="attach-button"
@@ -297,20 +307,22 @@ export function Composer() {
                 event.target.value = "";
               }}
             />
-            <span className="composer-hint">
-              <WandSparkles size={13} /> Shift+Enter for a new line · <code>/</code> for commands
-              {imagesAllowed ? "" : " · this model is text-only"}
+            <span
+              className="composer-hint"
+              title={imagesAllowed ? "Enter sends · Shift+Enter adds a line · / opens commands" : "Images are unavailable for this text-only model"}
+            >
+              <kbd>↵</kbd> Send <kbd>⇧↵</kbd> New line <kbd>/</kbd> Commands
             </span>
           </div>
           {turnRunning ? (
             <div className="composer-running">
-              <button className="stop-button" onClick={() => void acpClient.cancel()}><Square size={13} /> Stop</button>
-              <button className="send-button" disabled={(!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
+              <button type="button" className="stop-button" onClick={() => void acpClient.cancel()}><Square size={13} /> Stop</button>
+              <button type="button" className="send-button" disabled={(!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
               </button>
             </div>
           ) : (
-            <button className="send-button" disabled={(!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()} data-testid="send-button">
+            <button type="button" className="send-button" disabled={(!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()} data-testid="send-button">
               {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Send
             </button>
           )}

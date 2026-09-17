@@ -15,7 +15,8 @@ Shipped and usable as a local ACP chat shell:
 
 - Tauri host spawns `thanh agent stdio`, JSON-RPC mux, crash restart
 - Folder picker, session sidebar (list / search / rename / delete / resume)
-- Streaming chat, markdown + Shiki + mermaid, tool cards, plan banner
+- Streaming chat with turn-scoped coalescing, markdown + deferred Shiki/mermaid,
+  TUI-style activity groups, and plan banner
 - Permission / ask-user / folder-trust modals, YOLO, slash palette, queue
 - Model picker from `x.ai/models/list`, settings panel, `chmod 600` warning
 - Alpha AppImage/deb path; CLI still required at runtime
@@ -107,6 +108,7 @@ could reuse later). User can still pick **Custom**.
 | `anthropic` | Anthropic | `https://api.anthropic.com/v1` | `messages` | Claude family; `extra_headers = { "anthropic-version" = "2023-06-01" }` |
 | `openrouter` | OpenRouter | `https://openrouter.ai/api/v1` | `chat_completions` | Discover via `/models` or seed a few (`anthropic/claude-sonnet-4.6`, `deepseek/deepseek-chat`) |
 | `deepseek` | DeepSeek | `https://api.deepseek.com` | `chat_completions` | `deepseek-chat`, `deepseek-reasoner` |
+| `zai` | Z.ai | `https://api.z.ai/api/paas/v4/` | `chat_completions` | `glm-5.1`, `glm-5`, `glm-4.7` |
 | `xai` | xAI | native login **or** `https://api.x.ai/v1` | `chat_completions` / session | Grok catalog; optional `x.ai/auth/*` device-code |
 | `google` | Google Gemini | `https://generativelanguage.googleapis.com/v1beta/openai/` | `chat_completions` | `gemini-2.5-pro`, `gemini-2.5-flash` |
 | `groq` | Groq | `https://api.groq.com/openai/v1` | `chat_completions` | discover |
@@ -163,54 +165,57 @@ Ship in layers. Each layer is independently reviewable.
 
 ### P0 — Connect and talk (blocks “production”)
 
-1. **Fix `setApiKey` mismatch** (or stop calling it from BYOK UI).
-2. **Provider ACP + wizard + Settings → Providers** (§3).
-3. **Persist default model** via agent, not only `localStorage`.
-4. **Onboarding** when no provider works.
-5. **Attachments:** composer paperclip + drag-drop + paste image.
+1. **Transcript parity with TUI:** coalesce ACP chunks without relying on
+   `messageId`, group consecutive thought/tools, finalize on turn boundaries,
+   and use the same projection for replay.
+2. **Fix `setApiKey` mismatch** (or stop calling it from BYOK UI).
+3. **Provider ACP + wizard + Settings → Providers** (§3).
+4. **Persist default model** via agent, not only `localStorage`.
+5. **Onboarding** when no provider works.
+6. **Attachments:** composer paperclip + drag-drop + paste image.
    - Images → ACP `image` parts (`mediaType` + base64), gated on
      `inputModalities` containing `image` (same as TUI).
    - Other files → include path text + `read_file` hint, or
      `resource` parts if ACP supports them.
    - PDF/PPTX: rely on agent `read_file` special formats; attach as paths.
-6. **Command palette** (`Ctrl/Cmd+K`): sessions, models, slash commands,
+7. **Command palette** (`Ctrl/Cmd+K`): sessions, models, slash commands,
    Open folder, Settings, Connect provider.
 
 ### P1 — Connectors and project context (Claude Desktop core)
 
-7. **Connectors (MCP)**
+8. **Connectors (MCP)**
    - List from agent (`x.ai/mcp/*` status + config).
    - Toggle enabled, add stdio (`command`, `args`, `env`) or HTTP URL.
    - Surface `x.ai/mcp/elicit` in the existing interaction modal.
    - Do not spawn MCP from Tauri; agent already does.
-8. **Project instructions** — show/edit `AGENTS.md` / `.thanh` rules for the
+9. **Project instructions** — show/edit `AGENTS.md` / `.thanh` rules for the
    cwd (read/write through ACP fs or a small `x.ai/project/files` helper).
-9. **Memory** — settings panel + transcript “remember this”:
+10. **Memory** — settings panel + transcript “remember this”:
    `x.ai/memory/flush`, `rewrite`, open `MEMORY.md`.
-10. **Skills / plugins** — browse `x.ai/skills/*` and `x.ai/plugins/*`;
+11. **Skills / plugins** — browse `x.ai/skills/*` and `x.ai/plugins/*`;
     enable/disable. Marketplace can stay CLI for this slice.
-11. **Export conversation** — Markdown download of the transcript; optional
+12. **Export conversation** — Markdown download of the transcript; optional
     `x.ai/share_session` if the agent supports it.
 
 ### P2 — Artifacts, tasks, polish
 
-12. **Artifacts / preview dock** — mermaid already inlines; add a right pane
+13. **Artifacts / preview dock** — mermaid already inlines; add a right pane
     for HTML preview (sandboxed iframe), image gen output, full-file diffs.
-13. **Tasks / subagents** — `x.ai/task/*` + `x.ai/subagent/*` cards (Claude
+14. **Tasks / subagents** — `x.ai/task/*` + `x.ai/subagent/*` cards (Claude
     Desktop doesn’t have this; Thanh should, because the agent does).
-14. **Rewind / compact** buttons wired to existing extensions.
-15. **Theme:** system / dark / light. Map TUI tokens.
-16. **Desktop notifications** when a turn finishes in background.
-17. **Keyboard shortcuts sheet** (Claude-like `?`).
-18. **Usage** — `x.ai/session/usage` in the status bar (tokens, not paywall).
+15. **Rewind / compact** buttons wired to existing extensions.
+16. **Theme:** system / dark / light. Map TUI tokens.
+17. **Desktop notifications** when a turn finishes in background.
+18. **Keyboard shortcuts sheet** (Claude-like `?`).
+19. **Usage** — `x.ai/session/usage` in the status bar (tokens, not paywall).
 
 ### P3 — Ship
 
-19. **macOS dmg** (unsigned ok for the fork, same as CLI).
-20. **Tauri updater** for the app binary only; never touch `~/.thanh/bin/thanh`.
-21. **Stable sidecar optional** — bundle `thanh` for users without CLI.
-22. **Windows** after Linux+macOS are boring.
-23. Voice, embedded xterm PTY, worktree UI: keep as post-1.0.
+20. **macOS dmg** (unsigned ok for the fork, same as CLI).
+21. **Tauri updater** for the app binary only; never touch `~/.thanh/bin/thanh`.
+22. **Stable sidecar optional** — bundle `thanh` for users without CLI.
+23. **Windows** after Linux+macOS are boring.
+24. Voice, embedded xterm PTY, worktree UI: keep as post-1.0.
 
 ---
 
@@ -219,17 +224,21 @@ Ship in layers. Each layer is independently reviewable.
 ```
 ┌────────────┬─────────────────────────────────────┬──────────────┐
 │ Sidebar    │ Main                                │ Dock (P2)    │
-│ New chat   │ Title: workspace · model · YOLO     │ Artifact /   │
-│ Search     │ Transcript                          │ diff / HTML  │
-│ Sessions   │ Tool cards · plan · thoughts        │              │
-│ Workspaces │ Composer: attach · slash · send     │              │
-│ Connectors │ Status: tokens · provider           │              │
+│ New chat   │ Compact title: workspace · actions  │ Artifact /   │
+│ Search     │ Flat transcript                     │ diff / HTML  │
+│ Sessions   │ Grouped activity · plan · markdown  │              │
+│ Workspaces │ Editor-style composer               │              │
+│ Connectors │ VS Code-style status bar            │              │
 └────────────┴─────────────────────────────────────┴──────────────┘
 Settings (modal or route):
   Providers | Models | Connectors | Memory | Skills | Appearance | About
 ```
 
 First-run replaces main with **Open folder → Connect provider → Test**.
+
+Visual target: VS Code Dark Modern density and controls, while preserving the
+chat-first information architecture and macOS-style toggle switches. Tool-heavy
+turns follow TUI grouping rather than rendering every ACP update as a card.
 
 ---
 
@@ -258,8 +267,8 @@ folder, click DeepSeek/OpenRouter, paste a key, Test, and send a message.
 | Layer | What |
 |---|---|
 | Agent provider ACP | Temp `GROK_HOME`; upsert DeepSeek-shaped TOML; list redacts secrets; delete; test against a mock HTTP server |
-| Desktop unit | Session reducer with image prompt parts; provider form validation |
-| Playwright | Mock ACP: onboarding happy path, attach image, command palette |
+| Desktop unit | Missing-`messageId` chunk coalescing; assistant→tool→assistant ordering; activity grouping; image parts; provider validation |
+| Playwright | Mock ACP burst/tool-heavy streams; replay shape; onboarding; attachments; palette; dark/light screenshot audit |
 | Manual | Real OpenRouter or DeepSeek key on Linux WebKitGTK; Anthropic `messages` backend; Ollama with no key |
 
 Do not add these to `xai-grok-pager-pty-harness`.

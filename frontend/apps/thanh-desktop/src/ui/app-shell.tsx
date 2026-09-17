@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FolderOpen, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
+import { FolderOpen, Moon, PanelLeftClose, PanelLeftOpen, Settings, Sun } from "lucide-react";
 import { acpClient } from "../acp/client";
 import { pickFolder, request } from "../acp/host";
 import { shouldShowConnectProvider } from "../acp/provider-presets";
@@ -15,33 +15,59 @@ import { SessionSidebar } from "./sessions/session-sidebar";
 import { SettingsPanel } from "./settings/settings-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
+import { useTheme } from "./theme/theme";
 
 const DISMISSED_KEY = "thanh.connectProviderDismissed";
+type SettingsTab = "general" | "providers" | "models" | "connectors" | "context" | "skills" | "about";
 
 export function AppShell() {
   const { cwd, connection, error } = useSessionStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [settingsTab, setSettingsTab] = useState<"providers" | "models" | "connectors" | "context" | "skills" | "about" | null>(null);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
+  const [settingsCloseRequest, setSettingsCloseRequest] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const { preference, resolvedTheme, setPreference } = useTheme();
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISSED_KEY) === "true");
+
+  function openSettings(tab: SettingsTab) {
+    setPaletteOpen(false);
+    setSettingsTab(tab);
+  }
 
   useEffect(() => {
     const lastWorkspace = localStorage.getItem("thanh.lastWorkspace");
     if (lastWorkspace) void acpClient.connect(lastWorkspace).catch(() => undefined);
     const onBeforeUnload = () => void acpClient.dispose();
-    const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        setPaletteOpen((open) => !open);
-      }
-    };
     window.addEventListener("beforeunload", onBeforeUnload);
-    window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("beforeunload", onBeforeUnload);
-      window.removeEventListener("keydown", onKeyDown);
     };
   }, []);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const commandKey = event.metaKey || event.ctrlKey;
+      const key = event.key.toLowerCase();
+      if (document.querySelector(".dialog, .modal")) return;
+      if (commandKey && key === "k") {
+        event.preventDefault();
+        setPaletteOpen((open) => !open);
+        return;
+      }
+      if (event.metaKey && key === ",") {
+        event.preventDefault();
+        openSettings("general");
+        return;
+      }
+      if (commandKey && key === "w") {
+        event.preventDefault();
+        if (paletteOpen) setPaletteOpen(false);
+        else if (settingsTab) setSettingsCloseRequest((request) => request + 1);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [paletteOpen, settingsTab]);
 
   // Provider gate: only shown once the agent answers, so the wizard never flashes.
   const connected = connection === "ready";
@@ -70,8 +96,8 @@ export function AppShell() {
 
   function runPaletteAction(item: PaletteItem) {
     if (item.action === "open-folder") return void chooseWorkspace();
-    if (item.action === "settings") return setSettingsTab("providers");
-    if (item.action === "connect-provider") return setSettingsTab("providers");
+    if (item.action === "settings") return openSettings("general");
+    if (item.action === "connect-provider") return openSettings("providers");
     if (item.action === "new-session") return void acpClient.newSession();
     if (item.action === "shortcuts") return setSettingsTab("about");
     if (item.action === "model" && item.value) return void acpClient.setDefaultModel(item.value);
@@ -96,8 +122,16 @@ export function AppShell() {
           </div>
           <div className="titlebar-actions">
             <button className="ghost-button" onClick={chooseWorkspace}><FolderOpen size={16} /> Open folder</button>
-            <button className="ghost-button" onClick={() => setPaletteOpen(true)} aria-label="Command palette">Ctrl K</button>
-            <button className="icon-button" onClick={() => setSettingsTab("providers")} aria-label="Settings"><Settings size={18} /></button>
+            <button className="ghost-button" onClick={() => setPaletteOpen(true)} aria-label="Command palette">⌘K</button>
+            <button
+              className="icon-button"
+              onClick={() => setPreference(preference === "system" ? "light" : preference === "light" ? "dark" : "system")}
+              aria-label={`Theme: ${preference}. Change theme`}
+              title={`Theme: ${preference}. Click to change`}
+            >
+              {resolvedTheme === "dark" ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+            <button className="icon-button" onClick={() => openSettings("general")} aria-label="Settings"><Settings size={18} /></button>
           </div>
         </header>
         {error && <div className="error-banner">{error}</div>}
@@ -120,7 +154,7 @@ export function AppShell() {
           <ChatView />
         )}
       </main>
-      {settingsTab && <SettingsPanel initialTab={settingsTab} onClose={() => setSettingsTab(null)} />}
+      {settingsTab && <SettingsPanel initialTab={settingsTab} closeRequest={settingsCloseRequest} onClose={() => setSettingsTab(null)} />}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSelect={runPaletteAction} />}
       <PermissionModal />
       <InteractionModal />

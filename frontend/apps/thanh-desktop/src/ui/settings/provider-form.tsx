@@ -15,10 +15,13 @@ import {
   type ProviderSummary,
   type ProviderTestResult,
 } from "../../acp/providers";
+import { InfoTip } from "../components/info-tip";
+import { ToggleSwitch } from "../components/toggle-switch";
 
 interface EditorProps {
   preset: ProviderPreset;
   provider?: ProviderSummary;
+  showDefaultModel?: boolean;
   /** Called with the saved provider id. */
   onSaved: (id: string) => void;
   onCancel?: () => void;
@@ -28,7 +31,7 @@ interface EditorProps {
  * One provider's form: URL, credential (inline key or env var name), Test, models, save.
  * Shared by Settings → Providers and the first-run connect flow.
  */
-export function ProviderEditor({ preset, provider, onSaved, onCancel }: EditorProps) {
+export function ProviderEditor({ preset, provider, showDefaultModel = true, onSaved, onCancel }: EditorProps) {
   const [form, setForm] = useState<ProviderFormState>(() =>
     provider ? formFromProvider(provider) : formFromPreset(preset),
   );
@@ -109,10 +112,9 @@ export function ProviderEditor({ preset, provider, onSaved, onCancel }: EditorPr
       }}
     >
       <header>
-        <h3>{preset_.label}</h3>
-        {provider && <span className="provider-existing">configured</span>}
+        <h3>{preset_.label} <InfoTip label={preset_.label}>{preset_.help}</InfoTip></h3>
+        {provider && <span className="provider-existing">Saved</span>}
       </header>
-      <p className="provider-help">{preset_.help}</p>
 
       <label className="field">
         <span>Base URL</span>
@@ -175,12 +177,12 @@ export function ProviderEditor({ preset, provider, onSaved, onCancel }: EditorPr
           <div className="model-checklist">
             {preset_.models.map((model) => (
               <label key={model.id}>
-                <input
-                  type="checkbox"
+                <ToggleSwitch
                   checked={form.selectedModels.includes(model.id)}
-                  onChange={(event) =>
+                  ariaLabel={`Toggle model ${model.name}`}
+                  onChange={(checked) =>
                     patch({
-                      selectedModels: event.target.checked
+                      selectedModels: checked
                         ? [...form.selectedModels, model.id]
                         : form.selectedModels.filter((id) => id !== model.id),
                     })
@@ -195,7 +197,7 @@ export function ProviderEditor({ preset, provider, onSaved, onCancel }: EditorPr
       )}
 
       <label className="field">
-        <span>Additional model ids (one per line)</span>
+        <span>Extra model IDs</span>
         <textarea
           rows={2}
           value={form.customModelIds.join("\n")}
@@ -206,10 +208,12 @@ export function ProviderEditor({ preset, provider, onSaved, onCancel }: EditorPr
         {validation.errors.models && <small className="field-error">{validation.errors.models}</small>}
       </label>
 
-      <label className="toggle-row">
-        <span><strong>Set as default model</strong><small>Persisted in config.toml through the agent.</small></span>
-        <input type="checkbox" checked={form.setAsDefault} onChange={(event) => patch({ setAsDefault: event.target.checked })} />
-      </label>
+      {showDefaultModel && (
+        <label className="toggle-row">
+          <span><strong>Set as default model</strong></span>
+          <ToggleSwitch checked={form.setAsDefault} ariaLabel="Set as default model" onChange={(checked) => patch({ setAsDefault: checked })} />
+        </label>
+      )}
 
       <div className="provider-actions">
         <button type="button" className="ghost-button" disabled={busy !== null} onClick={() => void runTest()} data-testid="provider-test">
@@ -234,11 +238,11 @@ export function ProviderEditor({ preset, provider, onSaved, onCancel }: EditorPr
         </div>
       )}
       {discovered.length > 0 && (
-        <p className="provider-help" data-testid="provider-discovered">Discovered {discovered.length} models: {discovered.join(", ")}</p>
+        <p className="provider-help" data-testid="provider-discovered">{discovered.length} models found: {discovered.join(", ")}</p>
       )}
       {error && <div className="settings-note security-warning" data-testid="provider-error">{error}</div>}
       {!validation.ok && Object.keys(validation.errors).length > 0 && (
-        <p className="field-error">Fix the highlighted fields before saving.</p>
+        <p className="field-error">Check the highlighted fields.</p>
       )}
     </form>
   );
@@ -248,10 +252,12 @@ export function PresetGrid({ presets, onPick }: { presets: ProviderPreset[]; onP
   return (
     <div className="preset-grid">
       {presets.map((preset) => (
-        <button key={preset.id} className="preset-card" onClick={() => onPick(preset)} data-testid={`preset-${preset.id}`}>
+        <button type="button" key={preset.id} className="preset-card" onClick={() => onPick(preset)} data-testid={`preset-${preset.id}`}>
           <span className="preset-mark">{preset.label.slice(0, 2).toUpperCase()}</span>
-          <strong>{preset.label}</strong>
-          <small>{preset.baseUrl ?? "your own endpoint"}</small>
+          <span className="preset-card-copy">
+            <strong>{preset.label}</strong>
+            <small title={preset.baseUrl ?? "your own endpoint"}>{preset.baseUrl ?? "your own endpoint"}</small>
+          </span>
         </button>
       ))}
     </div>

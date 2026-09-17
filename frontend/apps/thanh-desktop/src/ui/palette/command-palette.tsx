@@ -1,4 +1,4 @@
-import { CornerDownLeft, FolderOpen, MessageSquarePlus, Settings2, ShieldCheck, Sparkles, Terminal } from "lucide-react";
+import { ArrowDownUp, CornerDownLeft, MessageSquarePlus, ShieldCheck, Sparkles, Terminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useCatalogStore } from "../../state/catalog";
 import { slashEntries } from "../chat/slash-commands";
@@ -27,12 +27,12 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
 
   return (
     <div className="palette-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="command-palette-modal" role="dialog" aria-label="Command palette" data-testid="command-palette">
+      <section className="palette" role="dialog" aria-label="Command palette" data-testid="command-palette">
         <input
           ref={inputRef}
           className="palette-input"
           value={query}
-          placeholder="Search sessions, models, commands, actions…"
+          placeholder="Search…"
           aria-label="Command palette search"
           data-testid="palette-input"
           onChange={(event) => setQuery(event.target.value)}
@@ -60,9 +60,11 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
           {items.map((item, index) => (
             <li key={item.id}>
               <button
+                type="button"
                 className={index === active ? "active" : ""}
                 role="option"
                 aria-selected={index === active}
+                title={item.detail ?? item.label}
                 data-testid={`palette-item-${item.id.replace(/:/g, "-")}`}
                 onMouseEnter={() => setActive(index)}
                 onClick={() => {
@@ -72,7 +74,6 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
               >
                 <span className="palette-icon">{ICONS[item.kind]}</span>
                 <span className="palette-label">{item.label}</span>
-                {item.detail && <small>{item.detail}</small>}
                 <span className="palette-kind">{item.kind}</span>
               </button>
             </li>
@@ -80,9 +81,9 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
           {items.length === 0 && <li className="palette-empty">Nothing matches “{query}”.</li>}
         </ul>
         <footer className="palette-footer">
-          <span><FolderOpen size={13} /> ↑↓ to move</span>
-          <span><CornerDownLeft size={13} /> Enter to open</span>
-          <span><Settings2 size={13} /> Esc to close</span>
+          <span><ArrowDownUp size={13} /> Navigate</span>
+          <span><CornerDownLeft size={13} /> Open</span>
+          <span><X size={13} /> Close</span>
         </footer>
       </section>
     </div>

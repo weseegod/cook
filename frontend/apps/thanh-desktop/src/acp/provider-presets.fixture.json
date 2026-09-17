@@ -136,6 +136,42 @@
     ]
   },
   {
+    "id": "zai",
+    "label": "Z.ai",
+    "baseUrl": "https://api.z.ai/api/paas/v4/",
+    "apiBackend": "chat_completions",
+    "envKey": "ZAI_API_KEY",
+    "help": "Create a key at z.ai",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "glm-5.1",
+        "model": "glm-5.1",
+        "name": "GLM-5.1",
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "glm-5",
+        "model": "glm-5",
+        "name": "GLM-5",
+        "input": [
+          "text"
+        ]
+      },
+      {
+        "id": "glm-4.7",
+        "model": "glm-4.7",
+        "name": "GLM-4.7",
+        "input": [
+          "text"
+        ]
+      }
+    ]
+  },
+  {
     "id": "xai",
     "label": "xAI",
     "baseUrl": "https://api.x.ai/v1",

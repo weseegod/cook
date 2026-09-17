@@ -3,9 +3,11 @@ import { Cable, Plus, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { listConnectors, serverEnabled, serverTransportLabel, toggleConnector, upsertConnector } from "../../acp/extensions";
 import { useSessionStore } from "../../state/session";
+import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
+import { ToggleSwitch } from "../components/toggle-switch";
 
 /** Settings → Connectors: the agent's MCP servers, their state, and add/toggle. */
-export function ConnectorsPanel({ connected }: { connected: boolean }) {
+export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const sessionId = useSessionStore((state) => state.sessionId);
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState<"stdio" | "http" | null>(null);
@@ -47,6 +49,7 @@ export function ConnectorsPanel({ connected }: { connected: boolean }) {
     onSuccess: () => {
       setError(null);
       setAdding(null);
+      onDirtyChange?.(false);
       setName("");
       setEndpoint("");
       setArgs("");
@@ -60,16 +63,22 @@ export function ConnectorsPanel({ connected }: { connected: boolean }) {
   return (
     <div className="connectors-panel">
       <div className="settings-actions">
-        <button className="primary-button" data-testid="connector-add" onClick={() => setAdding(adding ?? "stdio")}>
-          <Plus size={15} /> Add connector
+        <button className="primary-button" data-testid="connector-add" disabled={!sessionId} onClick={() => { setAdding(adding ?? "stdio"); onDirtyChange?.(true); }}>
+          <Plus size={15} /> Add
         </button>
         <button className="ghost-button" onClick={() => void servers.refetch()}>
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
-      {!sessionId && <p className="settings-note">Start a conversation to manage connectors; the agent exposes them per session.</p>}
-      {servers.isLoading && <p className="settings-note">Loading connectors…</p>}
-      {list.length === 0 && !servers.isLoading && <p className="settings-note">No MCP servers are configured.</p>}
+      {!sessionId ? (
+        <EmptyState label="No active session" detail="Start a conversation to manage its connectors." />
+      ) : servers.isLoading ? (
+        <LoadingState label="Loading connectors" />
+      ) : servers.isError ? (
+        <ErrorState label="Could not load connectors." />
+      ) : list.length === 0 ? (
+        <EmptyState label="No connectors" detail="Add an MCP server for this session." />
+      ) : null}
       <ul className="connector-list">
         {list.map((server) => (
           <li key={server.name} data-testid={`connector-${server.name}`}>
@@ -78,15 +87,15 @@ export function ConnectorsPanel({ connected }: { connected: boolean }) {
               <small>{serverTransportLabel(server)}</small>
               <small>{server.session?.tools?.length ?? 0} tools{server.session?.status ? ` · ${server.session.status}` : ""}</small>
             </div>
-            <label className="toggle-row connector-toggle">
+            <div className="toggle-row connector-toggle">
               <span>{serverEnabled(server) ? "Enabled" : "Disabled"}</span>
-              <input
-                type="checkbox"
+              <ToggleSwitch
                 checked={serverEnabled(server)}
-                aria-label={`Toggle ${server.name}`}
-                onChange={(event) => toggle.mutate({ serverName: server.name, enabled: event.target.checked })}
+                ariaLabel={`Toggle ${server.name}`}
+                onChange={(enabled) => toggle.mutate({ serverName: server.name, enabled })}
+                disabled={toggle.isPending}
               />
-            </label>
+            </div>
           </li>
         ))}
       </ul>
@@ -124,7 +133,7 @@ export function ConnectorsPanel({ connected }: { connected: boolean }) {
           )}
           <div className="settings-actions">
             <button type="submit" className="primary-button" data-testid="connector-save" disabled={add.isPending}>Save connector</button>
-            <button type="button" className="ghost-button" onClick={() => setAdding(null)}>Cancel</button>
+            <button type="button" className="ghost-button" onClick={() => { setAdding(null); onDirtyChange?.(false); }}>Cancel</button>
           </div>
         </form>
       )}

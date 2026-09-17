@@ -110,6 +110,7 @@ fn presets_cover_every_documented_provider() {
         "anthropic",
         "openrouter",
         "deepseek",
+        "zai",
         "xai",
         "google",
         "groq",
@@ -127,6 +128,13 @@ fn presets_cover_every_documented_provider() {
     assert_eq!(anthropic.extra_headers, &[("anthropic-version", "2023-06-01")]);
     let ollama = PRESETS.iter().find(|p| p.id == "ollama").unwrap();
     assert!(ollama.env_key.is_none(), "Ollama needs no key");
+    let zai = PRESETS.iter().find(|p| p.id == "zai").unwrap();
+    assert_eq!(zai.base_url, Some("https://api.z.ai/api/paas/v4/"));
+    assert_eq!(zai.env_key, Some("ZAI_API_KEY"));
+    assert_eq!(
+        zai.models.iter().map(|model| model.id).collect::<Vec<_>>(),
+        ["glm-5.1", "glm-5", "glm-4.7"]
+    );
     let custom = PRESETS.iter().find(|p| p.id == "custom").unwrap();
     assert!(custom.base_url.is_none(), "the custom card takes a user URL");
     assert_eq!(preset_api_version_header("anthropic", "messages").unwrap().0, "anthropic-version");

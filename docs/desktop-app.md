@@ -19,7 +19,7 @@ Desktop is a presentation client, not an IDE and not a second agent.
 
 | Is | Is not |
 |---|---|
-| Streaming chat over ACP | Cursor / VS Code clone |
+| Streaming chat over ACP | Cursor / VS Code feature clone |
 | Tool cards, diffs, permissions | Debugger, git GUI, LSP IDE |
 | Shared `~/.thanh` with CLI | Separate auth/config/session store |
 | Linux + macOS first | Electron Chromium bundle |
@@ -39,7 +39,7 @@ Desktop is a new app on the **same ACP contract**.
 | Agent | Discovered `thanh agent stdio` | One runtime with TUI/headless |
 | Protocol | ACP v1 + typed `x.ai/*` | Same wire as pager / IDE clients |
 | State | Zustand + TanStack Query | Transcript vs catalogs |
-| CSS | Tailwind v4 | Token map from TUI appearance |
+| CSS | Tailwind v4 + semantic CSS tokens | VS Code visual density with TUI transcript semantics |
 | Packages | pnpm | Matches announcements `generate.sh` |
 
 `src-tauri` is **not** a member of the generated root Cargo workspace. It has
@@ -174,6 +174,27 @@ authoritative.
 v1 handles a subset (sessions, models, commands, permissions, plan, ask-user,
 folder trust, a single API-key field). Production extensions are listed in the
 implement doc.
+
+### 5.4 Transcript presentation
+
+ACP notifications are an event stream, not presentation-ready chat rows. The
+desktop client keeps a turn-scoped streaming cursor like the TUI tracker:
+
+- adjacent `AgentMessageChunk` updates append to the active assistant segment;
+  clients must not require a `messageId`, because standard ACP chunks do not
+  guarantee one;
+- a tool call closes the active prose segment, updates in place by
+  `toolCallId`, and consecutive thought/tool events project into one compact
+  activity group;
+- prompt completion, cancellation, load completion, or failure finalizes all
+  active segments before syntax highlighting and Mermaid rendering;
+- replay and live updates use the same reducer so loading a session cannot
+  produce a different transcript shape.
+
+The visual language intentionally follows VS Code Dark Modern for density,
+typography, controls, focus states, and colors. This does not change the product
+boundary: Thanh Desktop remains chat-first and does not add an editor, LSP,
+debugger, or git workbench.
 
 ---
 

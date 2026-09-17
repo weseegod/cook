@@ -10,7 +10,8 @@ export function StatusBar() {
   const tokens = tokenSummary(usage);
   return (
     <div className="statusbar">
-      <label className="model-select">
+      <div className="statusbar-leading">
+        <label className="model-select">
         <Gauge size={13} />
         <select
           value={selected}
@@ -29,17 +30,18 @@ export function StatusBar() {
             </optgroup>
           ))}
         </select>
-      </label>
-      <button
+        </label>
+        <button
         className={planMode ? "active" : ""}
         data-testid="plan-toggle"
         aria-pressed={planMode}
         onClick={() => void acpClient.setPlanMode(!planMode).catch(reportError)}
-      >
-        <Brain size={13} /> Plan
-      </button>
+        >
+          <Brain size={13} /> Plan
+        </button>
+      </div>
       <span className="status-cwd" title={cwd ?? undefined}><Folder size={13} /> {cwd}</span>
-      {tokens && <span>{tokens}</span>}
+      {tokens && <span className="status-usage">{tokens}</span>}
     </div>
   );
 }

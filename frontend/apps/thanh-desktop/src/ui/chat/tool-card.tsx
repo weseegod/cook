@@ -1,22 +1,51 @@
-import { Check, ChevronRight, CircleEllipsis, Globe2, Search, Terminal, Wrench, X } from "lucide-react";
+import { Check, ChevronRight, CircleEllipsis, Files, Globe2, Search, Terminal, Wrench, X } from "lucide-react";
 import type { ToolBlock } from "../../state/session";
+import { Markdown } from "./markdown";
+import { activityLabel, toolCategory, type ActivityBlock } from "./transcript-projection";
 
-export function ToolCard({ tool }: { tool: ToolBlock }) {
+export function ActivityGroup({ activity }: { activity: ActivityBlock }) {
+  const open = activity.status === "failed";
+  return (
+    <details className={`activity-group activity-${activity.status}`} open={open}>
+      <summary>
+        <span className="activity-chevron"><ChevronRight size={13} /></span>
+        <span className="activity-state">{statusIcon(activity.status)}</span>
+        <strong>{activityLabel(activity)}</strong>
+        <span className="activity-meta">{activity.tools.length > 0 ? `${activity.tools.length} ${activity.tools.length === 1 ? "tool" : "tools"}` : "reasoning"}</span>
+      </summary>
+      <div className="activity-details">
+        {activity.thoughts.map((thought) => (
+          <div className="activity-thought" key={thought.id}>
+            <span>Reasoning</span>
+            <Markdown text={thought.text} streaming={thought.streaming} />
+          </div>
+        ))}
+        {activity.tools.map((tool) => <ToolDetail key={tool.id} tool={tool} />)}
+      </div>
+    </details>
+  );
+}
+
+function ToolDetail({ tool }: { tool: ToolBlock }) {
   const text = tool.content.map(contentText).filter(Boolean).join("\n");
   const images = tool.content.flatMap(contentImages);
-  const icon = toolIcon(tool.kind ?? tool.title);
   return (
-    <details className={`tool-card tool-${tool.status}`} open={tool.status === "failed"}>
-      <summary>
-        <span className="tool-chevron"><ChevronRight size={14} /></span>
-        {icon}
-        <strong>{tool.title}</strong>
-        <span className="tool-status">{statusIcon(tool.status)} {tool.status}</span>
-      </summary>
-      {text && <pre className={looksLikeDiff(text) ? "diff" : ""}>{text.split("\n").map((line, index) => <span key={index} className={line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-remove" : ""}>{line}{"\n"}</span>)}</pre>}
+    <section className={`tool-detail tool-${tool.status}`}>
+      <header>
+        {toolIcon(tool)}
+        <strong title={tool.title}>{tool.title}</strong>
+        <span>{statusIcon(normalizedStatus(tool.status))} {tool.status.replaceAll("_", " ")}</span>
+      </header>
+      {text && (
+        <pre className={looksLikeDiff(text) ? "diff" : ""}>
+          {text.split("\n").map((line, index) => (
+            <span key={index} className={line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-remove" : ""}>{line}{"\n"}</span>
+          ))}
+        </pre>
+      )}
       {images.length > 0 && <div className="tool-images">{images.map((src, index) => <img key={`${src.slice(-20)}-${index}`} src={src} alt="Tool output" />)}</div>}
       {tool.locations.length > 0 && <div className="tool-locations">{tool.locations.map((location, index) => <code key={index}>{contentText(location)}</code>)}</div>}
-    </details>
+    </section>
   );
 }
 
@@ -51,16 +80,23 @@ function looksLikeDiff(text: string) {
   return text.includes("@@") || text.split("\n").some((line) => line.startsWith("+") || line.startsWith("-"));
 }
 
-function toolIcon(value: string) {
-  const normalized = value.toLowerCase();
-  if (normalized.includes("bash") || normalized.includes("terminal")) return <Terminal size={15} />;
-  if (normalized.includes("grep") || normalized.includes("search")) return <Search size={15} />;
-  if (normalized.includes("web")) return <Globe2 size={15} />;
-  return <Wrench size={15} />;
+function toolIcon(tool: ToolBlock) {
+  const category = toolCategory(tool);
+  if (category === "execute") return <Terminal size={14} />;
+  if (category === "search") return <Search size={14} />;
+  if (category === "read" || category === "edit") return <Files size={14} />;
+  if (category === "fetch") return <Globe2 size={14} />;
+  return <Wrench size={14} />;
 }
 
-function statusIcon(status: string) {
+function normalizedStatus(status: string): ActivityBlock["status"] {
+  if (status.toLowerCase() === "failed") return "failed";
+  if (status.toLowerCase() === "completed") return "completed";
+  return "running";
+}
+
+function statusIcon(status: ActivityBlock["status"]) {
   if (status === "completed") return <Check size={13} />;
   if (status === "failed") return <X size={13} />;
-  return <CircleEllipsis size={13} />;
+  return <CircleEllipsis className="spin" size={13} />;
 }

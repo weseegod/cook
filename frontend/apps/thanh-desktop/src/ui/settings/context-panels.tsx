@@ -13,9 +13,12 @@ import {
   writeProjectFile,
 } from "../../acp/extensions";
 import { useSessionStore } from "../../state/session";
+import { EmptyState, LoadingState } from "../components/async-state";
+import { InfoTip } from "../components/info-tip";
+import { ToggleSwitch } from "../components/toggle-switch";
 
 /** Project instructions for the open folder, read and written through the agent's fs extension. */
-export function ProjectInstructionsPanel({ connected }: { connected: boolean }) {
+export function ProjectInstructionsPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const { cwd, sessionId } = useSessionStore();
   const [activePath, setActivePath] = useState(PROJECT_FILES[0].path);
   const [draft, setDraft] = useState("");
@@ -52,6 +55,7 @@ export function ProjectInstructionsPanel({ connected }: { connected: boolean }) 
     },
     onSuccess: (path) => {
       setStatus(`Saved ${path}`);
+      onDirtyChange?.(false);
       void queryClient.invalidateQueries({ queryKey: ["project-file"] });
     },
     onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
@@ -66,20 +70,22 @@ export function ProjectInstructionsPanel({ connected }: { connected: boolean }) 
           </button>
         ))}
       </div>
-      <p className="settings-note">{PROJECT_FILES.find((entry) => entry.path === activePath)?.description}</p>
-      <p className="settings-note"><code>{absolute}</code></p>
+      <p className="settings-path"><code>{absolute}</code> <InfoTip label="Project file">{PROJECT_FILES.find((entry) => entry.path === activePath)?.description}</InfoTip></p>
       <textarea
         className="settings-textarea"
         rows={10}
         value={draft}
         aria-label="Project instructions"
         data-testid="project-instructions"
-        placeholder={file.isError ? "This file does not exist yet — type instructions and save to create it." : ""}
-        onChange={(event) => setDraft(event.target.value)}
+        aria-busy={file.isLoading}
+        placeholder={file.isError ? "Start typing…" : ""}
+          onChange={(event) => { setDraft(event.target.value); onDirtyChange?.(true); }}
       />
+      {file.isLoading && <LoadingState label="Loading file" />}
+      {file.isError && <EmptyState label="File not found yet" detail="Start typing to create it in this workspace." />}
       <div className="settings-actions">
         <button className="primary-button" disabled={save.isPending || !cwd} onClick={() => save.mutate()} data-testid="project-save">
-          <Save size={15} /> Save instructions
+          <Save size={15} /> Save
         </button>
       </div>
       {status && <p className="settings-note" data-testid="project-status"><FileText size={13} /> {status}</p>}
@@ -102,19 +108,15 @@ export function MemoryPanel({ connected }: { connected: boolean }) {
 
   return (
     <div className="memory-panel">
-      <p className="settings-note">
-        Memory lives in the agent's own store under <code>~/.thanh</code>. Flush writes pending
-        observations; rewrite re-summarises them; forgetting drops everything.
-      </p>
       <div className="settings-actions">
         <button className="ghost-button" disabled={!connected || run.isPending} onClick={() => run.mutate("flush")} data-testid="memory-flush">
-          <Brain size={15} /> Flush memory
+          <Brain size={15} /> Flush
         </button>
         <button className="ghost-button" disabled={!connected || run.isPending} onClick={() => run.mutate("rewrite")}>
-          <Sparkles size={15} /> Rewrite memory
+          <Sparkles size={15} /> Rewrite
         </button>
         <button className="ghost-button" disabled={!connected || run.isPending} onClick={() => run.mutate("forget")}>
-          Forget everything
+          Forget
         </button>
       </div>
       {status && <p className="settings-note" data-testid="memory-status">{status}</p>}
@@ -138,29 +140,30 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   return (
     <div className="skills-panel">
       <h3>Skills</h3>
-      {skills.isLoading && <p className="settings-note">Loading skills…</p>}
-      {skillList.length === 0 && !skills.isLoading && <p className="settings-note">No skills discovered.</p>}
+      {skills.isLoading && <LoadingState label="Loading skills" />}
+      {skillList.length === 0 && !skills.isLoading && <EmptyState label="No skills" detail="Skills discovered in this workspace will appear here." />}
       <ul className="skill-list">
         {skillList.map((skill) => (
           <li key={skill.name} data-testid={`skill-${skill.name}`}>
             <div>
               <strong>{skill.name}</strong>
-              <small>{skill.description ?? "no description"}</small>
+              {skill.description && <InfoTip label={skill.name}>{skill.description}</InfoTip>}
             </div>
-            <label className="toggle-row">
-              <span>{skill.enabled === false ? "Disabled" : "Enabled"}</span>
-              <input
-                type="checkbox"
+            <div className="toggle-row">
+              <span>{skill.enabled === false ? "Off" : "On"}</span>
+              <ToggleSwitch
                 checked={skill.enabled !== false}
-                aria-label={`Toggle skill ${skill.name}`}
-                onChange={(event) => toggle.mutate({ name: skill.name, enabled: event.target.checked })}
+                ariaLabel={`Toggle skill ${skill.name}`}
+                onChange={(enabled) => toggle.mutate({ name: skill.name, enabled })}
+                disabled={toggle.isPending}
               />
-            </label>
+            </div>
           </li>
         ))}
       </ul>
       <h3>Plugins</h3>
-      {pluginList.length === 0 && !plugins.isLoading && <p className="settings-note">No plugins installed.</p>}
+      {plugins.isLoading && <LoadingState label="Loading plugins" />}
+      {pluginList.length === 0 && !plugins.isLoading && <EmptyState label="No plugins" />}
       <ul className="skill-list">
         {pluginList.map((plugin) => (
           <li key={plugin.name} data-testid={`plugin-${plugin.name}`}>
@@ -171,7 +174,6 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           </li>
         ))}
       </ul>
-      <p className="settings-note">Installing from the marketplace stays in the CLI for now.</p>
     </div>
   );
 }

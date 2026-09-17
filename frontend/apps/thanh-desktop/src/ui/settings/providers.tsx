@@ -10,6 +10,8 @@ import {
   type ProviderSummary,
 } from "../../acp/providers";
 import { ProviderEditor, PresetGrid } from "./provider-form";
+import { Dialog, DialogActions } from "../components/dialog";
+import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
 
 /** Agent presets win; the bundled mirror keeps the cards usable offline. */
 export function useProviderPresets() {
@@ -32,7 +34,7 @@ export function useProviders(connected: boolean) {
   });
 }
 
-export function ProvidersPanel({ connected }: { connected: boolean }) {
+export function ProvidersPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const { presets } = useProviderPresets();
   const providers = useProviders(connected);
   const queryClient = useQueryClient();
@@ -40,31 +42,46 @@ export function ProvidersPanel({ connected }: { connected: boolean }) {
   const [editingProvider, setEditingProvider] = useState<ProviderSummary | null>(null);
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [replacementProvider, setReplacementProvider] = useState<ProviderSummary | null>(null);
+  const [replacement, setReplacement] = useState("");
+  const [replacementBusy, setReplacementBusy] = useState(false);
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["providers"] });
     void queryClient.invalidateQueries({ queryKey: ["models"] });
   };
   const remove = useMutation({
-    mutationFn: async (provider: ProviderSummary) => {
-      try {
-        return await deleteProvider(provider.id);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        if (!message.includes("would dangle")) throw error;
-        const replacement = window.prompt(
-          `[models] default = “${provider.models[0]?.id ?? ""}” would be removed. Pick a replacement model id:`,
-          "",
-        );
-        if (!replacement?.trim()) throw new Error("deletion cancelled");
-        return deleteProvider(provider.id, replacement.trim());
-      }
-    },
+    mutationFn: (provider: ProviderSummary) => deleteProvider(provider.id),
     onSuccess: () => {
       setNotice(null);
       refresh();
     },
-    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
+    onError: (error, provider) => {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("would dangle")) {
+        setReplacementProvider(provider);
+        setReplacement("");
+        setNotice(null);
+      } else {
+        setNotice(message);
+      }
+    },
   });
+
+  async function confirmReplacement() {
+    if (!replacementProvider || !replacement.trim()) return;
+    setReplacementBusy(true);
+    setNotice(null);
+    try {
+      await deleteProvider(replacementProvider.id, replacement.trim());
+      setReplacementProvider(null);
+      setReplacement("");
+      refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setReplacementBusy(false);
+    }
+  }
 
   const list = providers.data?.providers ?? [];
   const editingPreset = useMemo(
@@ -74,14 +91,10 @@ export function ProvidersPanel({ connected }: { connected: boolean }) {
 
   return (
     <div className="providers-panel">
-      {providers.isLoading && <p className="settings-note">Loading configured providers…</p>}
-      {providers.isError && (
-        <p className="settings-note security-warning">Could not read providers from the agent.</p>
-      )}
-      {list.length === 0 && !adding && !editingPreset && (
-        <div className="settings-empty">
-          <p>No providers are configured yet. Add one to call DeepSeek, OpenRouter, OpenAI, Anthropic, or a local model.</p>
-        </div>
+      {providers.isLoading && <LoadingState label="Loading providers" />}
+      {providers.isError && <ErrorState label="Could not read providers from the agent." />}
+      {list.length === 0 && !providers.isLoading && !providers.isError && !adding && !editingPreset && (
+        <EmptyState label="No providers yet" detail="Add a provider to start a conversation." />
       )}
       <ul className="provider-list">
         {list.map((provider) => {
@@ -104,6 +117,7 @@ export function ProvidersPanel({ connected }: { connected: boolean }) {
                   onClick={() => {
                     setAdding(false);
                     setEditingProvider(provider);
+                    onDirtyChange?.(true);
                     setEditing(presets.find((preset) => preset.id === provider.id) ?? { ...presets[presets.length - 1], id: provider.id });
                   }}
                 >
@@ -128,12 +142,14 @@ export function ProvidersPanel({ connected }: { connected: boolean }) {
             setEditing(null);
             setEditingProvider(null);
             setAdding(false);
+            onDirtyChange?.(false);
             refresh();
           }}
           onCancel={() => {
             setEditing(null);
             setEditingProvider(null);
             setAdding(false);
+            onDirtyChange?.(false);
           }}
         />
       )}
@@ -153,9 +169,27 @@ export function ProvidersPanel({ connected }: { connected: boolean }) {
             onPick={(preset) => {
               setEditingProvider(null);
               setEditing(preset);
+              onDirtyChange?.(true);
             }}
           />
         </>
+      )}
+      {replacementProvider && (
+        <Dialog
+          title="Choose a replacement model"
+          description={`Removing ${replacementProvider.id} would remove its default model. Enter the model id to keep as the new default.`}
+          onClose={() => setReplacementProvider(null)}
+        >
+          <label className="dialog-field">
+            <span>Replacement model id</span>
+            <input autoFocus value={replacement} onChange={(event) => setReplacement(event.target.value)} placeholder="provider/model" />
+          </label>
+          {notice && <p className="field-error">{notice}</p>}
+          <DialogActions>
+            <button className="ghost-button" onClick={() => setReplacementProvider(null)} disabled={replacementBusy}>Cancel</button>
+            <button className="primary-button" onClick={() => void confirmReplacement()} disabled={replacementBusy || !replacement.trim()}>{replacementBusy ? "Removing…" : "Remove provider"}</button>
+          </DialogActions>
+        </Dialog>
       )}
     </div>
   );

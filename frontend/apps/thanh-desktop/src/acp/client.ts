@@ -17,7 +17,7 @@ import { useSessionStore, type PendingQuestion } from "../state/session";
 import {
   notify,
   onLog,
-  onMessage,
+  onMessages,
   onStatus,
   request,
   respond,
@@ -43,6 +43,7 @@ export class ThanhAcpClient {
   private restartCount = 0;
   private startup: Promise<void> | null = null;
   private pendingPromptRequests = 0;
+  private inboundMessages: Promise<void> = Promise.resolve();
 
   async connect(cwd: string): Promise<void> {
     if (this.startup) return this.startup;
@@ -77,7 +78,9 @@ export class ThanhAcpClient {
   private async installListeners() {
     for (const dispose of this.unlisten.splice(0)) dispose();
     this.unlisten.push(
-      await onMessage((message) => void this.handleMessage(message)),
+      await onMessages((messages) => {
+        this.inboundMessages = this.inboundMessages.then(() => this.handleMessages(messages));
+      }),
       await onStatus((status) => {
         if (status.state === "exited" && !this.stopping) void this.restartAfterCrash(status.detail);
       }),
@@ -132,6 +135,8 @@ export class ThanhAcpClient {
     const params: LoadSessionRequest = { sessionId, cwd: activeCwd, mcpServers: [] };
     useSessionStore.getState().resetConversation(sessionId);
     const response = await request<{ models?: unknown }>("session/load", params);
+    await this.inboundMessages;
+    useSessionStore.getState().finishTurn();
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
     const catalog = modelCatalog(response?.models);
@@ -189,6 +194,8 @@ export class ThanhAcpClient {
       useSessionStore.getState().set({ error: errorMessage(error) });
       throw error;
     } finally {
+      await this.inboundMessages;
+      useSessionStore.getState().finishTurn();
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       useSessionStore.getState().set({ turnRunning: this.pendingPromptRequests > 0 });
       void this.refreshSessions();
@@ -200,6 +207,8 @@ export class ThanhAcpClient {
     const sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) return;
     await notify("session/cancel", { sessionId });
+    await this.inboundMessages;
+    useSessionStore.getState().finishTurn();
     useSessionStore.getState().set({ turnRunning: false });
   }
 
@@ -325,20 +334,34 @@ export class ThanhAcpClient {
     await Promise.allSettled([this.refreshSessions(), this.refreshModels(), this.refreshCommands()]);
   }
 
+  private async handleMessages(messages: RpcMessage[]) {
+    let updates: SessionNotification[] = [];
+    const flushUpdates = () => {
+      if (updates.length === 0) return;
+      useSessionStore.getState().applyNotifications(updates);
+      updates = [];
+    };
+
+    for (const message of messages) {
+      const method = unwrapMethod(message);
+      const params = unwrapParams(message);
+      if (method === "session/update") {
+        const update = params.update as Record<string, unknown> | undefined;
+        if (update?.sessionUpdate === "available_commands_update") {
+          useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
+        }
+        updates.push(params as unknown as SessionNotification);
+        continue;
+      }
+      flushUpdates();
+      await this.handleMessage(message);
+    }
+    flushUpdates();
+  }
+
   private async handleMessage(message: RpcMessage) {
     const method = unwrapMethod(message);
     const params = unwrapParams(message);
-    if (method === "session/update") {
-      // The command catalog rides `session/update`, not an extension reply: the agent re-advertises
-      // it whenever skills, plugins, or folders change mid-session.
-      if (params.update && (params.update as Record<string, unknown>).sessionUpdate === "available_commands_update") {
-        useCatalogStore.getState().setCommands(
-          commandsFromUpdate((params.update as Record<string, unknown>).availableCommands),
-        );
-      }
-      useSessionStore.getState().applyNotification(params as unknown as SessionNotification);
-      return;
-    }
     if (method === "session/request_permission" && message.id !== undefined) {
       useSessionStore.getState().set({
         pendingPermission: {

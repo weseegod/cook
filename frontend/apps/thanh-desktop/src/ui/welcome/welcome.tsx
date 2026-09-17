@@ -1,4 +1,4 @@
-import { FolderOpen, MessageSquareCode, ShieldCheck, TerminalSquare } from "lucide-react";
+import { FolderOpen, MessageSquareCode } from "lucide-react";
 import { acpClient } from "../../acp/client";
 
 export function Welcome({ onChooseWorkspace }: { onChooseWorkspace: () => void }) {
@@ -7,7 +7,7 @@ export function Welcome({ onChooseWorkspace }: { onChooseWorkspace: () => void }
     <section className="welcome">
       <div className="welcome-mark"><MessageSquareCode size={32} /></div>
       <h1>Build with Thanh</h1>
-      <p>Choose a folder, then chat with the same agent and sessions used by the Thanh CLI.</p>
+      <p>Choose a folder to start.</p>
       <button className="primary-button welcome-open" onClick={onChooseWorkspace}>
         <FolderOpen size={18} /> Open workspace
       </button>
@@ -21,10 +21,6 @@ export function Welcome({ onChooseWorkspace }: { onChooseWorkspace: () => void }
           ))}
         </div>
       )}
-      <div className="welcome-notes">
-        <span><ShieldCheck size={15} /> Workspace trust and permissions stay explicit</span>
-        <span><TerminalSquare size={15} /> Uses your installed <code>thanh agent stdio</code></span>
-      </div>
     </section>
   );
 }

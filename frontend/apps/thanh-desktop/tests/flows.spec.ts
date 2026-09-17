@@ -125,6 +125,7 @@ test.describe("first run", () => {
     await expect.poll(async () => (await mock.state()).defaultModel).toBe("deepseek-reasoner");
     // The agent holds the key; what comes back out is only a hint.
     await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Providers" }).click();
     await expect(page.getByTestId("provider-row-deepseek")).toContainText("sk…abcd");
     await expect(page.locator(".settings-panel")).not.toContainText("sk-live-deepseek-0123456789abcd");
     expect(errors).toEqual([]);
@@ -164,6 +165,7 @@ test.describe("first run", () => {
     await openWorkspace(page);
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
     await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Providers" }).click();
     await expect(page.getByTestId("provider-row-deepseek")).toContainText("API key saved");
   });
 
@@ -181,6 +183,7 @@ test.describe("first run", () => {
     await openWorkspace(page, CONNECTED_SEED);
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
     await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Providers" }).click();
     await expect(page.getByTestId("provider-row-openai")).toContainText("API key saved");
     await expect(page.getByTestId("provider-row-openai")).toContainText("sk…cdef");
     await expect(page.locator(".settings-panel")).not.toContainText("sk-mock-0123456789abcdef");
@@ -214,6 +217,8 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
     await expect(page.getByText("What changed?")).toBeVisible();
+    await expect(page.locator(".message-assistant")).toHaveCount(1);
+    await expect(page.locator(".message-assistant")).toContainText("Mock assistant reply.");
 
     const prompt = await waitForCalls(page, "session/prompt");
     expect(prompt[0].params.prompt).toEqual([{ type: "text", text: "What changed?" }]);
@@ -294,7 +299,7 @@ test.describe("chat, attachments and the model picker", () => {
   test("refuses an image on a text-only model with a visible reason", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, { ...CONNECTED_SEED, defaultModel: "o4-mini" });
-    await expect(page.getByText("this model is text-only")).toBeVisible();
+    await expect(page.locator(".composer-hint")).toHaveAttribute("title", "Images are unavailable for this text-only model");
     await page.getByTestId("attach-input").setInputFiles({
       name: "shot.png",
       mimeType: "image/png",
@@ -487,7 +492,7 @@ test.describe("slash commands", () => {
 
     // The setting has one home: the toggle in Settings shows what the command just did.
     await page.getByLabel("Settings").click();
-    await page.getByRole("tab", { name: "About" }).click();
+    await page.getByRole("tab", { name: "General" }).click();
     await expect(page.locator(".toggle-row", { hasText: "Always approve" }).getByRole("checkbox")).toBeChecked();
   });
 
@@ -663,6 +668,13 @@ test.describe("minimum window", () => {
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Providers" }).click();
     await expect(page.getByTestId("provider-row-openai")).toBeVisible();
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+    await page.getByLabel("Settings").click();
+    await page.keyboard.press("Meta+w");
+    await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);

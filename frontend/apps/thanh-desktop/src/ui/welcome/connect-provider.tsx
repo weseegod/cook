@@ -48,11 +48,6 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
       <header className="connect-header">
         <div className="welcome-mark"><Sparkles size={26} /></div>
         <h1>Connect a provider</h1>
-        <p>
-          Thanh Desktop talks to the same agent as the CLI. Bring a key for DeepSeek, OpenRouter,
-          OpenAI, Anthropic, Google, Groq, Mistral, Moonshot, Together, Fireworks, or a local model —
-          no <code>config.toml</code> editing.
-        </p>
       </header>
 
       {!preset && (
@@ -69,6 +64,7 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
           <button className="ghost-button connect-back" onClick={() => setPreset(null)}><ArrowLeft size={15} /> All providers</button>
           <ProviderEditor
             preset={preset}
+            showDefaultModel={false}
             onSaved={(id) => setSavedId(id)}
             onCancel={() => setPreset(null)}
           />

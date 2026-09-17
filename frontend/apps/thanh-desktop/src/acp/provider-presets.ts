@@ -43,6 +43,11 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     { id: "deepseek-chat", model: "deepseek-chat", name: "DeepSeek Chat", input: text },
     { id: "deepseek-reasoner", model: "deepseek-reasoner", name: "DeepSeek Reasoner", input: text },
   ]),
+  preset("zai", "Z.ai", "https://api.z.ai/api/paas/v4/", "chat_completions", "ZAI_API_KEY", "Create a key at z.ai", [
+    { id: "glm-5.1", model: "glm-5.1", name: "GLM-5.1", input: text },
+    { id: "glm-5", model: "glm-5", name: "GLM-5", input: text },
+    { id: "glm-4.7", model: "glm-4.7", name: "GLM-4.7", input: text },
+  ]),
   preset("xai", "xAI", "https://api.x.ai/v1", "chat_completions", "XAI_API_KEY", "Create a key at console.x.ai, or run `thanh login` for session auth", [
     { id: "grok-4.5", model: "grok-4.5", name: "Grok 4.5", input: textImage },
     { id: "grok-4.5-mini", model: "grok-4.5-mini", name: "Grok 4.5 Mini", input: textImage },

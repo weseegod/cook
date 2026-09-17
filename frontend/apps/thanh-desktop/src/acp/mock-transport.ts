@@ -80,6 +80,8 @@ export interface MockState {
   setDefaultUnsupported: boolean;
   /** Assistant text streamed back for each prompt. */
   reply: string;
+  /** Optional exact ACP update sequence for transcript and visual tests. */
+  promptUpdates: Array<Record<string, unknown>>;
   /** Agent-side project instruction files keyed by path. */
   files: Record<string, string>;
   /** Paths the native attachment picker returns; empty means "no native picker here". */
@@ -113,6 +115,7 @@ function defaultState(): MockState {
     testFails: false,
     setDefaultUnsupported: false,
     reply: "Mock assistant reply.",
+    promptUpdates: [],
     files: {},
     pickedFiles: [],
     filePayloads: {},
@@ -341,17 +344,19 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       notify("session/update", availableCommandsUpdate());
       return respond({ modes: null, models: modelCatalog() });
     case "session/prompt": {
-      const messageId = `mock-${requests.length}`;
       // A real turn reports its context through `x.ai/session/info`, never an ACP `usage_update`.
       state.context = {
         used: state.context.used + 1234,
         turns: state.context.turns + 1,
         messageCount: state.context.messageCount + 2,
       };
-      notify("session/update", {
-        sessionId,
-        update: { sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text: state.reply } },
-      });
+      const updates = state.promptUpdates.length > 0
+        ? state.promptUpdates
+        : splitReply(state.reply).map((text) => ({
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text },
+          }));
+      for (const update of updates) notify("session/update", { sessionId, update });
       return respond({ stopReason: "end_turn" });
     }
     case "x.ai/session/info": {
@@ -537,6 +542,11 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
     default:
       return respond({});
   }
+}
+
+function splitReply(reply: string): string[] {
+  const midpoint = Math.max(1, Math.floor(reply.length / 2));
+  return [reply.slice(0, midpoint), reply.slice(midpoint)].filter(Boolean);
 }
 
 export function mockReset(seed: Partial<MockState> = {}): void {

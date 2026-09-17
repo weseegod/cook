@@ -88,6 +88,13 @@ describe("elicitation card", () => {
     expect(answer).toHaveBeenCalledWith({ outcome: "cancel" });
   });
 
+  it("cancels the active interaction with Escape", () => {
+    const answer = vi.spyOn(acpClient, "answerQuestion").mockResolvedValue();
+    show(elicitInteraction(14, FORM_REQUEST));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(answer).toHaveBeenCalledWith({ outcome: "cancel" });
+  });
+
   it("asks nothing for a url-mode visit", () => {
     show(elicitInteraction(13, { serverName: "linear", message: "Authorize", mode: "url", url: "https://linear.app/oauth" }));
     expect(screen.queryByTestId("elicit-fields")).toBeNull();

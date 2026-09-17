@@ -3,7 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeToHtml } from "shiki";
 
-export function Markdown({ text }: { text: string }) {
+export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return (
     <div className="markdown">
       <ReactMarkdown
@@ -13,6 +13,7 @@ export function Markdown({ text }: { text: string }) {
             const language = /language-([\w-]+)/.exec(className ?? "")?.[1];
             const value = String(children).replace(/\n$/, "");
             if (!language) return <code>{children}</code>;
+            if (streaming) return <pre className="streaming-code"><code>{value}</code></pre>;
             if (language === "mermaid") return <Mermaid source={value} />;
             return <HighlightedCode code={value} language={language} />;
           },

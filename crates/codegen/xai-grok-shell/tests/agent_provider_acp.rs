@@ -110,7 +110,7 @@ fn provider_acp_round_trip() {
                 .iter()
                 .filter_map(|p| p["id"].as_str())
                 .collect();
-            for expected in ["openai", "anthropic", "deepseek", "ollama", "custom"] {
+            for expected in ["openai", "anthropic", "deepseek", "zai", "ollama", "custom"] {
                 assert!(preset_ids.contains(&expected), "missing preset {expected}");
             }
             let anthropic = presets["presets"]

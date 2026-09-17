@@ -1,9 +1,22 @@
 import { ShieldAlert, Terminal, X } from "lucide-react";
+import { useEffect } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
+import { InfoTip } from "../components/info-tip";
 
 export function PermissionModal() {
   const pending = useSessionStore((state) => state.pendingPermission);
+  useEffect(() => {
+    if (!pending) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")) {
+        event.preventDefault();
+        void acpClient.answerPermission();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [pending]);
   if (!pending) return null;
   const tool = pending.request.toolCall;
   return (
@@ -11,8 +24,7 @@ export function PermissionModal() {
       <section className="modal permission-modal" role="dialog" aria-modal="true" aria-labelledby="permission-title">
         <button className="modal-close" onClick={() => void acpClient.answerPermission()} aria-label="Close"><X size={17} /></button>
         <div className="modal-icon warning"><ShieldAlert size={23} /></div>
-        <h2 id="permission-title">Permission required</h2>
-        <p>Thanh wants to run a tool that can affect your machine or workspace.</p>
+        <h2 id="permission-title">Permission required <InfoTip label="Permission required">Thanh wants to run a tool that can affect your machine or workspace.</InfoTip></h2>
         <div className="permission-tool"><Terminal size={16} /><strong>{tool.title ?? tool.kind ?? "Tool call"}</strong></div>
         {Array.isArray(tool.content) && tool.content.length > 0 && <pre>{tool.content.map(readContent).join("\n")}</pre>}
         <div className="modal-actions permission-actions">

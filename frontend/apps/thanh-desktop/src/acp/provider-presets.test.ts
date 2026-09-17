@@ -21,6 +21,7 @@ describe("preset catalog", () => {
       "anthropic",
       "openrouter",
       "deepseek",
+      "zai",
       "xai",
       "google",
       "groq",
@@ -36,6 +37,12 @@ describe("preset catalog", () => {
     expect(JSON.stringify(PROVIDER_PRESETS)).not.toMatch(/sk-[A-Za-z0-9]/);
     expect(findPreset("anthropic")?.apiBackend).toBe("messages");
     expect(findPreset("anthropic")?.extraHeaders).toEqual({ "anthropic-version": "2023-06-01" });
+    expect(findPreset("zai")).toMatchObject({
+      baseUrl: "https://api.z.ai/api/paas/v4/",
+      apiBackend: "chat_completions",
+      envKey: "ZAI_API_KEY",
+    });
+    expect(findPreset("zai")?.models.map((model) => model.id)).toEqual(["glm-5.1", "glm-5", "glm-4.7"]);
     expect(findPreset("ollama")?.envKey).toBeNull();
     expect(findPreset("custom")?.baseUrl).toBeNull();
   });

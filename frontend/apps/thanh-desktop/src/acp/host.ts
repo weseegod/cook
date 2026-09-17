@@ -160,13 +160,18 @@ export async function getConfigSecurity(): Promise<ConfigSecurity> {
 }
 
 export async function onMessage(handler: (message: RpcMessage) => void): Promise<UnlistenFn> {
+  return onMessages((messages) => messages.forEach(handler));
+}
+
+/** Preserve native host batches so transcript updates can be reduced in one store transaction. */
+export async function onMessages(handler: (messages: RpcMessage[]) => void): Promise<UnlistenFn> {
   if (!isTauri()) {
     if (!isMock()) return () => undefined;
     const { subscribe } = await mock();
-    return subscribe((message) => handler(message as RpcMessage));
+    return subscribe((message) => handler([message as RpcMessage]));
   }
-  const disposeSingle = await listen<RpcMessage>("acp-message", ({ payload }) => handler(payload));
-  const disposeBatch = await listen<RpcMessage[]>("acp-messages", ({ payload }) => payload.forEach(handler));
+  const disposeSingle = await listen<RpcMessage>("acp-message", ({ payload }) => handler([payload]));
+  const disposeBatch = await listen<RpcMessage[]>("acp-messages", ({ payload }) => handler(payload));
   return () => { disposeSingle(); disposeBatch(); };
 }
 

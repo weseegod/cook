@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
 import { Markdown } from "../chat/markdown";
+import { Dialog, DialogActions } from "../components/dialog";
+import { InfoTip } from "../components/info-tip";
 import { elicitContent, elicitFields, elicitFormComplete } from "./elicit-fields";
 
 export function InteractionModal() {
@@ -10,17 +12,34 @@ export function InteractionModal() {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [values, setValues] = useState<Record<string, string>>({});
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedback, setFeedback] = useState("");
   const elicitSchema = pending?.kind === "elicit" ? pending.raw.requestedSchema : undefined;
   const fields = useMemo(() => elicitFields(elicitSchema), [elicitSchema]);
   useEffect(() => {
     setAnswers({});
     setNotes({});
+    setFeedbackOpen(false);
+    setFeedback("");
     setValues(
       Object.fromEntries(
         elicitFields(pending?.raw.requestedSchema).map((field) => [field.name, field.default ?? ""]),
       ),
     );
   }, [pending?.rpcId, pending?.raw.requestedSchema]);
+  useEffect(() => {
+    if (!pending || feedbackOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")) {
+        event.preventDefault();
+        void acpClient.answerQuestion(
+          pending.kind === "trust" ? { outcome: "reject" } : pending.kind === "elicit" ? { outcome: "cancel" } : { outcome: "cancelled" },
+        );
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [pending, feedbackOpen]);
   if (!pending) return null;
 
   function choose(question: string, label: string, multi: boolean) {
@@ -58,9 +77,17 @@ export function InteractionModal() {
       return acpClient.answerQuestion({ outcome: "accept", ...(Object.keys(content).length ? { content } : {}) });
     }
     if (pending!.kind === "plan") {
-      const feedback = id === "cancelled" ? window.prompt("What should Thanh change in the plan?") ?? undefined : undefined;
-      return acpClient.answerQuestion({ outcome: id, ...(feedback ? { feedback } : {}) });
+      if (id === "cancelled") {
+        setFeedbackOpen(true);
+        return;
+      }
+      return acpClient.answerQuestion({ outcome: id });
     }
+  }
+
+  async function submitFeedback() {
+    await acpClient.answerQuestion({ outcome: "cancelled", ...(feedback.trim() ? { feedback: feedback.trim() } : {}) });
+    setFeedbackOpen(false);
   }
 
   return (
@@ -85,7 +112,7 @@ export function InteractionModal() {
                     className={selected ? "selected" : ""}
                     onClick={() => pending.kind === "question" ? choose(question.question, option.label, question.multiSelect ?? false) : void pickSpecial(option.id)}
                   >
-                    <strong>{option.label}</strong>{option.description && <span>{option.description}</span>}
+                    <strong>{option.label} {option.description && <InfoTip label={option.label}>{option.description}</InfoTip>}</strong>
                   </button>
                 );
               })}
@@ -113,7 +140,7 @@ export function InteractionModal() {
                   {field.label}
                   {field.required && <em aria-hidden="true"> *</em>}
                 </span>
-                {field.description && <small>{field.description}</small>}
+                  {field.description && <InfoTip label={field.label}>{field.description}</InfoTip>}
                 {field.options ? (
                   <select
                     data-testid={`elicit-${field.name}`}
@@ -167,6 +194,18 @@ export function InteractionModal() {
           </div>
         )}
       </section>
+      {feedbackOpen && (
+        <Dialog title="Change the plan" onClose={() => setFeedbackOpen(false)}>
+          <label className="dialog-field">
+            <span>Feedback</span>
+            <textarea autoFocus value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="Please adjust…" rows={4} />
+          </label>
+          <DialogActions>
+            <button className="ghost-button" onClick={() => setFeedbackOpen(false)}>Keep plan</button>
+            <button className="primary-button" onClick={() => void submitFeedback()}>Send feedback</button>
+          </DialogActions>
+        </Dialog>
+      )}
     </div>
   );
 }
