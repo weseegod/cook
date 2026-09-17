@@ -34,7 +34,7 @@ async function openWorkspace(page: Page, seed: Record<string, unknown> = {}) {
   await page.goto("/");
   await page.getByRole("button", { name: "Open workspace" }).click();
   await page.waitForFunction(() => Boolean(window.__thanhMock));
-  await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
 }
 
 function callsTo(requests: Recorded[], method: string): Recorded[] {
@@ -201,7 +201,7 @@ test.describe("first run", () => {
     await page.getByTestId("connect-skip").click();
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
     await page.reload();
-    await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
   });
 });
@@ -306,9 +306,10 @@ test.describe("chat, attachments and the model picker", () => {
       buffer: Buffer.from(PNG_BASE64, "base64"),
     });
     await expect(page.getByTestId("attachment-row")).toHaveCount(0);
-    await expect(page.locator(".error-banner")).toContainText("cannot read images");
-    await page.getByLabel("Dismiss error").click();
+    await expect(page.getByTestId("chat-error")).toContainText("cannot read images");
     await expect(page.getByTestId("error-banner")).toHaveCount(0);
+    await page.getByLabel("Dismiss error").click();
+    await expect(page.getByTestId("chat-error")).toHaveCount(0);
     expect(callsTo(await mock.requests(), "session/prompt")).toHaveLength(0);
   });
 
@@ -414,7 +415,7 @@ test.describe("slash commands", () => {
     await expect(page.getByTestId("slash-menu")).toHaveCount(0);
   });
 
-  test("runs /plan, then leaves plan mode from the status bar", async ({ page }) => {
+  test("runs /plan, then leaves plan mode from Settings", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
 
@@ -427,7 +428,9 @@ test.describe("slash commands", () => {
     expect(modes[0].params).toMatchObject({ sessionId: "mock-session", modeId: "plan" });
     expect((await mock.state()).sessionMode).toBe("plan");
 
-    await page.getByTestId("plan-toggle").click();
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "General" }).click();
+    await page.getByRole("checkbox", { name: "Plan mode" }).click();
     await expect.poll(async () => (await mock.state()).sessionMode).toBe("default");
     await expect(page.locator(".plan-banner")).toHaveCount(0);
   });
@@ -469,12 +472,12 @@ test.describe("slash commands", () => {
   test("reports context usage, and turns always-approve on where the agent can see it", async ({ page }) => {
     await openWorkspace(page, CONNECTED_SEED);
 
-    // A turn is what makes the agent report context usage; the status bar shows it from then on,
+    // A turn is what makes the agent report context usage; the composer shows it from then on,
     // out of `x.ai/session/info` — a real turn sends no `usage_update`.
     await composer(page).fill("hello");
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
-    await expect(page.locator(".statusbar")).toContainText("tokens");
+    await expect(page.locator(".composer-context-usage")).toContainText("tokens");
     await waitForCalls(page, "x.ai/session/info");
 
     await composer(page).fill("/context");
@@ -496,6 +499,20 @@ test.describe("slash commands", () => {
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "General" }).click();
     await expect(page.locator(".toggle-row", { hasText: "Always approve" }).getByRole("checkbox")).toBeChecked();
+  });
+
+  test("opens context actions inside the composer and queues /compact", async ({ page }) => {
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 250 });
+    await composer(page).fill("hello");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+
+    await page.getByLabel("Context status").click();
+    await expect(page.getByRole("menuitem", { name: /compact/ })).toBeVisible();
+    await page.getByRole("menuitem", { name: /compact/ }).click();
+
+    const prompts = await waitForCalls(page, "session/prompt", 2);
+    expect(prompts.at(-1)?.params.prompt).toEqual([{ type: "text", text: "/compact" }]);
   });
 
   test("picks a model before the first prompt and spawns the session on it", async ({ page }) => {
@@ -544,7 +561,7 @@ test.describe("connectors", () => {
     page.on("pageerror", (error) => errors.push(error.message));
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
-    await page.getByRole("button", { name: "New conversation" }).click();
+    await page.getByRole("button", { name: "New chat" }).click();
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Connectors" }).click();
 
@@ -676,7 +693,7 @@ test.describe("minimum window", () => {
     await page.getByLabel("Settings").click();
     await page.keyboard.press("Meta+w");
     await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
 
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);

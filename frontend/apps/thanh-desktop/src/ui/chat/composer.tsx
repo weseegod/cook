@@ -1,8 +1,8 @@
-import { ChevronDown, CornerDownLeft, FileText, LoaderCircle, Mic, Plus, Shield, X } from "lucide-react";
+import { ChevronDown, CornerDownLeft, FileText, Folder, LoaderCircle, Mic, Minimize2, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type Attachment } from "../../acp/attachments";
-import { onFileDrop, pickFiles, readFilePayload } from "../../acp/host";
+import { onFileDrop, pickFiles, pickFolder, readFilePayload } from "../../acp/host";
 import { groupByProvider } from "../../acp/xai";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
@@ -32,14 +32,19 @@ export function Composer() {
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
   const [menuClosed, setMenuClosed] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [compacting, setCompacting] = useState(false);
   const [active, setActive] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const filePicker = useRef<HTMLInputElement>(null);
+  const contextMenu = useRef<HTMLDivElement>(null);
   const text = useSessionStore((state) => state.composerDraft);
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
   const interactionPending = useSessionStore((state) => Boolean(state.pendingPermission || state.pendingQuestion));
   const sessionId = useSessionStore((state) => state.sessionId);
+  const cwd = useSessionStore((state) => state.cwd);
   const planMode = useSessionStore((state) => state.planMode);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
   const usage = useSessionStore((state) => state.usage);
@@ -57,6 +62,15 @@ export function Composer() {
     [typedName, typedArgs, commands, menuClosed],
   );
   useEffect(() => setActive(0), [typedName]);
+
+  useEffect(() => {
+    if (!contextMenuOpen) return;
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (event.target instanceof Node && !contextMenu.current?.contains(event.target)) setContextMenuOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [contextMenuOpen]);
 
   useEffect(() => {
     const node = textarea.current;
@@ -139,6 +153,36 @@ export function Composer() {
     // No native picker (a plain browser): the hidden input is the only way to get the bytes.
     if (paths === null) filePicker.current?.click();
     else await addPaths(paths);
+  }
+
+  async function chooseWorkspace() {
+    if (folderBusy || interactionPending) return;
+    setFolderBusy(true);
+    try {
+      const selected = await pickFolder();
+      if (selected && selected !== cwd) await acpClient.connect(selected);
+    } catch (error) {
+      reportError(error);
+    } finally {
+      setFolderBusy(false);
+    }
+  }
+
+  async function compactConversation() {
+    if (compacting || interactionPending) return;
+    setContextMenuOpen(false);
+    setCompacting(true);
+    setText("");
+    useSessionStore.getState().set({ notice: null, error: null });
+    try {
+      if (useSessionStore.getState().turnRunning) acpClient.queuePrompt("/compact");
+      else await acpClient.prompt("/compact");
+    } catch (error) {
+      reportError(error);
+    } finally {
+      setCompacting(false);
+      textarea.current?.focus();
+    }
   }
 
   /**
@@ -247,6 +291,43 @@ export function Composer() {
           ))}
         </div>
       )}
+      <div className="composer-contextbar">
+        <button
+          type="button"
+          className="composer-folder"
+          onClick={() => void chooseWorkspace()}
+          disabled={folderBusy || interactionPending}
+          title={cwd ?? "Choose a workspace folder"}
+          aria-label="Choose workspace folder"
+        >
+          {folderBusy ? <LoaderCircle className="spin" size={13} /> : <Folder size={13} />}
+          <span>{cwd || "Choose folder"}</span>
+        </button>
+        <div className="composer-context" ref={contextMenu}>
+          <button
+            type="button"
+            className="composer-context-trigger"
+            onClick={() => setContextMenuOpen((open) => !open)}
+            disabled={interactionPending}
+            aria-expanded={contextMenuOpen}
+            aria-haspopup="menu"
+            aria-label="Context status"
+            title="Context window usage"
+          >
+            <span>Context</span>
+            <span className="composer-context-usage">{tokenSummary(usage)}</span>
+            <ChevronDown size={12} aria-hidden="true" />
+          </button>
+          {contextMenuOpen && (
+            <div className="composer-context-menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => void compactConversation()} disabled={compacting || interactionPending}>
+                {compacting ? <LoaderCircle className="spin" size={13} /> : <Minimize2 size={13} />}
+                <span><strong>/compact</strong><small>Compress conversation history</small></span>
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
       <div
         className={`composer ${dragging ? "dragging" : ""}`}
         data-testid="composer-drop"
@@ -325,15 +406,6 @@ export function Composer() {
             </span>
           </div>
           <div className="composer-submit">
-            <button
-              type="button"
-              className={`access-toggle ${alwaysApprove ? "active" : ""}`}
-              aria-pressed={alwaysApprove}
-              title={alwaysApprove ? "Tools can run without an approval prompt" : "Ask before a tool changes your workspace"}
-              onClick={() => void acpClient.setYolo(!alwaysApprove).catch(reportError)}
-            >
-              <Shield size={13} /> {alwaysApprove ? "Full access" : "Ask before edits"}
-            </button>
             <label className="composer-model" title={selectedModel || "Select model"}>
               <select
                 value={selectedModel}
@@ -366,4 +438,14 @@ export function Composer() {
       </div>
     </div>
   );
+}
+
+function tokenSummary(usage: Record<string, unknown> | null): string {
+  const used = Number(usage?.used ?? usage?.totalTokens ?? 0);
+  if (!Number.isFinite(used) || used <= 0) return "—";
+  const size = Number(usage?.size ?? 0);
+  const count = new Intl.NumberFormat(undefined, { notation: used > 9999 ? "compact" : "standard" }).format(used);
+  if (!Number.isFinite(size) || size <= 0) return `${count} tokens`;
+  const percent = Math.min(100, Math.round((used / size) * 100));
+  return `${count} / ${new Intl.NumberFormat(undefined, { notation: "compact" }).format(size)} tokens (${percent}%)`;
 }

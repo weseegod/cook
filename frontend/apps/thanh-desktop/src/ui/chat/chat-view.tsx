@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Brain, Copy, FileCode2 } from "lucide-react";
+import { AlertCircle, Bot, Brain, Copy, FileCode2, RefreshCw, X } from "lucide-react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore, type MessageBlock, type PlanBlock, type SessionEventBlock } from "../../state/session";
 import { PermissionModal } from "../permissions/permission-modal";
@@ -7,7 +7,6 @@ import { InteractionModal } from "../permissions/interaction-modal";
 import { Composer } from "./composer";
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
-import { StatusBar } from "./status-bar";
 import { TurnStatus } from "./turn-status";
 import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
 import { projectTranscript } from "./transcript-projection";
@@ -17,6 +16,9 @@ export function ChatView() {
   const sessionId = useSessionStore((state) => state.sessionId);
   const turnRunning = useSessionStore((state) => state.turnRunning);
   const planMode = useSessionStore((state) => state.planMode);
+  const connection = useSessionStore((state) => state.connection);
+  const cwd = useSessionStore((state) => state.cwd);
+  const error = useSessionStore((state) => state.error);
   const notice = useSessionStore((state) => state.notice);
   const pendingPermission = useSessionStore((state) => state.pendingPermission);
   const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
@@ -63,6 +65,7 @@ export function ChatView() {
           return <Plan key={block.id} plan={block as PlanBlock} />;
         })}
       </div>
+      {error && <ChatError error={error} connection={connection} cwd={cwd} />}
       <TurnStatus />
       {planMode && <div className="plan-banner"><Brain size={15} /> Plan mode — Thanh will inspect and propose before changing files.</div>}
       {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
@@ -77,7 +80,28 @@ export function ChatView() {
       <div className={interactionPending ? "prompt-slot stashed" : "prompt-slot"}>
         <Composer />
       </div>
-      <StatusBar />
+    </div>
+  );
+}
+
+function ChatError({ error, connection, cwd }: { error: string; connection: string; cwd: string | null }) {
+  return (
+    <div className="chat-error" role="alert" data-testid="chat-error">
+      <AlertCircle size={15} aria-hidden="true" />
+      <div className="error-copy">
+        <strong>Something went wrong</strong>
+        <span>{error}</span>
+      </div>
+      <div className="error-actions">
+        {connection === "error" && cwd && (
+          <button type="button" className="error-retry" onClick={() => void acpClient.connect(cwd).catch(() => undefined)}>
+            <RefreshCw size={13} /> Retry
+          </button>
+        )}
+        <button type="button" className="error-dismiss" aria-label="Dismiss error" onClick={() => useSessionStore.getState().set({ error: null })}>
+          <X size={14} />
+        </button>
+      </div>
     </div>
   );
 }

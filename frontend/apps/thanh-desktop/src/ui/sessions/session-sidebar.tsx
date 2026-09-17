@@ -1,17 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleHelp, Folder, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
-import { useDeferredValue, useState } from "react";
+import { useState } from "react";
 import { acpClient } from "../../acp/client";
 import type { SessionSummary } from "../../acp/xai";
 import { useSessionStore } from "../../state/session";
 import { ConfirmDialog, Dialog, DialogActions } from "../components/dialog";
 
-export function SessionSidebar({ onOpenSettings }: { onOpenSettings: () => void }) {
+export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSettings: () => void; onOpenSearch: () => void }) {
   const activeId = useSessionStore((state) => state.sessionId);
-  const cwd = useSessionStore((state) => state.cwd);
-  const connection = useSessionStore((state) => state.connection);
-  const [search, setSearch] = useState("");
-  const deferredSearch = useDeferredValue(search);
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
   const [target, setTarget] = useState<SessionSummary | null>(null);
@@ -19,8 +15,8 @@ export function SessionSidebar({ onOpenSettings }: { onOpenSettings: () => void 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessions = useQuery({
-    queryKey: ["sessions", deferredSearch],
-    queryFn: () => acpClient.xai.listSessions(deferredSearch),
+    queryKey: ["sessions"],
+    queryFn: () => acpClient.xai.listSessions(),
     enabled: useSessionStore.getState().connection === "ready",
   });
 
@@ -86,12 +82,12 @@ export function SessionSidebar({ onOpenSettings }: { onOpenSettings: () => void 
           </div>
           <span className="sidebar-version">Desktop</span>
         </header>
-        <div className="sidebar-workspace" title={cwd ?? undefined}>
-          <Folder size={14} />
-          <span>{cwd ? cwd.split(/[\\/]/).pop() : "Workspace"}</span>
-        </div>
-        <button className="new-chat" onClick={newConversation}><MessageSquarePlus size={16} /> New conversation</button>
-        <label className="search-field"><Search size={14} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search sessions" /></label>
+        <button className="new-chat" onClick={newConversation}><MessageSquarePlus size={16} /> New chat</button>
+        <button type="button" className="search-field" onClick={onOpenSearch} aria-label="Search everything">
+          <Search size={14} aria-hidden="true" />
+          <span className="search-field-label">Search everything</span>
+          <kbd>⌘K</kbd>
+        </button>
         <div className="session-list">
           <div className="session-list-heading"><span>Conversations</span>{sessions.data && <small>{sessions.data.length}</small>}</div>
           {sessions.isLoading && <div className="sidebar-hint">Loading sessions…</div>}
@@ -105,7 +101,11 @@ export function SessionSidebar({ onOpenSettings }: { onOpenSettings: () => void 
             <div key={session.id} className={`session-row ${activeId === session.id ? "active" : ""}`}>
               <button className="session-open" onClick={() => void acpClient.loadSession(session.id, session.cwd)}>
                 <strong>{session.title || "Untitled conversation"}</strong>
-                <span>{formatDate(session.updatedAt)}</span>
+                <span className="session-path" title={session.cwd ?? "Workspace unavailable"}>
+                  <Folder size={11} aria-hidden="true" />
+                  <span>{session.cwd || "Workspace unavailable"}</span>
+                </span>
+                <span className="session-date">{formatDate(session.updatedAt)}</span>
               </button>
               <div className="session-actions">
                 <button type="button" onClick={() => void rename(session)} aria-label="Rename"><Pencil size={13} /></button>
@@ -116,10 +116,6 @@ export function SessionSidebar({ onOpenSettings }: { onOpenSettings: () => void 
           {sessions.data?.length === 0 && <div className="sidebar-hint">No conversations found.</div>}
         </div>
         <footer className="sidebar-footer">
-          <button type="button" className="sidebar-account" onClick={onOpenSettings} aria-label="Account" title="Account">
-            <span className="sidebar-avatar">T</span>
-            <span className="sidebar-account-copy"><strong>Thanh</strong><small>{connection === "ready" ? "Connected" : "Reconnecting"}</small></span>
-          </button>
           <div className="sidebar-footer-actions">
             <button type="button" className="sidebar-footer-button" onClick={onOpenSettings} aria-label="Settings" title="Settings"><Settings size={15} /></button>
             <button type="button" className="sidebar-footer-button" aria-label="Help" title="Help"><CircleHelp size={15} /></button>

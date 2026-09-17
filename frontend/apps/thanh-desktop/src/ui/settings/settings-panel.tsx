@@ -233,7 +233,7 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
                 <span>Version {__APP_VERSION__}</span>
               </div>
               <div className="shortcut-list" aria-label="Keyboard shortcuts">
-                <span><kbd>⌘K</kbd> Command palette</span>
+                <span><kbd>⌘K</kbd> Search everything</span>
                 <span><kbd>⌘,</kbd> Settings</span>
                 <span><kbd>⌘W</kbd> Close current panel</span>
                 <span><kbd>Esc</kbd> Cancel</span>

@@ -17,7 +17,7 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const items = useMemo(
-    // The window's own commands are part of the same catalog here, so Ctrl+K reaches `/plan` too.
+    // The window's own commands are part of the same catalog here, so Search everything reaches `/plan` too.
     () => rankPaletteItems(buildPaletteItems({ sessions, models, commands: slashEntries(commands) }), query),
     [sessions, models, commands, query],
   );
@@ -27,13 +27,13 @@ export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onS
 
   return (
     <div className="palette-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="palette" role="dialog" aria-label="Command palette" data-testid="command-palette">
+      <section className="palette" role="dialog" aria-label="Search everything" data-testid="command-palette">
         <input
           ref={inputRef}
           className="palette-input"
           value={query}
-          placeholder="Search…"
-          aria-label="Command palette search"
+          placeholder="Search everything…"
+          aria-label="Search everything input"
           data-testid="palette-input"
           onChange={(event) => setQuery(event.target.value)}
           onKeyDown={(event) => {

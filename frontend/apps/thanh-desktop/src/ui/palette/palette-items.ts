@@ -1,7 +1,7 @@
 /**
- * Command-palette item construction and ranking (pure).
+ * Search-everything item construction and ranking (pure).
  *
- * The palette indexes sessions, models, slash commands, and app actions in one list; ranking is
+ * Search everything indexes sessions, models, slash commands, and app actions in one list; ranking is
  * deterministic so the same query always surfaces the same order.
  */
 import type { CommandSummary, ModelSummary, SessionSummary } from "../../acp/xai";
@@ -27,7 +27,7 @@ export interface PaletteSource {
 }
 
 export const DEFAULT_ACTIONS: PaletteItem[] = [
-  { id: "action:new-session", kind: "action", label: "New conversation", action: "new-session" },
+  { id: "action:new-session", kind: "action", label: "New chat", action: "new-session" },
   { id: "action:open-folder", kind: "action", label: "Open folder…", action: "open-folder" },
   { id: "action:settings", kind: "action", label: "Open settings", action: "settings" },
   { id: "action:connect-provider", kind: "action", label: "Connect a provider", action: "connect-provider" },

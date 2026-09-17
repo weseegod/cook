@@ -33,7 +33,7 @@ async function openWorkspace(page: Page, seed = VISUAL_SEED) {
   await page.goto("/");
   await page.getByRole("button", { name: "Open workspace" }).click();
   await page.waitForFunction(() => Boolean(window.__thanhMock));
-  await expect(page.getByRole("button", { name: "New conversation" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -45,6 +45,17 @@ test.describe("visual audit", () => {
   test("covers chat, sidebar, palette and every Settings surface", async ({ page }) => {
     await openWorkspace(page);
     await expectNoHorizontalOverflow(page);
+    await expect(page.getByTestId("process-status")).toContainText("Ready");
+    await expect(page.locator(".statusbar")).toHaveCount(0);
+    await expect(page.getByLabel("Choose workspace folder")).toBeVisible();
+    await expect(page.getByLabel("Context status")).toBeVisible();
+    await expect(page.getByLabel(/Theme:/)).toHaveCount(0);
+    await expect(page.getByLabel("Account")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Open folder" })).toHaveCount(0);
+    await expect(page.locator(".processbar-workspace")).toHaveCount(0);
+    await expect(page.locator(".sidebar-connection")).toHaveCount(0);
+    await expect(page.locator(".sidebar-workspace")).toHaveCount(0);
+    await expect(page.locator(".session-path").first()).toContainText("/Users/thanh/projects/thanh-demo");
     await capture(page, "chat-empty");
 
     await page.getByPlaceholder("Ask Thanh anything…").fill("Review this project and suggest the next step.");
@@ -80,13 +91,14 @@ test.describe("visual audit", () => {
     await page.getByText("Read 2 files").click();
     await capture(page, "chat-activity-expanded");
 
-    await page.getByLabel("Command palette").click();
+    await page.getByLabel("Search everything").click();
     await expect(page.getByTestId("command-palette")).toBeVisible();
     await capture(page, "command-palette");
     await page.keyboard.press("Escape");
 
     await page.getByLabel("Settings").click();
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: "Plan mode" })).toBeVisible();
     for (const tab of ["General", "Providers", "Models", "Connectors", "Memory & project", "Skills", "About"]) {
       await page.getByRole("tab", { name: tab }).click();
       if (tab === "Providers") await expect(page.getByTestId("provider-row-openai")).toBeVisible();
