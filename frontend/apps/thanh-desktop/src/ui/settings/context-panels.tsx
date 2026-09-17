@@ -128,6 +128,7 @@ export function MemoryPanel({ connected }: { connected: boolean }) {
 export function SkillsPanel({ connected }: { connected: boolean }) {
   const cwd = useSessionStore((state) => state.cwd);
   const queryClient = useQueryClient();
+  const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
   const skills = useQuery({ queryKey: ["skills", cwd], queryFn: () => listSkills(cwd ?? undefined), enabled: connected, retry: 0 });
   const plugins = useQuery({ queryKey: ["plugins"], queryFn: listPlugins, enabled: connected, retry: 0 });
   const skillList = skills.data?.skills ?? skills.data?.items ?? [];
@@ -147,10 +148,23 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           <li key={skill.name} data-testid={`skill-${skill.name}`}>
             <div>
               <strong>{skill.name}</strong>
-              {skill.description && <InfoTip label={skill.name}>{skill.description}</InfoTip>}
+              {skill.description && (
+                <button
+                  type="button"
+                  className={`skill-description${expandedSkills.has(skill.name) ? " expanded" : ""}`}
+                  aria-expanded={expandedSkills.has(skill.name)}
+                  onClick={() => setExpandedSkills((current) => {
+                    const next = new Set(current);
+                    if (next.has(skill.name)) next.delete(skill.name);
+                    else next.add(skill.name);
+                    return next;
+                  })}
+                >
+                  {skill.description}
+                </button>
+              )}
             </div>
-            <div className="toggle-row">
-              <span>{skill.enabled === false ? "Off" : "On"}</span>
+            <div className="skill-toggle">
               <ToggleSwitch
                 checked={skill.enabled !== false}
                 ariaLabel={`Toggle skill ${skill.name}`}

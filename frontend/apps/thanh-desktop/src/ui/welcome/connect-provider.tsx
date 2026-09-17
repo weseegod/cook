@@ -64,7 +64,6 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
           <button className="ghost-button connect-back" onClick={() => setPreset(null)}><ArrowLeft size={15} /> All providers</button>
           <ProviderEditor
             preset={preset}
-            showDefaultModel={false}
             onSaved={(id) => setSavedId(id)}
             onCancel={() => setPreset(null)}
           />

@@ -17,7 +17,7 @@ import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
 
 const DISMISSED_KEY = "thanh.connectProviderDismissed";
-type SettingsTab = "general" | "providers" | "models" | "connectors" | "context" | "skills" | "about";
+type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "about";
 
 export function AppShell() {
   const { cwd, connection } = useSessionStore();
@@ -96,7 +96,7 @@ export function AppShell() {
   function runPaletteAction(item: PaletteItem) {
     if (item.action === "open-folder") return void chooseWorkspace();
     if (item.action === "settings") return openSettings("general");
-    if (item.action === "connect-provider") return openSettings("providers");
+    if (item.action === "connect-provider") return openSettings("models");
     if (item.action === "new-session") return void acpClient.newSession();
     if (item.action === "shortcuts") return setSettingsTab("about");
     if (item.action === "model" && item.value) return void acpClient.setDefaultModel(item.value);

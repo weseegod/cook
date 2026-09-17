@@ -87,8 +87,8 @@ test.describe("first run", () => {
     // No provider and no agent credential: the connect flow replaces the chat.
     await expect(page.getByTestId("connect-provider")).toBeVisible();
     await expect(page.getByTestId("preset-deepseek")).toBeVisible();
-    await expect(page.getByTestId("preset-ollama")).toBeVisible();
-    await expect(page.getByTestId("preset-custom")).toBeVisible();
+    await expect(page.getByTestId("preset-ollama")).toHaveCount(0);
+    await expect(page.getByTestId("preset-custom")).toHaveCount(0);
 
     await page.getByTestId("preset-deepseek").click();
     await expect(page.getByLabel("Base URL")).toHaveValue("https://api.deepseek.com");
@@ -125,8 +125,8 @@ test.describe("first run", () => {
     await expect.poll(async () => (await mock.state()).defaultModel).toBe("deepseek-reasoner");
     // The agent holds the key; what comes back out is only a hint.
     await page.getByLabel("Settings").click();
-    await page.getByRole("tab", { name: "Providers" }).click();
-    await expect(page.getByTestId("provider-row-deepseek")).toContainText("sk…abcd");
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.getByTestId("provider-row-deepseek")).toContainText("sk-l…abcd");
     await expect(page.locator(".settings-panel")).not.toContainText("sk-live-deepseek-0123456789abcd");
     expect(errors).toEqual([]);
   });
@@ -159,14 +159,15 @@ test.describe("first run", () => {
 
     // The credential lives with the agent, never in the window's own storage.
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain("sk-live-deepseek");
+    expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain("sk-live-deepseek");
     await page.evaluate(() => localStorage.clear());
     await page.reload();
 
     await openWorkspace(page);
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
     await page.getByLabel("Settings").click();
-    await page.getByRole("tab", { name: "Providers" }).click();
-    await expect(page.getByTestId("provider-row-deepseek")).toContainText("API key saved");
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.getByTestId("provider-row-deepseek")).toContainText("Connected · API key");
   });
 
   test("surfaces a rejected credential instead of pretending it worked", async ({ page }) => {
@@ -183,9 +184,9 @@ test.describe("first run", () => {
     await openWorkspace(page, CONNECTED_SEED);
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
     await page.getByLabel("Settings").click();
-    await page.getByRole("tab", { name: "Providers" }).click();
-    await expect(page.getByTestId("provider-row-openai")).toContainText("API key saved");
-    await expect(page.getByTestId("provider-row-openai")).toContainText("sk…cdef");
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.getByTestId("provider-row-openai")).toContainText("Connected · API key");
+    await expect(page.getByTestId("provider-row-openai")).toContainText("sk-m…cdef");
     await expect(page.locator(".settings-panel")).not.toContainText("sk-mock-0123456789abcdef");
   });
 
@@ -193,6 +194,9 @@ test.describe("first run", () => {
     await openWorkspace(page, { authMethodId: "xai-session", defaultModel: "grok-4.5" });
     await expect(page.getByTestId("connect-provider")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Start a conversation" })).toBeVisible();
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.getByTestId("provider-row-xai")).toContainText("Connected · OAuth");
   });
 
   test("stays dismissed once the user skips it", async ({ page }) => {
@@ -231,6 +235,172 @@ test.describe("chat, attachments and the model picker", () => {
       .evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptGroupElement).label));
     expect(groups).toEqual(["openai"]);
     expect(errors).toEqual([]);
+  });
+
+  test("adds a model through the add-model popup", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-add-model-openai").click();
+    await page.getByLabel("Model ID for openai").fill("gpt-custom");
+    await page.getByLabel("Model display name").fill("GPT Custom");
+    await page.getByTestId("model-save").click();
+    const upserts = await waitForCalls(page, "x.ai/models/upsert");
+    expect(upserts.at(-1)?.params).toMatchObject({ id: "gpt-custom", providerId: "openai", contextWindow: 300000, maxCompletionTokens: 64000, input: ["text"] });
+    await expect(page.getByTestId("model-row-gpt-custom")).toContainText("GPT Custom");
+    await expect(page.getByTestId("model-row-gpt-custom")).toContainText("gpt-custom");
+
+    // Removing it deletes the `[model.*]` row, so it leaves the panel for good.
+    await page.getByTestId("model-remove-gpt-custom").click();
+    await page.getByRole("dialog", { name: "Remove GPT Custom?" }).getByTestId("model-remove-confirm").click();
+    await expect(page.getByTestId("model-row-gpt-custom")).toHaveCount(0);
+    const state = await mock.state();
+    const openai = (state.providers as Array<{ id: string; models: Array<{ id: string }> }>).find((provider) => provider.id === "openai")!;
+    expect(openai.models.map((model) => model.id)).not.toContain("gpt-custom");
+  });
+
+  test("offers the provider's own models and seeds the limits from them", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      discoverable: [
+        { id: "gpt-5-mini", name: "GPT-5 Mini", contextWindow: 400_000, maxCompletionTokens: 128_000 },
+        { id: "gpt-5-nano", name: "GPT-5 Nano", contextWindow: 200_000 },
+        { id: "o4", name: "o4", contextWindow: 100_000, maxCompletionTokens: 32_000 },
+        { id: "gpt-4.1", name: "GPT-4.1" },
+        { id: "gpt-4o", name: "GPT-4o" },
+        { id: "gpt-4o-mini", name: "GPT-4o Mini" },
+      ],
+    });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-add-model-openai").click();
+    await page.getByTestId("model-get-models").click();
+    await waitForCalls(page, "x.ai/providers/probe_models");
+
+    // Five picks at most, and never an id the provider already has.
+    const candidates = page.getByTestId("model-candidates").getByRole("button");
+    await expect(candidates).toHaveCount(5);
+    await expect(page.getByTestId("model-candidates")).not.toContainText("o4-mini");
+
+    // The baseline context wins over a larger one, while output comes from the listing.
+    await candidates.filter({ hasText: "GPT-5 Mini" }).click();
+    await expect(page.getByLabel("Model ID for openai")).toHaveValue("gpt-5-mini");
+    await expect(page.getByLabel("Model context window")).toHaveValue("300000");
+    await expect(page.getByLabel("Model output limit")).toHaveValue("128000");
+
+    // A model that declares less than the baseline keeps its own context window.
+    await candidates.filter({ hasText: "o4" }).first().click();
+    await expect(page.getByLabel("Model ID for openai")).toHaveValue("o4");
+    await expect(page.getByLabel("Model context window")).toHaveValue("100000");
+    await expect(page.getByLabel("Model output limit")).toHaveValue("32000");
+    await page.getByTestId("model-save").click();
+
+    const upserts = await waitForCalls(page, "x.ai/models/upsert");
+    expect(upserts.at(-1)?.params).toMatchObject({ id: "o4", providerId: "openai", contextWindow: 100000, maxCompletionTokens: 32000 });
+    // Reading the listing must not configure anything on its own.
+    expect(callsTo(await mock.requests(), "x.ai/models/upsert")).toHaveLength(1);
+  });
+
+  test("reports a failed listing inside the add-model popup", async ({ page }) => {
+    await openWorkspace(page, { ...CONNECTED_SEED, probeFails: true });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-add-model-openai").click();
+    await page.getByTestId("model-get-models").click();
+    await expect(page.getByTestId("model-error")).toContainText("401");
+    // The id field still works, so a failed listing is not a dead end.
+    await page.getByLabel("Model ID for openai").fill("gpt-5-mini");
+    await expect(page.getByTestId("model-save")).toBeEnabled();
+  });
+
+  test("shows all supported providers and opens a closable add-provider dialog", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.locator("[data-testid^='provider-row-']")).toHaveCount(8);
+    await expect(page.getByTestId("provider-row-openai")).toContainText("Connected · API key");
+    await expect(page.getByTestId("provider-row-anthropic")).toContainText("Not connected");
+    await page.getByTestId("provider-add").click();
+    const dialog = page.getByRole("dialog", { name: "Add provider" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("Choose a provider")).toHaveCount(0);
+    await dialog.getByLabel("Close dialog").click();
+    await expect(dialog).toHaveCount(0);
+  });
+
+  test("edits a provider's name, then removes it and its models from config", async ({ page }) => {
+    const mock = api(page);
+    const twoProviders = {
+      ...CONNECTED_SEED,
+      providers: [
+        ...CONNECTED_SEED.providers,
+        { id: "deepseek", baseUrl: "https://api.deepseek.com", apiBackend: "chat_completions", apiKey: "sk-ds-0123456789abcdef", models: [{ id: "deepseek-chat", name: "DeepSeek Chat", input: ["text"] }] },
+      ],
+    };
+    await openWorkspace(page, twoProviders);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+
+    const row = page.getByTestId("provider-row-openai");
+    await expect(row).toContainText("sk-m…cdef");
+    await page.getByTestId("provider-edit-openai").click();
+    const editor = page.getByRole("dialog", { name: "Edit OpenAI" });
+    await expect(editor.getByText("Current key:")).toContainText("sk-m…cdef");
+    // Connection settings only: models live on the provider row.
+    await expect(editor.getByText("Extra model IDs")).toHaveCount(0);
+    await expect(editor.getByTestId("provider-discover")).toHaveCount(0);
+    await editor.getByLabel("Provider name").fill("Team OpenAI");
+    await editor.getByTestId("provider-save").click();
+    await expect(row).toContainText("Team OpenAI");
+    // A connection-only edit carries no model seeds, so the saved models must survive untouched.
+    await expect(page.getByTestId("model-row-gpt-5")).toBeVisible();
+    const edited = (await mock.state()).providers as Array<{ id: string; models: Array<{ id: string; model?: string; name?: string }> }>;
+    expect(edited.find((provider) => provider.id === "openai")?.models).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "gpt-5", name: "GPT-5" })]),
+    );
+
+    // Remove deletes the provider table and its models, not just the saved key.
+    await page.getByTestId("provider-remove-openai").click();
+    const confirm = page.getByRole("dialog", { name: "Remove Team OpenAI?" });
+    await expect(confirm).toContainText("[model_providers.openai]");
+    await confirm.getByTestId("provider-remove-confirm").click();
+
+    // gpt-5 is the default and belongs to openai, so the host refuses until one is chosen.
+    const replacement = page.getByRole("dialog", { name: "Choose the new default model" });
+    await expect(replacement).toBeVisible();
+    await replacement.getByTestId("replacement-model").selectOption("deepseek-chat");
+    await replacement.getByRole("button", { name: "Remove provider" }).click();
+
+    await expect(page.getByTestId("model-row-gpt-5")).toHaveCount(0);
+    await expect(page.getByTestId("provider-connect-openai")).toBeVisible();
+    const state = await mock.state();
+    expect((state.providers as Array<{ id: string }>).map((provider) => provider.id)).toEqual(["deepseek"]);
+    expect(state.defaultModel).toBe("deepseek-chat");
+  });
+
+  test("shows model context, output and input and edits them in a popup", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+
+    const row = page.getByTestId("model-row-gpt-5");
+    await expect(row).toContainText("Context 300K");
+    await expect(row).toContainText("Output 64K");
+    await expect(row).toContainText("Input text + image");
+    await page.getByLabel("Edit model gpt-5").click();
+    const editor = page.getByRole("dialog", { name: "Edit GPT-5" });
+    await editor.getByLabel("Model context window").fill("256000");
+    await editor.getByLabel("Model output limit").fill("32000");
+    await editor.getByLabel("Image").uncheck();
+    await editor.getByRole("button", { name: "Save model" }).click();
+    const call = (await waitForCalls(page, "x.ai/models/upsert")).at(-1)!;
+    expect(call.params).toMatchObject({ id: "gpt-5", providerId: "openai", contextWindow: 256000, maxCompletionTokens: 32000, input: ["text"] });
+    await expect(row).toContainText("Context 256K");
+    await expect(row).toContainText("Output 32K");
+    expect((await mock.state()).providers).toEqual(expect.arrayContaining([expect.objectContaining({ id: "openai" })]));
   });
 
   test("re-lists the catalog when the agent broadcasts an empty models update", async ({ page }) => {
@@ -644,6 +814,10 @@ test.describe("agent-driven surfaces", () => {
     await expect(page.getByTestId("plugin-thanh-core")).toContainText("1.0.0");
     await page.getByLabel("Toggle skill help").click();
     await waitForCalls(page, "x.ai/skills/toggle");
+    const skillDescription = page.getByTestId("skill-help").locator(".skill-description");
+    await expect(skillDescription).toHaveAttribute("aria-expanded", "false");
+    await skillDescription.click();
+    await expect(skillDescription).toHaveAttribute("aria-expanded", "true");
 
     await page.getByRole("tab", { name: "Memory & project" }).click();
     await page.getByTestId("memory-flush").click();
@@ -685,7 +859,7 @@ test.describe("minimum window", () => {
     await page.keyboard.press("Escape");
 
     await page.getByLabel("Settings").click();
-    await page.getByRole("tab", { name: "Providers" }).click();
+    await page.getByRole("tab", { name: "Models" }).click();
     await expect(page.getByTestId("provider-row-openai")).toBeVisible();
 
     await page.keyboard.press("Escape");

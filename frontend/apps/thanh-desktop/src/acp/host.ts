@@ -37,6 +37,15 @@ async function mock() {
   return import("./mock-transport");
 }
 
+/** Route desktop-only persistence through the Tauri host, with an ACP/mock fallback for tests. */
+export async function desktopCommand<T>(
+  command: string,
+  args: Record<string, unknown>,
+  fallback: () => Promise<T>,
+): Promise<T> {
+  return isTauri() ? invoke<T>(command, args) : fallback();
+}
+
 export async function startProcess(cwd: string): Promise<StartInfo> {
   if (!isTauri()) {
     if (isMock()) {

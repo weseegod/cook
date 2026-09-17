@@ -18,15 +18,21 @@ export interface RecordedRequest {
 
 export interface MockSeedModel {
   id: string;
+  model?: string;
   name?: string;
   input?: string[];
+  contextWindow?: number;
+  maxCompletionTokens?: number;
 }
 
 export interface MockProvider {
   id: string;
+  name?: string;
   baseUrl: string;
   apiBackend: string;
   apiKey?: string;
+  /** Persisted mock state keeps only presence, never the credential itself. */
+  apiKeyPresent?: boolean;
   envKey?: string;
   models: MockSeedModel[];
 }
@@ -83,6 +89,8 @@ export interface MockState {
   plugins: MockPlugin[];
   /** Force the next `providers/test` to fail, for the error-state path. */
   testFails: boolean;
+  /** Force the next read-only `/models` probe to fail, for the error-state path. */
+  probeFails: boolean;
   /** Model a build that predates `x.ai/models/set_default`, which answers -32601. */
   setDefaultUnsupported: boolean;
   /** Assistant text streamed back for each prompt. */
@@ -123,6 +131,7 @@ function defaultState(): MockState {
     ],
     plugins: [{ name: "thanh-core", version: "1.0.0", enabled: true }],
     testFails: false,
+    probeFails: false,
     setDefaultUnsupported: false,
     reply: "Mock assistant reply.",
     promptUpdates: [],
@@ -185,7 +194,13 @@ function persisted(): Partial<MockState> {
 
 function persist(): void {
   try {
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    // The browser mock models the agent's durable config, but must not turn sessionStorage into
+    // another secret store when a developer exercises the provider form with a real key.
+    const safeProviders = state.providers.map(({ apiKey, ...provider }) => ({
+      ...provider,
+      ...(apiKey ? { apiKeyPresent: true } : {}),
+    }));
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, providers: safeProviders }));
   } catch {
     // A full or blocked storage must not break the transport.
   }
@@ -228,25 +243,27 @@ function presetFor(id: string): ProviderPreset | undefined {
 }
 
 function linkedModels(provider: MockProvider) {
-  return provider.models.map((model) => ({ id: model.id, name: model.name, input: model.input }));
+  return provider.models.map((model) => ({ ...model }));
 }
 
 function providerList() {
   return {
     providers: state.providers.map((provider) => ({
       id: provider.id,
+      name: provider.name,
       baseUrl: provider.baseUrl,
       apiBackend: provider.apiBackend,
-      hasKey: Boolean(provider.apiKey) || Boolean(provider.envKey),
-      inlineKey: Boolean(provider.apiKey),
+      hasKey: Boolean(provider.apiKey) || Boolean(provider.apiKeyPresent) || Boolean(provider.envKey),
+      inlineKey: Boolean(provider.apiKey) || Boolean(provider.apiKeyPresent),
       keyHint: provider.apiKey && provider.apiKey.length >= 12
-        ? `${provider.apiKey.slice(0, 2)}…${provider.apiKey.slice(-4)}`
+        ? `${provider.apiKey.slice(0, 4)}…${provider.apiKey.slice(-4)}`
         : null,
       envKey: provider.envKey ?? null,
       envKeyPresent: false,
       extraHeaders: presetFor(provider.id)?.extraHeaders ?? {},
       models: linkedModels(provider),
     })),
+    models: state.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.id }))),
     defaultModel: state.defaultModel,
   };
 }
@@ -263,7 +280,7 @@ function modelCatalog() {
         name: model.name ?? model.id,
         provider: provider.id,
         inputModalities: model.input ?? ["text"],
-        _meta: { totalContextTokens: 300_000 },
+        _meta: { totalContextTokens: model.contextWindow ?? 300_000, maxCompletionTokens: model.maxCompletionTokens ?? 64_000, apiModel: model.model ?? model.id },
       });
     }
   }
@@ -443,6 +460,18 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return respond(commandList());
     case "x.ai/auth/info":
       return respond({ result: { methodId: state.authMethodId, email: null } });
+    case "x.ai/auth/logout":
+      state.authMethodId = null;
+      return respond({ result: { ok: true } });
+    case "x.ai/setApiKey": {
+      const provider = state.providers.find((entry) => entry.id === String(p.provider ?? ""));
+      if (provider) {
+        provider.apiKey = typeof p.apiKey === "string" && p.apiKey ? p.apiKey : undefined;
+        provider.apiKeyPresent = Boolean(provider.apiKey);
+        if (!provider.apiKey) provider.envKey = undefined;
+      }
+      return respond({ result: { ok: true } });
+    }
     case "x.ai/models/list":
       return respond({ result: modelCatalog() });
     case "x.ai/models/set_default": {
@@ -472,20 +501,32 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       const envKey = typeof p.envKey === "string" ? p.envKey : undefined;
       const existing = state.providers.find((provider) => provider.id === id);
       if (!existing && !apiKey && !envKey) return respond({ error: "a new provider needs apiKey or envKey" });
+      const seeds: MockSeedModel[] = models.map((model) => ({
+        id: String(model.id ?? model.model ?? ""),
+        model: typeof model.model === "string" ? model.model : undefined,
+        name: typeof model.name === "string" ? model.name : undefined,
+        input: Array.isArray(model.input) ? model.input.map(String) : undefined,
+        contextWindow: typeof model.contextWindow === "number" ? model.contextWindow : undefined,
+        maxCompletionTokens: typeof model.maxCompletionTokens === "number" ? model.maxCompletionTokens : undefined,
+      }));
+      // The host writes only the seeds it is given and leaves other `[model.*]` rows alone, so an
+      // upsert that omits models (a connection-only edit) must not drop the configured ones.
+      const seeded = new Set(seeds.map((model) => model.id));
       const next: MockProvider = {
         id,
+        name: typeof p.name === "string" ? p.name : existing?.name,
         baseUrl: String(p.baseUrl ?? ""),
         apiBackend: String(p.apiBackend ?? "chat_completions"),
         apiKey: apiKey ?? (envKey ? undefined : existing?.apiKey),
+        apiKeyPresent: Boolean(apiKey || (!envKey && (existing?.apiKey || existing?.apiKeyPresent))),
         envKey: envKey ?? (apiKey ? undefined : existing?.envKey),
-        models: models.map((model) => ({
-          id: String(model.id ?? model.model ?? ""),
-          name: typeof model.name === "string" ? model.name : undefined,
-          input: Array.isArray(model.input) ? model.input.map(String) : undefined,
-        })),
+        models: [...(existing?.models ?? []).filter((model) => !seeded.has(model.id)), ...seeds],
       };
-      state.providers = [...state.providers.filter((provider) => provider.id !== id), next];
-      if (p.setAsDefault && next.models[0]) state.defaultModel = next.models[0].id;
+      const providerIndex = state.providers.findIndex((provider) => provider.id === id);
+      state.providers = providerIndex < 0
+        ? [...state.providers, next]
+        : state.providers.map((provider, index) => index === providerIndex ? next : provider);
+      if (p.setAsDefault && seeds[0]) state.defaultModel = seeds[0].id;
       notify("x.ai/models/update", modelCatalog());
       return respond({ ok: true, id, models: next.models.map((model) => model.id), defaultModel: state.defaultModel });
     }
@@ -504,6 +545,33 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       notify("x.ai/models/update", modelCatalog());
       return respond({ ok: true, id, removedModels: removed, defaultModel: state.defaultModel });
     }
+    case "x.ai/models/delete": {
+      const modelId = String(p.modelId ?? "");
+      if (!modelId) return respond({ error: "modelId must not be empty" });
+      if (state.defaultModel === modelId) return respond({ error: `refusing to delete \`${modelId}\`: it is the default model; select another default first` });
+      const provider = state.providers.find((entry) => entry.models.some((model) => model.id === modelId));
+      if (!provider) return respond({ error: `no model \`${modelId}\` is configured` });
+      provider.models = provider.models.filter((model) => model.id !== modelId);
+      notify("x.ai/models/update", modelCatalog());
+      return respond({ ok: true, modelId });
+    }
+    case "x.ai/models/upsert": {
+      const modelId = String(p.id ?? "");
+      const providerId = String(p.providerId ?? "xai");
+      const provider = state.providers.find((entry) => entry.id === providerId);
+      if (!provider) return respond({ error: `no provider \`${providerId}\` is configured` });
+      const next: MockSeedModel = {
+        id: modelId,
+        model: typeof p.model === "string" ? p.model : modelId,
+        name: typeof p.name === "string" ? p.name : modelId,
+        input: Array.isArray(p.input) ? p.input.map(String) : ["text"],
+        contextWindow: typeof p.contextWindow === "number" ? p.contextWindow : undefined,
+        maxCompletionTokens: typeof p.maxCompletionTokens === "number" ? p.maxCompletionTokens : undefined,
+      };
+      provider.models = [...provider.models.filter((model) => model.id !== modelId), next];
+      notify("x.ai/models/update", modelCatalog());
+      return respond({ ok: true, modelId });
+    }
     case "x.ai/providers/test": {
       const id = String(p.id ?? "");
       const provider = state.providers.find((entry) => entry.id === id);
@@ -517,6 +585,26 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
         url: `${baseUrl.replace(/\/$/, "")}/chat/completions`,
         model: provider?.models[0]?.id ?? null,
         latencyMs: 12,
+      });
+    }
+    case "x.ai/providers/probe_models": {
+      // Read-only listing: unlike `discover_models` this must not merge anything into the catalog.
+      const id = String(p.id ?? "");
+      const provider = state.providers.find((entry) => entry.id === id);
+      if (!provider) return respond({ error: `no provider \`${id}\` is configured` });
+      if (!provider.apiKey && !provider.apiKeyPresent && !provider.envKey) {
+        return respond({ ok: false, id, models: [], error: "this provider has no credential" });
+      }
+      if (state.probeFails) return respond({ ok: false, id, models: [], error: "401 unauthorized: invalid api key" });
+      return respond({
+        ok: true,
+        id,
+        models: state.discoverable.map((model) => ({
+          id: model.id,
+          name: model.name,
+          contextWindow: model.contextWindow,
+          maxCompletionTokens: model.maxCompletionTokens,
+        })),
       });
     }
     case "x.ai/providers/discover_models": {

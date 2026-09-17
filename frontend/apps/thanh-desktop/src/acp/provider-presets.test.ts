@@ -6,6 +6,7 @@ import {
   formFromPreset,
   formFromProvider,
   formToUpsertRequest,
+  mergedProviderStatus,
   providerStatus,
   shouldShowConnectProvider,
   validateProviderForm,
@@ -71,6 +72,7 @@ describe("form → x.ai/providers/upsert params", () => {
     const form = { ...formFromPreset(preset), apiKey: "sk-live-abc123" };
     expect(formToUpsertRequest(form, preset)).toEqual({
       id: "anthropic",
+      name: "Anthropic",
       baseUrl: "https://api.anthropic.com/v1",
       apiBackend: "messages",
       apiKey: "sk-live-abc123",
@@ -122,6 +124,20 @@ describe("form → x.ai/providers/upsert params", () => {
     expect(request.extraHeaders).toBeUndefined();
   });
 
+  it("omits model seeds for a connection-only edit so configured rows survive", () => {
+    const preset = findPreset("openrouter")!;
+    const form = formFromProvider({
+      id: "openrouter",
+      baseUrl: preset.baseUrl,
+      apiBackend: "chat_completions",
+      inlineKey: true,
+      models: [{ id: "openrouter/stealth-union-alpha" }],
+    });
+    const request = formToUpsertRequest(form, preset, { includeModels: false });
+    expect(request.models).toEqual([]);
+    expect(request.id).toBe("openrouter");
+  });
+
   it("turns every preset into a request the agent accepts", () => {
     for (const preset of PROVIDER_PRESETS) {
       const form = preset.baseUrl
@@ -164,6 +180,11 @@ describe("form validation", () => {
       validateProviderForm({ ...base(), selectedModels: [], customModelIds: ["has space"] }, { requireKey: true }).errors.models,
     ).toContain("has space");
   });
+
+  it("skips the model requirement when the dialog does not show model fields", () => {
+    const form = { ...base(), selectedModels: [], customModelIds: [] };
+    expect(validateProviderForm(form, { requireKey: true, requireModels: false }).ok).toBe(true);
+  });
 });
 
 describe("first-run gate", () => {
@@ -179,12 +200,22 @@ describe("first-run gate", () => {
 
 describe("provider status badge", () => {
   it("distinguishes a saved key, a live env var, an unset env var and nothing", () => {
-    expect(providerStatus({ hasKey: true, inlineKey: true, envKeyPresent: false })).toEqual({ label: "API key saved", tone: "ok" });
+    expect(providerStatus({ hasKey: true, inlineKey: true, envKeyPresent: false })).toEqual({ label: "Connected · API key saved", tone: "ok" });
     expect(providerStatus({ hasKey: true, inlineKey: false, envKey: "K", envKeyPresent: true }).tone).toBe("ok");
     const unset = providerStatus({ hasKey: true, inlineKey: false, envKey: "K", envKeyPresent: false });
     expect(unset.tone).toBe("warn");
     expect(unset.label).toContain("not set");
     expect(providerStatus({ hasKey: false, inlineKey: false, envKeyPresent: false }).tone).toBe("warn");
+  });
+
+  it("merges OAuth and API-key connection methods", () => {
+    expect(mergedProviderStatus({ hasKey: true, inlineKey: true, envKeyPresent: false }, true)).toEqual({
+      label: "Connected · OAuth + API key",
+      tone: "ok",
+    });
+    expect(mergedProviderStatus(undefined, true)).toEqual({ label: "Connected · OAuth", tone: "ok" });
+    expect(mergedProviderStatus(undefined, false)).toEqual({ label: "Not connected", tone: "warn" });
+    expect(mergedProviderStatus({ hasKey: true, inlineKey: false, envKey: "OPENAI_API_KEY", envKeyPresent: false }, false).label).toContain("not set");
   });
 });
 
@@ -206,9 +237,23 @@ describe("editing an existing provider", () => {
     expect(form.keepExistingKey).toBe(false);
   });
 
+  it("prefills configured models so editing cannot drop config entries", () => {
+    const form = formFromProvider({
+      id: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      apiBackend: "chat_completions",
+      envKey: null,
+      inlineKey: true,
+      models: [{ id: "gpt-5" }, { id: "team-model" }],
+    });
+    expect(form.selectedModels).toEqual(["gpt-5"]);
+    expect(form.customModelIds).toEqual(["team-model"]);
+  });
+
   it("falls back to the custom card for a hand-written provider", () => {
     const form = formFromProvider({ id: "my-gateway", baseUrl: "https://gw.test/v1", apiBackend: "responses", envKey: null, inlineKey: true });
-    expect(form.presetId).toBe("custom");
+    expect(form.presetId).toBe("my-gateway");
+    expect(form.providerName).toBe("my-gateway");
     expect(form.baseUrl).toBe("https://gw.test/v1");
     expect(form.apiBackend).toBe("responses");
     expect(form.keepExistingKey).toBe(true);

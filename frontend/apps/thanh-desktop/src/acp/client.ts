@@ -234,11 +234,10 @@ export class ThanhAcpClient {
   }
 
   /**
-   * Persist the default, through the agent when it can.
+   * Persist the default through the desktop config service when available.
    *
-   * `x.ai/models/set_default` writes `[models] default` in `config.toml`. An older agent build has
-   * no such extension; the choice still reaches the next session through `_meta.modelId`, so the
-   * window keeps it and says where it will apply instead of appearing to do nothing.
+   * Browser/legacy clients fall back to `x.ai/models/set_default`; if that is unavailable, the
+   * choice still reaches the next session through `_meta.modelId`.
    */
   async setDefaultModel(modelId: string): Promise<void> {
     try {

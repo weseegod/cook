@@ -1,19 +1,24 @@
 /**
- * Fork-owned provider (`x.ai/providers/*`) ACP wrappers plus the renderer-side preset mirror.
+ * Desktop provider/model config service plus the renderer-side preset mirror.
  *
- * The agent owns `config.toml`; the renderer only ever sends these requests, and the preset
- * catalog here is the offline/mock mirror of `x.ai/providers/presets`.
+ * Tauri owns `~/.thanh/config.toml`; the renderer receives redacted DTOs. Browser tests fall back
+ * to the mock ACP contract, while network probes and preset discovery remain agent operations.
  */
-import { request } from "./host";
+import { desktopCommand, request } from "./host";
 
 export interface ProviderModelLink {
   id: string;
+  model?: string;
   name?: string;
   input?: string[];
+  contextWindow?: number;
+  maxCompletionTokens?: number;
+  supportsReasoningEffort?: boolean;
 }
 
 export interface ProviderSummary {
   id: string;
+  name?: string | null;
   baseUrl?: string | null;
   apiBackend?: string | null;
   hasKey: boolean;
@@ -27,6 +32,8 @@ export interface ProviderSummary {
 
 export interface ProviderList {
   providers: ProviderSummary[];
+  /** Every explicit `[model.*]` row from config.toml, including xAI overrides. */
+  models?: Array<ProviderModelLink & { provider: string }>;
   defaultModel?: string | null;
 }
 
@@ -35,6 +42,8 @@ export interface PresetModel {
   model: string;
   name: string;
   input: string[];
+  contextWindow?: number;
+  maxCompletionTokens?: number;
 }
 
 export interface ProviderPreset {
@@ -63,6 +72,26 @@ export interface DiscoveredModel {
   name?: string | null;
 }
 
+/**
+ * One entry of a provider's own `/models` listing.
+ *
+ * `contextWindow`/`maxCompletionTokens` are present only when the endpoint reports them
+ * (OpenRouter fills both), and are what the add-model form seeds its limits from.
+ */
+export interface ProviderProbeModel {
+  id: string;
+  name?: string | null;
+  contextWindow?: number;
+  maxCompletionTokens?: number;
+}
+
+export interface ProviderProbeResult {
+  ok: boolean;
+  id: string;
+  models: ProviderProbeModel[];
+  error?: string;
+}
+
 export interface DiscoverResult {
   ok: boolean;
   id: string;
@@ -74,6 +103,7 @@ export interface DiscoverResult {
 
 export interface ProviderUpsertRequest {
   id: string;
+  name?: string;
   baseUrl: string;
   apiBackend: string;
   apiKey?: string;
@@ -91,7 +121,7 @@ export interface ProviderUpsertResponse {
 }
 
 export function listProviders() {
-  return request<ProviderList>("x.ai/providers/list", {});
+  return desktopCommand("desktop_provider_list", {}, () => request<ProviderList>("x.ai/providers/list", {}));
 }
 
 export function providerPresets() {
@@ -99,13 +129,38 @@ export function providerPresets() {
 }
 
 export function upsertProvider(params: ProviderUpsertRequest) {
-  return request<ProviderUpsertResponse>("x.ai/providers/upsert", { ...params });
+  return desktopCommand<ProviderUpsertResponse>("desktop_provider_upsert", { request: params }, async () =>
+    request<ProviderUpsertResponse>("x.ai/providers/upsert", { ...params }),
+  );
 }
 
 export function deleteProvider(id: string, replacement?: string) {
-  return request<{ ok: boolean; id: string; removedModels: string[]; defaultModel?: string | null }>(
-    "x.ai/providers/delete",
-    { id, ...(replacement ? { replacement } : {}) },
+  return desktopCommand<{ ok: boolean; id: string; removedModels: string[]; defaultModel?: string | null }>(
+    "desktop_provider_delete",
+    { id, replacement },
+    () => request("x.ai/providers/delete", { id, ...(replacement ? { replacement } : {}) }),
+  );
+}
+
+export interface ModelUpsertRequest {
+  id: string;
+  model?: string;
+  providerId?: string;
+  name?: string;
+  input: string[];
+  contextWindow?: number;
+  maxCompletionTokens?: number;
+}
+
+export function upsertModel(params: ModelUpsertRequest) {
+  return desktopCommand<{ ok: boolean; modelId: string }>("desktop_model_upsert", { request: params }, () =>
+    request("x.ai/models/upsert", { ...params }),
+  );
+}
+
+export function deleteModel(modelId: string) {
+  return desktopCommand<{ ok: boolean; modelId: string }>("desktop_model_delete", { modelId }, () =>
+    request("x.ai/models/delete", { modelId }),
   );
 }
 
@@ -130,6 +185,20 @@ export function discoverProviderModels(params: {
   return request<DiscoverResult>("x.ai/providers/discover_models", { ...params });
 }
 
+/**
+ * Read what a provider's `/models` offers without writing `config.toml`.
+ *
+ * The agent's `discover_models` merges every id it finds as a `[model.*]` row, which is the wrong
+ * shape for a picker: the native host probes instead, so a listing stays a listing.
+ */
+export function probeProviderModels(id: string) {
+  return desktopCommand<ProviderProbeResult>("desktop_provider_models", { id }, () =>
+    request<ProviderProbeResult>("x.ai/providers/probe_models", { id }),
+  );
+}
+
 export function setDefaultModel(modelId: string) {
-  return request<{ ok: boolean; defaultModel: string }>("x.ai/models/set_default", { modelId });
+  return desktopCommand<{ ok: boolean; defaultModel: string }>("desktop_model_set_default", { modelId }, () =>
+    request("x.ai/models/set_default", { modelId }),
+  );
 }

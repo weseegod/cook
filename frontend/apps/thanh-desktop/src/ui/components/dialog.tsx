@@ -1,18 +1,33 @@
 import { AlertTriangle, Check, X } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
+type DialogTone = "neutral" | "danger" | "warning";
+
+/**
+ * The one in-app dialog shell: a heading row, a scrollable body, and the caller's actions.
+ *
+ * `tone` only adds a coloured marker for the cases that need one (deleting, warnings). Plain
+ * forms stay quiet instead of every dialog announcing itself with the same warning triangle.
+ */
 export function Dialog({
   title,
   description,
   children,
   onClose,
   labelledBy,
+  tone = "neutral",
+  size = "sm",
+  icon,
 }: {
   title: string;
-  description?: string;
+  description?: ReactNode;
   children: ReactNode;
   onClose: () => void;
   labelledBy?: string;
+  tone?: DialogTone;
+  /** `wide` gives long forms room; the default fits a confirm. */
+  size?: "sm" | "wide";
+  icon?: ReactNode;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -28,21 +43,35 @@ export function Dialog({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [onClose]);
 
+  const titleId = labelledBy ?? "dialog-title";
   return (
     <div className="dialog-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="dialog" role="dialog" aria-modal="true" aria-labelledby={labelledBy ?? "dialog-title"}>
-        <button className="modal-close" onClick={onClose} aria-label="Close dialog"><X size={17} /></button>
-        <div className="dialog-icon"><AlertTriangle size={18} /></div>
-        <h2 id={labelledBy ?? "dialog-title"}>{title}</h2>
-        {description && <p>{description}</p>}
-        {children}
+      <section
+        className={`dialog dialog-${size}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
+        <header className="dialog-header">
+          {tone !== "neutral" && (
+            <div className={`dialog-tone ${tone}`}>
+              {icon ?? <AlertTriangle size={15} />}
+            </div>
+          )}
+          <div className="dialog-heading">
+            <h2 id={titleId}>{title}</h2>
+            {description && <p>{description}</p>}
+          </div>
+          <button className="icon-button dialog-close" onClick={onClose} aria-label="Close dialog"><X size={16} /></button>
+        </header>
+        <div className="dialog-body">{children}</div>
       </section>
     </div>
   );
 }
 
 export function DialogActions({ children }: { children: ReactNode }) {
-  return <div className="modal-actions">{children}</div>;
+  return <div className="dialog-actions">{children}</div>;
 }
 
 export function ConfirmDialog({
@@ -57,7 +86,7 @@ export function ConfirmDialog({
   onConfirm,
 }: {
   title: string;
-  description: string;
+  description: ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -67,7 +96,12 @@ export function ConfirmDialog({
   onConfirm: () => void;
 }) {
   return (
-    <Dialog title={title} description={description} onClose={onCancel}>
+    <Dialog
+      title={title}
+      description={description}
+      tone={danger ? "danger" : "neutral"}
+      onClose={onCancel}
+    >
       {error && <p className="field-error" role="alert">{error}</p>}
       <DialogActions>
         <button className="ghost-button" onClick={onCancel} disabled={busy}>{cancelLabel}</button>

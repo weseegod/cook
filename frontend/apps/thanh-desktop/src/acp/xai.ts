@@ -10,6 +10,8 @@ export interface SessionSummary {
 
 export interface ModelSummary {
   id: string;
+  /** Routing slug sent to the provider; may differ from the catalog id. */
+  apiModel?: string;
   name?: string;
   provider?: string;
   inputModalities?: string[];
@@ -18,6 +20,10 @@ export interface ModelSummary {
   supportsReasoningEffort?: boolean;
   /** The model's context window in tokens, as `_meta.totalContextTokens` reports it. */
   contextWindow?: number;
+  /** Maximum completion/output tokens configured for this model. */
+  maxCompletionTokens?: number;
+  /** True when this row is explicitly present in ~/.thanh/config.toml. */
+  configured?: boolean;
 }
 
 /** `x.ai/models/list`: the catalog plus the model the agent would use right now. */
@@ -149,6 +155,8 @@ function normalizeModel(item: UnknownRecord): ModelSummary {
     isDefault: item.isDefault === true || item.default === true,
     supportsReasoningEffort: meta.supportsReasoningEffort === true,
     contextWindow: numberValue(meta.totalContextTokens ?? meta.total_context_tokens),
+    maxCompletionTokens: numberValue(meta.maxCompletionTokens ?? meta.max_completion_tokens),
+    apiModel: stringValue(meta.apiModel ?? meta.api_model ?? item.model),
   };
 }
 

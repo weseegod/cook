@@ -1,9 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Cable, Cpu, Eye, EyeOff, Info, KeyRound, Monitor, Moon, Palette, ShieldCheck, SlidersHorizontal, Sparkles, Sun, X } from "lucide-react";
+import { Cable, Cpu, Info, Monitor, Moon, Palette, ShieldCheck, SlidersHorizontal, Sparkles, Sun, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { getConfigSecurity } from "../../acp/host";
-import { groupByProvider } from "../../acp/xai";
 import { useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { ConnectorsPanel } from "./connectors";
@@ -13,12 +12,11 @@ import { useTheme, type ThemePreference } from "../theme/theme";
 import { ConfirmDialog } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
 
-type Tab = "general" | "providers" | "models" | "connectors" | "context" | "skills" | "about";
+type Tab = "general" | "models" | "connectors" | "context" | "skills" | "about";
 
 const TABS: Array<{ id: Tab; label: string; description: string; icon: React.ReactNode }> = [
   { id: "general", label: "General", description: "Appearance and behavior", icon: <SlidersHorizontal size={16} /> },
-  { id: "providers", label: "Providers", description: "Connections and API keys", icon: <Sparkles size={16} /> },
-  { id: "models", label: "Models", description: "Defaults and catalog", icon: <Cpu size={16} /> },
+  { id: "models", label: "Models", description: "Providers, connections and model catalog", icon: <Cpu size={16} /> },
   { id: "connectors", label: "Connectors", description: "MCP servers and tools", icon: <Cable size={16} /> },
   { id: "context", label: "Memory & project", description: "Instructions and memory", icon: <Palette size={16} /> },
   { id: "skills", label: "Skills", description: "Skills and plugins", icon: <Sparkles size={16} /> },
@@ -41,22 +39,10 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
   const { preference, setPreference } = useTheme();
   const { id: selectedModel, known: modelKnown, models } = useModelSelection();
   const configSecurity = useQuery({ queryKey: ["config-security"], queryFn: getConfigSecurity });
-  const [apiKey, setApiKey] = useState("");
-  const [provider, setProvider] = useState("");
-  const [showKey, setShowKey] = useState(false);
-  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setTab(initialTab);
   }, [initialTab]);
-
-  async function saveApiKey() {
-    await acpClient.xai.setApiKey(apiKey, provider || undefined);
-    setApiKey("");
-    setDirty(false);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
-  }
 
   function closeOrConfirm() {
     if (dirty) setConfirmClose(true);
@@ -101,7 +87,7 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
     <div className="settings-backdrop" onMouseDown={(event) => event.target === event.currentTarget && closeOrConfirm()}>
       <aside className="settings-panel" role="dialog" aria-label="Settings">
         <header className="settings-heading">
-          <div><span className="eyebrow">Thanh Desktop</span><h2>Settings</h2></div>
+          <div><h2>Settings</h2></div>
           <button className="icon-button" onClick={closeOrConfirm} aria-label="Close settings"><X size={18} /></button>
         </header>
         <div className="settings-layout">
@@ -123,12 +109,6 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
           </nav>
 
           <div className="settings-body">
-            <div className="settings-detail-heading">
-              <span className="settings-detail-icon">{TABS.find((entry) => entry.id === tab)?.icon}</span>
-              <h3 title={TABS.find((entry) => entry.id === tab)?.description}>
-                {TABS.find((entry) => entry.id === tab)?.label}
-              </h3>
-            </div>
           {tab === "general" && (
             <>
               <Section title="Appearance" description="Choose between system, light, or dark appearance." icon={<Palette size={15} />}>
@@ -153,53 +133,9 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
               </Section>
             </>
           )}
-          {tab === "providers" && (
-            <>
-              <Section title="Providers" description="Configure model providers and credentials." icon={<Sparkles size={15} />}>
-                <ProvidersPanel connected={connected} onDirtyChange={setDirty} />
-              </Section>
-              <Section title="Session key" description="Set a temporary xAI session key." icon={<KeyRound size={15} />}>
-                <input value={provider} onChange={(event) => { setProvider(event.target.value); setDirty(true); }} placeholder="Provider id (optional)" aria-label="Provider id" />
-                <label className="secret-field">
-                  <input
-                    type={showKey ? "text" : "password"}
-                    value={apiKey}
-                    onChange={(event) => { setApiKey(event.target.value); setDirty(true); }}
-                    placeholder="xAI API key"
-                    aria-label="xAI API key"
-                    autoComplete="off"
-                  />
-                  <button onClick={() => setShowKey((show) => !show)} aria-label="Toggle key visibility">{showKey ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-                </label>
-                <button className="primary-button" disabled={!apiKey.trim()} onClick={() => void saveApiKey()}>
-                  <KeyRound size={15} /> {saved ? "Saved" : "Save key"}
-                </button>
-              </Section>
-            </>
-          )}
-
           {tab === "models" && (
-            <Section title="Default model" description="Choose the model used for new conversations." icon={<Cpu size={15} />}>
-              <select
-                value={selectedModel}
-                aria-label="Default model"
-                data-testid="settings-default-model"
-                disabled={models.length === 0}
-                onChange={(event) => void acpClient.setDefaultModel(event.target.value)}
-              >
-                {!modelKnown && (
-                  <option value={selectedModel} disabled>
-                    {models.length === 0 ? "Loading models…" : selectedModel || "Select model"}
-                  </option>
-                )}
-                {groupByProvider(models).map(([providerId, entries]) => (
-                  <optgroup key={providerId} label={providerId}>
-                    {entries.map((model) => (
-                      <option key={model.id} value={model.id}>{model.name ?? model.id}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+            <Section title="Models" description="Connect providers and manage the models available in chat." icon={<Cpu size={15} />}>
+              <ProvidersPanel connected={connected} models={models} selectedModel={selectedModel} modelKnown={modelKnown} onDirtyChange={setDirty} />
             </Section>
           )}
 
@@ -268,6 +204,7 @@ function Section({ title, description, icon, children }: { title: string; descri
   return (
     <section className="settings-section">
       <h3 title={description}>{icon} {title}</h3>
+      {description && <p className="settings-section-description">{description}</p>}
       {children}
     </section>
   );

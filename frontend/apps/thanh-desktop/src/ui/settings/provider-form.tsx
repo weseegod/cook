@@ -21,17 +21,22 @@ import { ToggleSwitch } from "../components/toggle-switch";
 interface EditorProps {
   preset: ProviderPreset;
   provider?: ProviderSummary;
-  showDefaultModel?: boolean;
+  /**
+   * `connection` is the Settings popup: name, endpoint, credential and Test only, because models
+   * are added one at a time from the provider header. `full` is the first-run wizard, which still
+   * seeds the provider's suggested models so the next step has something to pick.
+   */
+  variant?: "full" | "connection";
   /** Called with the saved provider id. */
   onSaved: (id: string) => void;
   onCancel?: () => void;
 }
 
 /**
- * One provider's form: URL, credential (inline key or env var name), Test, models, save.
- * Shared by Settings → Providers and the first-run connect flow.
+ * One provider's form: URL, credential (inline key or env var name), Test, save.
+ * Shared by Settings → Models and the first-run connect flow.
  */
-export function ProviderEditor({ preset, provider, showDefaultModel = true, onSaved, onCancel }: EditorProps) {
+export function ProviderEditor({ preset, provider, variant = "full", onSaved, onCancel }: EditorProps) {
   const [form, setForm] = useState<ProviderFormState>(() =>
     provider ? formFromProvider(provider) : formFromPreset(preset),
   );
@@ -40,11 +45,22 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
   const [error, setError] = useState<string | null>(null);
   const [discovered, setDiscovered] = useState<string[]>([]);
   const preset_ = preset;
+  const connectionOnly = variant === "connection";
   const validation = useMemo(
-    () => validateProviderForm(form, { requireKey: !form.keepExistingKey }),
-    [form],
+    // The connection-only popup hides model management, so it must not fail on model errors it
+    // cannot show.
+    () => validateProviderForm(form, { requireKey: !form.keepExistingKey, requireModels: !connectionOnly }),
+    [form, connectionOnly],
   );
   const patch = (next: Partial<ProviderFormState>) => setForm((current) => ({ ...current, ...next }));
+
+  /** The credential as the probe needs it: only what the user actually typed. */
+  function credentialParams() {
+    return {
+      ...(form.credential === "inline" && form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
+      ...(form.credential === "env" && form.envKey.trim() ? { envKey: form.envKey.trim() } : {}),
+    };
+  }
 
   async function runTest() {
     setBusy("test");
@@ -54,8 +70,7 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
         id: form.presetId,
         baseUrl: form.baseUrl,
         apiBackend: form.apiBackend,
-        ...(form.credential === "inline" && form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-        ...(form.credential === "env" && form.envKey.trim() ? { envKey: form.envKey.trim() } : {}),
+        ...credentialParams(),
       });
       setTest(result);
     } catch (caught) {
@@ -74,8 +89,7 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
         id: form.presetId,
         baseUrl: form.baseUrl,
         apiBackend: form.apiBackend,
-        ...(form.credential === "inline" && form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-        ...(form.credential === "env" && form.envKey.trim() ? { envKey: form.envKey.trim() } : {}),
+        ...credentialParams(),
       });
       if (!result.ok) {
         setError(result.error ?? "model discovery failed");
@@ -94,7 +108,9 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
     setBusy("save");
     setError(null);
     try {
-      await upsertProvider(formToUpsertRequest(form, preset_));
+      // An edit from Settings may not round-trip configured model ids: the form derives them from
+      // presets, so sending them back would rewrite ids it never showed.
+      await upsertProvider(formToUpsertRequest(form, preset_, { includeModels: !connectionOnly }));
       onSaved(form.presetId);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -105,38 +121,52 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
 
   return (
     <form
-      className="provider-editor"
+      className={`provider-editor provider-editor-${variant}`}
       onSubmit={(event) => {
         event.preventDefault();
         if (validation.ok) void save();
       }}
     >
-      <header>
-        <h3>{preset_.label} <InfoTip label={preset_.label}>{preset_.help}</InfoTip></h3>
-        {provider && <span className="provider-existing">Saved</span>}
-      </header>
+      {!connectionOnly && (
+        <header>
+          <h3>{preset_.label} <InfoTip label={preset_.label}>{preset_.help}</InfoTip></h3>
+          {provider && <span className="provider-existing">Saved</span>}
+        </header>
+      )}
 
-      <label className="field">
-        <span>Base URL</span>
-        <input
-          value={form.baseUrl}
-          aria-label="Base URL"
-          placeholder="https://api.example.com/v1"
-          onChange={(event) => patch({ baseUrl: event.target.value })}
-        />
-        {validation.errors.baseUrl && <small className="field-error">{validation.errors.baseUrl}</small>}
-      </label>
+      <div className="provider-field-grid">
+        <label className="field">
+          <span>Provider name</span>
+          <input
+            value={form.providerName}
+            aria-label="Provider name"
+            onChange={(event) => patch({ providerName: event.target.value })}
+          />
+          {validation.errors.providerName && <small className="field-error">{validation.errors.providerName}</small>}
+        </label>
 
-      <div className="field">
-        <span>API backend</span>
-        <select value={form.apiBackend} aria-label="API backend" onChange={(event) => patch({ apiBackend: event.target.value })}>
-          <option value="chat_completions">chat_completions (OpenAI-compatible)</option>
-          <option value="messages">messages (Anthropic)</option>
-          <option value="responses">responses (OpenAI Responses)</option>
-        </select>
+        <div className="field">
+          <span>API backend</span>
+          <select value={form.apiBackend} aria-label="API backend" onChange={(event) => patch({ apiBackend: event.target.value })}>
+            <option value="chat_completions">chat_completions (OpenAI-compatible)</option>
+            <option value="messages">messages (Anthropic)</option>
+            <option value="responses">responses (OpenAI Responses)</option>
+          </select>
+        </div>
+
+        <label className="field provider-field-wide">
+          <span>Base URL</span>
+          <input
+            value={form.baseUrl}
+            aria-label="Base URL"
+            placeholder="https://api.example.com/v1"
+            onChange={(event) => patch({ baseUrl: event.target.value })}
+          />
+          {validation.errors.baseUrl && <small className="field-error">{validation.errors.baseUrl}</small>}
+        </label>
       </div>
 
-      <div className="field">
+      <div className="field provider-credential-field">
         <span>Credential</span>
         <div className="segmented">
           <button type="button" className={form.credential === "inline" ? "active" : ""} onClick={() => patch({ credential: "inline" })}>
@@ -153,9 +183,10 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
               value={form.apiKey}
               aria-label="API key"
               autoComplete="off"
-              placeholder={form.keepExistingKey ? "Leave blank to keep the saved key" : "sk-…"}
+              placeholder={form.keepExistingKey ? `Leave blank to keep ${provider?.keyHint ?? "the saved key"}` : "sk-…"}
               onChange={(event) => patch({ apiKey: event.target.value })}
             />
+            {provider?.keyHint && <small className="credential-hint">Current key: <code>{provider.keyHint}</code></small>}
             {validation.errors.apiKey && <small className="field-error">{validation.errors.apiKey}</small>}
           </>
         ) : (
@@ -171,7 +202,7 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
         )}
       </div>
 
-      {preset_.models.length > 0 && (
+      {!connectionOnly && preset_.models.length > 0 && (
         <div className="field">
           <span>Models</span>
           <div className="model-checklist">
@@ -196,22 +227,17 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
         </div>
       )}
 
-      <label className="field">
-        <span>Extra model IDs</span>
-        <textarea
-          rows={2}
-          value={form.customModelIds.join("\n")}
-          aria-label="Additional model ids"
-          placeholder="my-model-id"
-          onChange={(event) => patch({ customModelIds: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })}
-        />
-        {validation.errors.models && <small className="field-error">{validation.errors.models}</small>}
-      </label>
-
-      {showDefaultModel && (
-        <label className="toggle-row">
-          <span><strong>Set as default model</strong></span>
-          <ToggleSwitch checked={form.setAsDefault} ariaLabel="Set as default model" onChange={(checked) => patch({ setAsDefault: checked })} />
+      {!connectionOnly && (
+        <label className="field">
+          <span>Extra model IDs</span>
+          <textarea
+            rows={2}
+            value={form.customModelIds.join("\n")}
+            aria-label="Additional model ids"
+            placeholder="my-model-id"
+            onChange={(event) => patch({ customModelIds: event.target.value.split("\n").map((value) => value.trim()).filter(Boolean) })}
+          />
+          {validation.errors.models && <small className="field-error">{validation.errors.models}</small>}
         </label>
       )}
 
@@ -219,9 +245,11 @@ export function ProviderEditor({ preset, provider, showDefaultModel = true, onSa
         <button type="button" className="ghost-button" disabled={busy !== null} onClick={() => void runTest()} data-testid="provider-test">
           {busy === "test" ? <LoaderCircle className="spin" size={15} /> : <Plug size={15} />} Test
         </button>
-        <button type="button" className="ghost-button" disabled={busy !== null} onClick={() => void runDiscover()} data-testid="provider-discover">
-          {busy === "discover" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Discover models
-        </button>
+        {!connectionOnly && (
+          <button type="button" className="ghost-button" disabled={busy !== null} onClick={() => void runDiscover()} data-testid="provider-discover">
+            {busy === "discover" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />} Discover models
+          </button>
+        )}
         <button type="submit" className="primary-button" disabled={!validation.ok || busy !== null} data-testid="provider-save">
           {busy === "save" ? <LoaderCircle className="spin" size={15} /> : <KeyRound size={15} />} Save provider
         </button>

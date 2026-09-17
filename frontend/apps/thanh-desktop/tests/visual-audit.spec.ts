@@ -99,9 +99,14 @@ test.describe("visual audit", () => {
     await page.getByLabel("Settings").click();
     await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
     await expect(page.getByRole("checkbox", { name: "Plan mode" })).toBeVisible();
-    for (const tab of ["General", "Providers", "Models", "Connectors", "Memory & project", "Skills", "About"]) {
+    for (const tab of ["General", "Models", "Connectors", "Memory & project", "Skills", "About"]) {
       await page.getByRole("tab", { name: tab }).click();
-      if (tab === "Providers") await expect(page.getByTestId("provider-row-openai")).toBeVisible();
+      if (tab === "Models") {
+        await expect(page.getByTestId("provider-row-openai")).toBeVisible();
+        await expect(page.locator("[data-testid^='provider-row-']")).toHaveCount(8);
+        await expect(page.getByText("Choose a provider")).toHaveCount(0);
+        await expect(page.getByText("Could not read providers from the agent.")).toHaveCount(0);
+      }
       if (tab === "Connectors") await expect(page.getByTestId("connector-filesystem")).toBeVisible();
       if (tab === "Skills") await expect(page.getByTestId("skill-help")).toBeVisible();
       await capture(page, `settings-${tab.toLowerCase().replaceAll(" ", "-")}`);
@@ -123,10 +128,40 @@ test.describe("visual audit", () => {
     await capture(page, "minimum-chat");
 
     await page.getByLabel("Settings").click();
-    await page.getByRole("tab", { name: "Providers" }).click();
+    await page.getByRole("tab", { name: "Models" }).click();
     await expect(page.getByTestId("provider-row-openai")).toBeVisible();
     await expectNoHorizontalOverflow(page);
-    await capture(page, "minimum-settings-providers");
+    await capture(page, "minimum-settings-models");
+  });
+
+  test("keeps the models panel and its popups inside a narrow window", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      discoverable: [
+        { id: "gpt-5-mini", name: "GPT-5 Mini", contextWindow: 400_000, maxCompletionTokens: 128_000 },
+        { id: "gpt-4.1", name: "GPT-4.1 with a deliberately long catalogue name", contextWindow: 1_000_000 },
+      ],
+    });
+    await page.getByLabel("Settings").click();
+    // The shell itself is wider than this viewport, so compare against an untouched tab: only
+    // overflow the Models surface adds is a regression here.
+    await page.getByRole("tab", { name: "Connectors" }).click();
+    const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.getByTestId("provider-row-openai")).toBeVisible();
+    const models = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(models).toBeLessThanOrEqual(baseline + 1);
+
+    // A dialog is an overlay, so measure it on its own axis and inside the viewport.
+    await page.getByTestId("provider-add-model-openai").click();
+    await page.getByTestId("model-get-models").click();
+    await expect(page.getByTestId("model-candidates")).toBeVisible();
+    expect(await page.locator(".dialog").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    const box = (await page.locator(".dialog").boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    await capture(page, "narrow-add-model");
   });
 
   test("keeps onboarding cards and Z.ai form within the viewport", async ({ page }) => {

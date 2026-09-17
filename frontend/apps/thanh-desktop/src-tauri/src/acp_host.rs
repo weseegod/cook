@@ -86,6 +86,11 @@ impl AcpHost {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        // The desktop config APIs use THANH_HOME. Pin the child to the same directory so the
+        // agent and Settings can never read two different config.toml files.
+        if let Some(home) = std::env::var_os("THANH_HOME") {
+            command.env("GROK_HOME", home);
+        }
         #[cfg(unix)]
         unsafe {
             use std::os::unix::process::CommandExt;

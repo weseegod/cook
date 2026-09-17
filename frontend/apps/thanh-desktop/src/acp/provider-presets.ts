@@ -68,6 +68,23 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   preset("custom", "OpenAI-compatible", null, "chat_completions", null, "Any OpenAI-compatible endpoint: paste its base URL and a model id", []),
 ];
 
+/** Providers intentionally exposed by the desktop settings surface. Legacy adapters remain in
+ * the agent catalog for config compatibility, but are not offered as new connections here. */
+export const VISIBLE_PROVIDER_IDS = new Set([
+  "openai",
+  "anthropic",
+  "openrouter",
+  "deepseek",
+  "zai",
+  "xai",
+  "google",
+  "moonshot",
+]);
+
+export function isVisibleProviderPreset(preset: ProviderPreset): boolean {
+  return VISIBLE_PROVIDER_IDS.has(preset.id);
+}
+
 export function findPreset(id: string): ProviderPreset | undefined {
   return PROVIDER_PRESETS.find((entry) => entry.id === id);
 }
@@ -75,6 +92,7 @@ export function findPreset(id: string): ProviderPreset | undefined {
 export interface ProviderFormState {
   /** Preset id, or `custom` for a user URL. */
   presetId: string;
+  providerName: string;
   baseUrl: string;
   apiBackend: string;
   /** `env` uses `envKey`; `inline` requires the user to type a key. */
@@ -93,6 +111,7 @@ export interface ProviderFormState {
 export function formFromPreset(preset: ProviderPreset): ProviderFormState {
   return {
     presetId: preset.id,
+    providerName: preset.label,
     baseUrl: preset.baseUrl ?? "",
     apiBackend: preset.apiBackend,
     credential: "inline",
@@ -106,18 +125,29 @@ export function formFromPreset(preset: ProviderPreset): ProviderFormState {
 }
 
 export function formFromProvider(
-  provider: { id: string; baseUrl?: string | null; apiBackend?: string | null; envKey?: string | null; inlineKey: boolean },
+  provider: {
+    id: string;
+    baseUrl?: string | null;
+    apiBackend?: string | null;
+    envKey?: string | null;
+    inlineKey: boolean;
+    name?: string | null;
+    models?: Array<{ id: string }>;
+  },
 ): ProviderFormState {
   const base = findPreset(provider.id);
+  const presetModelIds = new Set(base?.models.map((model) => model.id) ?? []);
+  const configuredModelIds = provider.models?.map((model) => model.id) ?? [];
   return {
-    presetId: base ? provider.id : "custom",
+    presetId: provider.id,
+    providerName: provider.name ?? base?.label ?? provider.id,
     baseUrl: provider.baseUrl ?? base?.baseUrl ?? "",
     apiBackend: provider.apiBackend ?? base?.apiBackend ?? "chat_completions",
     credential: provider.inlineKey ? "inline" : "env",
     apiKey: "",
     envKey: provider.envKey ?? base?.envKey ?? "",
-    selectedModels: [],
-    customModelIds: [],
+    selectedModels: configuredModelIds.filter((id) => presetModelIds.has(id)),
+    customModelIds: configuredModelIds.filter((id) => !presetModelIds.has(id)),
     keepExistingKey: provider.inlineKey,
     setAsDefault: false,
   };
@@ -132,8 +162,13 @@ const MODEL_ID = /^[A-Za-z0-9._:/@+-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Pure validation shared by the settings panel and the onboarding wizard. */
-export function validateProviderForm(form: ProviderFormState, options: { requireKey: boolean }): FormValidation {
+export function validateProviderForm(
+  form: ProviderFormState,
+  options: { requireKey: boolean; requireModels?: boolean },
+): FormValidation {
   const errors: Record<string, string> = {};
+  if (!form.providerName.trim()) errors.providerName = "Provider name is required";
+  else if (form.providerName.trim().length > 80) errors.providerName = "Provider name must be 80 characters or fewer";
   const baseUrl = form.baseUrl.trim();
   if (!baseUrl) {
     errors.baseUrl = "Base URL is required";
@@ -147,25 +182,38 @@ export function validateProviderForm(form: ProviderFormState, options: { require
   } else if (!ENV_NAME.test(form.envKey.trim())) {
     errors.envKey = "Use a variable name: letters, digits and underscores";
   }
-  for (const id of [...form.selectedModels, ...form.customModelIds.map((value) => value.trim()).filter(Boolean)]) {
-    if (!MODEL_ID.test(id)) errors.models = `“${id}” is not a usable model id`;
-  }
-  if (form.selectedModels.length === 0 && form.customModelIds.every((value) => !value.trim())) {
-    errors.models = "Pick at least one model, or discover them from the provider";
+  if (options.requireModels !== false) {
+    for (const id of [...form.selectedModels, ...form.customModelIds.map((value) => value.trim()).filter(Boolean)]) {
+      if (!MODEL_ID.test(id)) errors.models = `“${id}” is not a usable model id`;
+    }
+    if (form.selectedModels.length === 0 && form.customModelIds.every((value) => !value.trim())) {
+      errors.models = "Pick at least one model, or discover them from the provider";
+    }
   }
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
-/** Map the form onto the exact `x.ai/providers/upsert` params (pure; directly unit-tested). */
-export function formToUpsertRequest(form: ProviderFormState, preset?: ProviderPreset): ProviderUpsertRequest {
+/**
+ * Map the form onto the exact `x.ai/providers/upsert` params (pure; directly unit-tested).
+ *
+ * `includeModels: false` leaves the model rows alone: the upsert only writes the seeds it is
+ * given, so a connection-only edit must not round-trip ids it cannot represent faithfully.
+ */
+export function formToUpsertRequest(
+  form: ProviderFormState,
+  preset?: ProviderPreset,
+  options: { includeModels?: boolean } = {},
+): ProviderUpsertRequest {
   const seeds = (preset?.models ?? []).filter((model) => form.selectedModels.includes(model.id));
   const extraIds = form.customModelIds
     .map((value) => value.trim())
     .filter((value, index, all) => value && all.indexOf(value) === index && !seeds.some((seed) => seed.id === value));
-  const models = [
-    ...seeds.map((seed) => ({ id: seed.id, model: seed.model, name: seed.name, input: [...seed.input] })),
-    ...extraIds.map((id) => ({ id, model: id, name: id, input: ["text"] })),
-  ];
+  const models = options.includeModels === false
+    ? []
+    : [
+        ...seeds.map((seed) => ({ id: seed.id, model: seed.model, name: seed.name, input: [...seed.input] })),
+        ...extraIds.map((id) => ({ id, model: id, name: id, input: ["text"] })),
+      ];
   const typedKey = form.apiKey.trim();
   const envName = form.envKey.trim();
   // An edit that leaves the key field blank sends no credential at all, so the stored secret
@@ -184,6 +232,7 @@ export function formToUpsertRequest(form: ProviderFormState, preset?: ProviderPr
             : {};
   return {
     id: form.presetId,
+    ...(form.providerName.trim() ? { name: form.providerName.trim() } : {}),
     baseUrl: form.baseUrl.trim(),
     apiBackend: form.apiBackend,
     ...credential,
@@ -217,8 +266,28 @@ export function providerStatus(provider: {
   envKeyPresent: boolean;
   envKey?: string | null;
 }): { label: string; tone: "ok" | "warn" } {
-  if (provider.inlineKey) return { label: "API key saved", tone: "ok" };
-  if (provider.hasKey && provider.envKeyPresent) return { label: `Env var ${provider.envKey}`, tone: "ok" };
-  if (provider.hasKey) return { label: `Env var ${provider.envKey} (not set)`, tone: "warn" };
+  if (provider.inlineKey) return { label: "Connected · API key saved", tone: "ok" };
+  if (provider.hasKey && provider.envKeyPresent) return { label: "Connected · Environment", tone: "ok" };
+  if (provider.hasKey) return { label: `Environment variable ${provider.envKey} (not set)`, tone: "warn" };
   return { label: "No credential", tone: "warn" };
+}
+
+export function mergedProviderStatus(
+  provider: {
+    hasKey: boolean;
+    inlineKey: boolean;
+    envKey?: string | null;
+    envKeyPresent: boolean;
+  } | undefined,
+  oauthConnected: boolean,
+): { label: string; tone: "ok" | "warn" } {
+  const apiKeyConnected = Boolean(provider?.inlineKey || (provider?.hasKey && provider.envKeyPresent));
+  const envKeyMissing = Boolean(provider?.hasKey && !provider.inlineKey && !provider.envKeyPresent);
+  const methods = [
+    ...(oauthConnected ? ["OAuth"] : []),
+    ...(apiKeyConnected ? [provider?.inlineKey ? "API key" : "Environment"] : []),
+  ];
+  if (methods.length > 0) return { label: `Connected · ${methods.join(" + ")}`, tone: "ok" };
+  if (envKeyMissing) return { label: `Not connected · ${provider?.envKey ?? "environment variable"} not set`, tone: "warn" };
+  return { label: "Not connected", tone: "warn" };
 }

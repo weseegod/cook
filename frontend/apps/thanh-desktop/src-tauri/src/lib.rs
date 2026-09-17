@@ -1,5 +1,7 @@
 mod acp_host;
 mod bin_resolve;
+mod http;
+mod provider_config;
 mod workspace;
 
 use std::path::PathBuf;
@@ -11,6 +13,8 @@ use serde_json::Value;
 use tauri::{Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tokio::sync::oneshot;
+
+use provider_config::{ModelUpsert, ProviderList, ProviderModels, ProviderUpsert};
 
 // Commands are invoked on the main thread (macOS delivers webview IPC on it via
 // `startURLSchemeTask`), so any command that blocks on the event loop, a subprocess, or a
@@ -263,6 +267,70 @@ fn config_security() -> ConfigSecurity {
     }
 }
 
+#[tauri::command]
+async fn desktop_provider_list() -> Result<ProviderList, String> {
+    tauri::async_runtime::spawn_blocking(provider_config::list)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn desktop_provider_upsert(request: ProviderUpsert) -> Result<Value, String> {
+    let id = request.id().to_owned();
+    let models = request.model_ids();
+    tauri::async_runtime::spawn_blocking(move || provider_config::upsert_provider(request))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true, "id": id, "models": models }))
+}
+
+#[tauri::command]
+async fn desktop_provider_delete(id: String, replacement: Option<String>) -> Result<Value, String> {
+    let response_id = id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        provider_config::delete_provider(&id, replacement.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true, "id": response_id }))
+}
+
+/// Read-only `/models` probe: what the provider offers, without writing `config.toml`.
+#[tauri::command]
+async fn desktop_provider_models(id: String) -> Result<ProviderModels, String> {
+    let target = tauri::async_runtime::spawn_blocking(move || provider_config::probe_target(&id))
+        .await
+        .map_err(|error| error.to_string())??;
+    provider_config::probe_models(target).await
+}
+
+#[tauri::command]
+async fn desktop_model_upsert(request: ModelUpsert) -> Result<Value, String> {
+    let model_id = request.id().to_owned();
+    tauri::async_runtime::spawn_blocking(move || provider_config::upsert_model(request))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true, "modelId": model_id }))
+}
+
+#[tauri::command]
+async fn desktop_model_delete(model_id: String) -> Result<Value, String> {
+    let response_id = model_id.clone();
+    tauri::async_runtime::spawn_blocking(move || provider_config::delete_model(&model_id))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true, "modelId": response_id }))
+}
+
+#[tauri::command]
+async fn desktop_model_set_default(model_id: String) -> Result<Value, String> {
+    let response_id = model_id.clone();
+    tauri::async_runtime::spawn_blocking(move || provider_config::set_default_model(&model_id))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true, "defaultModel": response_id }))
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -283,6 +351,13 @@ pub fn run() {
             workspace_open,
             open_path,
             config_security,
+            desktop_provider_list,
+            desktop_provider_upsert,
+            desktop_provider_delete,
+            desktop_provider_models,
+            desktop_model_upsert,
+            desktop_model_delete,
+            desktop_model_set_default,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
