@@ -139,6 +139,16 @@ export async function readFilePayload(path: string): Promise<FilePayload> {
   return (await mock()).mockReadFilePayload(path);
 }
 
+/** Open a tool-reported file or directory with the operating system default handler. */
+export async function openPath(path: string): Promise<void> {
+  if (isTauri()) {
+    await invoke("open_path", { path });
+    return;
+  }
+  if (isMock()) return;
+  throw new Error("Opening paths requires the Thanh Desktop app");
+}
+
 /**
  * OS drag-and-drop of files onto the window. Tauri intercepts native drops, so the webview never
  * sees them as HTML5 events; this is how a dropped file keeps its path.

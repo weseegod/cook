@@ -37,6 +37,7 @@ export function Composer() {
   const text = useSessionStore((state) => state.composerDraft);
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
+  const interactionPending = useSessionStore((state) => Boolean(state.pendingPermission || state.pendingQuestion));
   const sessionId = useSessionStore((state) => state.sessionId);
   const planMode = useSessionStore((state) => state.planMode);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
@@ -148,7 +149,7 @@ export function Composer() {
    */
   async function submit() {
     const prompt = text.trim();
-    if ((!prompt && attachments.length === 0) || busy) return;
+    if ((!prompt && attachments.length === 0) || busy || interactionPending) return;
     const slash = parseSlash(prompt);
     const command = slash && attachments.length === 0 ? clientCommand(slash.name) : undefined;
     setBusy(true);
@@ -243,10 +244,11 @@ export function Composer() {
       <div
         className={`composer ${dragging ? "dragging" : ""}`}
         data-testid="composer-drop"
-        onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+          onDragOver={(event) => { if (interactionPending) return; event.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
-        onDrop={(event) => {
-          event.preventDefault();
+          onDrop={(event) => {
+            if (interactionPending) return;
+            event.preventDefault();
           setDragging(false);
           void addFiles(event.dataTransfer?.files ?? null);
         }}
@@ -281,9 +283,10 @@ export function Composer() {
             }
           }}
           onKeyDown={onComposerKeyDown}
-          placeholder={turnRunning ? "Queue another prompt…" : "Ask Thanh anything…"}
+          placeholder={interactionPending ? "Waiting for your decision…" : turnRunning ? "Queue another prompt…" : "Ask Thanh anything…"}
           aria-label="Message"
           rows={1}
+          disabled={interactionPending}
         />
         <div className="composer-footer">
           <div className="composer-tools">
@@ -293,6 +296,7 @@ export function Composer() {
               aria-label="Attach files"
               data-testid="attach-button"
               onClick={() => void openPicker()}
+              disabled={interactionPending}
             >
               <Paperclip size={15} />
             </button>
@@ -316,13 +320,13 @@ export function Composer() {
           </div>
           {turnRunning ? (
             <div className="composer-running">
-              <button type="button" className="stop-button" onClick={() => void acpClient.cancel()}><Square size={13} /> Stop</button>
-              <button type="button" className="send-button" disabled={(!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
+              <button type="button" className="stop-button" onClick={() => void acpClient.cancel()} disabled={interactionPending}><Square size={13} /> Stop</button>
+              <button type="button" className="send-button" disabled={interactionPending || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
               </button>
             </div>
           ) : (
-            <button type="button" className="send-button" disabled={(!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()} data-testid="send-button">
+            <button type="button" className="send-button" disabled={interactionPending || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()} data-testid="send-button">
               {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Send
             </button>
           )}

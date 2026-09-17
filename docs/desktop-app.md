@@ -191,6 +191,19 @@ desktop client keeps a turn-scoped streaming cursor like the TUI tracker:
 - replay and live updates use the same reducer so loading a session cannot
   produce a different transcript shape.
 
+The chat surface also keeps the TUI's operational affordances visible without
+turning the transcript into a stream of noisy cards:
+
+- active tools stay in a pinned activity rail with command/path labels and a
+  live elapsed timer; completed work collapses into one verb-group summary;
+- permission, question, trust, and plan prompts render inline above the
+  composer, locking input until the decision is made instead of opening a
+  blocking modal;
+- tool output, assistant messages, plans, commands, and paths expose compact
+  copy actions; command reruns go back through the agent's ACP session rather
+  than spawning a renderer-side shell, while paths use the native desktop
+  opener.
+
 The visual language intentionally follows VS Code Dark Modern for density,
 typography, controls, focus states, and colors. This does not change the product
 boundary: Thanh Desktop remains chat-first and does not add an editor, LSP,

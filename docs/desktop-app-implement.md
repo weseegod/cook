@@ -16,8 +16,10 @@ Shipped and usable as a local ACP chat shell:
 - Tauri host spawns `thanh agent stdio`, JSON-RPC mux, crash restart
 - Folder picker, session sidebar (list / search / rename / delete / resume)
 - Streaming chat with turn-scoped coalescing, markdown + deferred Shiki/mermaid,
-  TUI-style activity groups, and plan banner
-- Permission / ask-user / folder-trust modals, YOLO, slash palette, queue
+  TUI-style activity groups, pinned live command rail, inline plans, and copy
+  actions
+- Permission / ask-user / folder-trust inline decision cards, YOLO, slash
+  palette, queue
 - Model picker from `x.ai/models/list`, settings panel, `chmod 600` warning
 - Alpha AppImage/deb path; CLI still required at runtime
 

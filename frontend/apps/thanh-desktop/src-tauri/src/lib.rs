@@ -119,6 +119,43 @@ async fn read_file_base64(path: String) -> Result<FilePayload, String> {
         .map_err(|error| error.to_string())?
 }
 
+/// Open an explicit path with the operating system default handler.
+#[tauri::command]
+async fn open_path(path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let source = PathBuf::from(&path);
+        if !source.exists() {
+            return Err(format!("{path} does not exist"));
+        }
+
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut command = std::process::Command::new("open");
+            command.arg(&source);
+            command
+        };
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let mut command = std::process::Command::new("xdg-open");
+            command.arg(&source);
+            command
+        };
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "start", "", &path]);
+            command
+        };
+
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("could not open {path}: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn read_file_payload(path: &str) -> Result<FilePayload, String> {
     const MAX_BYTES: u64 = 25 * 1024 * 1024;
     let source = PathBuf::from(path);
@@ -201,6 +238,7 @@ pub fn run() {
             pick_folder,
             pick_files,
             read_file_base64,
+            open_path,
             config_security,
         ])
         .setup(|app| {

@@ -1,7 +1,9 @@
+import { Check, Copy } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeToHtml } from "shiki";
+import { copyText } from "./clipboard";
 
 export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return (
@@ -13,9 +15,9 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
             const language = /language-([\w-]+)/.exec(className ?? "")?.[1];
             const value = String(children).replace(/\n$/, "");
             if (!language) return <code>{children}</code>;
-            if (streaming) return <pre className="streaming-code"><code>{value}</code></pre>;
+            if (streaming) return <CodeBlock code={value} streaming />;
             if (language === "mermaid") return <Mermaid source={value} />;
-            return <HighlightedCode code={value} language={language} />;
+            return <CodeBlock code={value} language={language} />;
           },
           a({ href, children }) {
             return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
@@ -24,6 +26,28 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
       >
         {text}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+function CodeBlock({ code, language, streaming = false }: { code: string; language?: string; streaming?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await copyText(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+  return (
+    <div className="code-block">
+      <div className="code-toolbar">
+        <span>{language ?? "text"}</span>
+        <button type="button" className="text-button" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}</button>
+      </div>
+      {streaming ? <pre className="streaming-code"><code>{code}</code></pre> : <HighlightedCode code={code} language={language ?? "text"} />}
     </div>
   );
 }

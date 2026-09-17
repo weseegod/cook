@@ -82,6 +82,8 @@ export interface MockState {
   reply: string;
   /** Optional exact ACP update sequence for transcript and visual tests. */
   promptUpdates: Array<Record<string, unknown>>;
+  /** Hold the prompt response open so visual tests can inspect live activity. */
+  promptDelayMs: number;
   /** Agent-side project instruction files keyed by path. */
   files: Record<string, string>;
   /** Paths the native attachment picker returns; empty means "no native picker here". */
@@ -116,6 +118,7 @@ function defaultState(): MockState {
     setDefaultUnsupported: false,
     reply: "Mock assistant reply.",
     promptUpdates: [],
+    promptDelayMs: 0,
     files: {},
     pickedFiles: [],
     filePayloads: {},
@@ -357,6 +360,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
             content: { type: "text", text },
           }));
       for (const update of updates) notify("session/update", { sessionId, update });
+      if (state.promptDelayMs > 0) await new Promise((resolve) => window.setTimeout(resolve, state.promptDelayMs));
       return respond({ stopReason: "end_turn" });
     }
     case "x.ai/session/info": {
@@ -615,12 +619,49 @@ export function mockElicit(overrides: Record<string, unknown> = {}): number {
   return id;
 }
 
+export function mockPermission(overrides: Record<string, unknown> = {}): number {
+  const id = nextServerRequestId++;
+  request("session/request_permission", {
+    sessionId: "mock-session",
+    toolCall: { title: "Run pnpm test", kind: "execute", content: [{ type: "text", text: "pnpm test" }] },
+    options: [
+      { optionId: "allow-once", name: "Allow once", kind: "allow_once" },
+      { optionId: "reject-once", name: "Reject", kind: "reject_once" },
+    ],
+    ...overrides,
+  }, id);
+  return id;
+}
+
+export function mockQuestion(overrides: Record<string, unknown> = {}): number {
+  const id = nextServerRequestId++;
+  request("x.ai/ask_user_question", {
+    sessionId: "mock-session",
+    questions: [{ question: "Which approach should I use?", options: [{ id: "safe", label: "Safe change" }, { id: "fast", label: "Fast change" }] }],
+    ...overrides,
+  }, id);
+  return id;
+}
+
+export function mockPlan(overrides: Record<string, unknown> = {}): number {
+  const id = nextServerRequestId++;
+  request("x.ai/exit_plan_mode", {
+    sessionId: "mock-session",
+    planContent: "# Implementation plan\n\n1. Update the transcript renderer\n2. Verify the desktop flow",
+    ...overrides,
+  }, id);
+  return id;
+}
+
 export interface MockControl {
   reset(seed?: Partial<MockState>): void;
   requests(): RecordedRequest[];
   state(): MockState;
   responses(): Array<{ id: number | string; result: unknown; at: number }>;
   elicit(overrides?: Record<string, unknown>): number;
+  permission(overrides?: Record<string, unknown>): number;
+  question(overrides?: Record<string, unknown>): number;
+  plan(overrides?: Record<string, unknown>): number;
   modelsUpdate(params?: Record<string, unknown>): void;
 }
 
@@ -637,6 +678,9 @@ if (typeof window !== "undefined") {
     state: mockState,
     responses: () => [...responses],
     elicit: mockElicit,
+    permission: mockPermission,
+    question: mockQuestion,
+    plan: mockPlan,
     modelsUpdate: mockModelsUpdate,
   };
 }

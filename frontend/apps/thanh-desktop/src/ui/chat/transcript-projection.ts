@@ -6,8 +6,11 @@ export interface ActivityBlock {
   turnId: string;
   tools: ToolBlock[];
   thoughts: MessageBlock[];
-  status: "running" | "completed" | "failed";
+  status: ActivityStatus;
+  startedAt: number;
 }
+
+export type ActivityStatus = "running" | "completed" | "failed" | "cancelled";
 
 export type DisplayBlock = MessageBlock | PlanBlock | ActivityBlock;
 
@@ -34,10 +37,12 @@ export function projectTranscript(blocks: TranscriptBlock[]): DisplayBlock[] {
           tools: [],
           thoughts: [],
           status: "completed",
+          startedAt: block.type === "tool" ? block.startedAt : Date.now(),
         };
       }
       if (block.type === "tool") activity.tools.push(block);
       else activity.thoughts.push(block);
+      if (block.type === "tool") activity.startedAt = Math.min(activity.startedAt, block.startedAt);
       continue;
     }
     flush();
@@ -52,7 +57,7 @@ export function activityLabel(activity: ActivityBlock): string {
   const categories = new Set(activity.tools.map(toolCategory));
   if (categories.size !== 1) {
     if (activity.status === "running") return `Running ${activity.tools.length} tools…`;
-    return `${activity.tools.length} tool calls`;
+    return activity.status === "cancelled" ? `${activity.tools.length} cancelled tools` : `${activity.tools.length} tool calls`;
   }
 
   const category = categories.values().next().value as ToolCategory;
@@ -76,8 +81,28 @@ export function activityLabel(activity: ActivityBlock): string {
     execute: `Ran ${count} command${plural}`,
     fetch: `Fetched ${count} page${plural}`,
     mcp: `Used ${count} integration${plural}`,
-    other: count === 1 ? activity.tools[0].title : `${count} tool calls`,
+    other: activity.status === "cancelled"
+      ? `Cancelled ${count} tool${plural}`
+      : count === 1 ? activity.tools[0].title : `${count} tool calls`,
   }[category];
+}
+
+export function activityElapsedMs(activity: ActivityBlock, now = Date.now()): number {
+  const activeElapsed = activity.tools
+    .filter((tool) => !isTerminalToolStatus(tool.status))
+    .map((tool) => Math.max(0, now - tool.startedAt));
+  const recordedElapsed = activity.tools
+    .map((tool) => tool.elapsedMs)
+    .filter((elapsed): elapsed is number => typeof elapsed === "number" && Number.isFinite(elapsed));
+  return Math.max(0, ...(activeElapsed.length > 0 ? activeElapsed : recordedElapsed.length > 0 ? recordedElapsed : [now - activity.startedAt]));
+}
+
+export function isLiveTool(tool: ToolBlock): boolean {
+  return !isTerminalToolStatus(tool.status);
+}
+
+export function isTerminalToolStatus(status: string): boolean {
+  return ["completed", "complete", "failed", "error", "cancelled", "canceled"].includes(status.toLowerCase());
 }
 
 type ToolCategory = "read" | "search" | "edit" | "execute" | "fetch" | "mcp" | "other";
@@ -95,6 +120,7 @@ export function toolCategory(tool: ToolBlock): ToolCategory {
 
 function activityStatus(tools: ToolBlock[], thoughts: MessageBlock[]): ActivityBlock["status"] {
   if (tools.some((tool) => tool.status.toLowerCase() === "failed")) return "failed";
+  if (tools.some((tool) => ["cancelled", "canceled"].includes(tool.status.toLowerCase()))) return "cancelled";
   if (
     thoughts.some((thought) => thought.streaming)
     || tools.some((tool) => !["completed", "failed"].includes(tool.status.toLowerCase()))

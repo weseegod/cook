@@ -11,6 +11,9 @@ const tool = (id: string, title: string, status = "completed"): ToolBlock => ({
   status,
   content: [],
   locations: [],
+  startedAt: Date.now(),
+  elapsedMs: status === "completed" || status === "failed" ? 120 : null,
+  paths: [],
 });
 
 const thought: MessageBlock = {

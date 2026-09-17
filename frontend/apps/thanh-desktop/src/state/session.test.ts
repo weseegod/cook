@@ -61,6 +61,42 @@ describe("session transcript reducer", () => {
     expect(transcript.blocks[0]).toMatchObject({ type: "tool", title: "pnpm test", status: "completed" });
   });
 
+  it("keeps tool timing and extracts command/path metadata across updates", () => {
+    const before = Date.now();
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Run tests",
+      kind: "execute",
+      rawInput: { command: "pnpm test", path: "frontend/apps/thanh-desktop" },
+      status: "pending",
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      status: "completed",
+      elapsedMs: 420,
+    });
+    expect(transcript.blocks[0]).toMatchObject({
+      command: "pnpm test",
+      paths: ["frontend/apps/thanh-desktop"],
+      elapsedMs: 420,
+    });
+    expect((transcript.blocks[0] as { startedAt: number }).startedAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it("coalesces tool output deltas instead of spamming output rows", () => {
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Run command",
+      status: "pending",
+    });
+    transcript = reduceTranscript(transcript, { sessionUpdate: "tool_call_update", toolCallId: "t1", outputDelta: "one\n" });
+    transcript = reduceTranscript(transcript, { sessionUpdate: "tool_call_update", toolCallId: "t1", outputDelta: "two\n" });
+    expect(transcript.blocks[0]).toMatchObject({ content: [{ content: { text: "one\ntwo\n" } }] });
+  });
+
   it("does not break a resumed assistant stream on a late tool update", () => {
     let transcript = reduceTranscript(empty(), {
       sessionUpdate: "tool_call",

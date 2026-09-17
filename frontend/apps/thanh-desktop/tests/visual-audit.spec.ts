@@ -11,9 +11,12 @@ const VISUAL_SEED = {
   promptUpdates: [
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I’ll inspect the relevant files first." } },
     { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Finding the state boundary and current renderer." } },
-    { sessionUpdate: "tool_call", toolCallId: "read-state", kind: "read", title: "Read src/state/session.ts", status: "pending" },
+    { sessionUpdate: "tool_call", toolCallId: "read-state", kind: "read", title: "Read src/state/session.ts", rawInput: { path: "src/state/session.ts" }, status: "pending" },
     { sessionUpdate: "tool_call_update", toolCallId: "read-state", kind: "read", title: "Read src/state/session.ts", status: "completed", content: [{ type: "content", content: { type: "text", text: "export const useSessionStore = create(...);" } }] },
-    { sessionUpdate: "tool_call", toolCallId: "read-chat", kind: "read", title: "Read src/ui/chat/chat-view.tsx", status: "completed", content: [{ type: "content", content: { type: "text", text: "function ChatView() { /* transcript */ }" } }] },
+    { sessionUpdate: "tool_call", toolCallId: "read-chat", kind: "read", title: "Read src/ui/chat/chat-view.tsx", rawInput: { path: "src/ui/chat/chat-view.tsx" }, status: "completed", content: [{ type: "content", content: { type: "text", text: "function ChatView() { /* transcript */ }" } }] },
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "I found the relevant boundary. " } },
+    { sessionUpdate: "tool_call", toolCallId: "run-tests", kind: "execute", title: "Run tests", rawInput: { command: "pnpm test" }, status: "pending" },
+    { sessionUpdate: "tool_call_update", toolCallId: "run-tests", kind: "execute", title: "Run tests", rawInput: { command: "pnpm test" }, status: "completed", content: [{ type: "content", content: { type: "text", text: "100 tests passed" } }] },
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "## Result\n\nMock assistant " } },
     { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "reply. The stream remains one message while tool activity stays compact." } },
   ],
@@ -97,5 +100,29 @@ test.describe("visual audit", () => {
     await expect(page.getByLabel("Base URL")).toHaveValue("https://api.z.ai/api/paas/v4/");
     await expectNoHorizontalOverflow(page);
     await capture(page, "connect-zai");
+  });
+
+  test("shows the TUI live rail and inline decisions without a modal", async ({ page }) => {
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      promptDelayMs: 1200,
+      promptUpdates: [
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Starting a long-running command." } },
+        { sessionUpdate: "tool_call", toolCallId: "live-command", kind: "execute", title: "Run integration tests", rawInput: { command: "pnpm test:e2e" }, status: "pending" },
+      ],
+    });
+    await page.getByPlaceholder("Ask Thanh anything…").fill("Run the integration tests");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByTestId("live-activity-rail")).toBeVisible();
+    await expect(page.getByTestId("live-activity-rail")).toContainText("pnpm test:e2e");
+    await expect(page.getByTestId("live-activity-rail")).toContainText("0.");
+    await page.evaluate(() => window.__thanhMock?.permission());
+    await expect(page.getByTestId("inline-permission")).toBeVisible();
+    await expect(page.locator(".modal-backdrop")).toHaveCount(0);
+    await page.getByTestId("inline-permission").getByRole("button", { name: /Allow once/ }).click();
+    await page.evaluate(() => window.__thanhMock?.plan());
+    await expect(page.getByTestId("inline-interaction")).toContainText("Implementation plan");
+    await expect(page.getByTestId("inline-interaction")).toContainText("Approve");
+    await capture(page, "chat-live-rail-inline-decisions");
   });
 });

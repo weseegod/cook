@@ -20,6 +20,11 @@ export interface ToolBlock {
   status: string;
   content: unknown[];
   locations: unknown[];
+  startedAt: number;
+  elapsedMs: number | null;
+  command?: string;
+  description?: string;
+  paths: string[];
 }
 
 export interface PlanBlock {
@@ -70,6 +75,7 @@ interface SessionState {
   blocks: TranscriptBlock[];
   transcriptCursor: TranscriptCursor;
   turnRunning: boolean;
+  turnStartedAt: number | null;
   modelId: string | null;
   planMode: boolean;
   usage: Record<string, unknown> | null;
@@ -104,6 +110,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   blocks: [],
   transcriptCursor: emptyCursor(),
   turnRunning: false,
+  turnStartedAt: null,
   modelId: localStorage.getItem("thanh.defaultModel"),
   planMode: false,
   usage: null,
@@ -122,6 +129,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       transcriptCursor: emptyCursor(),
       sessionTitle: "New conversation",
       turnRunning: false,
+      turnStartedAt: null,
       usage: null,
       pendingPermission: null,
       pendingQuestion: null,
@@ -135,10 +143,11 @@ export const useSessionStore = create<SessionState>((set) => ({
       const turnId = `turn-${crypto.randomUUID()}`;
       return {
         blocks: [
-          ...finishStreamingMessages(state.blocks),
+          ...finishStreamingBlocks(state.blocks),
           { type: "message", id: localId, turnId, role: "user", text, images: [...images], streaming: false },
         ],
         transcriptCursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: localId },
+        turnStartedAt: Date.now(),
       };
     }),
   applyNotification: (notification) =>
@@ -147,8 +156,9 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((state) => reduceNotifications(state, notifications)),
   finishTurn: () =>
     set((state) => ({
-      blocks: finishStreamingMessages(state.blocks),
+      blocks: finishStreamingBlocks(state.blocks),
       transcriptCursor: emptyCursor(),
+      turnStartedAt: null,
     })),
 }));
 
@@ -177,10 +187,12 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
   let planMode = state.planMode;
   let sessionTitle = state.sessionTitle;
   let modelId = state.modelId;
+  let turnStartedAt = state.turnStartedAt;
 
   for (const notification of notifications) {
     const raw = notification.update as SessionUpdate & Record<string, unknown>;
     const kind = String(raw.sessionUpdate ?? "");
+    if (isTurnActivity(kind) && turnStartedAt === null) turnStartedAt = Date.now();
     if (kind === "usage_update") {
       usage = asRecord(raw.usage) ?? asRecord(raw);
       continue;
@@ -200,7 +212,7 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
     cursor = next.cursor;
   }
 
-  return { blocks, transcriptCursor: cursor, usage, planMode, sessionTitle, modelId };
+  return { blocks, transcriptCursor: cursor, usage, planMode, sessionTitle, modelId, turnStartedAt };
 }
 
 function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknown>): TranscriptState {
@@ -243,7 +255,7 @@ function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknow
   const turnId = `turn-${serverId}`;
   return {
     blocks: [
-      ...finishStreamingMessages(transcript.blocks),
+      ...finishStreamingBlocks(transcript.blocks),
       { type: "message", id: serverId, turnId, role: "user", text, images: image ? [image] : [], streaming: true },
     ],
     cursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: null },
@@ -296,17 +308,25 @@ function reduceTool(transcript: TranscriptState, raw: Record<string, unknown>): 
   const index = transcript.blocks.findIndex((block) => block.type === "tool" && block.id === id);
   const previous = index >= 0 ? (transcript.blocks[index] as ToolBlock) : null;
   const turnId = previous?.turnId ?? transcript.cursor.turnId ?? `turn-orphan-${transcript.blocks.length}`;
+  const startedAt = previous?.startedAt ?? numberOr(raw.startedAt, null) ?? Date.now();
+  const status = stringOr(raw.status, previous?.status ?? "pending") ?? "pending";
+  const elapsedMs = numberOr(raw.elapsedMs, previous?.elapsedMs ?? null)
+    ?? (isTerminalToolStatus(status) ? Math.max(0, Date.now() - startedAt) : null);
+  const metadata = toolMetadata(raw, previous);
   const next: ToolBlock = {
     type: "tool",
     id,
     turnId,
     title: stringOr(raw.title, previous?.title ?? "Tool") ?? "Tool",
     kind: stringOr(raw.kind, previous?.kind),
-    status: stringOr(raw.status, previous?.status ?? "pending") ?? "pending",
-    content: Array.isArray(raw.content) ? raw.content : previous?.content ?? [],
+    status,
+    content: toolContent(raw, previous),
     locations: Array.isArray(raw.locations) ? raw.locations : previous?.locations ?? [],
+    startedAt,
+    elapsedMs,
+    ...metadata,
   };
-  const sourceBlocks = isStart ? finishStreamingMessages(transcript.blocks) : transcript.blocks;
+  const sourceBlocks = isStart ? finishStreamingBlocks(transcript.blocks) : transcript.blocks;
   const blocks = sourceBlocks.map((block, blockIndex) =>
     blockIndex === index ? next : block,
   );
@@ -337,14 +357,91 @@ function reducePlan(transcript: TranscriptState, raw: Record<string, unknown>): 
   };
 }
 
-function finishStreamingMessages(blocks: TranscriptBlock[]): TranscriptBlock[] {
+function finishStreamingBlocks(blocks: TranscriptBlock[]): TranscriptBlock[] {
   let changed = false;
   const next = blocks.map((block) => {
-    if (block.type !== "message" || !block.streaming) return block;
-    changed = true;
-    return { ...block, streaming: false };
+    if (block.type === "message" && block.streaming) {
+      changed = true;
+      return { ...block, streaming: false };
+    }
+    if (block.type === "tool" && !isTerminalToolStatus(block.status)) {
+      changed = true;
+      return {
+        ...block,
+        status: "cancelled",
+        elapsedMs: block.elapsedMs ?? Math.max(0, Date.now() - block.startedAt),
+      };
+    }
+    return block;
   });
   return changed ? next : blocks;
+}
+
+function isTurnActivity(kind: string): boolean {
+  return [
+    "user_message_chunk",
+    "agent_message_chunk",
+    "agent_thought_chunk",
+    "tool_call",
+    "tool_call_update",
+    "plan",
+    "plan_update",
+  ].includes(kind);
+}
+
+function isTerminalToolStatus(status: string): boolean {
+  return ["completed", "complete", "failed", "error", "cancelled", "canceled"].includes(status.toLowerCase());
+}
+
+function toolMetadata(raw: Record<string, unknown>, previous: ToolBlock | null) {
+  const input = asRecord(raw.rawInput) ?? asRecord(raw.input) ?? asRecord(raw.arguments) ?? {};
+  const command = firstString(
+    raw.command,
+    input.command,
+    previous?.command,
+  );
+  const description = firstString(raw.description, input.description, previous?.description);
+  const paths = uniqueStrings([
+    ...stringArray(raw.paths),
+    ...stringArray(raw.locations),
+    ...stringArray(input.paths),
+    ...stringArray(input.path),
+    ...stringArray(input.filePath),
+    ...(previous?.paths ?? []),
+  ]);
+  return { command, description, paths };
+}
+
+function toolContent(raw: Record<string, unknown>, previous: ToolBlock | null): unknown[] {
+  if (Array.isArray(raw.content)) return raw.content;
+  const delta = firstString(raw.outputDelta, raw.contentDelta, raw.delta);
+  if (!delta) return previous?.content ?? [];
+  const content = [...(previous?.content ?? [])];
+  const last = asRecord(content.at(-1));
+  const lastValue = last ? asRecord(last.content) : null;
+  if (last?.type === "content" && lastValue?.type === "text" && typeof lastValue.text === "string") {
+    content[content.length - 1] = { ...last, content: { ...lastValue, text: `${lastValue.text}${delta}` } };
+    return content;
+  }
+  return [...content, { type: "content", content: { type: "text", text: delta } }];
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  return values.find((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function stringArray(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string") return [item];
+    const record = asRecord(item);
+    return record ? [firstString(record.path, record.filePath, record.uri)].filter((item): item is string => Boolean(item)) : [];
+  });
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 function contentImage(content: Record<string, unknown> | null): string | null {
@@ -361,4 +458,8 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function stringOr(value: unknown, fallback?: string): string | undefined {
   return typeof value === "string" ? value : fallback;
+}
+
+function numberOr(value: unknown, fallback: number | null): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }

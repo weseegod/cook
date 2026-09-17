@@ -9,8 +9,6 @@ import { useSessionStore } from "../state/session";
 import { ChatView } from "./chat/chat-view";
 import { CommandPalette } from "./palette/command-palette";
 import type { PaletteItem } from "./palette/palette-items";
-import { InteractionModal } from "./permissions/interaction-modal";
-import { PermissionModal } from "./permissions/permission-modal";
 import { SessionSidebar } from "./sessions/session-sidebar";
 import { SettingsPanel } from "./settings/settings-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
@@ -156,8 +154,6 @@ export function AppShell() {
       </main>
       {settingsTab && <SettingsPanel initialTab={settingsTab} closeRequest={settingsCloseRequest} onClose={() => setSettingsTab(null)} />}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSelect={runPaletteAction} />}
-      <PermissionModal />
-      <InteractionModal />
     </div>
   );
 }

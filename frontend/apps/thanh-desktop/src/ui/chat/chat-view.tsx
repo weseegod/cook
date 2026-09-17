@@ -1,17 +1,29 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Bot, Brain, FileCode2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Brain, Copy, FileCode2 } from "lucide-react";
+import { acpClient } from "../../acp/client";
 import { useSessionStore, type MessageBlock, type PlanBlock } from "../../state/session";
+import { PermissionModal } from "../permissions/permission-modal";
+import { InteractionModal } from "../permissions/interaction-modal";
 import { Composer } from "./composer";
+import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
 import { StatusBar } from "./status-bar";
-import { ActivityGroup } from "./tool-card";
+import { ActivityGroup, LiveActivityRail } from "./tool-card";
 import { projectTranscript } from "./transcript-projection";
 
 export function ChatView() {
-  const { blocks, sessionId, turnRunning, planMode, notice, setComposerDraft } = useSessionStore();
+  const { blocks, sessionId, turnRunning, turnStartedAt, planMode, notice, pendingPermission, pendingQuestion, setComposerDraft } = useSessionStore();
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const [now, setNow] = useState(Date.now());
   const projected = useMemo(() => projectTranscript(blocks), [blocks]);
+  const liveActivities = projected.filter((block): block is Extract<typeof block, { type: "activity" }> => block.type === "activity" && block.status === "running");
+  const turnElapsedMs = turnStartedAt === null ? null : Math.max(0, now - turnStartedAt);
+  useEffect(() => {
+    if (!turnRunning && liveActivities.length === 0) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [turnRunning, liveActivities.length]);
   useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript || !stickToBottom.current) return;
@@ -26,6 +38,11 @@ export function ChatView() {
   return (
     <div className="chat-layout">
       {planMode && <div className="plan-banner"><Brain size={15} /> Plan mode — Thanh will inspect and propose before changing files.</div>}
+      <LiveActivityRail
+        activities={liveActivities}
+        turnElapsedMs={turnElapsedMs}
+        onCancel={() => void acpClient.cancel()}
+      />
       <div
         className="transcript"
         ref={transcriptRef}
@@ -51,6 +68,12 @@ export function ChatView() {
         })}
         {turnRunning && !hasLiveOutput && <div className="turn-activity"><span className="activity-pulse" /> Waiting for response…</div>}
       </div>
+      {(pendingPermission || pendingQuestion) && (
+        <div className="chat-prompt-dock">
+          <PermissionModal />
+          <InteractionModal />
+        </div>
+      )}
       {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
       <Composer />
       <StatusBar />
@@ -59,9 +82,26 @@ export function ChatView() {
 }
 
 function Message({ block }: { block: MessageBlock }) {
+  const [copied, setCopied] = useState(false);
   if (block.role === "thought") return null;
+  async function copyMessage() {
+    try {
+      await copyText(block.text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
   return (
     <article className={`message message-${block.role}`}>
+      {block.role === "assistant" && block.text && (
+        <div className="message-actions">
+          <button type="button" className="text-button" onClick={() => void copyMessage()}>
+            <Copy size={12} /> {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+      )}
       <div className="message-body">
         {block.images.map((src) => <img key={src.slice(-32)} src={src} alt="Agent output" />)}
         <Markdown text={block.text} streaming={block.streaming} />
@@ -71,10 +111,13 @@ function Message({ block }: { block: MessageBlock }) {
 }
 
 function Plan({ plan }: { plan: PlanBlock }) {
+  const content = plan.entries.length
+    ? plan.entries.map((entry, index) => `${index + 1}. ${renderUnknown(entry)}`).join("\n")
+    : renderUnknown(plan.content);
   return (
-    <section className="plan-card">
-      <h3><Brain size={16} /> Plan</h3>
-      {plan.entries.length ? <ol>{plan.entries.map((entry, index) => <li key={index}>{renderUnknown(entry)}</li>)}</ol> : <Markdown text={renderUnknown(plan.content)} />}
+    <section className="plan-card" data-testid={`plan-${plan.id}`}>
+      <header className="plan-card-header"><h3><Brain size={16} /> Plan</h3><button type="button" className="text-button" onClick={() => void copyText(content)}><Copy size={13} /> Copy</button></header>
+      {plan.entries.length ? <ol>{plan.entries.map((entry, index) => <li key={index}>{renderUnknown(entry)}</li>)}</ol> : <Markdown text={content} />}
     </section>
   );
 }

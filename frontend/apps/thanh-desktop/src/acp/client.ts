@@ -155,6 +155,21 @@ export class ThanhAcpClient {
     return this.dispatchPrompt(sessionId, this.buildParts(text, attachments));
   }
 
+  /** Re-run a terminal command through the agent's direct-bash ACP path. */
+  async rerunCommand(command: string): Promise<PromptResponse> {
+    const clean = command.trim();
+    if (!clean) throw new Error("Command is empty");
+    let sessionId = useSessionStore.getState().sessionId;
+    if (!sessionId) sessionId = await this.newSession();
+    const text = `! ${clean}`;
+    useSessionStore.getState().appendOptimisticUser(text);
+    return this.dispatchPrompt(sessionId, [{
+      type: "text",
+      text,
+      _meta: { bash_command: clean },
+    }]);
+  }
+
   queuePrompt(text: string, attachments: Attachment[] = []): void {
     const sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) throw new Error("Start a conversation before queueing a prompt");
