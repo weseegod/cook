@@ -48,6 +48,30 @@ describe("elicitInteraction", () => {
   });
 });
 
+describe("plan review card", () => {
+  // Plan review verdicts live only on PlanDialog — InteractionModal returns null for plan.
+  const REVIEW: PendingQuestion = {
+    rpcId: 21,
+    kind: "plan",
+    raw: { planContent: "# Implementation plan\n" },
+    questions: [{
+      question: "Waiting on plan approval",
+      options: [
+        { id: "approved", label: "Approve" },
+        { id: "approved_as_goal", label: "Run as goal" },
+        { id: "cancelled", label: "Request changes" },
+        { id: "abandoned", label: "Quit plan" },
+      ],
+    }],
+  };
+
+  it("does not render an inline card for a parked plan review", () => {
+    show(REVIEW);
+    expect(screen.queryByTestId("inline-interaction")).toBeNull();
+    expect(screen.queryByRole("button", { name: /Approve/ })).toBeNull();
+  });
+});
+
 describe("elicitation card", () => {
   it("renders one control per requested field", () => {
     show(elicitInteraction(11, FORM_REQUEST));

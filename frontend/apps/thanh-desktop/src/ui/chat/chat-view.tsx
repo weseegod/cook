@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Bot, Brain, Copy, FileCode2, RefreshCw, X } from "lucide-react";
 import { acpClient } from "../../acp/client";
-import { useSessionStore, type MessageBlock, type PlanBlock, type SessionEventBlock } from "../../state/session";
-import { PermissionModal } from "../permissions/permission-modal";
-import { InteractionModal } from "../permissions/interaction-modal";
-import { Composer } from "./composer";
+import { useSessionStore, type MessageBlock, type SessionEventBlock } from "../../state/session";
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
+import { PlanDialog } from "./plan-dialog";
+import { PromptSlot } from "./prompt-slot";
+import { TodoOverlay } from "./todo-overlay";
 import { TurnStatus } from "./turn-status";
 import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
 import { projectTranscript } from "./transcript-projection";
@@ -15,18 +15,14 @@ export function ChatView() {
   const blocks = useSessionStore((state) => state.blocks);
   const sessionId = useSessionStore((state) => state.sessionId);
   const turnRunning = useSessionStore((state) => state.turnRunning);
-  const planMode = useSessionStore((state) => state.planMode);
   const connection = useSessionStore((state) => state.connection);
   const cwd = useSessionStore((state) => state.cwd);
   const error = useSessionStore((state) => state.error);
   const notice = useSessionStore((state) => state.notice);
-  const pendingPermission = useSessionStore((state) => state.pendingPermission);
-  const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const setComposerDraft = useSessionStore((state) => state.setComposerDraft);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const projected = useMemo(() => projectTranscript(blocks), [blocks]);
-  const interactionPending = Boolean(pendingPermission || pendingQuestion);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -36,6 +32,7 @@ export function ChatView() {
 
   return (
     <div className="chat-layout">
+      <TodoOverlay />
       <div
         className="transcript"
         ref={transcriptRef}
@@ -62,24 +59,14 @@ export function ChatView() {
           if (block.type === "verb-group") return <VerbGroupRow key={block.id} tools={block.tools} />;
           if (block.type === "tool") return <ToolRow key={block.id} tool={block.tool} />;
           if (block.type === "session-event") return <SessionEvent key={block.id} block={block} />;
-          return <Plan key={block.id} plan={block as PlanBlock} />;
+          return null;
         })}
       </div>
-      {error && <ChatError error={error} connection={connection} cwd={cwd} />}
       <TurnStatus />
-      {planMode && <div className="plan-banner"><Brain size={15} /> Plan mode — Thanh will inspect and propose before changing files.</div>}
+      {error && <ChatError error={error} connection={connection} cwd={cwd} />}
       {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
-      {interactionPending && (
-        <div className="chat-prompt-dock">
-          <PermissionModal />
-          <InteractionModal />
-        </div>
-      )}
-      {/* The card replaces the prompt slot visually; the composer stays mounted behind it so a
-          half-written draft and its attachments survive the interruption. */}
-      <div className={interactionPending ? "prompt-slot stashed" : "prompt-slot"}>
-        <Composer />
-      </div>
+      <PromptSlot />
+      <PlanDialog />
     </div>
   );
 }
@@ -137,25 +124,4 @@ function Message({ block }: { block: MessageBlock }) {
       </div>
     </article>
   );
-}
-
-function Plan({ plan }: { plan: PlanBlock }) {
-  const content = plan.entries.length
-    ? plan.entries.map((entry, index) => `${index + 1}. ${renderUnknown(entry)}`).join("\n")
-    : renderUnknown(plan.content);
-  return (
-    <section className="plan-card" data-testid={`plan-${plan.id}`}>
-      <header className="plan-card-header"><h3><Brain size={16} /> Plan</h3><button type="button" className="text-button" onClick={() => void copyText(content)}><Copy size={13} /> Copy</button></header>
-      {plan.entries.length ? <ol>{plan.entries.map((entry, index) => <li key={index}>{renderUnknown(entry)}</li>)}</ol> : <Markdown text={content} />}
-    </section>
-  );
-}
-
-function renderUnknown(value: unknown): string {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return String(record.content ?? record.title ?? record.description ?? JSON.stringify(value));
-  }
-  return value == null ? "" : String(value);
 }

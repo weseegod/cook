@@ -294,6 +294,60 @@ describe("turn markers", () => {
   });
 });
 
+describe("goal notifications", () => {
+  /** The extension envelope the shell ships goal state in (`x.ai/session_notification`). */
+  const goalNotification = (update: Record<string, unknown>) =>
+    ({ sessionId: "session-4", update: { sessionUpdate: "goal_updated", goal_id: "g-1", objective: "Ship it", status: "active", phase: "executing", tokens_used: 0, elapsed_ms: 0, total_worker_rounds: 0, total_verify_rounds: 0, token_baseline: 0, finished_subagent_tokens: 0, ...update } }) as never;
+
+  it("keeps the goal state out of the transcript and off the turn clock", () => {
+    useSessionStore.getState().resetConversation("session-4");
+    useSessionStore.getState().applyNotifications([goalNotification({ elapsed_ms: 3_000 })]);
+    const state = useSessionStore.getState();
+    expect(state.goal).toMatchObject({ goalId: "g-1", status: "active", elapsedMs: 3_000 });
+    expect(state.blocks).toEqual([]);
+    expect(state.turnStartedAt).toBeNull();
+  });
+
+  it("writes the end-to-end row once, then keeps the goal as the finished chip", () => {
+    useSessionStore.getState().resetConversation("session-4");
+    useSessionStore.getState().appendOptimisticUser("go");
+    useSessionStore.getState().applyNotifications([goalNotification({ elapsed_ms: 1_000 })]);
+    useSessionStore.getState().applyNotifications([goalNotification({ status: "complete", elapsed_ms: 619_000 })]);
+    expect(useSessionStore.getState().blocks.at(-1)).toMatchObject({
+      type: "session-event",
+      kind: "goal",
+      text: "Goal complete in 10m19s end-to-end.",
+    });
+
+    useSessionStore.getState().applyNotifications([goalNotification({ status: "complete", elapsed_ms: 620_000 })]);
+    expect(useSessionStore.getState().blocks.filter((block) => block.type === "session-event")).toHaveLength(1);
+    expect(useSessionStore.getState().goal?.status).toBe("complete");
+  });
+
+  it("closes the turn after a goal-complete row instead of suppressing the turn marker", () => {
+    useSessionStore.getState().resetConversation("session-5");
+    useSessionStore.getState().appendOptimisticUser("go");
+    useSessionStore.getState().set({ turnStartedAt: Date.now() - 2_000 });
+    useSessionStore.getState().applyNotifications([goalNotification({ status: "complete", elapsed_ms: 5_000 })]);
+    useSessionStore.getState().finishTurn();
+    expect(useSessionStore.getState().blocks.map((block) => block.type)).toEqual([
+      "message",
+      "session-event",
+      "session-event",
+    ]);
+    expect(useSessionStore.getState().blocks.at(-1)).toMatchObject({ kind: "turn" });
+  });
+
+  it("drops a late update for a cleared goal", () => {
+    useSessionStore.getState().resetConversation("session-6");
+    useSessionStore.getState().applyNotifications([goalNotification({})]);
+    useSessionStore.getState().applyNotifications([goalNotification({ status: "cleared", goal_id: "" })]);
+    expect(useSessionStore.getState().goal).toBeNull();
+    useSessionStore.getState().applyNotifications([goalNotification({ elapsed_ms: 9_000 })]);
+    expect(useSessionStore.getState().goal).toBeNull();
+  });
+});
+
 describe("turn clock", () => {
   it("nets question-card time out of the turn clock", () => {
     expect(turnElapsedMs({ turnStartedAt: 0, turnPausedMs: 5_000, questionOpenedAt: null }, 100_000)).toBe(95_000);
@@ -312,5 +366,78 @@ describe("turn clock", () => {
     expect(useSessionStore.getState().questionOpenedAt).toBeNull();
     expect(useSessionStore.getState().turnPausedMs).toBeGreaterThanOrEqual(0);
     expect(turnElapsedMs(useSessionStore.getState())).not.toBeNull();
+  });
+});
+
+describe("plan review", () => {
+  it("stashes the request's plan body and starts the review with no comments", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-plan");
+    useSessionStore.getState().savePlanComment(null, [1, 2], "leftover from the last review");
+    expect(useSessionStore.getState().planComments).toHaveLength(1);
+
+    useSessionStore.getState().beginPlanReview("# Plan\n\n1. Do it");
+
+    expect(useSessionStore.getState().planReview).toEqual({ body: "# Plan\n\n1. Do it", pending: true });
+    // A new review owns its comments (`acp_handler/interactions.rs` resets both on arrival).
+    expect(useSessionStore.getState().planComments).toEqual([]);
+    expect(useSessionStore.getState().planNextCommentId).toBe(0);
+    expect(useSessionStore.getState().planDialogOpen).toBe(true);
+  });
+
+  it("keeps the body but stops blocking once the review is answered", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-plan-2");
+    useSessionStore.getState().beginPlanReview("# Plan");
+    useSessionStore.getState().setPlanDialogOpen(false);
+    useSessionStore.getState().endPlanReview();
+
+    expect(useSessionStore.getState().planReview).toEqual({ body: "# Plan", pending: false });
+    expect(useSessionStore.getState().planDialogOpen).toBe(false);
+  });
+
+  it("numbers comments in order, edits them in place, and deletes them", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-plan-3");
+    useSessionStore.getState().beginPlanReview("# Plan");
+
+    useSessionStore.getState().savePlanComment(null, [2, 3], "  rewrite this  ");
+    useSessionStore.getState().savePlanComment(null, [4, 5], "combine these");
+    expect(useSessionStore.getState().planComments).toEqual([
+      { id: 0, lineRange: [2, 3], text: "rewrite this" },
+      { id: 1, lineRange: [4, 5], text: "combine these" },
+    ]);
+
+    useSessionStore.getState().savePlanComment(0, [2, 4], "wider");
+    expect(useSessionStore.getState().planComments[0]).toEqual({ id: 0, lineRange: [2, 4], text: "wider" });
+    // Editing does not consume an id, so the next new comment still lands after the last one.
+    expect(useSessionStore.getState().planNextCommentId).toBe(2);
+
+    useSessionStore.getState().removePlanComment(0);
+    expect(useSessionStore.getState().planComments).toEqual([{ id: 1, lineRange: [4, 5], text: "combine these" }]);
+  });
+
+  it("ignores an empty comment, as `save_plan_comment` does", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-plan-4");
+    useSessionStore.getState().beginPlanReview("# Plan");
+    useSessionStore.getState().savePlanComment(null, [1, 2], "   ");
+    expect(useSessionStore.getState().planComments).toEqual([]);
+  });
+
+  it("clears the whole surface when the session changes", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("session-plan-5");
+    useSessionStore.getState().beginPlanReview("# Plan");
+    useSessionStore.getState().savePlanComment(null, [1, 2], "a note");
+    useSessionStore.getState().setPlanDialogOpen(true);
+
+    useSessionStore.getState().resetConversation("session-plan-6");
+
+    const state = useSessionStore.getState();
+    expect(state.planReview).toBeNull();
+    expect(state.planComments).toEqual([]);
+    expect(state.planNextCommentId).toBe(0);
+    expect(state.planDialogOpen).toBe(false);
   });
 });

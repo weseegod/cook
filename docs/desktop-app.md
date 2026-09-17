@@ -154,10 +154,18 @@ emit terminal methods.
 | Direction | Methods |
 |---|---|
 | Client → Agent | `initialize`, `authenticate`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/set_model` |
-| Agent → Client | `session/update`, `session/request_permission`, `fs/read_text_file`, `fs/write_text_file`, terminal create/output |
+| Agent → Client | `session/update`, `session/request_permission`, `fs/read_text_file`, `fs/write_text_file`, terminal create/output, `x.ai/session_notification` |
+
+`session/update` reasons are reduced by the same path as `x.ai/session_notification`, because both
+carry `{ sessionId, update }`: the extension envelope is how the shell ships what ACP has no slot
+for, goal orchestration state (`sessionUpdate: "goal_updated"`) above all. An unknown reason is
+ignored, never rendered.
 
 Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
-to the session cwd and explicit allow-paths.
+to the session cwd plus one allow-path: the agent's own session store
+(`$THANH_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.thanh/sessions`).
+Without it plan mode cannot write `<session>/plan.md`, which lives outside every
+workspace.
 
 ### 5.3 `x.ai/*` groups
 
@@ -214,10 +222,76 @@ scrollback and the prompt slot, hidden while idle. It carries the spinner
 `Waiting for response…`, `Cancelling…`, …), a timer for the current phase on the
 left, and the turn timer, optional `⇣12k` tokens and `[stop]` on the right.
 Phase and turn clocks use `format_duration` (catalog §5.1) — no spaces, e.g.
-`0.5s`, `32s`, `1m20s`, `1h2m`. A permission, question, trust, or plan card
-swaps the spinner for the pulsing `◆` and replaces the prompt slot; the composer
-stays mounted but hidden so a draft and its attachments survive. Question time
-is netted out of the turn clock.
+`0.5s`, `32s`, `1m20s`, `1h2m`. A permission, question, or trust card swaps the
+spinner for the pulsing `◆` and replaces the prompt slot; the composer stays
+mounted but hidden so a draft and its attachments survive. A parked plan review
+keeps the composer (placeholder `Request changes…`) and uses `◆` on turn-status
+instead of an inline card. Question time is netted out of the turn clock. Live
+activity is never duplicated into the header.
+
+**Status bar (catalog §3.3).** The Chat column header is cwd on the left (short
+path + full-path tooltip) and chips on the right: `plan` (while a review is
+parked or already answered), Goal, context `8.5K/1.0M` (with `/compact`), and
+the Desktop-only tools toggle. Idle is an empty turn-status (height 0), not a
+Ready/Processing label in the header.
+
+**Plans (catalog §3.3, §9.4, §9.8).** The agent's todo tool emits an ACP
+`Plan`. Entries stay in session state for GoalDetail `Progress:` and an optional
+todo overlay (`src/ui/chat/plan-list.tsx` / `todo-overlay.tsx`) — pending `□`,
+in progress `▶` (bold, amber), completed `✓` (green), cancelled `✗` (red,
+struck through). ACP has no cancelled status, so a cancelled entry arrives as
+`completed` plus `_meta.cancelled`, which the renderer reads. A newer `Plan`
+update replaces the entries in place. The todo overlay is **not** auto-shown on
+Plan updates (catalog §9.8); toggle it from the header checklist control while
+entries exist, or from palette / `/view-plan` when there is no parked `plan.md`
+review. Plan entries are **not** transcript rows.
+
+The plan review itself is the popup (`src/ui/chat/plan-dialog.tsx`), auto-opened
+on `x.ai/exit_plan_mode`. Reopen it from the header's `plan` chip, or with
+`/view-plan` (aliases `/show-plan`, `/plan-view`) and its `View plan` palette
+entry when a review exists. The body is rendered as the TUI's line viewer holds
+it (`src/ui/chat/plan-lines.tsx`): one row per source line with its 1-based
+number, so a comment range is exact. The decision bar is a static footer below
+the scroll container, in the TUI's order and with its keys — `a approve` (or
+`approve w/ comments`), `g run as goal`, `s request changes`, `c comment` with a
+` N ●` badge, `y copy plan`, `q quit plan`. Approve, run as goal, request changes
+and quit plan exist only while the review is parked; after the decision the bar
+drops to comment / copy / send, so no button is a dead end. Verdicts live only
+on this bar — there is no second inline review card.
+
+Comments are line-anchored (`x.ai/exit_plan_mode` carries the whole `plan.md`;
+ACP `Plan` updates carry entries only, and this fork emits no `plan_kept`). Drag
+across lines — or click one — opens the comment box, `Enter` saves, `Enter` on a
+saved comment edits it and `x` deletes it. `s request changes` sends the pager's
+own format: `Proposed plan lines 3-4:` with the quoted lines, `Comment:`, and any
+freeform note as `Additional feedback:`. Hiding is not a verdict: the `−` control
+closes only the surface, the parked review stays parked, and the chip reopens it.
+That is why the popup shows a minimize dash rather than a close cross, and why
+the plan stays reachable for the rest of the session after a decision.
+
+While the review is parked, the composer stays live under the dialog
+(`PlanApprovalFocus::Prompt`): placeholder `Request changes…`, `Enter` on
+non-empty text sends `cancelled` with the typed note, and an empty line answers
+nothing. Every other interaction (permission / question / elicit / trust) still
+swaps the prompt slot out.
+
+**Goals (catalog §3.3, §6.2, §7.3).** Goal state arrives as
+`x.ai/session_notification` with `sessionUpdate: "goal_updated"` and lives in
+`src/state/goal.ts`, which mirrors the pager's `GoalDisplayState`: the same
+status/phase parsing (an unknown status reads as a resumable pause), the same
+chip labels, the same live elapsed and token accounting, and the same monotonic
+elapsed floor. The header shows the chip
+`[Goal: {label}]  {tokens} tokens  {elapsed}` with the TUI's spinner while
+active, a warning tone while paused and an error tone when failed or
+interrupted; clicking it opens the detail surface: status, `Budget:`/`Tokens:`
+with the budget bar, `Progress:` (the session's plan), the active subagent and
+its per-model tokens, the completion review, the last event, and the `/goal`
+hint. While `verifying_completion` is set the turn-status row reads
+`Verifying…` (it outranks stale streaming activity, as in the TUI). The
+transition into `complete` writes one `Goal complete in {duration} end-to-end.`
+row timed from the goal's own clock; `cleared` drops the chip, and a late update
+for the cleared goal id is dropped. Goal state is session-scoped: a new or
+loaded session starts with none.
 
 **Transcript rows (catalog §7).** Each block paints its own collapsed one-liner
 (`Read path`, `$ cmd`, `Edit path +N/-M`, `Message sent to …`). Tool rows do not
@@ -235,7 +309,9 @@ label rebuilds every frame: `Read 2 files, Searched 1 pattern`,
 **Forbidden chrome.** Desktop must not add any of these, because the TUI does
 not have them: a pinned live-tool activity rail, per-tool elapsed on collapsed
 rows, in-transcript command rerun/Execute, a `Waiting…` row inside the
-transcript, or a 1 s timer tick. Command output, assistant messages, plans,
+transcript, a 1 s timer tick, `ProcessStatus` / Ready–Processing header copy,
+a `plan-banner`, an in-transcript plan card, an inline plan-review card, or a
+header duplicate of turn-status activity. Command output, assistant messages,
 paths, commands and queries expose copy actions; opening a path uses the native
 desktop opener.
 

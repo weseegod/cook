@@ -16,6 +16,8 @@ export interface SlashCommandHost {
   sendPrompt(text: string): Promise<unknown>;
   /** `x.ai/session/info`, or `null` when the agent cannot report it. */
   sessionInfo(): Promise<SessionInfo | null>;
+  /** Open the plan review popup (the TUI's `/view-plan`). */
+  openPlan(): void;
 }
 
 export interface SlashCommandContext {
@@ -26,10 +28,14 @@ export interface SlashCommandContext {
   /** Context occupancy as `used`/`size` tokens, from `x.ai/session/info` or a `usage_update`. */
   usage: Record<string, unknown> | null;
   models: ModelSummary[];
+  /** Whether the session holds a plan to show (`/view-plan`). */
+  hasPlan: boolean;
 }
 
 export interface SlashCommandSpec {
   name: string;
+  /** Extra names the command answers to, as the TUI's `/view-plan` offers `show-plan` and `plan-view`. */
+  aliases?: string[];
   description: string;
   inputHint?: string;
   /** `null` when the command already made its effect visible (a prompt, a new session). */
@@ -131,10 +137,22 @@ export const CLIENT_COMMANDS: SlashCommandSpec[] = [
         : "Always-approve is off: tools ask before running.";
     },
   },
+  {
+    // `slash/commands/view_plan.rs`: the TUI's `/view-plan` opens the saved plan preview.
+    name: "view-plan",
+    aliases: ["show-plan", "plan-view"],
+    description: "View the current plan",
+    run: async (host, context) => {
+      if (!context.hasPlan) return "No plan yet. Enter plan mode with /plan and let Thanh write one.";
+      host.openPlan();
+      return null;
+    },
+  },
 ];
 
 export function clientCommand(name: string): SlashCommandSpec | undefined {
-  return CLIENT_COMMANDS.find((command) => command.name === name.toLowerCase());
+  const needle = name.toLowerCase();
+  return CLIENT_COMMANDS.find((command) => command.name === needle || command.aliases?.includes(needle));
 }
 
 /**

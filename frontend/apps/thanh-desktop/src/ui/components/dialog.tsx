@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, X } from "lucide-react";
+import { AlertTriangle, Check, Minus, X } from "lucide-react";
 import { useEffect, type ReactNode } from "react";
 
 type DialogTone = "neutral" | "danger" | "warning";
@@ -8,6 +8,7 @@ type DialogTone = "neutral" | "danger" | "warning";
  *
  * `tone` only adds a coloured marker for the cases that need one (deleting, warnings). Plain
  * forms stay quiet instead of every dialog announcing itself with the same warning triangle.
+ * `footer` sits outside the scrollable body, so a bar there stays put while long content scrolls.
  */
 export function Dialog({
   title,
@@ -18,6 +19,9 @@ export function Dialog({
   tone = "neutral",
   size = "sm",
   icon,
+  footer,
+  closeKind = "close",
+  closeLabel,
 }: {
   title: string;
   description?: ReactNode;
@@ -25,9 +29,14 @@ export function Dialog({
   onClose: () => void;
   labelledBy?: string;
   tone?: DialogTone;
-  /** `wide` gives long forms room; the default fits a confirm. */
-  size?: "sm" | "wide";
+  /** `wide` gives long forms room; `plan` takes the viewport for the plan review. */
+  size?: "sm" | "wide" | "plan";
   icon?: ReactNode;
+  /** Rendered below the body, outside its scroll container. */
+  footer?: ReactNode;
+  /** `hide` draws a minimize dash: a surface that is parked, not dismissed. */
+  closeKind?: "close" | "hide";
+  closeLabel?: string;
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -62,9 +71,17 @@ export function Dialog({
             <h2 id={titleId}>{title}</h2>
             {description && <p>{description}</p>}
           </div>
-          <button className="icon-button dialog-close" onClick={onClose} aria-label="Close dialog"><X size={16} /></button>
+          <button
+            className="icon-button dialog-close"
+            onClick={onClose}
+            aria-label={closeLabel ?? (closeKind === "hide" ? "Hide dialog" : "Close dialog")}
+            data-testid={closeKind === "hide" ? "dialog-hide" : "dialog-close"}
+          >
+            {closeKind === "hide" ? <Minus size={17} /> : <X size={16} />}
+          </button>
         </header>
         <div className="dialog-body">{children}</div>
+        {footer && <div className="dialog-footer">{footer}</div>}
       </section>
     </div>
   );

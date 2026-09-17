@@ -45,9 +45,10 @@ test.describe("visual audit", () => {
   test("covers chat, sidebar, palette and every Settings surface", async ({ page }) => {
     await openWorkspace(page);
     await expectNoHorizontalOverflow(page);
-    await expect(page.getByTestId("process-status")).toContainText("Ready");
-    await expect(page.locator(".statusbar")).toHaveCount(0);
+    await expect(page.getByTestId("agent-header")).toBeVisible();
     await expect(page.getByLabel("Choose workspace folder")).toBeVisible();
+    await expect(page.locator(".process-status")).toHaveCount(0);
+    await expect(page.locator(".statusbar")).toHaveCount(0);
     await expect(page.getByLabel("Context status")).toBeVisible();
     await expect(page.getByLabel(/Theme:/)).toHaveCount(0);
     await expect(page.getByLabel("Account")).toHaveCount(0);
@@ -134,6 +135,168 @@ test.describe("visual audit", () => {
     await capture(page, "minimum-settings-models");
   });
 
+  test("shows the goal chip and its detail surface in both themes", async ({ page }) => {
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      promptUpdates: [
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Executing the approved plan." } },
+        {
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Map the TUI goal surface", priority: "high", status: "completed" },
+            { content: "Render the goal chip", priority: "high", status: "in_progress" },
+            { content: "Add the completion marker", priority: "medium", status: "pending" },
+            { content: "Drop the old approach", priority: "low", status: "completed", _meta: { cancelled: true } },
+          ],
+        },
+      ],
+    });
+    await page.getByPlaceholder("Ask Thanh anything…").fill("run the approved plan");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText("Executing the approved plan.")).toBeVisible();
+    await expect(page.locator(".plan-card")).toHaveCount(0);
+    await expect(page.getByTestId("todo-overlay")).toHaveCount(0);
+    // The goal reports itself over the extension envelope, after the session exists.
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({
+      token_budget: 100_000,
+      tokens_used: 25_000,
+      elapsed_ms: 65_000,
+      current_subagent_role: "worker",
+      total_worker_rounds: 4,
+      total_verify_rounds: 2,
+      live_subagent_tokens: 10_000,
+      live_context_pct: 35,
+      live_turn_count: 3,
+      live_tool_call_count: 8,
+      live_tokens_by_model: [["gpt-5", 6_000], ["o4-mini", 4_000], ["deepseek-chat", 3_000]],
+      last_event: "worker_completed",
+      last_event_detail: "Core logic",
+      classifier_runs_attempted: 1,
+      classifier_max_runs: 3,
+      last_classifier_verdict: "not_achieved",
+      last_classifier_details_path: "/tmp/details.md",
+    })));
+
+    await expect(page.getByTestId("goal-chip")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-goal-chip");
+
+    await page.getByTestId("goal-chip").click();
+    await expect(page.getByTestId("goal-detail")).toBeVisible();
+    await expect(page.getByTestId("goal-detail").getByTestId("plan-entry-completed")).toContainText("Map the TUI goal surface");
+    expect(await page.locator(".dialog").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    await capture(page, "chat-goal-detail");
+    await page.keyboard.press("Escape");
+
+    // Light theme keeps the chip, the checklist and the detail readable.
+    await page.getByLabel("Settings").click();
+    await page.getByTestId("theme-option-light").click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("goal-chip")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-goal-chip-light");
+    await page.getByTestId("goal-chip").click();
+    await expect(page.getByTestId("goal-detail")).toBeVisible();
+    await capture(page, "chat-goal-detail-light");
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Settings").click();
+    await page.getByTestId("theme-option-dark").click();
+    await page.keyboard.press("Escape");
+  });
+
+  test("shows the plan chip and its popup in both themes", async ({ page }) => {
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      promptUpdates: [
+        {
+          sessionUpdate: "plan",
+          entries: [
+            { content: "Map the TUI plan surface", priority: "high", status: "completed" },
+            { content: "Render the popup", priority: "high", status: "in_progress" },
+            { content: "Anchor the comments", priority: "medium", status: "pending" },
+            { content: "Drop the old card", priority: "low", status: "completed", _meta: { cancelled: true } },
+          ],
+        },
+      ],
+    });
+    await page.getByPlaceholder("Ask Thanh anything…").fill("show me the plan");
+    await page.getByRole("button", { name: "Send" }).click();
+    await expect(page.getByText("Mock assistant reply.").or(page.getByTestId("todo-toggle"))).toBeVisible();
+    await expect(page.locator(".plan-card")).toHaveCount(0);
+    await expect(page.getByTestId("todo-overlay")).toHaveCount(0);
+    // The review carries the whole plan body; the popup is where it is read.
+    await page.evaluate(() => window.__thanhMock!.plan({
+      planContent: "# Implementation plan\n\n## Steps\n\n- Update the transcript renderer\n- Verify the desktop flow\n\n> Keep the line numbers honest.",
+    }));
+
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await expect(page.getByRole("dialog")).toContainText("plan.md");
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-plan-chip");
+
+    await page.getByTestId("dialog-hide").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-lines")).toBeVisible();
+    expect(await page.locator(".dialog").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    await capture(page, "chat-plan-popup");
+    await page.keyboard.press("Escape");
+
+    // Light theme keeps the chip, the gutter and the decision bar readable.
+    await page.getByLabel("Settings").click();
+    await page.getByTestId("theme-option-light").click();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "chat-plan-chip-light");
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-lines")).toBeVisible();
+    await capture(page, "chat-plan-popup-light");
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Settings").click();
+    await page.getByTestId("theme-option-dark").click();
+    await page.keyboard.press("Escape");
+  });
+
+  test("keeps the plan popup inside a narrow window", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkspace(page, CONNECTED_SEED);
+    // The shell itself overflows this viewport; only overflow the popup adds is a regression here.
+    const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await page.evaluate(() => window.__thanhMock!.plan());
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(baseline + 1);
+
+    const box = (await page.locator(".dialog").boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    expect(await page.locator(".dialog").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    await capture(page, "narrow-plan-popup");
+  });
+
+  test("keeps the goal chip inside a narrow window", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkspace(page, CONNECTED_SEED);
+    // The shell itself overflows this viewport; only overflow the chip adds is a regression here.
+    const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({
+      status: "blocked",
+      elapsed_ms: 3_600_000,
+      token_budget: 100_000,
+      tokens_used: 42_000,
+    })));
+    await expect(page.getByTestId("goal-chip")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(baseline + 1);
+    await capture(page, "narrow-goal-chip");
+
+    await page.getByTestId("goal-chip").click();
+    const box = (await page.locator(".dialog").boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(390);
+    await capture(page, "narrow-goal-detail");
+  });
+
   test("keeps the models panel and its popups inside a narrow window", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openWorkspace(page, {
@@ -203,17 +366,23 @@ test.describe("visual audit", () => {
     await page.evaluate(() => window.__thanhMock?.permission());
     await expect(page.getByTestId("inline-permission")).toBeVisible();
     // The card replaces the prompt slot rather than stacking above a live composer.
-    await expect(page.locator(".prompt-slot")).toBeHidden();
+    await expect(page.locator(".prompt-composer")).toBeHidden();
     const [transcriptAfter, cardBox] = await Promise.all([
       page.locator(".transcript").boundingBox(),
-      page.locator(".chat-prompt-dock").boundingBox(),
+      page.getByTestId("inline-permission").boundingBox(),
     ]);
     expect(cardBox!.y).toBeGreaterThanOrEqual(transcriptAfter!.y + transcriptAfter!.height - 1);
     await expect(page.locator(".modal-backdrop")).toHaveCount(0);
     await page.getByTestId("inline-permission").getByRole("button", { name: /Allow once/ }).click();
     await page.evaluate(() => window.__thanhMock?.plan());
-    await expect(page.getByTestId("inline-interaction")).toContainText("Implementation plan");
-    await expect(page.getByTestId("inline-interaction")).toContainText("Approve");
+    // Plan review auto-opens PlanDialog; no inline interaction card; composer stays after hide.
+    await expect(page.getByRole("dialog")).toContainText("plan.md");
+    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await page.getByTestId("dialog-hide").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("composer-input")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toHaveAttribute("placeholder", "Request changes…");
     await capture(page, "chat-turn-status-inline-decisions");
   });
 });

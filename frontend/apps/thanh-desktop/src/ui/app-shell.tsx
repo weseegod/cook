@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { PanelLeftClose, PanelLeftOpen, PanelRight } from "lucide-react";
 import { acpClient } from "../acp/client";
 import { pickFolder, request } from "../acp/host";
 import { shouldShowConnectProvider } from "../acp/provider-presets";
 import { listProviders } from "../acp/providers";
 import { useSessionStore } from "../state/session";
+import { AgentHeader } from "./chat/agent-header";
 import { ChatView } from "./chat/chat-view";
-import { ProcessStatus } from "./chat/process-status";
 import { CommandPalette } from "./palette/command-palette";
 import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
@@ -15,6 +14,7 @@ import { SettingsPanel } from "./settings/settings-panel";
 import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
+import { viewPlan } from "./chat/view-plan";
 
 const DISMISSED_KEY = "thanh.connectProviderDismissed";
 type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "about";
@@ -98,6 +98,7 @@ export function AppShell() {
     if (item.action === "settings") return openSettings("general");
     if (item.action === "connect-provider") return openSettings("models");
     if (item.action === "new-session") return void acpClient.newSession();
+    if (item.action === "view-plan") return viewPlan();
     if (item.action === "shortcuts") return setSettingsTab("about");
     if (item.action === "model" && item.value) return void acpClient.setDefaultModel(item.value);
     if (item.action === "session" && item.value) return void acpClient.loadSession(item.value);
@@ -111,24 +112,12 @@ export function AppShell() {
     <div className="app-frame">
       {sidebarOpen && cwd && <SessionSidebar onOpenSettings={() => openSettings("general")} onOpenSearch={() => setPaletteOpen(true)} />}
       <main className="main-column">
-        <header className="processbar">
-          <button className="icon-button" onClick={() => setSidebarOpen((open) => !open)} aria-label="Toggle sessions">
-            {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-          </button>
-          <ProcessStatus />
-          <div className="processbar-actions">
-            {cwd && !utilityPanelOpen && (
-              <button
-                className="icon-button"
-                onClick={() => setUtilityPanelOpen((open) => !open)}
-                aria-label="Open tools panel"
-                title="Open tools panel"
-              >
-                <PanelRight size={17} />
-              </button>
-            )}
-          </div>
-        </header>
+        <AgentHeader
+          sidebarOpen={sidebarOpen}
+          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          utilityPanelOpen={utilityPanelOpen}
+          onOpenTools={() => setUtilityPanelOpen(true)}
+        />
         {!cwd ? (
           <Welcome onChooseWorkspace={chooseWorkspace} />
         ) : needsConnect ? (

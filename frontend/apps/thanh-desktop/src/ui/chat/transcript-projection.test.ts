@@ -122,11 +122,11 @@ describe("verb kinds", () => {
 });
 
 describe("display rows", () => {
-  it("keeps plans and turn markers in order", () => {
+  it("skips ACP Plan blocks and keeps turn markers in order", () => {
     const rows: DisplayBlock[] = projectTranscript([
       { type: "plan", id: "p1", turnId: "turn-1", entries: [] },
       { type: "session-event", id: "e1", turnId: "turn-1", text: "Worked for 2.0s" },
     ]);
-    expect(rows.map((row) => row.type)).toEqual(["plan", "session-event"]);
+    expect(rows.map((row) => row.type)).toEqual(["session-event"]);
   });
 });

@@ -25,6 +25,7 @@ function host(info: SessionInfo | null = null): SlashCommandHost & { calls: stri
     newSession: vi.fn(async () => void calls.push("new")),
     sendPrompt: vi.fn(async (text: string) => void calls.push(`prompt:${text}`)),
     sessionInfo: vi.fn(async () => info),
+    openPlan: vi.fn(() => void calls.push("open-plan")),
   };
 }
 
@@ -36,6 +37,7 @@ function context(overrides: Partial<SlashCommandContext> = {}): SlashCommandCont
     alwaysApprove: false,
     usage: null,
     models: MODELS,
+    hasPlan: false,
     ...overrides,
   };
 }

@@ -40,10 +40,15 @@ export function TurnStatus() {
   }, [turnRunning]);
 
   const derived = useMemo(() => deriveActivity(blocks), [blocks]);
+  // Goal verification runs in-turn while the model is idle, so the TUI labels the whole window
+  // `Verifying…` ahead of any stale streaming activity (`views/turn_status.rs::compute_activity`).
+  const goalVerifying = useSessionStore((state) => state.goal?.verifyingCompletion === true);
   // An ask tool owns the row while its card is open (`AskUserQuestion`), and its phase timer is hidden.
-  const activity: TurnActivity | null = pendingQuestion?.kind === "question"
-    ? { kind: "ask", detail: pendingQuestion.title }
-    : derived;
+  const activity: TurnActivity | null = goalVerifying && turnRunning
+    ? { kind: "verifying" }
+    : pendingQuestion?.kind === "question"
+      ? { kind: "ask", detail: pendingQuestion.title ?? "" }
+      : derived;
   const resolved: TurnActivity | null = activity ?? (turnRunning ? { kind: "waiting", reason: { kind: "model" } } : null);
 
   const key = phaseKey(resolved);

@@ -73,6 +73,12 @@ export interface MockWorkspaceState {
   review: ReviewSnapshot;
 }
 
+/**
+ * One scripted prompt update: either an ACP `session/update` payload, or an extension envelope
+ * (`{ notify, update }`) for the notifications the shell ships outside ACP, such as goal updates.
+ */
+export type MockPromptUpdate = Record<string, unknown>;
+
 export interface MockState {
   /** Non-null when the agent holds an xAI credential of its own. */
   authMethodId: string | null;
@@ -96,7 +102,7 @@ export interface MockState {
   /** Assistant text streamed back for each prompt. */
   reply: string;
   /** Optional exact ACP update sequence for transcript and visual tests. */
-  promptUpdates: Array<Record<string, unknown>>;
+  promptUpdates: MockPromptUpdate[];
   /** Hold the prompt response open so visual tests can inspect live activity. */
   promptDelayMs: number;
   /** Agent-side project instruction files keyed by path. */
@@ -410,7 +416,16 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
             sessionUpdate: "agent_message_chunk",
             content: { type: "text", text },
           }));
-      for (const update of updates) notify("session/update", { sessionId, update });
+      for (const update of updates) {
+        // A scripted entry can name an extension envelope (`x.ai/session_notification`), which is
+        // how the shell ships goal updates; everything else is a plain `session/update`.
+        const envelope = update as { notify?: string; update?: Record<string, unknown> };
+        if (typeof envelope.notify === "string" && envelope.update) {
+          notify(`_${envelope.notify}`, { sessionId, update: envelope.update });
+          continue;
+        }
+        notify("session/update", { sessionId, update });
+      }
       if (state.promptDelayMs > 0) await new Promise((resolve) => window.setTimeout(resolve, state.promptDelayMs));
       return respond({ stopReason: "end_turn" });
     }
@@ -788,6 +803,34 @@ export function mockPlan(overrides: Record<string, unknown> = {}): number {
   return id;
 }
 
+/**
+ * Ship one `x.ai/session_notification` update the way the shell does (goal updates, relay status):
+ * an extension method carrying `{ sessionId, update }`.
+ */
+export function mockSessionNotification(update: Record<string, unknown>): void {
+  notify("_x.ai/session_notification", { sessionId: "mock-session", update });
+}
+
+/** A goal snapshot with the wire's required fields; callers override what they exercise. */
+export function goalUpdate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    sessionUpdate: "goal_updated",
+    goal_id: "goal-1",
+    objective: "Ship the desktop goal surface",
+    status: "active",
+    phase: "executing",
+    tokens_used: 0,
+    elapsed_ms: 0,
+    total_deliverables: 0,
+    completed_deliverables: 0,
+    total_worker_rounds: 0,
+    total_verify_rounds: 0,
+    token_baseline: 0,
+    finished_subagent_tokens: 0,
+    ...overrides,
+  };
+}
+
 export interface MockControl {
   reset(seed?: Partial<MockState>): void;
   requests(): RecordedRequest[];
@@ -797,6 +840,8 @@ export interface MockControl {
   permission(overrides?: Record<string, unknown>): number;
   question(overrides?: Record<string, unknown>): number;
   plan(overrides?: Record<string, unknown>): number;
+  sessionNotification(update: Record<string, unknown>): void;
+  goalUpdate(overrides?: Record<string, unknown>): Record<string, unknown>;
   modelsUpdate(params?: Record<string, unknown>): void;
 }
 
@@ -816,6 +861,8 @@ if (typeof window !== "undefined") {
     permission: mockPermission,
     question: mockQuestion,
     plan: mockPlan,
+    sessionNotification: mockSessionNotification,
+    goalUpdate,
     modelsUpdate: mockModelsUpdate,
   };
 }

@@ -469,7 +469,6 @@ test.describe("chat, attachments and the model picker", () => {
   test("refuses an image on a text-only model with a visible reason", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, { ...CONNECTED_SEED, defaultModel: "o4-mini" });
-    await expect(page.locator(".composer-hint")).toHaveAttribute("title", "Images are unavailable for this text-only model");
     await page.getByTestId("attach-input").setInputFiles({
       name: "shot.png",
       mimeType: "image/png",
@@ -593,7 +592,9 @@ test.describe("slash commands", () => {
     await page.keyboard.press("Enter");
 
     await expect(page.getByTestId("notice-banner")).toContainText("Plan mode is on");
-    await expect(page.locator(".plan-banner")).toBeVisible();
+    await expect(page.getByTestId("composer-plan-flag")).toBeVisible();
+    await expect(page.locator(".composer.plan-mode")).toBeVisible();
+    await expect(page.locator(".plan-banner")).toHaveCount(0);
     const modes = await waitForCalls(page, "session/set_mode");
     expect(modes[0].params).toMatchObject({ sessionId: "mock-session", modeId: "plan" });
     expect((await mock.state()).sessionMode).toBe("plan");
@@ -602,6 +603,7 @@ test.describe("slash commands", () => {
     await page.getByRole("tab", { name: "General" }).click();
     await page.getByRole("checkbox", { name: "Plan mode" }).click();
     await expect.poll(async () => (await mock.state()).sessionMode).toBe("default");
+    await expect(page.getByTestId("composer-plan-flag")).toHaveCount(0);
     await expect(page.locator(".plan-banner")).toHaveCount(0);
   });
 
@@ -642,12 +644,12 @@ test.describe("slash commands", () => {
   test("reports context usage, and turns always-approve on where the agent can see it", async ({ page }) => {
     await openWorkspace(page, CONNECTED_SEED);
 
-    // A turn is what makes the agent report context usage; the composer shows it from then on,
+    // A turn is what makes the agent report context usage; the header shows it from then on,
     // out of `x.ai/session/info` — a real turn sends no `usage_update`.
     await composer(page).fill("hello");
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
-    await expect(page.locator(".composer-context-usage")).toContainText("tokens");
+    await expect(page.getByTestId("context-chip")).toBeVisible();
     await waitForCalls(page, "x.ai/session/info");
 
     await composer(page).fill("/context");
@@ -825,6 +827,310 @@ test.describe("agent-driven surfaces", () => {
   });
 });
 
+test.describe("goal and plan presentation", () => {
+  const composer = (page: Page) => page.getByPlaceholder("Ask Thanh anything…");
+  const PLAN_SEED = {
+    ...CONNECTED_SEED,
+    promptUpdates: [
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Writing the plan." } },
+      {
+        sessionUpdate: "plan",
+        entries: [
+          { content: "Map the TUI goal surface", priority: "high", status: "completed" },
+          { content: "Render the goal chip", priority: "high", status: "in_progress" },
+          { content: "Add the completion marker", priority: "medium", status: "pending" },
+          { content: "Drop the old approach", priority: "low", status: "completed", _meta: { cancelled: true } },
+        ],
+      },
+    ],
+  };
+
+  test("paints plan entries with the todo pane's status glyphs", async ({ page }) => {
+    await openWorkspace(page, PLAN_SEED);
+    await composer(page).fill("show me the plan");
+    await composer(page).press("Enter");
+
+    await expect(page.getByText("Writing the plan.")).toBeVisible();
+    await expect(page.locator(".plan-card")).toHaveCount(0);
+    await expect(page.getByTestId("todo-overlay")).toHaveCount(0);
+    await page.getByTestId("todo-toggle").click();
+    const overlay = page.getByTestId("todo-overlay");
+    await expect(overlay).toBeVisible();
+    await expect(overlay.getByTestId("plan-entry-completed")).toContainText("Map the TUI goal surface");
+    await expect(overlay.getByTestId("plan-entry-in_progress")).toContainText("Render the goal chip");
+    await expect(overlay.getByTestId("plan-entry-pending")).toContainText("Add the completion marker");
+    // ACP has no cancelled status, so the cancelled row only shows through `_meta.cancelled`.
+    await expect(overlay.getByTestId("plan-entry-cancelled")).toContainText("Drop the old approach");
+
+    // ACP Plan updates replace the list in place instead of appending a second card.
+    await page.evaluate(() => window.__thanhMock!.sessionNotification({
+      sessionUpdate: "plan",
+      entries: [{ content: "Render the goal chip", priority: "high", status: "completed" }],
+    }));
+    await expect(overlay.getByTestId("plan-entry-completed")).toHaveCount(1);
+    await expect(page.getByTestId("todo-overlay")).toHaveCount(1);
+  });
+
+  test("offers run-as-goal on the plan review", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+    // PlanDialog auto-opens; verdicts live on its decision bar.
+    await expect(page.getByRole("dialog")).toContainText("plan.md");
+    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+
+    await page.getByTestId("plan-goal").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const answer = (await mock.responses()).find((entry) => entry.id === requestId);
+    expect(answer?.result).toEqual({ outcome: "approved_as_goal" });
+  });
+
+  test("keeps the composer live during a plan review and sends typed feedback as request changes", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+    await page.getByTestId("dialog-hide").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    // The TUI's parked review keeps its prompt slot (`PlanApprovalFocus::Prompt`).
+    await expect(page.locator(".prompt-slot")).toBeVisible();
+
+    const input = page.getByTestId("composer-input");
+    await expect(input).toBeVisible();
+    await expect(input).toBeEnabled();
+    await expect(input).toHaveAttribute("placeholder", "Request changes…");
+
+    // Empty `Enter` answers nothing (`empty_enter_on_revise_prompt_does_not_approve`).
+    await input.press("Enter");
+    expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+
+    await input.fill("split these into two steps");
+    await expect(input).toHaveValue("split these into two steps");
+    await page.getByTestId("send-button").click();
+    await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({
+      outcome: "cancelled",
+      feedback: "split these into two steps",
+    });
+  });
+
+  test("opens the plan from the chip and hides without deciding", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.evaluate(() => window.__thanhMock!.sessionNotification({
+      sessionUpdate: "plan",
+      entries: [{ content: "Update the transcript renderer", status: "pending" }],
+    }));
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+
+    // Auto-open on exit_plan_mode; chip reopens after hide.
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await expect(page.getByRole("dialog")).toContainText("plan.md");
+    await expect(page.getByTestId("plan-line-1")).toContainText("Implementation plan");
+    await expect(page.getByTestId("plan-line-3")).toContainText("Update the transcript renderer");
+    for (const id of ["plan-approve", "plan-goal", "plan-changes", "plan-comment", "plan-copy", "plan-quit"]) {
+      await expect(page.getByTestId(id)).toBeVisible();
+    }
+
+    // The minimize dash hides the surface; it is not a close button and sends no verdict.
+    await page.getByTestId("dialog-hide").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
+    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    // Escape hides the surface too, and still answers nothing.
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-line-1")).toBeVisible();
+  });
+
+  test("anchors a comment to the dragged lines and sends them with request changes", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+    await expect(page.getByRole("dialog")).toBeVisible();
+
+    const first = await page.getByTestId("plan-line-3").boundingBox();
+    const last = await page.getByTestId("plan-line-4").boundingBox();
+    await page.mouse.move(first!.x + 60, first!.y + first!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(last!.x + 60, last!.y + last!.height / 2);
+    await page.mouse.up();
+
+    const input = page.getByTestId("plan-comment-input");
+    await expect(input).toBeVisible();
+    await input.fill("split these into two steps");
+    await input.press("Enter");
+    await expect(page.getByTestId("plan-comment-0")).toContainText("L3-4");
+    await expect(page.getByTestId("plan-comment-badge")).toHaveText("1 ●");
+
+    await page.getByTestId("plan-changes").click();
+    await expect(page.getByTestId("plan-notes")).toBeVisible();
+    await page.getByTestId("plan-notes").press("Enter");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    const answer = (await mock.responses()).find((entry) => entry.id === requestId);
+    expect(answer?.result).toEqual({
+      outcome: "cancelled",
+      feedback: "Proposed plan lines 3-4:\n> 1. Update the transcript renderer\n> 2. Verify the desktop flow\n\nComment:\nsplit these into two steps",
+    });
+  });
+
+  test("approves from the popup with a key and keeps the plan reachable", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.keyboard.press("a");
+
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect((await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "approved" });
+    // The review is answered, so the verdict buttons are gone rather than dead.
+    await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-comment")).toBeVisible();
+    await expect(page.getByTestId("plan-copy")).toBeVisible();
+    await expect(page.getByTestId("plan-approve")).toHaveCount(0);
+    await expect(page.getByTestId("plan-quit")).toHaveCount(0);
+  });
+
+  test("approves from an empty notes box, but types the letter once there is text", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await page.getByTestId("plan-changes").click();
+    const notes = page.getByTestId("plan-notes");
+    await expect(notes).toBeVisible();
+
+    // With text in the box `a` is a letter, not a verdict (`a_with_nonempty_freeform_types_letter`).
+    await notes.fill("keep");
+    await notes.press("a");
+    await expect(notes).toHaveValue("keepa");
+    expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
+
+    // Empty, it approves (`a_on_empty_revise_prompt_approves`).
+    await notes.fill("");
+    await notes.press("a");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect((await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "approved" });
+  });
+
+  test("shows the empty-plan placeholder and quits from it", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan({ planContent: null }));
+    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+    const dialog = page.getByRole("dialog");
+    await expect(dialog).toContainText("plan.md (empty)");
+    await expect(dialog).toContainText("No plan written yet");
+
+    await page.getByTestId("plan-quit").click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect((await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "abandoned" });
+  });
+
+  test("shows the goal chip, its detail surface and the end-to-end row", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await composer(page).fill("start the goal");
+    await composer(page).press("Enter");
+    // A goal belongs to a session, so wait for the prompt to create one before the shell reports.
+    await expect(page.locator(".session-event")).toBeVisible();
+
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({
+      token_budget: 100_000,
+      tokens_used: 25_000,
+      elapsed_ms: 65_000,
+      current_subagent_role: "worker",
+      total_worker_rounds: 4,
+      total_verify_rounds: 2,
+      live_subagent_tokens: 10_000,
+      live_context_pct: 35,
+      live_turn_count: 3,
+      live_tool_call_count: 8,
+      last_event: "worker_completed",
+      last_event_detail: "Core logic",
+      classifier_runs_attempted: 1,
+      classifier_max_runs: 3,
+      last_classifier_verdict: "not_achieved",
+      last_classifier_details_path: "/tmp/details.md",
+    })));
+
+    await page.evaluate(() => window.__thanhMock!.sessionNotification({
+      sessionUpdate: "plan",
+      entries: [
+        { content: "Map the TUI goal surface", priority: "high", status: "completed" },
+        { content: "Render the goal chip", priority: "high", status: "in_progress" },
+      ],
+    }));
+
+    const chip = page.getByTestId("goal-chip");
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText("Goal: Executing");
+    await expect(chip).toContainText("/100k tokens");
+
+    await chip.click();
+    const detail = page.getByTestId("goal-detail");
+    await expect(page.getByTestId("goal-detail-status")).toContainText("Active · Executing");
+    await expect(detail).toContainText("Budget: 25k / 100k tokens (25%)");
+    await expect(detail).toContainText(/Elapsed: 1m\d\ds/);
+    // The goal's progress list is the session's plan, the same entries the todo pane holds.
+    await expect(detail.getByTestId("plan-entry-in_progress")).toContainText("Render the goal chip");
+    await expect(detail).toContainText("Active Subagent: worker (round 6)");
+    await expect(detail).toContainText("Context: 35%");
+    await expect(detail).toContainText("Last verdict: Not Achieved");
+    await expect(detail).toContainText("Attempts: 1/3");
+    await expect(detail).toContainText("Details: /tmp/details.md");
+    await expect(detail).toContainText("Worker completed");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("goal-detail")).toHaveCount(0);
+
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({ status: "complete", elapsed_ms: 619_000 })));
+    await expect(chip).toContainText("Goal: Done");
+    await expect(page.locator(".session-event", { hasText: "Goal complete" })).toHaveText("Goal complete in 10m19s end-to-end.");
+  });
+
+  test("labels the turn as verifying while the goal's completion is checked", async ({ page }) => {
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      promptDelayMs: 1_500,
+      promptUpdates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Done with the work." } }],
+    });
+    await composer(page).fill("finish the goal");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({
+      verifying_completion: true,
+      classifier_runs_attempted: 1,
+      classifier_max_runs: 3,
+    })));
+    await expect(page.getByTestId("turn-status")).toContainText("Verifying…");
+    await expect(page.getByTestId("goal-chip")).toContainText("Goal: Verifying (1/3)");
+  });
+
+  test("shows a paused goal's resume hint and drops it once cleared", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({
+      status: "user_paused",
+      pause_message: "user",
+      elapsed_ms: 30_000,
+    })));
+    const chip = page.getByTestId("goal-chip");
+    await expect(chip).toContainText("Goal: Paused");
+    await chip.click();
+    await expect(page.getByTestId("goal-detail")).toContainText("Status: Paused. Type /goal resume to continue");
+    await page.keyboard.press("Escape");
+
+    await page.evaluate(() => window.__thanhMock!.sessionNotification(window.__thanhMock!.goalUpdate({ status: "cleared", goal_id: "" })));
+    await expect(chip).toHaveCount(0);
+  });
+});
+
 test.describe("minimum window", () => {
   // `src-tauri/tauri.conf.json` pins the window to minWidth 840 / minHeight 600.
   test.use({ viewport: { width: 840, height: 600 } });
@@ -843,10 +1149,10 @@ test.describe("minimum window", () => {
     const menu = await page.getByTestId("slash-menu").boundingBox();
     expect(menu!.y).toBeGreaterThanOrEqual(0);
     expect(menu!.y + menu!.height).toBeLessThanOrEqual(600);
-    // The footer hint ends before the send button rather than running under it.
-    const hint = await page.locator(".composer-hint").boundingBox();
+    // The info line ends before the send button rather than running under it.
+    const info = await page.getByTestId("composer-info").boundingBox();
     const send = await page.getByTestId("send-button").boundingBox();
-    expect(hint!.x + hint!.width).toBeLessThanOrEqual(send!.x);
+    expect(info!.x + info!.width).toBeLessThanOrEqual(send!.x);
     await page.getByPlaceholder("Ask Thanh anything…").fill("");
 
     await page.getByPlaceholder("Ask Thanh anything…").fill("minimum window turn");

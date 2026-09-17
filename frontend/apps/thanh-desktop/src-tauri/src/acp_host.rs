@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -427,12 +428,50 @@ fn handle_host_request(
     true
 }
 
+/// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file to
+/// `<session>/plan.md` through this client filesystem, so that tree has to stay reachable even
+/// though it sits outside any workspace. `$GROK_HOME` is honoured because the child agent uses it
+/// when `$THANH_HOME` is unset and nothing has pinned the child's home.
+fn agent_state_root() -> PathBuf {
+    agent_state_root_from(
+        std::env::var_os("THANH_HOME").as_deref(),
+        std::env::var_os("GROK_HOME").as_deref(),
+        crate::provider_config::config_home(),
+    )
+}
+
+fn agent_state_root_from(
+    thanh_home: Option<&OsStr>,
+    grok_home: Option<&OsStr>,
+    app_home: PathBuf,
+) -> PathBuf {
+    let home = thanh_home
+        .filter(|value| !value.is_empty())
+        .or(grok_home.filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+        .unwrap_or(app_home);
+    let sessions = home.join("sessions");
+    // The compared path is canonicalized, and on macOS both `$HOME` and `$TMPDIR` may be symlinks.
+    sessions.canonicalize().unwrap_or(sessions)
+}
+
 fn safe_workspace_path(
     raw: &str,
     workspace: &Arc<Mutex<Option<PathBuf>>>,
     writing: bool,
 ) -> Result<PathBuf, String> {
     let root = workspace.lock().clone().ok_or("no active workspace")?;
+    let allowed = vec![root.clone(), agent_state_root()];
+    safe_path(raw, &root, &allowed, writing)
+}
+
+/// Resolve `raw` against `base` and require the result to land inside one of `allowed`.
+fn safe_path(
+    raw: &str,
+    base: &Path,
+    allowed: &[PathBuf],
+    writing: bool,
+) -> Result<PathBuf, String> {
     let requested = Path::new(raw);
     if requested
         .components()
@@ -443,7 +482,7 @@ fn safe_workspace_path(
     let joined = if requested.is_absolute() {
         requested.to_path_buf()
     } else {
-        root.join(requested)
+        base.join(requested)
     };
     let checked = if writing && !joined.exists() {
         let parent = joined.parent().ok_or("write path has no parent")?;
@@ -456,7 +495,7 @@ fn safe_workspace_path(
             .canonicalize()
             .map_err(|error| format!("invalid path: {error}"))?
     };
-    if !checked.starts_with(&root) {
+    if !allowed.iter().any(|root| checked.starts_with(root)) {
         return Err(format!(
             "path is outside the workspace: {}",
             checked.display()
@@ -504,6 +543,77 @@ mod tests {
     fn rejects_parent_traversal() {
         let root = Arc::new(Mutex::new(Some(std::env::temp_dir())));
         assert!(safe_workspace_path("../secret", &root, false).is_err());
+    }
+
+    #[test]
+    fn session_store_outranks_thanh_home_then_grok_home() {
+        let thanh = OsStr::new("/fake/thanh-home");
+        let grok = OsStr::new("/fake/grok-home");
+        let app_home = || PathBuf::from("/fake/app-home");
+        let sessions = |base: &str| PathBuf::from(format!("{base}/sessions"));
+
+        assert_eq!(
+            agent_state_root_from(Some(thanh), Some(grok), app_home()),
+            sessions("/fake/thanh-home")
+        );
+        assert_eq!(
+            agent_state_root_from(None, Some(grok), app_home()),
+            sessions("/fake/grok-home")
+        );
+        assert_eq!(
+            agent_state_root_from(Some(OsStr::new("")), None, app_home()),
+            sessions("/fake/app-home")
+        );
+    }
+
+    /// Plan mode writes `<session>/plan.md` through the client filesystem; the session store is
+    /// outside the workspace, so it must be an allow-path.
+    #[test]
+    fn allows_plan_file_in_session_store_outside_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let workspace = base.join("ws");
+        let session = base
+            .join("store")
+            .join("%2FUsers%2Fthanhbm%2FProjects")
+            .join("01a0afaa");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&session).unwrap();
+        let allowed = vec![workspace.clone(), base.join("store")];
+
+        let plan = session.join("plan.md");
+        assert_eq!(
+            safe_path(plan.to_str().unwrap(), &workspace, &allowed, true).unwrap(),
+            plan
+        );
+    }
+
+    #[test]
+    fn still_rejects_paths_outside_every_allowed_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let workspace = base.join("ws");
+        let outside = base.join("elsewhere");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let allowed = vec![workspace.clone(), base.join("store")];
+
+        let error = safe_path(
+            outside.join("notes.md").to_str().unwrap(),
+            &workspace,
+            &allowed,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            error.starts_with("path is outside the workspace:"),
+            "{error}"
+        );
+        // Relative paths still resolve against the workspace.
+        assert_eq!(
+            safe_path("notes.md", &workspace, &allowed, true).unwrap(),
+            workspace.join("notes.md")
+        );
     }
 
     #[test]

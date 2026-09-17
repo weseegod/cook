@@ -789,7 +789,9 @@ fn key_hint(key: &str) -> Option<String> {
     })
 }
 
-fn config_home() -> PathBuf {
+/// The app home (`$THANH_HOME`, else `~/.thanh`). Shared with the agent host so Settings and the
+/// filesystem surface can never disagree about which tree belongs to the agent.
+pub(crate) fn config_home() -> PathBuf {
     std::env::var_os("THANH_HOME")
         .map(PathBuf::from)
         .or_else(|| dirs::home_dir().map(|home| home.join(".thanh")))

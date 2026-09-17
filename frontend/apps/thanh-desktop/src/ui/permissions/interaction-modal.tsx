@@ -1,8 +1,7 @@
-import { Brain, HelpCircle, ShieldCheck, X } from "lucide-react";
+import { HelpCircle, ShieldCheck, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
-import { Markdown } from "../chat/markdown";
 import { InfoTip } from "../components/info-tip";
 import { elicitContent, elicitFields, elicitFormComplete } from "./elicit-fields";
 
@@ -11,21 +10,17 @@ export function InteractionModal() {
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [values, setValues] = useState<Record<string, string>>({});
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedback, setFeedback] = useState("");
   const elicitSchema = pending?.kind === "elicit" ? pending.raw.requestedSchema : undefined;
   const fields = useMemo(() => elicitFields(elicitSchema), [elicitSchema]);
 
   useEffect(() => {
     setAnswers({});
     setNotes({});
-    setFeedbackOpen(false);
-    setFeedback("");
     setValues(Object.fromEntries(elicitFields(pending?.raw.requestedSchema).map((field) => [field.name, field.default ?? ""])));
   }, [pending?.rpcId, pending?.raw.requestedSchema]);
 
   useEffect(() => {
-    if (!pending || feedbackOpen) return;
+    if (!pending || pending.kind === "plan") return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")) {
         event.preventDefault();
@@ -34,9 +29,10 @@ export function InteractionModal() {
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [pending, feedbackOpen]);
+  }, [pending]);
 
-  if (!pending) return null;
+  // Plan review verdicts live only on PlanDialog — no second inline card.
+  if (!pending || pending.kind === "plan") return null;
 
   function choose(question: string, label: string, multi: boolean) {
     setAnswers((current) => {
@@ -64,51 +60,40 @@ export function InteractionModal() {
   }
 
   async function pickSpecial(id: string) {
-    if (pending!.kind === "trust") return acpClient.answerQuestion({ outcome: id });
-    if (pending!.kind === "elicit") {
+    if (pending.kind === "trust") return acpClient.answerQuestion({ outcome: id });
+    if (pending.kind === "elicit") {
       if (id === "decline") return acpClient.answerQuestion({ outcome: "decline" });
-      const url = pending!.raw.url;
+      const url = pending.raw.url;
       if (typeof url === "string" && url.startsWith("http")) window.open(url, "_blank", "noopener");
       const content = elicitContent(fields, values);
       return acpClient.answerQuestion({ outcome: "accept", ...(Object.keys(content).length ? { content } : {}) });
     }
-    if (pending!.kind === "plan") {
-      if (id === "cancelled") {
-        setFeedbackOpen(true);
-        return;
-      }
-      return acpClient.answerQuestion({ outcome: id });
-    }
-  }
-
-  async function submitFeedback() {
-    await acpClient.answerQuestion({ outcome: "cancelled", ...(feedback.trim() ? { feedback: feedback.trim() } : {}) });
-    setFeedbackOpen(false);
-    setFeedback("");
   }
 
   return (
     <section className={`inline-interaction interaction-${pending.kind}`} data-testid="inline-interaction" aria-live="polite">
-      <header className="inline-interaction-header">
-        <div className={`inline-interaction-icon ${pending.kind === "trust" ? "safe" : ""}`}>
-          {pending.kind === "plan" ? <Brain size={16} /> : pending.kind === "trust" ? <ShieldCheck size={16} /> : <HelpCircle size={16} />}
-        </div>
-        <div>
-          <strong>{pending.title}</strong>
-          <span>Waiting for your input</span>
-        </div>
-        <button className="icon-button" data-testid="interaction-close" onClick={() => void cancelPending(pending.kind)} aria-label="Cancel interaction"><X size={15} /></button>
-      </header>
+      {pending.title && (
+        <header className="inline-interaction-header">
+          <div className={`inline-interaction-icon ${pending.kind === "trust" ? "safe" : ""}`}>
+            {pending.kind === "trust" ? <ShieldCheck size={16} /> : <HelpCircle size={16} />}
+          </div>
+          <div>
+            <strong>{pending.title}</strong>
+            <span>Waiting for your input</span>
+          </div>
+          <button className="icon-button" data-testid="interaction-close" onClick={() => void cancelPending(pending.kind)} aria-label="Cancel interaction"><X size={15} /></button>
+        </header>
+      )}
       {pending.questions.map((question) => (
         <fieldset key={question.question} className="question-fieldset">
-          <legend>{pending.kind === "plan" ? <Markdown text={question.question} /> : question.question}</legend>
+          <legend>{question.question}</legend>
           <div className="question-options">
             {question.options.map((option, index) => {
               const selected = (answers[question.question] ?? []).includes(option.label);
               return (
                 <button
                   key={option.id}
-                  className={`${selected ? "selected" : ""} ${pending.kind === "plan" ? "decision-button" : ""}`}
+                  className={selected ? "selected" : ""}
                   onClick={() => pending.kind === "question" ? choose(question.question, option.label, question.multiSelect ?? false) : void pickSpecial(option.id)}
                 >
                   <kbd>{index + 1}</kbd>
@@ -164,15 +149,6 @@ export function InteractionModal() {
         <div className="inline-interaction-actions">
           <button className="ghost-button" onClick={() => void cancelPending(pending.kind)}>Cancel</button>
           <button className="primary-button" onClick={() => void submitQuestions()} disabled={Object.keys(answers).length === 0}>Submit answers</button>
-        </div>
-      )}
-      {feedbackOpen && (
-        <div className="inline-feedback">
-          <label><span>Plan feedback</span><textarea autoFocus value={feedback} onChange={(event) => setFeedback(event.target.value)} placeholder="Please adjust…" rows={3} /></label>
-          <div className="inline-interaction-actions">
-            <button className="ghost-button" onClick={() => setFeedbackOpen(false)}>Keep plan</button>
-            <button className="primary-button" onClick={() => void submitFeedback()}>Send feedback</button>
-          </div>
         </div>
       )}
     </section>

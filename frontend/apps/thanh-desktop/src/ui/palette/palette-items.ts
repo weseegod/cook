@@ -30,6 +30,8 @@ export const DEFAULT_ACTIONS: PaletteItem[] = [
   { id: "action:new-session", kind: "action", label: "New chat", action: "new-session" },
   { id: "action:open-folder", kind: "action", label: "Open folder…", action: "open-folder" },
   { id: "action:settings", kind: "action", label: "Open settings", action: "settings" },
+  // `views/modal.rs` indexes the TUI's `/view-plan` in the palette as "View Plan".
+  { id: "action:view-plan", kind: "action", label: "View plan", action: "view-plan" },
   { id: "action:connect-provider", kind: "action", label: "Connect a provider", action: "connect-provider" },
   { id: "action:palette", kind: "action", label: "Show keyboard shortcuts", action: "shortcuts" },
 ];

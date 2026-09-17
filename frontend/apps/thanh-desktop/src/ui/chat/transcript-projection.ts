@@ -1,13 +1,14 @@
-import type { MessageBlock, PlanBlock, SessionEventBlock, ToolBlock, TranscriptBlock } from "../../state/session";
+import type { MessageBlock, SessionEventBlock, ToolBlock, TranscriptBlock } from "../../state/session";
 import { verbKind } from "./verb-group";
 
 /**
  * Transcript rows as the TUI paints them (`scrollback/` blocks). A verb-group row stands in for a
  * run of consecutive foldable collapsed tools (`scrollback/state/groups.rs::VerbRun`).
+ * ACP `Plan` blocks stay in session state for GoalDetail / the todo overlay — they are not
+ * scrollback rows (catalog §9.8).
  */
 export type DisplayBlock =
   | MessageBlock
-  | PlanBlock
   | SessionEventBlock
   | { type: "tool"; id: string; tool: ToolBlock }
   | { type: "verb-group"; id: string; tools: ToolBlock[] };
@@ -29,6 +30,7 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
   };
 
   for (const block of blocks) {
+    if (block.type === "plan") continue;
     if (block.type === "tool") {
       if (verbKind(block)) {
         run ??= { tools: [], thoughts: [] };

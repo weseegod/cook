@@ -1,6 +1,8 @@
 import type { RequestPermissionRequest, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { create } from "zustand";
 import { formatDuration } from "../ui/chat/format-duration";
+import { reduceGoalUpdate, type GoalState } from "./goal";
+import { emptyPlanSlice, type PlanComment, type PlanSlice } from "./plan-review";
 
 export interface MessageBlock {
   type: "message";
@@ -21,6 +23,8 @@ export interface SessionEventBlock {
   id: string;
   turnId: string;
   text: string;
+  /** `goal` rows never close a turn: the goal completes while its own turn is still open. */
+  kind?: "turn" | "goal";
 }
 
 export interface ToolBlock {
@@ -74,7 +78,8 @@ export interface PendingPermission {
 
 export interface PendingQuestion {
   rpcId: number | string;
-  title: string;
+  /** Card heading. Absent for a plan review, which keeps the composer instead of a title line. */
+  title?: string;
   kind: "question" | "plan" | "trust" | "elicit";
   questions: Array<{
     question: string;
@@ -100,6 +105,17 @@ interface SessionState {
   modelId: string | null;
   planMode: boolean;
   usage: Record<string, unknown> | null;
+  /** Goal orchestration state from `x.ai/session_notification`; `null` before a goal exists. */
+  goal: GoalState | null;
+  /** Goal id of the last cleared goal, so a late update for it cannot resurrect the chip. */
+  goalClearedId: string | null;
+  /** Plan review state (`x.ai/exit_plan_mode`): the plan body, its comments, and popup visibility. */
+  planReview: PlanSlice["planReview"];
+  planComments: PlanComment[];
+  planNextCommentId: number;
+  planDialogOpen: boolean;
+  /** User-toggled ACP Plan checklist under the header; closed by default. */
+  todoOverlayOpen: boolean;
   alwaysApprove: boolean;
   pendingPermission: PendingPermission | null;
   pendingQuestion: PendingQuestion | null;
@@ -110,6 +126,14 @@ interface SessionState {
   error: string | null;
   set: (patch: Partial<SessionState>) => void;
   setComposerDraft: (draft: string) => void;
+  /** Stash the plan body an `exit_plan_mode` request carried; comments are per-review, so they reset. */
+  beginPlanReview: (body: string | null) => void;
+  /** The review was answered: it stops blocking, but the body stays viewable for the session. */
+  endPlanReview: () => void;
+  setPlanDialogOpen: (open: boolean) => void;
+  setTodoOverlayOpen: (open: boolean) => void;
+  savePlanComment: (id: number | null, lineRange: [number, number], text: string) => void;
+  removePlanComment: (id: number) => void;
   resetConversation: (sessionId?: string | null) => void;
   appendOptimisticUser: (text: string, images?: string[]) => void;
   applyNotification: (notification: SessionNotification) => void;
@@ -149,6 +173,10 @@ export const useSessionStore = create<SessionState>((set) => ({
   modelId: localStorage.getItem("thanh.defaultModel"),
   planMode: false,
   usage: null,
+  goal: null,
+  goalClearedId: null,
+  ...emptyPlanSlice,
+  todoOverlayOpen: false,
   alwaysApprove: localStorage.getItem("thanh.alwaysApprove") === "true",
   pendingPermission: null,
   pendingQuestion: null,
@@ -172,6 +200,36 @@ export const useSessionStore = create<SessionState>((set) => ({
       return next;
     }),
   setComposerDraft: (composerDraft) => set({ composerDraft }),
+  beginPlanReview: (body) =>
+    set({
+      planReview: { body, pending: true },
+      // A new review owns its own comments: `acp_handler/interactions.rs` resets both on arrival.
+      planComments: [],
+      planNextCommentId: 0,
+      // TUI shows the line viewer immediately on `exit_plan_mode`.
+      planDialogOpen: true,
+    }),
+  endPlanReview: () =>
+    set((state) => (state.planReview ? { planReview: { ...state.planReview, pending: false } } : {})),
+  setPlanDialogOpen: (planDialogOpen) => set({ planDialogOpen }),
+  setTodoOverlayOpen: (todoOverlayOpen) => set({ todoOverlayOpen }),
+  savePlanComment: (id, lineRange, text) =>
+    set((state) => {
+      const trimmed = text.trim();
+      if (trimmed === "") return {};
+      if (id !== null) {
+        return {
+          planComments: state.planComments.map((comment) =>
+            comment.id === id ? { ...comment, lineRange, text: trimmed } : comment),
+        };
+      }
+      return {
+        planComments: [...state.planComments, { id: state.planNextCommentId, lineRange, text: trimmed }],
+        planNextCommentId: state.planNextCommentId + 1,
+      };
+    }),
+  removePlanComment: (id) =>
+    set((state) => ({ planComments: state.planComments.filter((comment) => comment.id !== id) })),
   resetConversation: (sessionId = null) =>
     set({
       sessionId,
@@ -183,6 +241,10 @@ export const useSessionStore = create<SessionState>((set) => ({
       turnPausedMs: 0,
       questionOpenedAt: null,
       usage: null,
+      goal: null,
+      goalClearedId: null,
+      ...emptyPlanSlice,
+      todoOverlayOpen: false,
       pendingPermission: null,
       pendingQuestion: null,
       queuedPromptCount: 0,
@@ -237,9 +299,11 @@ function appendTurnMarker(
   if (!turnId) return blocks;
   const last = blocks.at(-1);
   if (!last || last.turnId !== turnId) return blocks;
-  if (last.type === "session-event") return blocks;
+  // Idempotent when the agent already closed the turn. A goal-complete row is not a turn marker:
+  // the goal finishes while its own turn is still running, so the turn marker still belongs there.
+  if (last.type === "session-event" && last.kind !== "goal") return blocks;
   const text = turnMarkerText(outcome, turnElapsedMs(state));
-  return [...blocks, { type: "session-event", id: `event-${turnId}`, turnId, text }];
+  return [...blocks, { type: "session-event", id: `event-${turnId}`, turnId, kind: "turn", text }];
 }
 
 export function turnMarkerText(outcome: TurnOutcome, elapsedMs: number | null): string {
@@ -282,6 +346,7 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
   let sessionTitle = state.sessionTitle;
   let modelId = state.modelId;
   let turnStartedAt = state.turnStartedAt;
+  let goalSlice = { goal: state.goal, clearedGoalId: state.goalClearedId };
 
   for (const notification of notifications) {
     const raw = notification.update as SessionUpdate & Record<string, unknown>;
@@ -301,12 +366,39 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
       modelId = stringOr(raw.modelId, modelId ?? undefined) ?? null;
       continue;
     }
+    if (kind === "goal_updated") {
+      const reduced = reduceGoalUpdate(goalSlice, raw);
+      goalSlice = reduced.slice;
+      // The TUI writes one `Goal complete in {duration} end-to-end.` row on the transition into
+      // `complete` (`session_notification.rs`), timed from the goal's own clock, not the turn's.
+      if (reduced.completedElapsedMs !== null) {
+        const turnId = cursor.turnId ?? `goal-${goalSlice.goal?.goalId ?? "run"}`;
+        blocks = [...blocks, {
+          type: "session-event",
+          id: `goal-complete-${goalSlice.goal?.goalId ?? "run"}`,
+          turnId,
+          kind: "goal",
+          text: `Goal complete in ${formatDuration(reduced.completedElapsedMs)} end-to-end.`,
+        }];
+      }
+      continue;
+    }
     const next = reduceTranscript({ blocks, cursor }, raw);
     blocks = next.blocks;
     cursor = next.cursor;
   }
 
-  return { blocks, transcriptCursor: cursor, usage, planMode, sessionTitle, modelId, turnStartedAt };
+  return {
+    blocks,
+    transcriptCursor: cursor,
+    usage,
+    planMode,
+    sessionTitle,
+    modelId,
+    turnStartedAt,
+    goal: goalSlice.goal,
+    goalClearedId: goalSlice.clearedGoalId,
+  };
 }
 
 function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknown>): TranscriptState {

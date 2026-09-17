@@ -293,6 +293,20 @@ export class ThanhAcpClient {
     if (!pending) return;
     await respond(pending.rpcId, result);
     useSessionStore.getState().set({ pendingQuestion: null });
+    if (pending.kind === "plan") useSessionStore.getState().endPlanReview();
+  }
+
+  /**
+   * Answer a parked `x.ai/exit_plan_mode`. One path for the popup, the inline card and every key
+   * binding so the payload cannot drift: only `cancelled` carries feedback
+   * (`ExitPlanModeExtResponse`), and an empty one is sent as absent.
+   */
+  async resolvePlan(outcome: string, feedback?: string | null): Promise<void> {
+    const trimmed = feedback?.trim();
+    await this.answerQuestion({
+      outcome,
+      ...(outcome === "cancelled" && trimmed ? { feedback: trimmed } : {}),
+    });
   }
 
   async refreshSessions(query = useCatalogStore.getState().sessionSearch): Promise<void> {
@@ -352,7 +366,9 @@ export class ThanhAcpClient {
     for (const message of messages) {
       const method = unwrapMethod(message);
       const params = unwrapParams(message);
-      if (method === "session/update") {
+      // Both envelopes carry `{ sessionId, update }`. The extension one (`x.ai/session_notification`)
+      // is how the shell ships what ACP has no slot for — goal orchestration state above all.
+      if (method === "session/update" || method === "x.ai/session_notification") {
         const update = params.update as Record<string, unknown> | undefined;
         if (update?.sessionUpdate === "available_commands_update") {
           useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
@@ -393,6 +409,12 @@ export class ThanhAcpClient {
       return;
     }
     if (method === "x.ai/exit_plan_mode" && message.id !== undefined) {
+      // The request carries the whole `plan.md`; ACP `Plan` updates carry entries only, so this is
+      // the one place the full body reaches the renderer. Stash it before parking the decision.
+      const body = typeof params.planContent === "string" && params.planContent.trim() !== ""
+        ? params.planContent
+        : null;
+      useSessionStore.getState().beginPlanReview(body);
       useSessionStore.getState().set({ pendingQuestion: planInteraction(message.id, params) });
       return;
     }
@@ -475,17 +497,24 @@ function questionInteraction(rpcId: number | string, raw: Record<string, unknown
 }
 
 function planInteraction(rpcId: number | string, raw: Record<string, unknown>): PendingQuestion {
+  const hasPlan = typeof raw.planContent === "string" && raw.planContent.trim() !== "";
   return {
     rpcId,
-    title: "Review the implementation plan",
+    // No card title: the review keeps the composer, so the decision status is the card's only header.
     kind: "plan",
     raw,
     questions: [{
-      question: typeof raw.planContent === "string" ? raw.planContent : "The agent is ready to leave plan mode.",
+      // `plan_approval_view::plan_approval_status_label`: the plan body itself lives in the popup,
+      // so the card carries the decision status instead of dumping the whole file inline.
+      question: hasPlan
+        ? "Waiting on plan approval"
+        : "No plan written: approve or request changes",
       options: [
         { id: "approved", label: "Approve", description: "Proceed with the plan" },
+        // The TUI's `g` decision. Its button reads `run as goal`; `approved_as_goal` is the wire value.
+        { id: "approved_as_goal", label: "Run as goal", description: "Run the approved plan as an autonomous goal" },
         { id: "cancelled", label: "Request changes", description: "Keep planning and send feedback" },
-        { id: "abandoned", label: "Abandon", description: "Leave plan mode without executing" },
+        { id: "abandoned", label: "Quit plan", description: "Leave plan mode without executing" },
       ],
     }],
   };
