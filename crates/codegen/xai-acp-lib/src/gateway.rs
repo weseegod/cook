@@ -111,7 +111,7 @@ fn before_request<T: AcpRequest>(args: &AcpArgs<T>, tracing: bool) -> Option<Str
         let method = crate::common::compact_json(&args.method_name());
         tracing::debug!(
             "sending {method} request: {}",
-            crate::common::compact_json(&args.request)
+            crate::common::redacted_compact_json(&args.request)
         );
         method
     })
@@ -127,7 +127,7 @@ fn after_request<T: Serialize>(
             Ok(ref response) => {
                 tracing::debug!(
                     "received {method} response: {}",
-                    crate::common::compact_json(&response)
+                    crate::common::redacted_compact_json(&response)
                 );
             }
             Err(ref err) => {
