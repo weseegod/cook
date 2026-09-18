@@ -5,6 +5,7 @@ import { formatDuration } from "../ui/chat/format-duration";
 import { applySubagentSessionUpdate, applyWorkflowUpdated } from "./activity";
 import { reduceGoalUpdate, type GoalState } from "./goal";
 import { emptyPlanSlice, type PlanComment, type PlanFocus, type PlanSlice } from "./plan-review";
+import { deriveActivity, type TurnActivity } from "../ui/chat/turn-activity";
 
 export interface MessageBlock {
   type: "message";
@@ -54,6 +55,7 @@ export interface PlanBlock {
 }
 
 export type TranscriptBlock = MessageBlock | ToolBlock | PlanBlock | SessionEventBlock;
+export const EMPTY_PLAN_ENTRIES: unknown[] = [];
 
 /** Terminal outcome of a turn, as the visible marker presents it (`turn_completion.rs`). */
 export type TurnOutcome =
@@ -113,6 +115,10 @@ interface SessionState {
   sessionId: string | null;
   sessionTitle: string;
   blocks: TranscriptBlock[];
+  /** Narrow activity snapshot so the status row does not subscribe to the whole transcript. */
+  activity: TurnActivity | null;
+  /** Stable latest-plan reference for the optional checklist/pane. */
+  planEntries: unknown[];
   transcriptCursor: TranscriptCursor;
   turnRunning: boolean;
   turnStartedAt: number | null;
@@ -208,6 +214,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   sessionId: null,
   sessionTitle: "New chat",
   blocks: [],
+  activity: null,
+  planEntries: EMPTY_PLAN_ENTRIES,
   transcriptCursor: emptyCursor(),
   turnRunning: false,
   turnStartedAt: null,
@@ -363,6 +371,8 @@ export const useSessionStore = create<SessionState>((set) => ({
     set({
       sessionId,
       blocks: [],
+      activity: null,
+      planEntries: EMPTY_PLAN_ENTRIES,
       transcriptCursor: emptyCursor(),
       sessionTitle: "New chat",
       turnRunning: false,
@@ -399,6 +409,7 @@ export const useSessionStore = create<SessionState>((set) => ({
           { type: "message", id: localId, turnId, role: "user", text, images: [...images], streaming: false },
         ],
         transcriptCursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: localId },
+        activity: null,
         turnStartedAt: Date.now(),
         turnPausedMs: 0,
         followUps: null,
@@ -413,6 +424,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       const finished = finishStreamingBlocks(state.blocks);
       return {
         blocks: appendTurnMarker(finished, state, outcome),
+        activity: null,
         transcriptCursor: emptyCursor(),
         turnStartedAt: null,
         turnPausedMs: 0,
@@ -474,6 +486,14 @@ export function reduceTranscript(
     return { ...transcript, blocks: transcript.blocks.filter((block) => block.type !== "plan") };
   }
   return transcript;
+}
+
+function latestPlanEntries(blocks: readonly TranscriptBlock[]): unknown[] {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (block.type === "plan") return block.entries;
+  }
+  return EMPTY_PLAN_ENTRIES;
 }
 
 function reduceNotifications(state: SessionState, notifications: SessionNotification[]): Partial<SessionState> {
@@ -598,6 +618,7 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
 
   return {
     blocks,
+    ...(blocks !== state.blocks ? { activity: deriveActivity(blocks), planEntries: latestPlanEntries(blocks) } : {}),
     transcriptCursor: cursor,
     usage,
     planMode,

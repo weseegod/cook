@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { turnElapsedMs, useSessionStore } from "../../state/session";
 import { formatDuration, formatTokensShort } from "./format-duration";
 import {
   activityParts,
-  deriveActivity,
   isSendableWait,
   phaseKey,
   type TurnActivity,
 } from "./turn-activity";
 
-/** Default 30 fps tick, matching `AnimationConfig.fps`; the spinner dwells four ticks per frame. */
+/** Keep the TUI's 30 fps capability while painting the status row at roughly 7.5 fps. */
 const TICK_MS = 1000 / 30;
 const SPINNER_DIVISOR = 4;
 const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -21,7 +20,7 @@ const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", 
  * turn timer, token count and `[stop]` on the right.
  */
 export function TurnStatus() {
-  const blocks = useSessionStore((state) => state.blocks);
+  const derived = useSessionStore((state) => state.activity);
   const turnRunning = useSessionStore((state) => state.turnRunning);
   const turnStartedAt = useSessionStore((state) => state.turnStartedAt);
   const turnPausedMs = useSessionStore((state) => state.turnPausedMs);
@@ -35,11 +34,10 @@ export function TurnStatus() {
 
   useEffect(() => {
     if (!turnRunning) return;
-    const timer = window.setInterval(() => setTick((value) => value + 1), TICK_MS);
+    const timer = window.setInterval(() => setTick((value) => value + 1), TICK_MS * SPINNER_DIVISOR);
     return () => window.clearInterval(timer);
   }, [turnRunning]);
 
-  const derived = useMemo(() => deriveActivity(blocks), [blocks]);
   // Goal verification runs in-turn while the model is idle, so the TUI labels the whole window
   // `Verifying…` ahead of any stale streaming activity (`views/turn_status.rs::compute_activity`).
   const goalVerifying = useSessionStore((state) => state.goal?.verifyingCompletion === true);
@@ -70,7 +68,7 @@ export function TurnStatus() {
   return (
     <div className="turn-status" data-testid="turn-status" role="status" aria-live="polite">
       <span className={`turn-status-spinner${blocked ? " blocked" : ""}`} aria-hidden="true">
-        {blocked ? "◆" : BRAILLE_FRAMES[Math.floor(tick / SPINNER_DIVISOR) % BRAILLE_FRAMES.length]}
+        {blocked ? "◆" : BRAILLE_FRAMES[tick % BRAILLE_FRAMES.length]}
       </span>
       <span className="turn-status-label" title={parts.text}>
         {parts.prefix && parts.subject

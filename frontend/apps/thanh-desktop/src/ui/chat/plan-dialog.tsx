@@ -12,7 +12,7 @@ import {
   planFeedback,
   type PlanDecisionId,
 } from "../../state/plan-review";
-import { useSessionStore, type PlanBlock } from "../../state/session";
+import { useSessionStore } from "../../state/session";
 import { copyText } from "./clipboard";
 import { PlanChecklist } from "./plan-list";
 import { PlanLines } from "./plan-lines";
@@ -22,9 +22,14 @@ import { PlanLines } from "./plan-lines";
  * transcript while the live prompt remains the one shared input for revision notes and comments.
  */
 export function PlanDialog() {
+  const open = useSessionStore((state) => state.planDialogOpen);
+  if (!open) return null;
+  return <PlanDialogContent />;
+}
+
+function PlanDialogContent() {
   const review = useSessionStore((state) => state.planReview);
   const comments = useSessionStore((state) => state.planComments);
-  const open = useSessionStore((state) => state.planDialogOpen);
   const planFocus = useSessionStore((state) => state.planFocus);
   const selection = useSessionStore((state) => state.planCommentRange);
   const setOpen = useSessionStore((state) => state.setPlanDialogOpen);
@@ -33,7 +38,7 @@ export function PlanDialog() {
   const beginPlanComment = useSessionStore((state) => state.beginPlanComment);
   const cancelPlanComment = useSessionStore((state) => state.cancelPlanComment);
   const removeComment = useSessionStore((state) => state.removePlanComment);
-  const blocks = useSessionStore((state) => state.blocks);
+  const planEntries = useSessionStore((state) => state.planEntries);
 
   const [dragAnchor, setDragAnchor] = useState<number | null>(null);
   const [activeCommentId, setActiveCommentId] = useState<number | null>(null);
@@ -41,10 +46,6 @@ export function PlanDialog() {
   const body = review && !planBodyIsEmpty(review.body) ? review.body : null;
   const bodyText = body ?? EMPTY_PLAN_BODY;
   const lines = useMemo(() => planBodyLines(bodyText), [bodyText]);
-  const planEntries = useMemo(() => {
-    const plan = [...blocks].reverse().find((block): block is PlanBlock => block.type === "plan");
-    return plan?.entries ?? [];
-  }, [blocks]);
   const bar = planDecisionBar(review, comments.length);
 
   useEffect(() => {
@@ -115,7 +116,7 @@ export function PlanDialog() {
     return () => document.removeEventListener("keydown", onKeyDown, true);
   });
 
-  if (!open || !review) return null;
+  if (!review) return null;
 
   async function choose(id: PlanDecisionId) {
     if (id === "copy") {

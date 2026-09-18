@@ -237,6 +237,22 @@ test.describe("chat, attachments and the model picker", () => {
     expect(errors).toEqual([]);
   });
 
+  test("keeps composer input stable while a delayed stream is running", async ({ page }) => {
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      promptDelayMs: 1_500,
+      reply: "A delayed mock response.",
+    });
+
+    const input = page.getByTestId("composer-input");
+    await input.fill("start the delayed turn");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+
+    await input.fill("typed while the response is running");
+    await expect(input).toHaveValue("typed while the response is running");
+  });
+
   test("adds a model through the add-model popup", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);

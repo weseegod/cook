@@ -9,6 +9,7 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { buildPromptParts, imageAttachEnabled, optimisticImages, type Attachment } from "./attachments";
+import { SessionNotificationCoalescer, type ScheduleFlush } from "./client-coalesce";
 import { normalizeError } from "./errors";
 import { PromptCorrelation, SessionEventDedupe } from "./session-events";
 import { desktopTrace } from "./trace";
@@ -45,7 +46,15 @@ export class ThanhAcpClient {
   private pendingPromptRequests = 0;
   private readonly sessionEvents = new SessionEventDedupe();
   private readonly promptCorrelation = new PromptCorrelation();
+  private readonly sessionUpdates: SessionNotificationCoalescer;
   private inboundMessages: Promise<void> = Promise.resolve();
+
+  constructor(options: { scheduleFlush?: ScheduleFlush } = {}) {
+    this.sessionUpdates = new SessionNotificationCoalescer(
+      (notifications) => useSessionStore.getState().applyNotifications(notifications),
+      options.scheduleFlush,
+    );
+  }
 
   async connect(cwd: string): Promise<void> {
     const connection = useSessionStore.getState().connection;
@@ -147,10 +156,13 @@ export class ThanhAcpClient {
         ...(yoloMode ? { yoloMode: true } : {}),
       },
     };
+    await this.inboundMessages;
+    this.sessionUpdates.flushNow();
     useSessionStore.getState().resetConversation(sessionId);
     this.promptCorrelation.clear();
     const response = await request<{ models?: unknown }>("session/load", params);
     await this.inboundMessages;
+    this.sessionUpdates.flushNow();
     useSessionStore.getState().finishTurn();
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
@@ -248,6 +260,7 @@ export class ThanhAcpClient {
       throw new Error(message);
     } finally {
       await this.inboundMessages;
+      this.sessionUpdates.flushNow();
       // N-pcomplete may already have finalized; finishTurn is idempotent on the marker.
       if (useSessionStore.getState().turnStartedAt !== null) {
         useSessionStore.getState().finishTurn(outcome);
@@ -269,6 +282,7 @@ export class ThanhAcpClient {
     if (!sessionId) return;
     await notify("session/cancel", { sessionId });
     await this.inboundMessages;
+    this.sessionUpdates.flushNow();
     useSessionStore.getState().finishTurn({ kind: "cancelled" });
     useSessionStore.getState().set({ turnRunning: false });
   }
@@ -409,13 +423,6 @@ export class ThanhAcpClient {
   }
 
   private async handleMessages(messages: RpcMessage[]) {
-    let updates: SessionNotification[] = [];
-    const flushUpdates = () => {
-      if (updates.length === 0) return;
-      useSessionStore.getState().applyNotifications(updates);
-      updates = [];
-    };
-
     for (const message of messages) {
       const method = unwrapMethod(message);
       const params = unwrapParams(message);
@@ -446,15 +453,16 @@ export class ThanhAcpClient {
           await dispatchNotification(message, sessionKind, update ?? {});
         }
         if (this.shouldApplyToActiveSession(params, update)) {
-          updates.push(params as unknown as SessionNotification);
+          this.sessionUpdates.enqueue(params as unknown as SessionNotification);
         }
         continue;
       }
-      flushUpdates();
+      // Non-session messages can affect prompt completion, so do not let a deferred update pass
+      // them in the wire order.
+      this.sessionUpdates.flushNow();
       if (method === "x.ai/session/prompt_complete" && !this.promptCorrelation.accept(params)) continue;
       await this.handleMessage(message, method, params);
     }
-    flushUpdates();
   }
 
   private shouldApplyToActiveSession(

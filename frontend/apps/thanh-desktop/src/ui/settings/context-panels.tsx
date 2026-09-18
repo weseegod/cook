@@ -29,7 +29,8 @@ export { MemoryBrowserPanel as MemoryPanel } from "./memory-browser";
 
 /** Project instructions for the open folder, read and written through the agent's fs extension. */
 export function ProjectInstructionsPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
-  const { cwd, sessionId } = useSessionStore();
+  const cwd = useSessionStore((state) => state.cwd);
+  const sessionId = useSessionStore((state) => state.sessionId);
   const [activePath, setActivePath] = useState(PROJECT_FILES[0].path);
   const [draft, setDraft] = useState("");
   const [status, setStatus] = useState<string | null>(null);

@@ -52,7 +52,8 @@ function exportActiveTranscript() {
 }
 
 export function AppShell() {
-  const { cwd, connection } = useSessionStore();
+  const cwd = useSessionStore((state) => state.cwd);
+  const connection = useSessionStore((state) => state.connection);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [utilityPanelOpen, setUtilityPanelOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);

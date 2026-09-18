@@ -34,7 +34,10 @@ const THEME_OPTIONS: Array<{ id: ThemePreference; label: string; icon: React.Rea
 ];
 
 export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 0 }: { onClose: () => void; initialTab?: Tab; closeRequest?: number }) {
-  const { sessionId, planMode, connection, alwaysApprove } = useSessionStore();
+  const sessionId = useSessionStore((state) => state.sessionId);
+  const planMode = useSessionStore((state) => state.planMode);
+  const connection = useSessionStore((state) => state.connection);
+  const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
   const connected = connection === "ready";
   const [tab, setTab] = useState<Tab>(initialTab);
   const [dirty, setDirty] = useState(false);

@@ -79,7 +79,6 @@ export function Composer() {
   const sessionId = useSessionStore((state) => state.sessionId);
   const planMode = useSessionStore((state) => state.planMode);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
-  const usage = useSessionStore((state) => state.usage);
   const modelId = useSessionStore((state) => state.modelId);
   const hasPlan = useSessionStore((state) => hasViewablePlan(state));
   const commands = useCatalogStore((state) => state.commands);
@@ -269,6 +268,7 @@ export function Composer() {
     useSessionStore.getState().set({ notice: null, error: null });
     try {
       if (command && slash) {
+        const usage = useSessionStore.getState().usage;
         const message = await command.run(
           SLASH_HOST,
           { sessionId, modelId, planMode, alwaysApprove, usage, models, hasPlan, cancelRewindEnabled, sessionRecapEnabled },

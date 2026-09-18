@@ -9,7 +9,7 @@ import {
   Search,
   Terminal,
 } from "lucide-react";
-import { useState } from "react";
+import { memo, useState } from "react";
 import { openPath } from "../../acp/host";
 import { normalizeError } from "../../acp/errors";
 import { useArtifactStore } from "../../state/artifacts";
@@ -50,7 +50,29 @@ function isExecute(tool: ToolBlock): boolean {
  * A verb-group run: one aggregated header replaces its member rows
  * (`scrollback/state/groups.rs::project_verb_run`). The label rebuilds from status every render.
  */
-export function VerbGroupRow({ tools }: { tools: ToolBlock[] }) {
+export function toolPropsEqual(previous: { tool: ToolBlock }, next: { tool: ToolBlock }): boolean {
+  return toolVisualEqual(previous.tool, next.tool);
+}
+
+function toolVisualEqual(previous: ToolBlock, next: ToolBlock): boolean {
+  return previous.id === next.id
+    && previous.title === next.title
+    && previous.kind === next.kind
+    && previous.status === next.status
+    && previous.startedAt === next.startedAt
+    && previous.elapsedMs === next.elapsedMs
+    && previous.command === next.command
+    && previous.description === next.description
+    && sameArray(previous.paths, next.paths)
+    && sameArray(previous.locations, next.locations)
+    && sameArray(previous.content, next.content);
+}
+
+function sameArray(previous: readonly unknown[], next: readonly unknown[]): boolean {
+  return previous.length === next.length && previous.every((value, index) => value === next[index]);
+}
+
+export const VerbGroupRow = memo(function VerbGroupRow({ tools }: { tools: ToolBlock[] }) {
   const running = tools.some(isLiveTool);
   const failed = tools.some((tool) => ["failed", "error"].includes(tool.status.toLowerCase()));
   const state = running ? "running" : failed ? "failed" : "completed";
@@ -66,10 +88,13 @@ export function VerbGroupRow({ tools }: { tools: ToolBlock[] }) {
       </div>
     </details>
   );
-}
+}, (previous, next) => (
+  previous.tools.length === next.tools.length
+  && previous.tools.every((tool, index) => toolVisualEqual(tool, next.tools[index]))
+));
 
 /** One tool block, collapsed by default; no elapsed in the row and no rerun control. */
-export function ToolRow({ tool }: { tool: ToolBlock }) {
+export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
   const header = toolHeader(tool);
   const running = isLiveTool(tool);
   return (
@@ -86,10 +111,10 @@ export function ToolRow({ tool }: { tool: ToolBlock }) {
       <ToolDetail tool={tool} />
     </details>
   );
-}
+}, toolPropsEqual);
 
 /** Thinking row: `Thinking…` while running, `Thought for 1.2s` once frozen. */
-export function ThinkingRow({ block }: { block: { id: string; text: string; streaming: boolean; elapsedMs?: number | null } }) {
+export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: string; text: string; streaming: boolean; elapsedMs?: number | null } }) {
   const time = block.elapsedMs ?? null;
   const header = block.streaming ? "Thinking…" : time === null ? "Thought" : `Thought for ${formatThinkingDuration(time)}`;
   return (
@@ -102,7 +127,12 @@ export function ThinkingRow({ block }: { block: { id: string; text: string; stre
       <div className="thinking-body"><Markdown text={block.text} streaming={block.streaming} /></div>
     </details>
   );
-}
+}, (previous, next) => (
+  previous.block.id === next.block.id
+  && previous.block.text === next.block.text
+  && previous.block.streaming === next.block.streaming
+  && previous.block.elapsedMs === next.block.elapsedMs
+));
 
 export function ToolDetail({ tool }: { tool: ToolBlock }) {
   const [copied, setCopied] = useState<string | null>(null);

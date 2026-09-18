@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Bot, Brain, Copy, FileCode2, RefreshCw, X } from "lucide-react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore, type MessageBlock, type SessionEventBlock } from "../../state/session";
@@ -24,12 +24,26 @@ export function ChatView() {
   const setComposerDraft = useSessionStore((state) => state.setComposerDraft);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
+  const scrollFrame = useRef<number | null>(null);
   const projected = useMemo(() => projectTranscript(blocks), [blocks]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript || !stickToBottom.current) return;
-    transcript.scrollTo({ top: transcript.scrollHeight, behavior: turnRunning ? "auto" : "smooth" });
+    const schedule = typeof window.requestAnimationFrame === "function"
+      ? window.requestAnimationFrame.bind(window)
+      : (callback: FrameRequestCallback) => window.setTimeout(() => callback(Date.now()), 0);
+    scrollFrame.current = schedule(() => {
+      scrollFrame.current = null;
+      const current = transcriptRef.current;
+      if (current && stickToBottom.current) current.scrollTop = current.scrollHeight;
+    });
+    return () => {
+      if (scrollFrame.current === null) return;
+      if (typeof window.cancelAnimationFrame === "function") window.cancelAnimationFrame(scrollFrame.current);
+      else window.clearTimeout(scrollFrame.current);
+      scrollFrame.current = null;
+    };
   }, [blocks, turnRunning]);
 
   return (
@@ -99,11 +113,25 @@ function ChatError({ error, connection, cwd }: { error: string; connection: stri
   );
 }
 
-function SessionEvent({ block }: { block: SessionEventBlock }) {
+export const SessionEvent = memo(function SessionEvent({ block }: { block: SessionEventBlock }) {
   return <div className="session-event" data-testid={`session-event-${block.id}`}>{block.text}</div>;
+}, (previous, next) => (
+  previous.block.id === next.block.id
+  && previous.block.turnId === next.block.turnId
+  && previous.block.kind === next.block.kind
+  && previous.block.text === next.block.text
+));
+
+export function messagePropsEqual(previous: { block: MessageBlock }, next: { block: MessageBlock }): boolean {
+  return previous.block.id === next.block.id
+    && previous.block.role === next.block.role
+    && previous.block.text === next.block.text
+    && previous.block.streaming === next.block.streaming
+    && previous.block.images.length === next.block.images.length
+    && previous.block.images.every((image, index) => image === next.block.images[index]);
 }
 
-function Message({ block }: { block: MessageBlock }) {
+export const Message = memo(function Message({ block }: { block: MessageBlock }) {
   const [copied, setCopied] = useState(false);
   if (block.role === "thought") return null;
   async function copyMessage() {
@@ -130,4 +158,4 @@ function Message({ block }: { block: MessageBlock }) {
       </div>
     </article>
   );
-}
+}, messagePropsEqual);
