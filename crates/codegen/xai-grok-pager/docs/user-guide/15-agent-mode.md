@@ -1,6 +1,6 @@
 # Agent mode (ACP) and IDE integration
 
-Agent mode runs Grok as a long-lived server that clients talk to over [ACP](https://agentclientprotocol.com) (JSON-RPC). Use it from IDEs, SDKs, eval harnesses, and custom apps. For a one-shot prompt that prints and exits, use `thanh -p` instead ([headless mode](14-headless-mode.md)).
+Agent mode runs Grok as a long-lived server that clients talk to over [ACP](https://agentclientprotocol.com) (JSON-RPC). Use it from IDEs, SDKs, eval harnesses, and custom apps. For a one-shot prompt that prints and exits, use `cook -p` instead ([headless mode](14-headless-mode.md)).
 
 ---
 
@@ -10,10 +10,10 @@ For scripts, CI, evals, and agent servers, start with always-approve so tools ru
 
 ```bash
 # stdio (local process / many SDKs)
-thanh agent --always-approve stdio
+cook agent --always-approve stdio
 
 # WebSocket server
-thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
+cook agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 ```
 
 You can also set always-approve per session on `session/new`:
@@ -47,7 +47,7 @@ The [Agent Client Protocol (ACP)](https://agentclientprotocol.com) defines how c
 stdio is the common local integration path. The agent speaks JSON-RPC on stdin and stdout:
 
 ```bash
-thanh agent --always-approve stdio
+cook agent --always-approve stdio
 ```
 
 Typical clients: IDE extensions (Zed, Neovim, Emacs), custom tools, and ACP SDKs.
@@ -57,8 +57,8 @@ Typical clients: IDE extensions (Zed, Neovim, Emacs), custom tools, and ACP SDKs
 Agent options apply to every transport (`stdio`, `serve`, `headless`, `leader`). They go after `agent` and before the mode name. Mode-specific flags go after the mode (for example `serve --bind`).
 
 ```bash
-thanh agent --always-approve --model grok-build stdio
-thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
+cook agent --always-approve --model grok-build stdio
+cook agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 ```
 
 | Flag | Description |
@@ -74,7 +74,7 @@ thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 ## Server mode
 
 ```bash
-thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
+cook agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 ```
 
 Clients connect over WebSocket and authenticate with the secret token. If you omit `--secret`, the agent prints a generated token at startup, or set `GROK_AGENT_SECRET`. The process keeps state across client reconnects. Permissions match other entry points; see [Permissions and safety](22-permissions-and-safety.md).
@@ -88,7 +88,7 @@ This is a server you run yourself — Grok's hosted cloud sandboxes do not run `
 To reach the agent over the internet, connect the agent to a relay and point browsers at the same relay:
 
 ```bash
-thanh agent --always-approve headless --grok-ws-url wss://your-relay.example.com/ws
+cook agent --always-approve headless --grok-ws-url wss://your-relay.example.com/ws
 ```
 
 ---

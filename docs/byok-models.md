@@ -5,13 +5,13 @@ Grok **đã hỗ trợ sẵn** — không cần build lại source.
 
 | Mục | Giá trị |
 |-----|---------|
-| File config | `~/.thanh/config.toml` |
-| Xem danh sách | `thanh models` hoặc trong TUI: `/model` |
+| File config | `~/.cook/config.toml` |
+| Xem danh sách | `cook models` hoặc trong TUI: `/model` |
 | Đổi model | `/model <id>` hoặc `/m <id>` |
-| Docs chính thức | `~/.thanh/docs/user-guide/11-custom-models.md` |
+| Docs chính thức | `~/.cook/docs/user-guide/11-custom-models.md` |
 
 > **Lưu ý bảo mật:** `config.toml` có thể chứa API key. Không commit file này lên git.  
-> Nên `chmod 600 ~/.thanh/config.toml`. Prefer `env_key` thay vì ghi key thẳng vào file.
+> Nên `chmod 600 ~/.cook/config.toml`. Prefer `env_key` thay vì ghi key thẳng vào file.
 
 ---
 
@@ -116,7 +116,7 @@ input = ["text"]
 | `input = ["text", "image"]` | model đọc được text + ảnh |
 | `input = ["text"]` | model chỉ nhận text |
 
-Kiểm tra nhanh bằng `thanh models` — mỗi model in kèm modalities, vd.:
+Kiểm tra nhanh bằng `cook models` — mỗi model in kèm modalities, vd.:
 
 ```text
 Available models:
@@ -164,7 +164,7 @@ context_window = 128000
 thanh models
 
 # Trong TUI đang chạy: Grok hot-reload config.toml;
-# nếu model chưa hiện → restart `thanh`
+# nếu model chưa hiện → restart `cook`
 ```
 
 Chọn model:
@@ -187,10 +187,10 @@ default = "deepseek-new-slug"
 
 ### Chỉ xóa một model
 
-1. Mở `~/.thanh/config.toml`.  
+1. Mở `~/.cook/config.toml`.  
 2. Xóa **toàn bộ** block `[model.<id>]` … đến trước section kế tiếp.  
 3. Nếu `[models] default = "<id>"` trỏ model vừa xóa → đổi sang model còn tồn tại (vd. `grok-4.5`).  
-4. Chạy `thanh models` để confirm id đã biến mất.
+4. Chạy `cook models` để confirm id đã biến mất.
 
 ### Xóa cả provider
 
@@ -201,7 +201,7 @@ default = "deepseek-new-slug"
 ### Không đụng
 
 - `[cli]`, `[ui]`, `[marketplace]`, … — không liên quan model list.  
-- `~/.thanh/models_cache.json` — cache model xAI remote, **không** phải nơi thêm BYOK.
+- `~/.cook/models_cache.json` — cache model xAI remote, **không** phải nơi thêm BYOK.
 
 ---
 
@@ -213,7 +213,7 @@ default = "deepseek-new-slug"
 - [ ] Chọn `api_backend` đúng protocol  
 - [ ] Thêm/reuse `[model_providers.*]` hoặc set `base_url` trên model  
 - [ ] Thêm `[model.<id>]` (quote nếu id có `.`)  
-- [ ] `thanh models` thấy id mới  
+- [ ] `cook models` thấy id mới  
 - [ ] `/model <id>` + gửi 1 tin nhắn test  
 
 ### Xóa
@@ -221,7 +221,7 @@ default = "deepseek-new-slug"
 - [ ] Xóa block `[model.<id>]`  
 - [ ] Sửa `[models] default` nếu cần  
 - [ ] Xóa provider orphan nếu không còn model nào dùng  
-- [ ] `thanh models` không còn id đó  
+- [ ] `cook models` không còn id đó  
 
 ---
 
@@ -247,7 +247,7 @@ Provider URLs (không secret):
 | xiaomi | `https://api.xiaomimimo.com/v1` |
 | moonshot | `https://api.moonshot.ai/v1` |
 
-Backup lúc import: `~/.thanh/config.toml.bak-20260731-221150`
+Backup lúc import: `~/.cook/config.toml.bak-20260731-221150`
 
 ---
 
@@ -286,9 +286,9 @@ thanh models    # mỗi model in kèm modalities, vd. grok-4.5 [text, image]
 ```
 
 Trong TUI: `/model grok-4.5`. Sau khi sửa `config.toml`, catalog hot-reload khi file
-đổi; nếu model list chưa cập nhật, restart `thanh`.
+đổi; nếu model list chưa cập nhật, restart `cook`.
 
-Danh sách field đầy đủ: `~/.thanh/docs/user-guide/11-custom-models.md`.
+Danh sách field đầy đủ: `~/.cook/docs/user-guide/11-custom-models.md`.
 
 ---
 
@@ -333,12 +333,12 @@ model = "deepseek-v4-flash"
 
 | Triệu chứng | Việc kiểm tra |
 |-------------|----------------|
-| `thanh models` không thấy model | Typo section TOML? Id có `.` đã quote chưa? Restart `thanh` |
+| `cook models` không thấy model | Typo section TOML? Id có `.` đã quote chưa? Restart `cook` |
 | 401 / unauthorized | Sai `api_key` / `env_key`; env đã export chưa |
 | 404 model | Field `model` phải khớp id API của provider |
 | Request đi nhầm xAI | Model cần `base_url` hoặc `model_provider` trỏ provider đúng |
 | Tool / reasoning lỗi | Provider có thể cần header/compat đặc biệt — xem `11-custom-models.md` |
-| `400 unknown variant image_url, expected text` | Model khai báo `input = ["text"]` nhưng request vẫn kèm ảnh (ảnh dán cũ trong session). Kể từ fix này, Grok tự strip ảnh khỏi request khi model text-only — ảnh được thay bằng placeholder text, file path (nếu có) vẫn giữ để đọc qua `read_file`. Không cần làm gì thêm; nếu vẫn lỗi, kiểm tra `input = ["text"]` đã khai báo đúng chưa (`thanh models` phải hiện `[text]`) |
+| `400 unknown variant image_url, expected text` | Model khai báo `input = ["text"]` nhưng request vẫn kèm ảnh (ảnh dán cũ trong session). Kể từ fix này, Grok tự strip ảnh khỏi request khi model text-only — ảnh được thay bằng placeholder text, file path (nếu có) vẫn giữ để đọc qua `read_file`. Không cần làm gì thêm; nếu vẫn lỗi, kiểm tra `input = ["text"]` đã khai báo đúng chưa (`cook models` phải hiện `[text]`) |
 | Muốn ẩn model xAI | Dùng `[models] allowed_models` / `hidden_models` / `disabled_models` (glob) trong docs chính thức |
 
 ```bash
@@ -346,10 +346,10 @@ model = "deepseek-v4-flash"
 thanh models
 
 # Backup trước khi sửa tay
-cp ~/.thanh/config.toml ~/.thanh/config.toml.bak-$(date +%Y%m%d)
+cp ~/.cook/config.toml ~/.cook/config.toml.bak-$(date +%Y%m%d)
 
 # Quyền file (có secret)
-chmod 600 ~/.thanh/config.toml
+chmod 600 ~/.cook/config.toml
 ```
 
 ---
@@ -377,6 +377,6 @@ Thứ tự resolve (tóm tắt): `api_key` model → `env_key` model → provide
 
 ## 10. Liên kết
 
-- Official: `~/.thanh/docs/user-guide/11-custom-models.md`
-- Slash commands: `~/.thanh/docs/user-guide/04-slash-commands.md` (`/model`, `/effort`)
-- Config tổng: `~/.thanh/docs/user-guide/05-configuration.md`
+- Official: `~/.cook/docs/user-guide/11-custom-models.md`
+- Slash commands: `~/.cook/docs/user-guide/04-slash-commands.md` (`/model`, `/effort`)
+- Config tổng: `~/.cook/docs/user-guide/05-configuration.md`

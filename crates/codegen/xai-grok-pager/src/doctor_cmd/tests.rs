@@ -181,7 +181,7 @@ fn mixed_report() -> DiagnosticReport {
             disposition: FindingDisposition::Recommendation,
             message: "Use local SSH wrapping".to_owned(),
             remediation: Some(ManualRemediation {
-                fix: "thanh wrap ssh <host>".to_owned(),
+                fix: "cook wrap ssh <host>".to_owned(),
                 config_path: None,
             }),
             automatic_remediation: Some(crate::diagnostics::ssh_wrap_automatic_remediation()),
@@ -505,12 +505,12 @@ fn human_mixed_fixture_is_exact() {
             "\n",
             "Findings\n",
             "  ! terminal.tmux-clipboard      OSC 52 clipboard passthrough is disabled\n",
-            "    → Automatic setup: `thanh doctor fix tmux-clipboard`\n",
+            "    → Automatic setup: `cook doctor fix tmux-clipboard`\n",
             "    → Add `set -g set-clipboard on` to ~/.tmux.conf\n",
             "      Reload tmux after editing.\n",
             "  i terminal.ssh-wrap            Use local SSH wrapping\n",
-            "    → Automatic setup: `thanh doctor fix ssh-wrap`\n",
-            "    → One-off: `thanh wrap ssh <host>`\n",
+            "    → Automatic setup: `cook doctor fix ssh-wrap`\n",
+            "    → One-off: `cook wrap ssh <host>`\n",
             "\n",
             "Checks not completed\n",
             "  ? tmux.version                 unavailable\n",
@@ -544,10 +544,10 @@ fn fix_preview_contains_exact_change_and_caveats() {
     assert!(preview.contains("File: "));
     assert!(
         preview.contains(
-            "# >>> thanh doctor >>>\n# >>> terminal.ssh-wrap >>>\nalias ssh='thanh wrap ssh'"
+            "# >>> cook doctor >>>\n# >>> terminal.ssh-wrap >>>\nalias ssh='cook wrap ssh'"
         )
     );
-    assert!(preview.contains("To use once without changing config: `thanh wrap ssh <host>`"));
+    assert!(preview.contains("To use once without changing config: `cook wrap ssh <host>`"));
     assert!(preview.contains("Use `command ssh ...` to bypass the alias."));
     assert!(preview.contains("ssh -f"));
     assert!(preview.contains("ControlPersist"));
@@ -770,7 +770,7 @@ fn json_contract_is_structural_stable_ordered_and_ansi_free() {
                     },
                     "automaticRemediation": {
                         "fixId": "terminal.tmux-clipboard",
-                        "command": "thanh doctor fix terminal.tmux-clipboard"
+                        "command": "cook doctor fix terminal.tmux-clipboard"
                     },
                     "note": "Reload tmux after editing."
                 },
@@ -778,10 +778,10 @@ fn json_contract_is_structural_stable_ordered_and_ansi_free() {
                     "id": "terminal.ssh-wrap",
                     "disposition": "recommendation",
                     "message": "Use local SSH wrapping",
-                    "remediation": {"fix": "thanh wrap ssh <host>", "configPath": null},
+                    "remediation": {"fix": "cook wrap ssh <host>", "configPath": null},
                     "automaticRemediation": {
                         "fixId": "terminal.ssh-wrap",
-                        "command": "thanh doctor fix terminal.ssh-wrap"
+                        "command": "cook doctor fix terminal.ssh-wrap"
                     },
                     "note": null
                 }
@@ -1020,7 +1020,7 @@ fn clipboard_issue_count_preserves_legacy_reports_without_double_counting_named_
 fn new_named_findings_extend_json_without_schema_changes() {
     let mut report = healthy_report();
     report.facts.clipboard.delivery = ClipboardDelivery::Unverified;
-    report.facts.clipboard.fix = Some("thanh wrap <ssh command> or /minimal".to_owned());
+    report.facts.clipboard.fix = Some("cook wrap <ssh command> or /minimal".to_owned());
     report.findings.push(DiagnosticFinding {
         id: crate::diagnostics::CLIPBOARD_DELIVERY_UNVERIFIED_ID,
         disposition: FindingDisposition::Issue,
@@ -1040,7 +1040,7 @@ fn new_named_findings_extend_json_without_schema_changes() {
     );
     assert_eq!(
         json["facts"]["clipboard"]["fix"],
-        "thanh wrap <ssh command> or /minimal"
+        "cook wrap <ssh command> or /minimal"
     );
     assert_eq!(
         json.pointer("/facts/clipboard/delivery")
@@ -1050,7 +1050,7 @@ fn new_named_findings_extend_json_without_schema_changes() {
     assert_eq!(
         json.pointer("/facts/clipboard/fix")
             .and_then(serde_json::Value::as_str),
-        Some("thanh wrap <ssh command> or /minimal")
+        Some("cook wrap <ssh command> or /minimal")
     );
     assert_eq!(
         json.pointer("/findings/0/id")

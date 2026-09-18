@@ -7,7 +7,7 @@
     <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
   </picture>
   <br>
-  Grok Build (<code>thanh</code>)
+  Cook (<code>cook</code>) / Let Cook
 </h1>
 
 **Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
@@ -22,7 +22,7 @@ Protocol (ACP).
 
 </div>
 
-## About this fork (thanh)
+## About this fork (Cook)
 
 This repository is a **BYOK-focused fork** of upstream
 [Grok Build](https://github.com/xai-org/grok-build), synced periodically from
@@ -30,15 +30,17 @@ the SpaceXAI monorepo. It keeps the upstream agent/TUI core unchanged and
 customizes only what third-party models need — DeepSeek, OpenRouter, or any
 OpenAI-compatible API.
 
-The fork ships as a command named **`thanh`** (not `grok`) with its own home
-directory **`~/.thanh`** (config, auth, sessions, binaries, caches), completely
+The fork ships as a command named **`cook`** (not `grok`) with its own home
+directory **`~/.cook`** (config, auth, sessions, binaries, caches), completely
 separate from `~/.grok`, so both can run side by side.
 
 | Topic | Link |
 |-------|------|
 | How the repo is organized (for engineers/AI) | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Desktop app architecture | [`docs/desktop-app.md`](docs/desktop-app.md) |
+| Desktop client-layering fold (honesty, registry) | [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md) |
 | Desktop production plan (providers, Claude Desktop–class) | [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md) |
+| Desktop ↔ TUI capability map | [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md) |
 | BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
 | Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
 | Restore core surfaces after a sync (implement + test) | [`docs/post-merge-core-fix.md`](docs/post-merge-core-fix.md) |
@@ -52,15 +54,15 @@ Prebuilt binaries are published on this fork's
 
 ```sh
 # Pick the latest version from the releases page:
-curl -fsSL -o ~/.local/bin/thanh \
-  https://github.com/weseegod/thanh/releases/latest/download/thanh-<version>-macos-aarch64
-chmod +x ~/.local/bin/thanh
-# Linux (x86_64): replace the asset name with thanh-<version>-linux-x86_64
+curl -fsSL -o ~/.local/bin/cook \
+  https://github.com/weseegod/thanh/releases/latest/download/cook-<version>-macos-aarch64
+chmod +x ~/.local/bin/cook
+# Linux (x86_64): replace the asset name with cook-<version>-linux-x86_64
 ```
 
 A background updater keeps the binary fresh — the welcome screen shows
-`Update: vX available — press ctrl+u to restart`, or run `thanh update`
-manually. It only manages `~/.thanh/bin/thanh` and never touches `~/.grok`.
+`Update: vX available — press ctrl+u to restart`, or run `cook update`
+manually. It only manages `~/.cook/bin/cook` and never touches `~/.grok`.
 
 ## Building from source
 
@@ -70,7 +72,7 @@ Requirements: **Rust** (toolchain pinned by
 [`bin/protoc`](bin/protoc) wrapper can download and run `protoc`).
 
 ```sh
-./build.sh                              # builds and installs `thanh` into ~/.thanh/bin (+ ~/.local/bin symlink)
+./build.sh                              # builds and installs `cook` into ~/.cook/bin (+ ~/.local/bin symlink)
 cargo run -p xai-grok-pager-bin         # build + launch the TUI in one go
 cargo check -p xai-grok-pager-bin       # fast validation
 ```

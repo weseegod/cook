@@ -37,13 +37,13 @@ The PowerShell installer automatically adds `%USERPROFILE%\.grok\bin` to your Us
 Verify the installation:
 
 ```bash
-thanh --version
+cook --version
 ```
 
 Update to the latest version at any time:
 
 ```bash
-thanh update
+cook update
 ```
 
 To fetch a repository through Grove (NFS on macOS, FUSE on Linux), enable
@@ -71,7 +71,7 @@ Start Grok by running:
 grok
 ```
 
-On first launch, Grok opens your browser to authenticate with grok.com. After you sign in, Grok stores your credentials in `~/.thanh/auth.json`, where they persist across sessions. Grok refreshes your credentials automatically and prompts you to sign in again when they can no longer be renewed.
+On first launch, Grok opens your browser to authenticate with grok.com. After you sign in, Grok stores your credentials in `~/.cook/auth.json`, where they persist across sessions. Grok refreshes your credentials automatically and prompts you to sign in again when they can no longer be renewed.
 
 If you prefer API key authentication (e.g., for CI/CD or environments without a browser), set the `XAI_API_KEY` environment variable instead:
 
@@ -117,7 +117,7 @@ The `@` operator opens a fuzzy file picker. By default it respects `.gitignore` 
 By default, Grok asks for permission before executing shell commands or editing files. You can approve individually or toggle always-approve mode:
 
 - Press `Ctrl+O` to toggle always-approve mode
-- Use the `--yolo` flag at launch: `thanh --yolo`
+- Use the `--yolo` flag at launch: `cook --yolo`
 - Type `/always-approve` in the prompt to toggle the mode
 
 ---
@@ -126,11 +126,11 @@ By default, Grok asks for permission before executing shell commands or editing 
 
 ### Sessions
 
-Every conversation is a **session**. Sessions are automatically saved to `~/.thanh/sessions/` and can be resumed later. Each session tracks the full conversation history, tool calls, file edits, and task state.
+Every conversation is a **session**. Sessions are automatically saved to `~/.cook/sessions/` and can be resumed later. Each session tracks the full conversation history, tool calls, file edits, and task state.
 
 - Start a new session: `Ctrl+N` or `/new`
 - Resume a previous session: `/resume` in the TUI, or `--resume <ID>` from the CLI
-- Continue the most recent session: `thanh -c`
+- Continue the most recent session: `cook -c`
 
 ### Scrollback
 
@@ -180,44 +180,44 @@ See [Slash Commands](04-slash-commands.md) for the complete reference.
 
 ```bash
 # Launch the interactive TUI and submit an initial prompt as the first turn
-thanh "fix the failing auth test and run it"
+cook "fix the failing auth test and run it"
 
 # Initial prompt in a new git worktree. Use --worktree=<name> (with `=`) so the
-# prompt isn't swallowed as the worktree name — `thanh -w "refactor module X"`
+# prompt isn't swallowed as the worktree name — `cook -w "refactor module X"`
 # would treat "refactor module X" as the worktree label, not the prompt.
-thanh --worktree=feat "refactor module X"
+cook --worktree=feat "refactor module X"
 
 # Base the worktree on a specific branch (e.g. main) instead of the current HEAD:
-thanh -w --ref main "implement feature from main"
+cook -w --ref main "implement feature from main"
 
 
 # Start in a specific project directory
-thanh --cwd ~/projects/my-app
+cook --cwd ~/projects/my-app
 
 # Add project-specific rules
-thanh --rules "Always use TypeScript. Prefer functional components."
+cook --rules "Always use TypeScript. Prefer functional components."
 
 # Auto-approve all tool executions
-thanh --yolo
+cook --yolo
 
 # Use a specific model
-thanh -m grok-build
+cook -m grok-build
 
 # Resume a previous session
-thanh --resume <session-id>
+cook --resume <session-id>
 
 # Continue the most recent session
-thanh -c
+cook -c
 
 # Experimental scrollback-native render mode. Sticky: plain `grok` reopens in
 # the mode last chosen via --minimal/--fullscreen (or /minimal//fullscreen).
-thanh --minimal
+cook --minimal
 
 # Back to the standard fullscreen TUI (and make it sticky again)
-thanh --fullscreen
+cook --fullscreen
 
 # Headless mode (for scripts)
-thanh -p "Explain this codebase"
+cook -p "Explain this codebase"
 ```
 
 ---
@@ -227,7 +227,7 @@ thanh -p "Explain this codebase"
 Run Grok non-interactively for scripting, CI/CD, and automation:
 
 ```bash
-thanh -p "Your prompt here"
+cook -p "Your prompt here"
 ```
 
 Output formats:
@@ -241,7 +241,7 @@ Output formats:
 Example CI/CD usage:
 
 ```bash
-thanh -p "Review changes for bugs" --output-format json --yolo | jq -r '.text'
+cook -p "Review changes for bugs" --output-format json --yolo | jq -r '.text'
 ```
 
 ---
@@ -251,7 +251,7 @@ thanh -p "Review changes for bugs" --output-format json --yolo | jq -r '.text'
 Add per-project instructions by creating an `AGENTS.md` file in your repository. Grok reads these files and injects their contents as a project-instructions message at the start of the conversation:
 
 ```
-~/.thanh/AGENTS.md           # Global rules (apply to all projects)
+~/.cook/AGENTS.md           # Global rules (apply to all projects)
 <repo-root>/AGENTS.md       # Repository-level rules
 <cwd>/AGENTS.md             # Directory-level rules (highest priority)
 ```

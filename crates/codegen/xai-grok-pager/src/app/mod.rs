@@ -2475,9 +2475,9 @@ mod tests {
         assert!(!args.no_alt_screen);
     }
     #[test]
-    fn cli_command_name_is_thanh() {
+    fn cli_command_name_is_cook() {
         use clap::CommandFactory;
-        assert_eq!(PagerArgs::command().get_name(), "thanh");
+        assert_eq!(PagerArgs::command().get_name(), "cook");
     }
     #[test]
     fn cli_help_output_header() {
@@ -2487,9 +2487,9 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "thanh (fork) — Grok Build TUI",
+                "Cook — Let Cook TUI",
                 "",
-                "Usage: thanh [OPTIONS] [PROMPT] [COMMAND]",
+                "Usage: cook [OPTIONS] [PROMPT] [COMMAND]",
                 "",
                 "Arguments:",
             ]
@@ -2535,7 +2535,7 @@ mod tests {
         print_exit_resume_hint(&bare_exit_info("sess-abc", false), 80, &mut buf);
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "\nResume this session with:\n  thanh --resume sess-abc\n"
+            "\nResume this session with:\n  cook --resume sess-abc\n"
         );
     }
     #[test]
@@ -2544,7 +2544,7 @@ mod tests {
         print_exit_resume_hint(&bare_exit_info("sess-abc", true), 80, &mut buf);
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "\nResume this session with:\n  thanh --minimal --resume sess-abc\n"
+            "\nResume this session with:\n  cook --minimal --resume sess-abc\n"
         );
     }
     #[test]
@@ -2569,7 +2569,7 @@ mod tests {
                 "  Pinned the seed; 200 consecutive green runs.\n",
                 "\n",
                 "Resume this session with:\n",
-                "  thanh --resume sess-abc\n",
+                "  cook --resume sess-abc\n",
             )
         );
     }
@@ -2590,7 +2590,7 @@ mod tests {
         assert!(out.contains(&format!("\n{}…\n", "t".repeat(19))));
         assert!(out.contains(&format!("\n> {}…\n", "p".repeat(17))));
         assert!(out.contains(&format!("\n  {}…\n", "r".repeat(17))));
-        assert!(out.contains("  thanh --resume sess-abc\n"));
+        assert!(out.contains("  cook --resume sess-abc\n"));
     }
     #[test]
     fn print_relaunch_failure_hint_writes_expected_lines() {

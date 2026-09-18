@@ -1,5 +1,5 @@
 //! Basic PTY coverage: startup, input, rendering, permission-mode keys, and
-//! `thanh wrap` command routing.
+//! `cook wrap` command routing.
 //!
 //! All cases are ignored for ordinary Cargo runs; Bazel opts in and caps this process-heavy family at four concurrent libtest workers.
 

@@ -18,7 +18,7 @@ shopt -s nullglob
 CRATE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Desktop consumer lives three levels up from this crate in the workspace tree.
 REPO_ROOT="$(cd "$CRATE_DIR/../../.." && pwd)"
-DESKTOP_DIR="$REPO_ROOT/frontend/apps/thanh-desktop"
+DESKTOP_DIR="$REPO_ROOT/frontend/apps/let-cook"
 DST="$DESKTOP_DIR/src/acp/generated"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

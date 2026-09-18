@@ -15,7 +15,7 @@ A session is a persistent conversation with full history. It includes:
 - Token usage and turn counts
 - Subagent sessions (when enabled)
 
-Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.thanh/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.thanh`.
+Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.cook/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.cook`.
 
 ---
 
@@ -24,7 +24,7 @@ Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it;
 Grok stores each session in its own directory, grouped by working directory. It URL-encodes the working directory to name the group. When the encoded name exceeds 255 bytes, it instead uses a slug plus a hash and records the original path in a `.cwd` file inside the group.
 
 ```
-~/.thanh/sessions/<encoded-cwd>/<session-id>/
+~/.cook/sessions/<encoded-cwd>/<session-id>/
   summary.json            # metadata: summary/title, timestamps, model ID, message counts
   updates.jsonl           # ACP session update stream (conversation + tool calls)
   chat_history.jsonl      # raw chat messages sent to the model
@@ -100,12 +100,12 @@ For the live top-level sessions in this pager (parent and forks) — switch, ren
 Resume a specific session by ID or title:
 
 ```bash
-thanh --resume <session-id-or-title>
+cook --resume <session-id-or-title>
 ```
 
 A value that is not a session ID is matched against session titles for the current directory, ignoring letter case (a simple lowercase comparison) — handy after `/rename`. If several sessions share the title, a single manually renamed session wins over auto-generated duplicates; otherwise the command errors and lists the matching IDs. UUID-shaped values are always treated as session IDs, never titles. Scripts should prefer IDs.
 
-Run `thanh --resume` without a value to resume the most recent session for the current directory.
+Run `cook --resume` without a value to resume the most recent session for the current directory.
 
 ### From the Welcome Screen
 
@@ -188,14 +188,14 @@ This shows:
 
 - Session title (when set)
 - Shell version
-- Auth method (OAuth vs API key; API-key sessions also suggest `thanh login` for SuperGrok)
+- Auth method (OAuth vs API key; API-key sessions also suggest `cook login` for SuperGrok)
 - Session ID
 - Working directory
 - Model (with a model hash for coding models)
 - API backend and sandbox profile (when set)
 - Context window usage (used and total tokens, with the percentage used)
 
-On the Session info tab, click a value to copy it, or drag to select a range (same highlight as the tool viewer). `c` copies the session ID and `y` copies the whole block. Copy uses the same clipboard route as the rest of Grok, including `thanh wrap`.
+On the Session info tab, click a value to copy it, or drag to select a range (same highlight as the tool viewer). `c` copies the session ID and `y` copies the whole block. Copy uses the same clipboard route as the rest of Grok, including `cook wrap`.
 
 ---
 
@@ -205,13 +205,13 @@ In headless mode, you manage sessions through command-line flags:
 
 ```bash
 # New session each time (default)
-thanh -p "Hello"
+cook -p "Hello"
 
 # Resume an existing session by ID or title (errors if it does not exist)
-thanh -p "Continue where we left off" -r <session-id-or-title>
+cook -p "Continue where we left off" -r <session-id-or-title>
 
 # Continue the most recent session in the current directory
-thanh -p "What were we doing?" -c
+cook -p "What were we doing?" -c
 ```
 
 In headless mode, resume an existing session with `-r`/`--resume`, which errors if the session does not exist, or continue the most recent session in the current directory with `-c`/`--continue`. A non-ID value is matched against session titles for the current directory, ignoring letter case (a sole manually renamed match wins among duplicates; remaining duplicates error with their IDs; UUID-shaped values always take the ID path) — scripts should pass the session ID from JSON output (see below) to `-r`.
@@ -221,7 +221,7 @@ Use `-s`/`--session-id` only to **create** a new session with a **UUID** (errors
 To read the session ID back, request JSON output:
 
 ```bash
-thanh -p "Hello" --output-format json | jq -r '.sessionId'
+cook -p "Hello" --output-format json | jq -r '.sessionId'
 ```
 
 ---
@@ -259,20 +259,20 @@ The agent persists all session updates automatically. Clients can reconnect and 
 
 ## The grok sessions Subcommand
 
-List or search sessions from the command line. `thanh sessions` requires a subcommand:
+List or search sessions from the command line. `cook sessions` requires a subcommand:
 
 ```bash
 # List recent sessions for the current directory
-thanh sessions list
+cook sessions list
 
 # Limit the number of results (default 20)
-thanh sessions list --limit 50
+cook sessions list --limit 50
 
 # Search sessions by keyword (matches titles and prompts)
-thanh sessions search "rate limit"
+cook sessions search "rate limit"
 ```
 
-`thanh sessions list` shows sessions for the current working directory, grouped by worktree label. Each row lists the session ID, the creation and update dates, the source status, and the summary. `thanh sessions search` combines a local SQLite index with remote results.
+`cook sessions list` shows sessions for the current working directory, grouped by worktree label. Each row lists the session ID, the creation and update dates, the source status, and the summary. `cook sessions search` combines a local SQLite index with remote results.
 
 ---
 
@@ -302,14 +302,14 @@ Worktree sessions are managed internally through the `x.ai/git/worktree/*` exten
 - **Apply**: Merge worktree changes back into the main working directory
 - **Remove**: Clean up a worktree when the session is done
 
-Resume a session in a fresh worktree with `thanh -w -r <session-id>`.
+Resume a session in a fresh worktree with `cook -w -r <session-id>`.
 
 ### Checking Disk Usage
 
-`thanh du` (alias: `thanh disk-usage`) reports what the grok home (`~/.thanh`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
+`cook du` (alias: `cook disk-usage`) reports what the grok home (`~/.cook`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
 
 ```text
-Disk usage for ~/.thanh
+Disk usage for ~/.cook
     412.3 GB  worktrees
       1.2 GB  sessions
     412.0 MB  (top-level files)
@@ -318,28 +318,28 @@ Disk usage for ~/.thanh
 
 Worktrees
         SIZE  TYPE                AGE        LABEL  PATH
-    380.0 GB  session             12d ago    my-fix ~/.thanh/worktrees/xai/worktree-abc
-     32.3 GB  untracked (session) 40d ago           ~/.thanh/worktrees/xai/worktree-old
+    380.0 GB  session             12d ago    my-fix ~/.cook/worktrees/xai/worktree-abc
+     32.3 GB  untracked (session) 40d ago           ~/.cook/worktrees/xai/worktree-old
 
-To reclaim space, run `thanh worktree gc --max-age 7d --dry-run`, then the same command without `--dry-run`. Without `--max-age`, gc expires nothing, and it keeps a worktree whose work it cannot find elsewhere, naming each one.
-Untracked rows are not in the registry, so gc never visits them. Remove one with `thanh worktree rm --dry-run <path>`, then without `--dry-run`.
+To reclaim space, run `cook worktree gc --max-age 7d --dry-run`, then the same command without `--dry-run`. Without `--max-age`, gc expires nothing, and it keeps a worktree whose work it cannot find elsewhere, naming each one.
+Untracked rows are not in the registry, so gc never visits them. Remove one with `cook worktree rm --dry-run <path>`, then without `--dry-run`.
 ```
 
-`AGE` is the value `thanh worktree gc` measures: time since the worktree was last accessed, or since it was created when that is more recent. Session and agent activity update it; a shell or editor left open in the directory does not. An untracked worktree has no registry entry, so its age comes from the newest file underneath it.
+`AGE` is the value `cook worktree gc` measures: time since the worktree was last accessed, or since it was created when that is more recent. Session and agent activity update it; a shell or editor left open in the directory does not. An untracked worktree has no registry entry, so its age comes from the newest file underneath it.
 
-Sizes are physical block counts on Unix and logical file sizes elsewhere, matching what `thanh worktree show` reports. A worktree clone shares storage with its source and each copy counts in full, so the total can exceed both `du -sh` and the space actually in use. When the total exceeds the used space on the volume, the report says so. `--json` carries the same figures as `volume_capacity_bytes` and `volume_available_bytes`.
+Sizes are physical block counts on Unix and logical file sizes elsewhere, matching what `cook worktree show` reports. A worktree clone shares storage with its source and each copy counts in full, so the total can exceed both `du -sh` and the space actually in use. When the total exceeds the used space on the volume, the report says so. `--json` carries the same figures as `volume_capacity_bytes` and `volume_available_bytes`.
 
-The report measures a single filesystem, the one holding the grok home. A directory on any other filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug thanh du` to name each one.
+The report measures a single filesystem, the one holding the grok home. A directory on any other filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug cook du` to name each one.
 
 Every worktree row in `--json` also carries `created_at`, `last_accessed_at`, and `last_modified_at` in unix seconds, plus `repo_name` and `git_ref`. Registry fields are `null` for untracked rows. `git_ref` is the branch recorded when the worktree was registered, not the branch checked out now.
 
-When the registry is unavailable, every row appears as `untracked` and the report names the reason. The `--json` `registry` field carries the same value: `read`, `absent`, `busy`, `unopenable`, or `corrupt`. A `busy` registry is held by another process, so retry. An `unopenable` one has a permission or I/O problem, so check the file. A `corrupt` one is the only case that calls for deletion: remove the file the report names, then run `thanh worktree db rebuild`.
+When the registry is unavailable, every row appears as `untracked` and the report names the reason. The `--json` `registry` field carries the same value: `read`, `absent`, `busy`, `unopenable`, or `corrupt`. A `busy` registry is held by another process, so retry. An `unopenable` one has a permission or I/O problem, so check the file. A `corrupt` one is the only case that calls for deletion: remove the file the report names, then run `cook worktree db rebuild`.
 
-To reclaim space, run `thanh worktree gc --max-age 7d`, which removes tracked worktrees older than the age you give. Without `--max-age`, gc expires nothing, and it visits only worktrees the registry tracks. Remove an untracked worktree with `thanh worktree rm <path>`. Both commands take `--dry-run` and report what they would do: gc counts the worktrees it would remove, and `rm` names the path.
+To reclaim space, run `cook worktree gc --max-age 7d`, which removes tracked worktrees older than the age you give. Without `--max-age`, gc expires nothing, and it visits only worktrees the registry tracks. Remove an untracked worktree with `cook worktree rm <path>`. Both commands take `--dry-run` and report what they would do: gc counts the worktrees it would remove, and `rm` names the path.
 
 Each run judges as many worktrees as it can in about a minute, because the same pass runs on a timer beside your session and reading a whole working tree is not free. Anything it did not reach is counted as `Not judged this pass` and waits for the next run, so on a machine with a lot to reclaim, run gc again until that number is zero.
 
-Before removing an expired worktree, gc checks whether the removal would destroy work: uncommitted, untracked or ignored files, a commit no surviving ref holds, or state kept only in that worktree's git directory. A worktree it cannot check is kept as well. The report counts kept worktrees and names the reason, separately from the ones a live process held back. `--force` does not skip the check, and `thanh worktree rm` does not apply it: it removes the path you name.
+Before removing an expired worktree, gc checks whether the removal would destroy work: uncommitted, untracked or ignored files, a commit no surviving ref holds, or state kept only in that worktree's git directory. A worktree it cannot check is kept as well. The report counts kept worktrees and names the reason, separately from the ones a live process held back. `--force` does not skip the check, and `cook worktree rm` does not apply it: it removes the path you name.
 
 Ignored files count as work, with one exception: a directory the repository's own ignore rules exclude and that either carries a tool's cache tag or is named like one of its output directories (`target`, `node_modules`, `.venv`, and the rest). A name alone is never enough, so a hand-written `build/` nobody excluded still keeps the worktree.
 
@@ -359,7 +359,7 @@ Grok stores the conversation as newline-delimited JSON (JSONL). Each line in `up
 - Efficient streaming reads (for session restore)
 - Easy debugging (each line is valid JSON)
 
-The smaller state files -- `summary.json`, `plan.json`, and `signals.json` -- are plain JSON rather than JSONL. JSONL is the source of truth for session content; `thanh sessions search` additionally maintains a local SQLite FTS5 index over session titles and prompts for fast keyword search.
+The smaller state files -- `summary.json`, `plan.json`, and `signals.json` -- are plain JSON rather than JSONL. JSONL is the source of truth for session content; `cook sessions search` additionally maintains a local SQLite FTS5 index over session titles and prompts for fast keyword search.
 
 ### Session Metadata
 

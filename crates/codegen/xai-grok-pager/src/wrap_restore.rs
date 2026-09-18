@@ -1,6 +1,6 @@
-//! Terminal-mode tracking and restore emission for `thanh wrap`.
+//! Terminal-mode tracking and restore emission for `cook wrap`.
 //!
-//! `thanh wrap` cannot tell a clean child exit from a connection drop: an ssh
+//! `cook wrap` cannot tell a clean child exit from a connection drop: an ssh
 //! transport death reaches it as a plain PTY EOF plus an exit code. What it
 //! *can* know is which DEC private modes the child enabled on the local
 //! terminal and never disabled — reset bytes that died with the link.

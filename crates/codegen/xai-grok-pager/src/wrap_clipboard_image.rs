@@ -1,4 +1,4 @@
-//! Host clipboard image paste mediated by `thanh wrap`.
+//! Host clipboard image paste mediated by `cook wrap`.
 //!
 //! On a full remote paste miss (no image/text/file URLs) with `osc52_sink_active()`, remote emits a private OSC on stderr.
 //! Wrap injects a bracketed-paste frame on PTY stdin for the normal paste-chip path.
@@ -8,7 +8,7 @@
 //! Answering the private request OSC is effectively an image clipboard *read*
 //! for the wrapped session: any process that can write to the PTY (not only
 //! the inner `grok`) can solicit the host pasteboard. That is intentional and
-//! acceptable for `thanh wrap` because (1) the user opted into wrap on their
+//! acceptable for `cook wrap` because (1) the user opted into wrap on their
 //! own host, (2) the answer stays inside their session, and (3) the remote
 //! only requests when `osc52_sink_active()` (wrap already set
 //! `GROK_OSC52_SINK` / `LC_GROK_OSC52_SINK`). Do not generalize this pattern

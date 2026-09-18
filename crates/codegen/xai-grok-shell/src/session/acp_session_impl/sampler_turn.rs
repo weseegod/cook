@@ -1560,7 +1560,7 @@ impl SessionActor {
                 "{detailed_message}\n\n\
                  You are using a deprecated authentication method (WebLogin).\n\
                  This auth method is no longer supported and will cause errors.\n\n\
-                 To fix: run `thanh update`, then `thanh logout`, then `thanh login` to re-authenticate with OAuth2.\n\n\
+                 To fix: run `cook update`, then `cook logout`, then `cook login` to re-authenticate with OAuth2.\n\n\
                  Version: {client_version}"
             );
             self.log_terminal_failure("legacy_auth", error.status_code, &msg);

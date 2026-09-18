@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 const EXCLUDED_DIR_NAMES: &[&str] = &[
-    ".grok", ".thanh", ".cache", ".daemon", ".config", ".npm", ".cargo", ".rustup", ".vscode",
+    ".grok", ".cook", ".thanh", ".cache", ".daemon", ".config", ".npm", ".cargo", ".rustup",
+    ".vscode",
     ".gemini", ".hermes", ".claude",
 ];
 

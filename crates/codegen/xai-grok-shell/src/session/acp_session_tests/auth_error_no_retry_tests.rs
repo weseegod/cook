@@ -928,19 +928,19 @@ async fn legacy_auth_hint_on_404_model_not_found() {
                 "404 with WebLogin must include deprecation message, got: {msg}"
             );
             assert!(
-                msg.contains("thanh update"),
-                "hint must mention `thanh update` before re-login, got: {msg}"
+                msg.contains("cook update"),
+                "hint must mention `cook update` before re-login, got: {msg}"
             );
             assert!(
-                msg.contains("thanh logout"),
-                "hint must mention `thanh logout`, got: {msg}"
+                msg.contains("cook logout"),
+                "hint must mention `cook logout`, got: {msg}"
             );
             assert!(
-                msg.contains("thanh login"),
-                "hint must mention `thanh login`, got: {msg}"
+                msg.contains("cook login"),
+                "hint must mention `cook login`, got: {msg}"
             );
-            let update_at = msg.find("thanh update").expect("thanh update");
-            let logout_at = msg.find("thanh logout").expect("thanh logout");
+            let update_at = msg.find("cook update").expect("cook update");
+            let logout_at = msg.find("cook logout").expect("cook logout");
             assert!(
                 update_at < logout_at,
                 "update must come before logout, got: {msg}"
@@ -1008,19 +1008,19 @@ async fn legacy_auth_hint_on_401_unauthorized() {
                 "401 with WebLogin must include deprecation message, got: {msg}"
             );
             assert!(
-                msg.contains("thanh update"),
-                "hint must mention `thanh update` before re-login, got: {msg}"
+                msg.contains("cook update"),
+                "hint must mention `cook update` before re-login, got: {msg}"
             );
             assert!(
-                msg.contains("thanh logout"),
-                "hint must mention `thanh logout`, got: {msg}"
+                msg.contains("cook logout"),
+                "hint must mention `cook logout`, got: {msg}"
             );
             assert!(
-                msg.contains("thanh login"),
-                "hint must mention `thanh login`, got: {msg}"
+                msg.contains("cook login"),
+                "hint must mention `cook login`, got: {msg}"
             );
-            let update_at = msg.find("thanh update").expect("thanh update");
-            let logout_at = msg.find("thanh logout").expect("thanh logout");
+            let update_at = msg.find("cook update").expect("cook update");
+            let logout_at = msg.find("cook logout").expect("cook logout");
             assert!(
                 update_at < logout_at,
                 "update must come before logout, got: {msg}"

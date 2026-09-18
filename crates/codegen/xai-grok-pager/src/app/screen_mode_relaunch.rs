@@ -741,11 +741,11 @@ mod tests {
         // The explicit flag keeps the resume in the right mode if the env is dropped
         assert_eq!(
             screen_mode_relaunch_resume_hint("abc-sid", false),
-            "GROK_SCREEN_MODE=fullscreen thanh --fullscreen --resume abc-sid"
+            "GROK_SCREEN_MODE=fullscreen cook --fullscreen --resume abc-sid"
         );
         assert_eq!(
             screen_mode_relaunch_resume_hint("abc-sid", true),
-            "GROK_SCREEN_MODE=minimal thanh --minimal --resume abc-sid"
+            "GROK_SCREEN_MODE=minimal cook --minimal --resume abc-sid"
         );
     }
 

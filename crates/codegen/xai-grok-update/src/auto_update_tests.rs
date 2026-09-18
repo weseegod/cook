@@ -3,11 +3,11 @@ use super::*;
 #[test]
 fn test_tmp_download_path_is_unique_per_version_and_per_attempt() {
     // The old `with_extension("tmp")` collapsed every 0.1.x versioned
-    // name onto a single `thanh-0.1.tmp`; the helper must keep distinct
+    // name onto a single `cook-0.1.tmp`; the helper must keep distinct
     // versions distinct AND make repeated attempts (same process, e.g.
     // concurrent tokio tasks) unique.
-    let dest_181 = std::path::Path::new("/home/u/.thanh/downloads/thanh-0.1.181-linux-x86_64");
-    let dest_182 = std::path::Path::new("/home/u/.thanh/downloads/thanh-0.1.182-linux-x86_64");
+    let dest_181 = std::path::Path::new("/home/u/.cook/downloads/cook-0.1.181-linux-x86_64");
+    let dest_182 = std::path::Path::new("/home/u/.cook/downloads/cook-0.1.182-linux-x86_64");
 
     let a = tmp_download_path(dest_181);
     let b = tmp_download_path(dest_182);
@@ -21,7 +21,7 @@ fn test_tmp_download_path_is_unique_per_version_and_per_attempt() {
 
     let name = a.file_name().unwrap().to_string_lossy().to_string();
     assert!(
-        name.starts_with("thanh-0.1.181-linux-x86_64."),
+        name.starts_with("cook-0.1.181-linux-x86_64."),
         "full versioned name must be preserved: {name}"
     );
     assert!(
@@ -30,7 +30,7 @@ fn test_tmp_download_path_is_unique_per_version_and_per_attempt() {
     );
     assert_eq!(
         a.parent(),
-        std::path::Path::new("/home/u/.thanh/downloads").into(),
+        std::path::Path::new("/home/u/.cook/downloads").into(),
         "temp file must stay in the destination directory for atomic rename"
     );
 }
@@ -407,67 +407,67 @@ async fn test_atomic_symlink_swap_with_relative_target() {
 #[cfg(unix)]
 #[test]
 fn test_relative_symlink_target_sibling_dirs() {
-    // bin/thanh -> ../downloads/thanh-0.1.203
-    let target = std::path::Path::new("/home/alice/.thanh/downloads/thanh-0.1.203");
-    let link = std::path::Path::new("/home/alice/.thanh/bin/thanh");
+    // bin/cook -> ../downloads/cook-0.1.203
+    let target = std::path::Path::new("/home/alice/.cook/downloads/cook-0.1.203");
+    let link = std::path::Path::new("/home/alice/.cook/bin/cook");
     let result = relative_symlink_target(target, link);
     assert_eq!(
         result,
-        std::path::PathBuf::from("../downloads/thanh-0.1.203")
+        std::path::PathBuf::from("../downloads/cook-0.1.203")
     );
 }
 
 #[cfg(unix)]
 #[test]
 fn test_relative_symlink_target_same_dir() {
-    // downloads/thanh-latest -> thanh-0.1.203 (same directory)
-    let target = std::path::Path::new("/home/alice/.thanh/downloads/thanh-0.1.203");
-    let link = std::path::Path::new("/home/alice/.thanh/downloads/thanh-latest");
+    // downloads/cook-latest -> cook-0.1.203 (same directory)
+    let target = std::path::Path::new("/home/alice/.cook/downloads/cook-0.1.203");
+    let link = std::path::Path::new("/home/alice/.cook/downloads/cook-latest");
     let result = relative_symlink_target(target, link);
-    assert_eq!(result, std::path::PathBuf::from("thanh-0.1.203"));
+    assert_eq!(result, std::path::PathBuf::from("cook-0.1.203"));
 }
 
 #[cfg(unix)]
 #[test]
 fn test_relative_symlink_target_cross_tree_stays_absolute() {
-    // /usr/local/bin/thanh -> /home/alice/.thanh/downloads/thanh-0.1.203
+    // /usr/local/bin/cook -> /home/alice/.cook/downloads/cook-0.1.203
     // Different grandparents — should stay absolute.
-    let target = std::path::Path::new("/home/alice/.thanh/downloads/thanh-0.1.203");
-    let link = std::path::Path::new("/usr/local/bin/thanh");
+    let target = std::path::Path::new("/home/alice/.cook/downloads/cook-0.1.203");
+    let link = std::path::Path::new("/usr/local/bin/cook");
     let result = relative_symlink_target(target, link);
     assert_eq!(
         result,
-        std::path::PathBuf::from("/home/alice/.thanh/downloads/thanh-0.1.203")
+        std::path::PathBuf::from("/home/alice/.cook/downloads/cook-0.1.203")
     );
 }
 
 #[cfg(unix)]
 #[tokio::test]
 async fn test_relative_symlink_survives_directory_move() {
-    // Simulates Docker bind-mount: create ~/.thanh/ layout at path A,
+    // Simulates Docker bind-mount: create ~/.cook/ layout at path A,
     // then move it to path B and verify the symlink still resolves.
     let dir = tempfile::tempdir().unwrap();
 
     // Create alice's layout
-    let alice = dir.path().join("alice").join(".thanh");
+    let alice = dir.path().join("alice").join(".cook");
     let alice_downloads = alice.join("downloads");
     let alice_bin = alice.join("bin");
     std::fs::create_dir_all(&alice_downloads).unwrap();
     std::fs::create_dir_all(&alice_bin).unwrap();
-    std::fs::write(alice_downloads.join("thanh-0.1.203"), "binary-content").unwrap();
+    std::fs::write(alice_downloads.join("cook-0.1.203"), "binary-content").unwrap();
 
     // Create a relative symlink (what the fix produces)
-    let rel_target = std::path::Path::new("../downloads/thanh-0.1.203");
-    let link = alice_bin.join("thanh");
+    let rel_target = std::path::Path::new("../downloads/cook-0.1.203");
+    let link = alice_bin.join("cook");
     atomic_symlink_swap(rel_target, &link).await.unwrap();
 
     // Verify it works at the original location
     assert_eq!(std::fs::read_to_string(&link).unwrap(), "binary-content");
 
-    // "Bind-mount" to bob: copy the entire .thanh tree
+    // "Bind-mount" to bob: copy the entire .cook tree
     let bob_home = dir.path().join("bob");
     std::fs::create_dir_all(&bob_home).unwrap();
-    let bob = bob_home.join(".thanh");
+    let bob = bob_home.join(".cook");
     let copy_status = std::process::Command::new("cp")
         .args(["-a", alice.to_str().unwrap(), bob.to_str().unwrap()])
         .status()
@@ -475,11 +475,11 @@ async fn test_relative_symlink_survives_directory_move() {
     assert!(copy_status.success());
 
     // Verify the symlink resolves at bob's path too
-    let bob_link = bob.join("bin").join("thanh");
+    let bob_link = bob.join("bin").join("cook");
     assert!(bob_link.is_symlink());
     assert_eq!(
         std::fs::read_link(&bob_link).unwrap(),
-        std::path::PathBuf::from("../downloads/thanh-0.1.203"),
+        std::path::PathBuf::from("../downloads/cook-0.1.203"),
         "symlink target should be relative"
     );
     assert_eq!(
@@ -939,7 +939,7 @@ fn test_reinstall_hint_gh_release_mentions_gh_command() {
         hint.contains("weseegod/thanh"),
         "should name the fork repo: {hint}"
     );
-    assert!(hint.contains("thanh-*"), "should name thanh assets: {hint}");
+    assert!(hint.contains("cook-*"), "should name cook assets: {hint}");
 }
 
 #[test]
@@ -949,7 +949,7 @@ fn test_reinstall_hint_internal_mentions_fork_release_page() {
         hint.contains("github.com/weseegod/thanh/releases"),
         "should point at the fork release page: {hint}"
     );
-    assert!(hint.contains("thanh"), "should name the thanh binary: {hint}");
+    assert!(hint.contains("cook"), "should name the cook binary: {hint}");
 }
 
 #[test]
@@ -960,6 +960,7 @@ fn test_reinstall_hint_enterprise_uses_enterprise_script() {
         hint.contains("/enterprise-install."),
         "enterprise must use the published enterprise-install script: {hint}"
     );
+    let stable = reinstall_hint("internal", "stable");
     assert!(
         !stable.contains("GROK_CHANNEL"),
         "fork hint must not set GROK_CHANNEL: {stable}"
@@ -1942,7 +1943,7 @@ async fn test_windows_replace_exe_creates_dest_when_missing() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new-binary.exe");
     std::fs::write(&src, "new content").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
 
     windows_replace_exe(&src, &dest).await.unwrap();
 
@@ -1956,7 +1957,7 @@ async fn test_windows_replace_exe_overwrites_unlocked_dest() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new-binary.exe");
     std::fs::write(&src, "new content").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "old content").unwrap();
 
     windows_replace_exe(&src, &dest).await.unwrap();
@@ -1971,7 +1972,7 @@ async fn test_windows_replace_exe_preserves_binary_bytes() {
     let body: Vec<u8> = (0u8..=255).cycle().take(4096).collect();
     let src = dir.path().join("binary.exe");
     std::fs::write(&src, &body).unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
 
     windows_replace_exe(&src, &dest).await.unwrap();
 
@@ -1984,9 +1985,9 @@ async fn test_windows_replace_exe_cleans_stale_old_backup() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new.exe");
     std::fs::write(&src, "new").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "current").unwrap();
-    let old = dir.path().join("thanh.exe.old");
+    let old = dir.path().join("cook.exe.old");
     std::fs::write(&old, "stale-from-prior-update").unwrap();
 
     windows_replace_exe(&src, &dest).await.unwrap();
@@ -2018,7 +2019,7 @@ async fn test_windows_replace_exe_locked_file_renames_aside() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new.exe");
     std::fs::write(&src, "updated binary").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "running binary").unwrap();
 
     let _lock = std::fs::OpenOptions::new()
@@ -2031,7 +2032,7 @@ async fn test_windows_replace_exe_locked_file_renames_aside() {
 
     assert_eq!(std::fs::read_to_string(&dest).unwrap(), "updated binary");
 
-    let old = dir.path().join("thanh.exe.old");
+    let old = dir.path().join("cook.exe.old");
     assert!(old.exists(), ".old must exist after rename fallback");
     drop(_lock);
     assert_eq!(std::fs::read_to_string(&old).unwrap(), "running binary");
@@ -2040,7 +2041,7 @@ async fn test_windows_replace_exe_locked_file_renames_aside() {
 #[cfg(windows)]
 #[tokio::test]
 async fn test_windows_replace_exe_rollback_on_copy_failure() {
-    // No stale .old: the aside IS thanh.exe.old, so this pins the
+    // No stale .old: the aside IS cook.exe.old, so this pins the
     // non-diverted rollback branch (rename .old back onto dest).
     use std::os::windows::fs::OpenOptionsExt;
     const FILE_SHARE_READ: u32 = 0x00000001;
@@ -2049,7 +2050,7 @@ async fn test_windows_replace_exe_rollback_on_copy_failure() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new.exe");
     std::fs::write(&src, "updated binary").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "original").unwrap();
 
     // Dest locked like a running exe: blocks writes but allows rename.
@@ -2075,7 +2076,7 @@ async fn test_windows_replace_exe_rollback_on_copy_failure() {
         "original",
         "rollback must restore the original binary"
     );
-    let old = dir.path().join("thanh.exe.old");
+    let old = dir.path().join("cook.exe.old");
     assert!(!old.exists(), "rollback must consume the .old aside");
 }
 
@@ -2085,7 +2086,7 @@ async fn test_windows_replace_exe_idempotent_same_content() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("binary.exe");
     std::fs::write(&src, "same content").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "same content").unwrap();
 
     windows_replace_exe(&src, &dest).await.unwrap();
@@ -2099,7 +2100,7 @@ async fn test_windows_replace_exe_empty_binary() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("empty.exe");
     std::fs::write(&src, b"").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "non-empty").unwrap();
 
     windows_replace_exe(&src, &dest).await.unwrap();
@@ -2119,9 +2120,9 @@ async fn test_windows_replace_exe_locked_stale_old_does_not_block_update() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new.exe");
     std::fs::write(&src, "updated binary").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "running binary").unwrap();
-    let old = dir.path().join("thanh.exe.old");
+    let old = dir.path().join("cook.exe.old");
     std::fs::write(&old, "previous binary").unwrap();
 
     // No FILE_SHARE_DELETE: .old cannot be deleted or rename-replaced.
@@ -2151,7 +2152,7 @@ async fn test_windows_replace_exe_locked_stale_old_does_not_block_update() {
         .filter(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with("thanh.exe.old.") && n.ends_with(".old"))
+                .is_some_and(|n| n.starts_with("cook.exe.old.") && n.ends_with(".old"))
         })
         .collect();
     assert_eq!(
@@ -2182,9 +2183,9 @@ async fn test_windows_replace_exe_rollback_restores_from_diverted_aside() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new.exe");
     std::fs::write(&src, "updated binary").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "running binary").unwrap();
-    let old = dir.path().join("thanh.exe.old");
+    let old = dir.path().join("cook.exe.old");
     std::fs::write(&old, "previous binary").unwrap();
 
     // No FILE_SHARE_DELETE: .old survives the sweep and forces a divert.
@@ -2221,7 +2222,7 @@ async fn test_windows_replace_exe_rollback_restores_from_diverted_aside() {
         .filter(|e| {
             let name = e.file_name();
             let name = name.to_string_lossy();
-            name.starts_with("thanh.exe.old.") && name.ends_with(".old")
+            name.starts_with("cook.exe.old.") && name.ends_with(".old")
         })
         .count();
     assert_eq!(leftover_asides, 0, "rollback must consume the aside");
@@ -2235,12 +2236,12 @@ async fn test_windows_replace_exe_sweeps_accumulated_asides() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("new.exe");
     std::fs::write(&src, "new").unwrap();
-    let dest = dir.path().join("thanh.exe");
+    let dest = dir.path().join("cook.exe");
     std::fs::write(&dest, "current").unwrap();
-    let old = dir.path().join("thanh.exe.old");
+    let old = dir.path().join("cook.exe.old");
     std::fs::write(&old, "stale").unwrap();
-    let aside_a = dir.path().join("thanh.exe.old.1234-0.old");
-    let aside_b = dir.path().join("thanh.exe.old.1234-1.old");
+    let aside_a = dir.path().join("cook.exe.old.1234-0.old");
+    let aside_b = dir.path().join("cook.exe.old.1234-1.old");
     std::fs::write(&aside_a, "aside-a").unwrap();
     std::fs::write(&aside_b, "aside-b").unwrap();
     let agent_old = dir.path().join("agent.exe.old");

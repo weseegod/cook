@@ -16,7 +16,7 @@ See the [MCP specification](https://modelcontextprotocol.io) for protocol detail
 
 ## Configuration
 
-MCP servers are configured in `~/.thanh/config.toml` under `[mcp_servers.<name>]` sections.
+MCP servers are configured in `~/.cook/config.toml` under `[mcp_servers.<name>]` sections.
 
 To distribute MCP servers to a team, or to restrict which servers users may run (`allowedMcpServers` / `deniedMcpServers` in `requirements.toml` / `managed_config.toml`, with Claude `managed-settings.json` advisory for foreign-defined servers), see [Distribute across an organization](09-plugins.md#distribute-across-an-organization) in the Plugins guide.
 
@@ -48,7 +48,7 @@ tool_timeouts = { slow_op = 120 }     # Per-tool timeout overrides, seconds
 >
 > - env `GROK_MAX_MCP_OUTPUT_BYTES` or `MAX_MCP_OUTPUT_BYTES` (bytes; Grok-native
 >   wins if both set; Claude-style name, but we bound by **bytes** not tokens)
-> - `config.toml` — user-level (`~/.thanh/config.toml`) **or repo-level**
+> - `config.toml` — user-level (`~/.cook/config.toml`) **or repo-level**
 >   (`.grok/config.toml` anywhere on the cwd → git-root chain; the deepest
 >   file wins, and the repo value applies only once the folder is trusted):
 >
@@ -98,45 +98,45 @@ Manage MCP servers from the command line without editing config files:
 
 ```bash
 # List configured MCP servers
-thanh mcp list
-thanh mcp list --json          # Machine-readable output
+cook mcp list
+cook mcp list --json          # Machine-readable output
 
 # Add a stdio server. Everything after -- is the server command, so flags
 # like -y reach the server instead of being parsed by grok.
-thanh mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
+cook mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
 
 # Add a stdio server with environment variables (-e is repeatable)
-thanh mcp add postgres -e DATABASE_URL=postgres://localhost/mydb -- npx -y @modelcontextprotocol/server-postgres
+cook mcp add postgres -e DATABASE_URL=postgres://localhost/mydb -- npx -y @modelcontextprotocol/server-postgres
 
 # Add a remote HTTP server
-thanh mcp add --transport http sentry https://mcp.sentry.dev/mcp
+cook mcp add --transport http sentry https://mcp.sentry.dev/mcp
 
 # Add a remote server with an authentication header (--header is repeatable)
-thanh mcp add --transport http api https://mcp.example.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
+cook mcp add --transport http api https://mcp.example.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
 
 # Add a remote SSE server
-thanh mcp add --transport sse linear https://mcp.linear.app/sse
+cook mcp add --transport sse linear https://mcp.linear.app/sse
 
 # Remove a server
-thanh mcp remove github
+cook mcp remove github
 
 # Enable or disable a local/TOML (or compat-sourced) server
-thanh mcp enable github
-thanh mcp disable github
+cook mcp enable github
+cook mcp disable github
 
 # Diagnose a server's configuration and connectivity
-thanh mcp doctor               # Check every configured server
-thanh mcp doctor github        # Check one server
-thanh mcp doctor --json        # Machine-readable output
+cook mcp doctor               # Check every configured server
+cook mcp doctor github        # Check one server
+cook mcp doctor --json        # Machine-readable output
 ```
 
 The transport defaults to `stdio`; pass `--transport http` or `--transport sse` for remote servers.
 
-By default `thanh mcp add` writes to `~/.thanh/config.toml` (`--scope user`). Use `--scope project` to write to `.grok/config.toml` in the current directory instead, which can be committed and shared with your team (see [Project-Scoped MCP Servers](#project-scoped-mcp-servers)). Header and environment variable values are stored verbatim, so reference secrets as `${VAR}` instead of pasting them into a committed project config (see [Example Configurations](#example-configurations)). `thanh mcp list` shows servers from both scopes, marking project-scoped ones with `(project)` and disabled ones with `(disabled)`.
+By default `cook mcp add` writes to `~/.cook/config.toml` (`--scope user`). Use `--scope project` to write to `.grok/config.toml` in the current directory instead, which can be committed and shared with your team (see [Project-Scoped MCP Servers](#project-scoped-mcp-servers)). Header and environment variable values are stored verbatim, so reference secrets as `${VAR}` instead of pasting them into a committed project config (see [Example Configurations](#example-configurations)). `cook mcp list` shows servers from both scopes, marking project-scoped ones with `(project)` and disabled ones with `(disabled)`.
 
-`thanh mcp remove` searches both scopes and exits 0 after removing the server. It exits 1 when the name is not found, or when the name is defined in both user and project scope — pass `--scope` to say which one to remove.
+`cook mcp remove` searches both scopes and exits 0 after removing the server. It exits 1 when the name is not found, or when the name is defined in both user and project scope — pass `--scope` to say which one to remove.
 
-`thanh mcp enable` / `disable` persist the personal on/off state to user `~/.thanh/config.toml` (`disabled_mcp_servers`, and `[mcp_servers.<name>].enabled` when that entry exists). Scope:
+`cook mcp enable` / `disable` persist the personal on/off state to user `~/.cook/config.toml` (`disabled_mcp_servers`, and `[mcp_servers.<name>].enabled` when that entry exists). Scope:
 
 - **Known names:** user/project Grok TOML, names already on the disabled list, compat sources (`.mcp.json`, Claude, Cursor), and **plugin** MCP servers (same discovery as doctor/`/mcps`).
 - **Enable only:** if the cwd-nearest project definition has sticky `enabled = false`, that single key is cleared (comments preserved); disable never rewrites project configs.
@@ -171,13 +171,13 @@ Grok walks from the current directory up to the git repo root, loading `.grok/co
 
 | Location | Scope | Priority |
 |----------|-------|----------|
-| `~/.thanh/config.toml` | All projects | Lowest |
+| `~/.cook/config.toml` | All projects | Lowest |
 | `<repo-root>/.grok/config.toml` | This repository | Medium |
 | `<cwd>/.grok/config.toml` | Current directory | Highest |
 
 If a project defines a server with the same name as a global one, the project version replaces it entirely (fields are not merged).
 
-Project-scoped files contribute `[mcp_servers]`, `[plugins]`, and `[permission]` entries. Grok reads most other config sections only from `~/.thanh/config.toml`.
+Project-scoped files contribute `[mcp_servers]`, `[plugins]`, and `[permission]` entries. Grok reads most other config sections only from `~/.cook/config.toml`.
 
 ---
 
@@ -247,14 +247,14 @@ Grok loads MCP server configurations from multiple sources for compatibility:
 
 | Source | Format | Location | Configurable |
 |--------|--------|----------|-------------|
-| `config.toml` | Native Grok config | `~/.thanh/config.toml`, `.grok/config.toml` | Always on |
+| `config.toml` | Native Grok config | `~/.cook/config.toml`, `.grok/config.toml` | Always on |
 | `.claude.json` | Claude Code format | `~/.claude.json` | `[compat.claude] mcps` |
 | `.cursor/mcp.json` | Cursor format | `~/.cursor/mcp.json`, `<project>/.cursor/mcp.json` | `[compat.cursor] mcps` |
 | `.mcp.json` | MCP standard format | Project root (cwd to git root) | Loaded unless you have imported or dismissed the Claude import prompt (the import marker is set) |
 
 All sources are merged in priority order: config.toml > Claude > Cursor > `.mcp.json`. Servers from higher-priority sources take precedence when names conflict.
 
-The Claude and Cursor MCP sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] mcps = false` in `~/.thanh/config.toml` or the corresponding environment variable (`GROK_CURSOR_MCPS_ENABLED`, `GROK_CLAUDE_MCPS_ENABLED`). See [Configuration](05-configuration.md#harness-compatibility) for details. Use `thanh inspect` to see which MCP servers were loaded and their vendor origin (`[cursor]`, `[claude]`).
+The Claude and Cursor MCP sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] mcps = false` in `~/.cook/config.toml` or the corresponding environment variable (`GROK_CURSOR_MCPS_ENABLED`, `GROK_CLAUDE_MCPS_ENABLED`). See [Configuration](05-configuration.md#harness-compatibility) for details. Use `cook inspect` to see which MCP servers were loaded and their vendor origin (`[cursor]`, `[claude]`).
 
 ---
 
@@ -270,7 +270,7 @@ Use the `url` form for hosted MCP servers and the `command` / `args` form for lo
 
 ### Native HTTP (hosted services)
 
-You must authenticate OAuth-based MCP servers before you can use them. Grok stores the resulting tokens under `~/.thanh/mcp_credentials.json` as local plaintext with owner-only file permissions (`0600` on Unix). Prefer full-disk encryption on the host. After you edit `config.toml`, press `r` in the `/mcps` modal to refresh the server list.
+You must authenticate OAuth-based MCP servers before you can use them. Grok stores the resulting tokens under `~/.cook/mcp_credentials.json` as local plaintext with owner-only file permissions (`0600` on Unix). Prefer full-disk encryption on the host. After you edit `config.toml`, press `r` in the `/mcps` modal to refresh the server list.
 
 ```toml
 [mcp_servers.linear]
@@ -361,7 +361,7 @@ Subagents inherit the parent session’s connected MCP servers by default, inclu
 
 If a child lists `search_tool` / `use_tool` but returns an empty catalog, check that:
 
-1. The parent session actually connected the server (see Extensions / `thanh inspect`)
+1. The parent session actually connected the server (see Extensions / `cook inspect`)
 2. The agent’s `mcpInheritance` is not `none` or a filter that excludes the server
 3. Plugin agents cannot declare their own `mcpServers` in frontmatter — they only see parent-connected servers
 
@@ -381,10 +381,10 @@ npx -y @modelcontextprotocol/server-filesystem /path
 startup_timeout_sec = 30
 ```
 
-For stdio servers, Grok captures the process's standard error to `~/.thanh/logs/mcp/<server>.stderr.log`, truncated on each launch. Check this file when a server starts but fails to handshake:
+For stdio servers, Grok captures the process's standard error to `~/.cook/logs/mcp/<server>.stderr.log`, truncated on each launch. Check this file when a server starts but fails to handshake:
 
 ```bash
-tail -f ~/.thanh/logs/mcp/filesystem.stderr.log
+tail -f ~/.cook/logs/mcp/filesystem.stderr.log
 ```
 
 ### Blocked by organization policy
@@ -404,11 +404,11 @@ This is separate from a tool that is missing on the **first** prompt because the
 
 ### Viewing Server Status
 
-Use `thanh inspect` to see all loaded MCP servers and their sources:
+Use `cook inspect` to see all loaded MCP servers and their sources:
 
 ```bash
-thanh inspect          # Human-readable
-thanh inspect --json   # Machine-readable
+cook inspect          # Human-readable
+cook inspect --json   # Machine-readable
 ```
 
 ### Debug Logging

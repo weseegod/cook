@@ -20,7 +20,7 @@ Grok discovers skills from these directories, in priority order:
 |----------|-------|----------|-------|
 | `./.grok/skills/`, `./.grok/commands/` | Local (CWD) | Highest | Current directory skills / legacy command markdown |
 | `<repo_root>/.grok/skills/`, `…/commands/` | Repo | Medium | Shared across the repo |
-| `~/.thanh/skills/`, `~/.thanh/commands/` | User | Lowest | Personal skills for all projects |
+| `~/.cook/skills/`, `~/.cook/commands/` | User | Lowest | Personal skills for all projects |
 | `~/.claude/skills/`, `~/.claude/commands/` | User | Lowest | Claude Code compatibility (configurable) |
 | `./.claude/skills/`, `./.claude/commands/` | Local / Repo | High | Project Claude skills and legacy custom slash commands |
 | `~/.cursor/skills/` | User | Lowest | Cursor compatibility (configurable) |
@@ -32,11 +32,11 @@ Flat `*.md` files under a `commands/` directory become user-invocable slash comm
 
 Skill and command discovery does **not** use `.gitignore`. Paths under known skill roots (`.grok/`, `.agents/`, `.claude/`, `.cursor/`) always load when present on disk — teams often ignore `.claude/**` as local-only config while still expecting `/frontend`-style project commands to work. To hide a skill, use `[skills] ignore` in config (not repo ignore rules).
 
-Grok scans the Claude and Cursor skill directories by default. To stop scanning a vendor, set its `skills` cell to `false` under `[compat.cursor]` or `[compat.claude]` in `~/.thanh/config.toml`, or set the `GROK_CURSOR_SKILLS_ENABLED` or `GROK_CLAUDE_SKILLS_ENABLED` environment variable to `false`. See [Configuration](05-configuration.md#harness-compatibility) for details. Grok always filters out known vendor-shipped default skills (such as Cursor's `shell`, `canvas`, and `statusline`), regardless of these settings.
+Grok scans the Claude and Cursor skill directories by default. To stop scanning a vendor, set its `skills` cell to `false` under `[compat.cursor]` or `[compat.claude]` in `~/.cook/config.toml`, or set the `GROK_CURSOR_SKILLS_ENABLED` or `GROK_CLAUDE_SKILLS_ENABLED` environment variable to `false`. See [Configuration](05-configuration.md#harness-compatibility) for details. Grok always filters out known vendor-shipped default skills (such as Cursor's `shell`, `canvas`, and `statusline`), regardless of these settings.
 
 ### Additional Skill Directories
 
-Add directories, exclude paths, or disable individual skills via `[skills]` in `~/.thanh/config.toml`:
+Add directories, exclude paths, or disable individual skills via `[skills]` in `~/.cook/config.toml`:
 
 ```toml
 [skills]
@@ -56,7 +56,7 @@ Each entry in `paths` is a `SKILL.md` file or a directory that Grok walks recurs
 Each skill lives in its own directory with a `SKILL.md` file:
 
 ```
-~/.thanh/skills/
+~/.cook/skills/
   commit/
     SKILL.md
   review-pr/
@@ -138,7 +138,7 @@ When you run `/create-skill`, Grok:
 Grok asks where to save the skill:
 
 - **Project** (`<repo_root>/.grok/skills/<name>/`) -- available only in this repository and shareable with teammates through version control. Grok recommends this scope inside a git repository.
-- **User** (`~/.thanh/skills/<name>/`) -- available across all your projects.
+- **User** (`~/.cook/skills/<name>/`) -- available across all your projects.
 
 To distribute a skill to a whole team or organization, package it in a plugin and publish it through a marketplace. See [Create your own marketplace](09-plugins.md#create-your-own-marketplace) and [Distribute across an organization](09-plugins.md#distribute-across-an-organization).
 
@@ -163,7 +163,7 @@ Running a skill loads its instructions into the conversation and directs the mod
 /commit fix the build
 ```
 
-To browse your skills, type `/` to open the slash-command menu. Grok lists every built-in command and skill and filters them as you type. To list skills from the command line instead, run `thanh inspect` (see [Viewing Skill Details](#viewing-skill-details)).
+To browse your skills, type `/` to open the slash-command menu. Grok lists every built-in command and skill and filters them as you type. To list skills from the command line instead, run `cook inspect` (see [Viewing Skill Details](#viewing-skill-details)).
 
 ### Qualified Names
 
@@ -171,13 +171,13 @@ When a skill's name collides with another skill or a built-in command, Grok keep
 
 ```
 /local:commit        # The "commit" skill from ./.grok/skills/
-/user:commit         # The "commit" skill from ~/.thanh/skills/
+/user:commit         # The "commit" skill from ~/.cook/skills/
 /acme:login          # A plugin skill named "login" (built-in /login is unchanged)
 ```
 
 Typing `/login` in the slash menu shows both rows, with a right-aligned **built-in** or **skill · plugin-name** badge so you can tell them apart. Rename the skill (or its directory) if you want the bare `/name` for the skill instead.
 
-`thanh inspect` tags colliding skills with `[collides with /login → /acme:login]`.
+`cook inspect` tags colliding skills with `[collides with /login → /acme:login]`.
 
 ### Automatic Invocation
 
@@ -189,11 +189,11 @@ For example, if a skill's description says "Use when the user wants to commit ch
 
 ## Viewing Skill Details
 
-Run `thanh inspect` to see every skill Grok discovers, along with the rest of your configuration:
+Run `cook inspect` to see every skill Grok discovers, along with the rest of your configuration:
 
 ```bash
-thanh inspect          # Human-readable summary
-thanh inspect --json   # Machine-readable report
+cook inspect          # Human-readable summary
+cook inspect --json   # Machine-readable report
 ```
 
 In the human-readable output, the Skills section lists each skill's name and its source -- `project`, `user`, `bundled`, `config` (a `[skills].paths` entry), `server` (skills synced from the skill store in managed workspaces), or `plugin: <name>`. Grok tags any skill disabled via `[skills].disabled` or from a disabled vendor surface with `[disabled]`.
@@ -206,9 +206,9 @@ The `--json` report includes the full detail for each skill: its `name`, `descri
 
 ## Bundled and Plugin Skills
 
-Grok distributes platform skills separately from your personal skills. Bundled skills are cached under `~/.thanh/bundled/skills/`; Grok never writes them into `~/.thanh/skills/`. A same-named local, repo, or user skill overrides the bundled copy. `thanh inspect` labels each definition by its actual source. (A plugin skill of the same name does not override a native skill; it stays available under its qualified `plugin:name` form.)
+Grok distributes platform skills separately from your personal skills. Bundled skills are cached under `~/.cook/bundled/skills/`; Grok never writes them into `~/.cook/skills/`. A same-named local, repo, or user skill overrides the bundled copy. `cook inspect` labels each definition by its actual source. (A plugin skill of the same name does not override a native skill; it stays available under its qualified `plugin:name` form.)
 
-Skills can also come from plugins. When you install a plugin that includes skills, they appear alongside your user and project skills. `thanh inspect` labels each plugin-provided skill with its source as `plugin: <name>`.
+Skills can also come from plugins. When you install a plugin that includes skills, they appear alongside your user and project skills. `cook inspect` labels each plugin-provided skill with its source as `plugin: <name>`.
 
 See the [Plugins guide](09-plugins.md) for more on installing plugins that provide skills.
 
@@ -224,7 +224,7 @@ See the [Plugins guide](09-plugins.md) for more on installing plugins that provi
 
 4. **Keep skills focused.** Write one skill per workflow. A "deploy" skill and a "rollback" skill work better than a single "deploy-and-rollback" skill.
 
-5. **Version-control project skills.** Commit `.grok/skills/` to your repository so the whole team benefits. User skills in `~/.thanh/skills/` stay personal and unshared.
+5. **Version-control project skills.** Commit `.grok/skills/` to your repository so the whole team benefits. User skills in `~/.cook/skills/` stay personal and unshared.
 
 6. **Test by running it.** Invoke `/name` and confirm the skill works before you rely on automatic invocation.
 

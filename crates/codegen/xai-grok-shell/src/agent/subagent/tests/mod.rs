@@ -2652,7 +2652,7 @@ fn fresh_tool_model_rejects_unknown_and_nonavailable_entries() {
                      Omit `model` to inherit the parent model."
                 )
             );
-        assert!(!error.contains("thanh models"));
+        assert!(!error.contains("cook models"));
     }
     assert!(
             super::handle_request::task_model_override_error(

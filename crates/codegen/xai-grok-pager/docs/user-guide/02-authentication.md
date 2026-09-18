@@ -12,11 +12,11 @@ On first launch, Grok opens your browser to authenticate with grok.com:
 grok
 ```
 
-Grok stores credentials in `~/.thanh/auth.json` and reuses them across sessions. Grok refreshes access tokens automatically in the background. When a token can't be refreshed, Grok prompts you to sign in again. Credentials without a server-provided expiry fall back to a 30-day lifetime.
+Grok stores credentials in `~/.cook/auth.json` and reuses them across sessions. Grok refreshes access tokens automatically in the background. When a token can't be refreshed, Grok prompts you to sign in again. Credentials without a server-provided expiry fall back to a 30-day lifetime.
 
 ### Credential storage
 
-Tokens in `~/.thanh/auth.json` (and MCP OAuth tokens in `~/.thanh/mcp_credentials.json`) are written with owner-only permissions (`0600` on Unix). Anyone with filesystem access to those paths can use the credentials, so:
+Tokens in `~/.cook/auth.json` (and MCP OAuth tokens in `~/.cook/mcp_credentials.json`) are written with owner-only permissions (`0600` on Unix). Anyone with filesystem access to those paths can use the credentials, so:
 
 - Prefer full-disk encryption (FileVault, BitLocker, LUKS, or equivalent).
 - Do not copy `auth.json` or `mcp_credentials.json` into shared directories, tickets, or chat.
@@ -27,17 +27,17 @@ Tokens in `~/.thanh/auth.json` (and MCP OAuth tokens in `~/.thanh/mcp_credential
 To switch accounts or resolve an authentication problem, run:
 
 ```bash
-thanh login
+cook login
 ```
 
-Running `thanh login` starts the sign-in flow again, replacing your cached session. By default, it opens your browser and signs in through SpaceXAI OAuth at `auth.x.ai`. Pass a flag to select a different flow:
+Running `cook login` starts the sign-in flow again, replacing your cached session. By default, it opens your browser and signs in through SpaceXAI OAuth at `auth.x.ai`. Pass a flag to select a different flow:
 
 | Flag | Description |
 |------|-------------|
 | `--oauth` | Sign in through SpaceXAI OAuth at `auth.x.ai`. This is the default, so the flag is optional. |
 | `--device-auth` (alias `--device-code`) | Sign in with the device-code flow for headless or remote environments. |
 
-To sign out, run `thanh logout`. It takes no flags and clears your cached credentials.
+To sign out, run `cook logout`. It takes no flags and clears your cached credentials.
 
 ---
 
@@ -50,7 +50,7 @@ export XAI_API_KEY="xai-..."
 grok
 ```
 
-Grok uses the API key as a fallback when no session token is active. If you have already signed in interactively, the stored session token takes precedence. To fall back to the API key, run `thanh logout` or delete `~/.thanh/auth.json`.
+Grok uses the API key as a fallback when no session token is active. If you have already signed in interactively, the stored session token takes precedence. To fall back to the API key, run `cook logout` or delete `~/.cook/auth.json`.
 
 ---
 
@@ -69,7 +69,7 @@ Authenticate developers through your own Identity Provider (IdP) -- such as Okta
 Via config file:
 
 ```toml
-# ~/.thanh/config.toml
+# ~/.cook/config.toml
 [grok_com_config.oidc]
 issuer = "https://acme.okta.com"
 client_id = "0oa1b2c3d4e5f6g7h8i9"
@@ -90,7 +90,7 @@ export GROK_CLI_CHAT_PROXY_BASE_URL="https://grok-proxy.acme.com/v1"
 
 ### 3. Run `grok`
 
-The CLI discovers endpoints via `{issuer}/.well-known/openid-configuration`, opens the IdP login page, and stores tokens in `~/.thanh/auth.json`. Tokens auto-refresh silently via the stored `refresh_token`.
+The CLI discovers endpoints via `{issuer}/.well-known/openid-configuration`, opens the IdP login page, and stores tokens in `~/.cook/auth.json`. Tokens auto-refresh silently via the stored `refresh_token`.
 
 ### Optional fields
 
@@ -162,7 +162,7 @@ JSON fields:
 Via config file:
 
 ```toml
-# ~/.thanh/config.toml
+# ~/.cook/config.toml
 [auth]
 auth_provider_command = "/usr/local/bin/my-auth-provider"
 auth_provider_label = "Acme Corp"   # optional -- customizes the TUI login button
@@ -188,7 +188,7 @@ same JSON fields (such as `issuer`) on every invocation, including refreshes.
   rejected. Nobody is watching. stdin is closed, your stderr is swallowed, and
   the binary is given a few seconds before it is killed. Mint silently or exit
   non-zero — never block.
-- **Unset — a sign-in.** `thanh login`, the sign-in screen, or the escalation
+- **Unset — a sign-in.** `cook login`, the sign-in screen, or the escalation
   Grok performs when a headless run couldn't mint. A user is waiting, your
   stderr reaches them, and you have 300 seconds — enough for a browser round
   trip or a device code.
@@ -228,7 +228,7 @@ run has the variable unset, like a sign-in. A binary that mints without help
 (service account, keytab, mounted token) succeeds there and the session heals
 itself. One that must prompt just sits, up to the 300s sign-in ceiling —
 nothing waits on it, the sign-in screen is already up, and that run's stderr
-goes to `~/.thanh/leader.log` rather than to you.
+goes to `~/.cook/leader.log` rather than to you.
 
 ### Environment Variables
 
@@ -247,7 +247,7 @@ goes to `~/.thanh/leader.log` rather than to you.
 For headless environments (SSH sessions, Docker containers, remote VMs) where no browser is available locally:
 
 ```bash
-thanh login --device-auth    # or: grok login --device-code
+cook login --device-auth    # or: grok login --device-code
 ```
 
 This prints a URL and code to the terminal. Open the URL on any device, enter the code, and complete authentication. Grok polls until the login is confirmed.
@@ -278,7 +278,7 @@ export GROK_AUTH_EARLY_INVALIDATION_SECS=0
 
 ## Hot Reload
 
-Grok picks up changes to `~/.thanh/auth.json` automatically. If you update credentials externally (for example, with a script that writes new tokens), Grok uses the new credentials on the next API call without a restart.
+Grok picks up changes to `~/.cook/auth.json` automatically. If you update credentials externally (for example, with a script that writes new tokens), Grok uses the new credentials on the next API call without a restart.
 
 ---
 
@@ -287,7 +287,7 @@ Grok picks up changes to `~/.thanh/auth.json` automatically. If you update crede
 Grok resolves credentials for each request in this order, highest to lowest:
 
 1. **Per-model `api_key` or `env_key`** -- set under `[model.<name>]` in `config.toml`. Wins whenever present.
-2. **Active session token** -- obtained through browser, OIDC/OAuth2, or external-provider login and stored in `~/.thanh/auth.json`.
+2. **Active session token** -- obtained through browser, OIDC/OAuth2, or external-provider login and stored in `~/.cook/auth.json`.
 3. **`XAI_API_KEY`** -- fallback when no session token is active.
 
 When more than one login flow is configured, Grok populates the session token from the first available source, highest to lowest:
@@ -362,7 +362,7 @@ RUST_LOG=debug grok -p "hello" 2> /tmp/grok.log
 
 ### Common fixes
 
-- **"Authentication failed"** -- Run `thanh logout` to clear cached credentials, then `thanh login` to sign in again.
+- **"Authentication failed"** -- Run `cook logout` to clear cached credentials, then `cook login` to sign in again.
 - **Token expires too quickly** -- Set `auth_token_ttl` or return `expires_in` in your auth provider's JSON output.
 - **OIDC redirect fails** -- Ensure your IdP allows loopback redirect URIs (`http://127.0.0.1/callback`).
 - **External auth provider not found** -- Check that the `auth_provider_command` path is correct and the binary is executable.

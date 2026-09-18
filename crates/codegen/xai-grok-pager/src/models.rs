@@ -1,4 +1,4 @@
-//! `thanh models` subcommand.
+//! `cook models` subcommand.
 
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;

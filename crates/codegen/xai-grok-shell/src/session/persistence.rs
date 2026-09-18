@@ -2576,7 +2576,7 @@ fn init_remote_sync(
             let auth_manager = auth_manager.ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    "Writeback storage mode requires authentication. Run 'thanh login' first.",
+                    "Writeback storage mode requires authentication. Run 'cook login' first.",
                 )
             })?;
             if let Some(auth) = auth_manager.current_or_expired() {

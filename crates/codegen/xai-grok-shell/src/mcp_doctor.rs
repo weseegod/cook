@@ -192,14 +192,14 @@ fn discover_servers(cwd: &Path) -> (Vec<ConfigSourceStatus>, Vec<DiscoveredServe
 
     if user_config.is_file() {
         sources.push(ConfigSourceStatus {
-            path: "~/.thanh/config.toml".to_string(),
+            path: "~/.cook/config.toml".to_string(),
             status: ConfigSourceState::Found {
                 server_count: toml_counts.get(&user_config).copied().unwrap_or(0),
             },
         });
     } else {
         sources.push(ConfigSourceStatus {
-            path: "~/.thanh/config.toml".to_string(),
+            path: "~/.cook/config.toml".to_string(),
             status: ConfigSourceState::NotFound,
         });
     }
@@ -833,7 +833,7 @@ pub fn print_report(report: &DoctorReport) {
 
     if report.servers.is_empty() {
         println!("  No MCP servers configured.");
-        println!("  Run `thanh mcp add --help` to get started.");
+        println!("  Run `cook mcp add --help` to get started.");
         println!();
         return;
     }
@@ -863,7 +863,7 @@ pub fn print_report(report: &DoctorReport) {
         report.healthy_count,
         report.failing_count,
         if report.failing_count > 0 {
-            " Run `thanh mcp doctor --json` for full diagnostics."
+            " Run `cook mcp doctor --json` for full diagnostics."
         } else {
             ""
         }

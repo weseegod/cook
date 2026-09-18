@@ -1,6 +1,6 @@
 # Status Line
 
-An optional row at the bottom of the pager — above the shortcuts bar in the full screen, under the prompt's info row in minimal mode — and disabled by default. It shows live session context, such as the model, context-window usage, cost, directory, and git worktree, or the output of any script you configure. Opt in with `[ui.status_line]` in `~/.thanh/config.toml`.
+An optional row at the bottom of the pager — above the shortcuts bar in the full screen, under the prompt's info row in minimal mode — and disabled by default. It shows live session context, such as the model, context-window usage, cost, directory, and git worktree, or the output of any script you configure. Opt in with `[ui.status_line]` in `~/.cook/config.toml`.
 
 ## Set up
 
@@ -30,7 +30,7 @@ Point `command` at a script. Grok pipes [JSON](#available-data) to it on stdin a
 ```toml
 [ui.status_line]
 type = "command"
-command = "~/.thanh/statusline.sh"
+command = "~/.cook/statusline.sh"
 ```
 
 Field names and nesting follow the common status line convention, so a ported script usually needs a small edit rather than a rewrite. Anything the table below does not list is not sent.
@@ -66,13 +66,13 @@ Set `refresh_interval` on a `command` row and the script also re-runs on a timer
 ```toml
 [ui.status_line]
 type = "command"
-command = "~/.thanh/statusline.sh"
+command = "~/.cook/statusline.sh"
 refresh_interval = 300   # seconds
 ```
 
 - **The payload says why the script ran.** A run that answers the timer carries `"trigger": "refresh_interval"` — a state change landing while a timer fire is owed rides that run — and a run with no fire owed carries `"trigger": "state"`. Hit the network on `refresh_interval` and read a cache on `state`, or a busy turn — which re-runs the script continuously — becomes a request storm against whatever the script calls.
 - **The payload is the last one Grok sent.** A timer run re-runs your script with the payload from the last state change, so its session numbers — cost, context, tokens — are as of that change, not of the fire. Only what your script fetches itself is fresh.
-- **Refresh failures keep the last output.** Once your script has answered — printed a row, or deliberately nothing — a timer run that fails or times out leaves the row exactly as it was, whether that is the last output or a failure a state run had already painted, and writes the failure to `~/.thanh/logs/unified.jsonl`, so a flaky endpoint does not paint an error over a quiet night. Three consecutive refresh failures mean the script itself is broken, and the error shows after all; a refresh failure before the script has answered anything — a fresh session, or right after switching agents — also paints at once, since there is nothing to keep. A run triggered by session state still reports its failure at once, as ever.
+- **Refresh failures keep the last output.** Once your script has answered — printed a row, or deliberately nothing — a timer run that fails or times out leaves the row exactly as it was, whether that is the last output or a failure a state run had already painted, and writes the failure to `~/.cook/logs/unified.jsonl`, so a flaky endpoint does not paint an error over a quiet night. Three consecutive refresh failures mean the script itself is broken, and the error shows after all; a refresh failure before the script has answered anything — a fresh session, or right after switching agents — also paints at once, since there is nothing to keep. A run triggered by session state still reports its failure at once, as ever.
 - **Missed fires coalesce.** While the row is hidden (a fullscreen subagent view, the welcome screen) or a run already holds the slot, the fire waits and the row is owed one run when it can have it — never a burst for the fires a suspend or a long turn skipped. The timer keeps its cadence whatever your script's runtime: a fire that comes due while a run is still going is carried to the next run rather than stacked behind it.
 - **The timer belongs to the mode that runs a script.** `refresh_interval` under `builtin` schedules nothing and is reported through `grok inspect`; under `disabled` it is off with everything else.
 
@@ -113,7 +113,7 @@ Fields Grok cannot source are omitted rather than sent as placeholders, so the r
 
 ## Example
 
-Save a script (for example `~/.thanh/statusline.sh`), make it executable with `chmod +x`, and set it as `command`. This one uses [`jq`](https://jqlang.org/); Python and Node.js parse JSON natively. The payload carries no dirty-file count, so the script calls `git` for that.
+Save a script (for example `~/.cook/statusline.sh`), make it executable with `chmod +x`, and set it as `command`. This one uses [`jq`](https://jqlang.org/); Python and Node.js parse JSON natively. The payload carries no dirty-file count, so the script calls `git` for that.
 
 ```bash
 #!/bin/bash
@@ -137,6 +137,6 @@ printf '%b\n' "${DIR##*/} │ $MODEL │ ${PCT}% ctx │ \033[32m$BRANCH\033[0m 
 - **Nothing shows.** Grok reads `[ui.status_line]` at startup, so restart it after editing `config.toml`. Restarting is enough: when the new client attaches, the agent switches the row on for a session that is still running. The row only renders once the agent view is active, so not on the welcome screen or while a subagent view is open full screen. Check that `type` is not `disabled`, and that a command script is executable and writes to stdout.
 - **A message in the row.** A row beginning `[ui.status_line]` means Grok could not use that section as written: it either names the key it could not read, or names what the mode you chose still needs. `grok inspect` lists the same problems, including keys this version does not know, which is where to look when the row is switched off. Everything it could read still applies, and Grok leaves the section as you wrote it rather than rewriting one it cannot read. Setting `type = "disabled"` removes the row and the message.
 - **A blank row that never fills.** The agent is not sending status updates, which usually means a `grok` or leader process older than this client. Restart the leader or update Grok.
-- **Only your own config can set this.** A `command` row runs a program, so it is read from your `~/.thanh/config.toml` and from configuration your administrator manages. A repository cannot set one: a repo-local `.grok/config.toml` is read for MCP servers only, and `[ui.status_line]` is not among the keys any project-scoped layer can supply, so cloning a repo cannot make Grok run its script.
+- **Only your own config can set this.** A `command` row runs a program, so it is read from your `~/.cook/config.toml` and from configuration your administrator manages. A repository cannot set one: a repo-local `.grok/config.toml` is read for MCP servers only, and `[ui.status_line]` is not among the keys any project-scoped layer can supply, so cloning a repo cannot make Grok run its script.
 - **A pushed config had no effect.** `[ui.status_line]` is stripped from campaign and version-override patches, because a status line can name a command your machine would run. Set it in your own `config.toml`.
 - **Errors.** Anything your script prints is shown, even when it exits non-zero, so `printf …; [[ -n $dirty ]]` behaves as you would expect. A script that prints nothing and fails shows `[status line: exit N]`, and that stays until the next run succeeds — for a run triggered by session state, which reports its failure at once; a timer run's failure keeps the last output instead (see [Refresh runs](#refresh-runs)). Your script's stderr is never painted, so a debugging `echo` will not disturb the row; run Grok with `--debug` to read it. A script Grok could not start at all shows `[status line: could not start the script: …]`, which is what a file without the execute bit produces, and one the system kills shows `[status line: killed by signal]`. A `#!` line naming a missing interpreter is retried under `sh` instead, so it shows an exit code.

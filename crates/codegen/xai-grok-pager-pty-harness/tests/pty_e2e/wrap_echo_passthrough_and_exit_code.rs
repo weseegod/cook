@@ -2,7 +2,7 @@
 #[allow(unused_imports)]
 use super::common::*;
 
-/// Direct-route e2e: `thanh wrap` with a resolvable explicit path runs the
+/// Direct-route e2e: `cook wrap` with a resolvable explicit path runs the
 /// command inside the wrap PTY with output passing through, and propagates the
 /// child's exit code — both for success and for a nonzero exit.
 #[test]
@@ -24,6 +24,6 @@ fn wrap_echo_passthrough_and_exit_code() {
     assert_eq!(
         code,
         Some(7),
-        "a nonzero child exit must propagate as thanh wrap's own exit\nraw:\n{raw}"
+        "a nonzero child exit must propagate as cook wrap's own exit\nraw:\n{raw}"
     );
 }

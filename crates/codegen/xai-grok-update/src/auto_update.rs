@@ -30,7 +30,7 @@ pub enum UpdateRunMode {
 
 const PROMPT_UPDATE_NOW: &str = "Update now? [Y/n/d]";
 const MSG_AUTO_UPDATE_BACKGROUND: &str = "Auto-update running in background.";
-const MSG_RUN_UPDATE_MANUAL: &str = "Run `thanh update` to get the latest version.";
+const MSG_RUN_UPDATE_MANUAL: &str = "Run `cook update` to get the latest version.";
 
 /// Manual-install hint for this platform.
 ///
@@ -39,11 +39,11 @@ const MSG_RUN_UPDATE_MANUAL: &str = "Run `thanh update` to get the latest versio
 /// upstream call sites and ignored.
 fn manual_install_cmd(_channel: &str) -> String {
     if cfg!(windows) {
-        "Download the latest 'thanh' asset from \
+        "Download the latest 'cook' asset from \
          https://github.com/weseegod/thanh/releases/latest and put it on your PATH"
             .to_string()
     } else {
-        "Download the latest 'thanh' binary for your platform from \
+        "Download the latest 'cook' binary for your platform from \
          https://github.com/weseegod/thanh/releases/latest and put it on your PATH"
             .to_string()
     }
@@ -52,7 +52,7 @@ fn manual_install_cmd(_channel: &str) -> String {
 fn reinstall_hint(installer: &str, channel: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
-        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/thanh --pattern 'thanh-*' --output thanh && chmod +x thanh".to_string(),
+        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/thanh --pattern 'cook-*' --output cook && chmod +x cook".to_string(),
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd(channel)),
     }
 }
@@ -166,7 +166,7 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
 
     if let Some(error) = status.error.as_deref() {
         println!(
-            "thanh - v{} [{}]",
+            "cook - v{} [{}]",
             status.current_version, status.channel
         );
         println!("Update check failed: {error}");
@@ -178,24 +178,24 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
     if status.update_available {
         if let Some(latest_version) = status.latest_version.as_deref() {
             println!(
-                "A new version of thanh is available: {} -> {}{}",
+                "A new version of cook is available: {} -> {}{}",
                 status.current_version, latest_version, channel_label
             );
         } else {
-            println!("A new version of thanh is available.");
+            println!("A new version of cook is available.");
         }
         return Ok(());
     }
 
     if let Some(latest_version) = status.latest_version.as_deref() {
         println!(
-            "thanh - v{} (latest: {}){}",
+            "cook - v{} (latest: {}){}",
             status.current_version, latest_version, channel_label
         );
         return Ok(());
     }
 
-    println!("thanh - v{}{}", status.current_version, channel_label);
+    println!("cook - v{}{}", status.current_version, channel_label);
     Ok(())
 }
 
@@ -363,7 +363,7 @@ pub struct EnsureLatestOutcome {
 ///
 /// Unlike [`run_update`] this never uses the compiled-in version for the
 /// download decision — a binary already installed by another process (TUI
-/// background download, explicit `thanh update`) is reused as-is. This both
+/// background download, explicit `cook update`) is reused as-is. This both
 /// removes the duplicate download in leader mode and stops the pre-fix
 /// hourly re-download while a busy leader keeps deferring its relaunch.
 ///
@@ -429,7 +429,7 @@ pub async fn ensure_latest_on_disk(update_config: &UpdateConfig) -> Result<Ensur
 }
 
 /// Disk-version probe gated on the installer actually maintaining the
-/// managed `~/.thanh/bin/thanh` symlink.
+/// managed `~/.cook/bin/cook` symlink.
 ///
 /// Only the internal (install.sh / CDN) and gh-release installers write that
 /// symlink. npm manages its own global install, so a symlink left over from a previous internal install would LIE about the npm install's version.
@@ -541,7 +541,7 @@ pub struct UpdateAvailable {
 pub struct BackgroundUpdateCheck {
     /// `Some` when the *running* binary is older than the channel pointer; drives the in-TUI restart hint regardless of who downloads the binary.
     pub update: Option<UpdateAvailable>,
-    /// Handle to the background `thanh update` child, `Some` only when a
+    /// Handle to the background `cook update` child, `Some` only when a
     /// download was actually started (the on-disk install was behind the
     /// pointer). The TUI parks this and `wait()`s on it at quit-for-update
     /// time instead of spawning a second downloader.
@@ -562,7 +562,7 @@ impl BackgroundUpdateCheck {
 /// Sets [`BackgroundUpdateCheck::update`] when the running binary is older
 /// than the channel pointer. If `auto_update` is enabled **and the on-disk
 /// install is also behind the pointer**, kicks off a non-blocking download
-/// (spawns `thanh update` as a detached child process) so the new binary is
+/// (spawns `cook update` as a detached child process) so the new binary is
 /// ready when the user quits and relaunches. When another process (an earlier
 /// TUI, the leader's hourly checker) already put the target version on disk,
 /// no download is started — only the restart hint is surfaced.
@@ -607,7 +607,7 @@ pub async fn check_update_background(update_config: &UpdateConfig) -> Background
 
     // Only download when the on-disk install is behind the pointer; the
     // running process being stale (checked above) just means "show the
-    // restart hint". The quit-for-update path's `thanh update` child resolves
+    // restart hint". The quit-for-update path's `cook update` child resolves
     // to "Already up to date" against the same disk state. Gated on the
     // installer maintaining the managed symlink — for npm a leftover symlink
     // would wrongly suppress the download (see `disk_version_for_installer`).
@@ -711,7 +711,7 @@ pub async fn run_update_if_available(
     let channel_label = format!(" [{}]", update_config.channel);
     if auto_update {
         eprintln!(
-            "A new version of thanh is available: {} -> {}{}",
+            "A new version of cook is available: {} -> {}{}",
             current_version, latest_version, channel_label
         );
         if interactive {
@@ -739,7 +739,7 @@ pub async fn run_update_if_available(
             return Ok(false);
         }
         eprintln!(
-            "A new version of thanh is available: {} -> {}{}",
+            "A new version of cook is available: {} -> {}{}",
             current_version, latest_version, channel_label
         );
         if interactive {
@@ -777,7 +777,7 @@ pub async fn run_update_if_available(
     Ok(false)
 }
 
-/// Launch "thanh update" in blocking or non-blocking mode.
+/// Launch "cook update" in blocking or non-blocking mode.
 ///
 /// `NonBlocking` mode returns the spawned child's handle.
 /// The TUI's quit-for-update path `wait()`s on that in-flight download instead of spawning a second downloader.
@@ -813,7 +813,7 @@ async fn run_update_subcommand(
             // The atomic install protocol makes mid-download kills safe
             let status = cmd.status().await?;
             if !status.success() {
-                anyhow::bail!("thanh update failed with {}", status);
+                anyhow::bail!("cook update failed with {}", status);
             }
             Ok(None)
         }
@@ -830,11 +830,11 @@ async fn run_update_subcommand(
     }
 }
 
-/// Resolve the thanh binary path for re-execution after an update.
+/// Resolve the cook binary path for re-execution after an update.
 ///
 /// `current_exe()` resolves symlinks via `/proc/self/exe` (see proc(5)),
 /// so it returns the old versioned target after a symlink swap.
-/// Prefer `~/.thanh/bin/thanh` which always points to the latest version.
+/// Prefer `~/.cook/bin/cook` which always points to the latest version.
 fn resolve_restart_exe() -> Result<std::path::PathBuf> {
     let canonical = grok_application();
     if canonical.exists() {
@@ -843,7 +843,7 @@ fn resolve_restart_exe() -> Result<std::path::PathBuf> {
     Ok(std::env::current_exe()?)
 }
 
-/// Restart thanh with the original command-line arguments to pick up the update.
+/// Restart cook with the original command-line arguments to pick up the update.
 pub fn restart_grok() -> Result<()> {
     let exe = resolve_restart_exe()?;
     let mut cmd = Command::new(exe);
@@ -852,7 +852,7 @@ pub fn restart_grok() -> Result<()> {
     }
     cmd.env_clear();
     cmd.envs(std::env::vars_os().filter(|(k, _)| k != "GROK_AUTO_UPDATE"));
-    eprintln!("Restarting thanh...");
+    eprintln!("Restarting cook...");
 
     // Use exec on Unix to replace the current process, avoiding stdio issues when the parent exits
     // On Windows, fall back to spawn and exit
@@ -936,7 +936,7 @@ pub async fn run_install_script(
 }
 
 /// Every update path converges to the native build instead of perpetuating the translated one. That covers interactive
-/// `thanh update`, background `--auto` children, the leader's hourly converge, and forced minimum-version installs.
+/// `cook update`, background `--auto` children, the leader's hourly converge, and forced minimum-version installs.
 /// Without it, a lingering x86_64 process would reinstall x86_64 right over a fresh native install.
 pub(crate) fn detect_platform() -> Result<(&'static str, &'static str)> {
     let os = if cfg!(target_os = "macos") {
@@ -978,8 +978,8 @@ fn download_client() -> reqwest::Result<reqwest::Client> {
 ///
 /// Appends `.{pid}-{seq}.tmp` to the FULL file name instead of using
 /// `Path::with_extension`, which treats everything after the last dot of the
-/// versioned name as the extension (`thanh-0.1.181-linux-x86_64` →
-/// `thanh-0.1.tmp`) and therefore collides for every `0.1.x` version. The PID
+/// versioned name as the extension (`cook-0.1.181-linux-x86_64` →
+/// `cook-0.1.tmp`) and therefore collides for every `0.1.x` version. The PID
 /// plus a per-process counter makes the name unique per download attempt —
 /// across processes (two updaters racing in the same instant, the accepted
 /// lock-free residual race) and within one process — so no racer can ever
@@ -990,7 +990,7 @@ fn tmp_download_path(dest: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Unique temp path `<base>.{pid}-{seq}.{ext}`, appended to the full name so a
-/// versioned base like `thanh-0.1.181` doesn't collide via `with_extension`.
+/// versioned base like `cook-0.1.181` doesn't collide via `with_extension`.
 /// PID + per-process counter keep racing updaters from clobbering each other.
 fn unique_temp_sibling(base: &std::path::Path, ext: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1249,7 +1249,7 @@ pub async fn download_silent(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Delete `~/.thanh/models_cache.json` after a successful update.
+/// Delete `~/.cook/models_cache.json` after a successful update.
 ///
 /// The cache embeds the binary version, so the new binary would treat it as a miss anyway.
 /// Removing it eagerly avoids a wasted disk read and deserialize on first launch.
@@ -1262,7 +1262,7 @@ async fn remove_stale_models_cache() {
     }
 }
 
-/// Remove the stale `grok-pager` symlink/binary from `~/.thanh/bin/` left by
+/// Remove the stale `grok-pager` symlink/binary from `~/.cook/bin/` left by
 /// older installations that shipped a separate pager binary.
 async fn remove_stale_pager(bin_dir: &std::path::Path) {
     let name = if cfg!(windows) {
@@ -1526,7 +1526,7 @@ async fn smoke_test_binary(binary_path: &std::path::Path) -> Result<(), SmokeTes
 
 /// Test-only entry point: same as [`install_internal`] but reads from
 /// `gcs_base_url` instead of the hardcoded release base. Persists installer
-/// config and writes to `~/.thanh/bin/`, so callers must isolate
+/// config and writes to `~/.cook/bin/`, so callers must isolate
 /// `GROK_HOME`.
 #[doc(hidden)]
 pub async fn install_internal_from_base(
@@ -1543,8 +1543,8 @@ pub async fn install_internal_from_base(
         .map_err(|e| InstallPhaseError::Activate(e).into())
 }
 
-/// A downloaded and smoke-tested binary in `~/.thanh/downloads/`, not yet
-/// activated as the managed `thanh`.
+/// A downloaded and smoke-tested binary in `~/.cook/downloads/`, not yet
+/// activated as the managed `cook`.
 struct VerifiedDownload {
     version: String,
     binary_path: std::path::PathBuf,
@@ -1580,10 +1580,10 @@ async fn download_verified_from_base(
     let download_dir = grok_home.join("downloads");
     tokio::fs::create_dir_all(&download_dir).await?;
 
-    let binary_name = format!("thanh-{}-{}", version, platform);
+    let binary_name = format!("cook-{}-{}", version, platform);
     let binary_path = download_dir.join(&binary_name);
 
-    eprintln!("  Downloading thanh v{} ({})...", version, platform);
+    eprintln!("  Downloading cook v{} ({})...", version, platform);
 
     // The downloaded binary is already +x (see `publish_downloaded_artifact`)
     download_cli_artifact_from_gcs(gcs_base_url, &binary_name, &binary_path, true).await?;
@@ -1632,7 +1632,7 @@ async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
     let bin_dir = grok_home.join("bin");
     tokio::fs::create_dir_all(&bin_dir).await?;
 
-    // Atomic swap of ~/.thanh/bin/thanh -> downloaded binary.
+    // Atomic swap of ~/.cook/bin/cook -> downloaded binary.
     let link_path = swap_managed_bin_links(&download.binary_path, &bin_dir).await?;
 
     remove_stale_pager(&bin_dir).await;
@@ -1644,7 +1644,7 @@ async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
     eprintln!();
 
     // Current, N-1, and any leftover a live process is still executing.
-    cleanup_old_downloads(&download_dir, "thanh", &download.version).await;
+    cleanup_old_downloads(&download_dir, "cook", &download.version).await;
     cleanup_old_downloads(&download_dir, "grok-pager", &download.version).await;
 
     // Persist installer to config.toml so future runs auto-detect internal.
@@ -1669,9 +1669,9 @@ async fn regenerate_completions(binary: &std::path::Path, grok_home: &std::path:
     let user_home = xai_dirs::home_dir().unwrap_or_default();
 
     let completions: &[(&str, std::path::PathBuf)] = &[
-        ("bash", grok_home.join("completions/bash/thanh.bash")),
-        ("zsh", grok_home.join("completions/zsh/_thanh")),
-        ("fish", user_home.join(".config/fish/completions/thanh.fish")),
+        ("bash", grok_home.join("completions/bash/cook.bash")),
+        ("zsh", grok_home.join("completions/zsh/_cook")),
+        ("fish", user_home.join(".config/fish/completions/cook.fish")),
     ];
 
     for (shell, dest) in completions {
@@ -1695,13 +1695,13 @@ async fn regenerate_completions(binary: &std::path::Path, grok_home: &std::path:
 
 /// Compute a relative symlink target from `link` to `target`.
 ///
-/// When both paths share a grandparent (e.g. `~/.thanh/bin/thanh` and
-/// `~/.thanh/downloads/thanh-0.1.203-linux-x86_64`), returns a relative path
-/// like `../downloads/thanh-0.1.203-linux-x86_64`.  When they share the same
+/// When both paths share a grandparent (e.g. `~/.cook/bin/cook` and
+/// `~/.cook/downloads/cook-0.1.203-linux-x86_64`), returns a relative path
+/// like `../downloads/cook-0.1.203-linux-x86_64`.  When they share the same
 /// parent directory, returns just the filename.  Falls back to the absolute
 /// `target` path for any other layout.
 ///
-/// Relative symlinks survive Docker bind-mounts where `~/.thanh/` is mapped
+/// Relative symlinks survive Docker bind-mounts where `~/.cook/` is mapped
 /// into a container with a different `$HOME` (and thus a different absolute
 /// prefix).
 #[cfg(unix)]
@@ -1709,13 +1709,13 @@ fn relative_symlink_target(target: &std::path::Path, link: &std::path::Path) -> 
     let (Some(target_parent), Some(link_parent)) = (target.parent(), link.parent()) else {
         return target.to_path_buf();
     };
-    // Same directory — just the filename (e.g. thanh-latest -> thanh-0.1.203-…)
+    // Same directory — just the filename (e.g. cook-latest -> cook-0.1.203-…)
     if target_parent == link_parent
         && let Some(name) = target.file_name()
     {
         return std::path::PathBuf::from(name);
     }
-    // Sibling directories — ../target_dir/filename (e.g. bin/thanh -> ../downloads/thanh-…)
+    // Sibling directories — ../target_dir/filename (e.g. bin/cook -> ../downloads/cook-…)
     if let (Some(tp), Some(lp)) = (target_parent.parent(), link_parent.parent())
         && tp == lp
         && let (Some(dir_name), Some(file_name)) = (target_parent.file_name(), target.file_name())
@@ -1725,17 +1725,17 @@ fn relative_symlink_target(target: &std::path::Path, link: &std::path::Path) -> 
     target.to_path_buf()
 }
 
-/// Swap `~/.thanh/bin/thanh` to point at `binary_path`. Returns the `thanh`
+/// Swap `~/.cook/bin/cook` to point at `binary_path`. Returns the `cook`
 /// link path (for [`regenerate_completions`]).
 ///
 /// Fork-specific: the updater maintains a single managed entry point named
-/// `thanh` — it deliberately never touches `bin/grok` / `bin/agent`, which
+/// `cook` — it deliberately never touches `bin/grok` / `bin/agent`, which
 /// belong to the official grok CLI. Combined with the fork's own home
-/// (`~/.thanh` vs grok's `~/.grok`), both can run side by side without ever
+/// (`~/.cook` vs grok's `~/.grok`), both can run side by side without ever
 /// clobbering each other.
 ///
 /// Unix: atomic symlink swap with relative target (survives Docker
-/// bind-mounts of `~/.thanh/`). Windows: [`windows_replace_exe`].
+/// bind-mounts of `~/.cook/`). Windows: [`windows_replace_exe`].
 ///
 /// **All-or-nothing.** Each link's prior state is captured before the swap.
 /// The capture is the prior symlink target on Unix, a `.rollback.bak` on Windows, or an `Absent` marker via `symlink_metadata`.
@@ -1746,11 +1746,11 @@ async fn swap_managed_bin_links(
     binary_path: &std::path::Path,
     bin_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf> {
-    let thanh_name = if cfg!(windows) { "thanh.exe" } else { "thanh" };
-    let thanh_link = bin_dir.join(thanh_name);
-    let pairs = [(binary_path.to_path_buf(), thanh_link.clone())];
+    let cook_name = if cfg!(windows) { "cook.exe" } else { "cook" };
+    let cook_link = bin_dir.join(cook_name);
+    let pairs = [(binary_path.to_path_buf(), cook_link.clone())];
     replace_managed_bins(&pairs).await?;
-    Ok(thanh_link)
+    Ok(cook_link)
 }
 
 /// Point every `dest` in `pairs` at its `src` (a symlink on Unix, a copy through
@@ -2251,7 +2251,7 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
     Ok(())
 }
 
-/// Download and install thanh from the fork's GitHub Releases (weseegod/thanh).
+/// Download and install cook from the fork's GitHub Releases (weseegod/thanh).
 ///
 /// Uses `gh release download` to fetch the binary matching the current platform.
 /// This works anywhere the `gh` CLI is authenticated, without needing npm or internal network access.
@@ -2270,12 +2270,12 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
     tokio::fs::create_dir_all(&download_dir).await?;
     tokio::fs::create_dir_all(&bin_dir).await?;
 
-    let binary_name = format!("thanh-{}-{}", version, platform);
+    let binary_name = format!("cook-{}-{}", version, platform);
     let binary_path = download_dir.join(&binary_name);
     let tag = format!("v{}", version);
 
     eprintln!(
-        "  Downloading thanh v{} ({}) from GitHub Releases...",
+        "  Downloading cook v{} ({}) from GitHub Releases...",
         version, platform
     );
 
@@ -2288,30 +2288,30 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
         tokio::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755)).await?;
     }
 
-    // Atomic swap of ~/.thanh/bin/thanh -> downloaded binary.
+    // Atomic swap of ~/.cook/bin/cook -> downloaded binary.
     swap_managed_bin_links(&binary_path, &bin_dir).await?;
 
-    // Update thanh-latest -> versioned binary so any existing symlinks that
-    // route through it (e.g. /usr/local/bin/thanh ->
-    // ~/.thanh/downloads/thanh-latest) resolve to the newly installed version.
+    // Update cook-latest -> versioned binary so any existing symlinks that
+    // route through it (e.g. /usr/local/bin/cook ->
+    // ~/.cook/downloads/cook-latest) resolve to the newly installed version.
     #[cfg(unix)]
     {
-        let latest_path = download_dir.join("thanh-latest");
+        let latest_path = download_dir.join("cook-latest");
         let rel_target = relative_symlink_target(&binary_path, &latest_path);
         if let Err(e) = atomic_symlink_swap(&rel_target, &latest_path).await {
-            tracing::warn!("Failed to update thanh-latest symlink: {e}");
+            tracing::warn!("Failed to update cook-latest symlink: {e}");
         }
     }
 
-    // Also update /usr/local/bin/thanh if it points directly into
-    // ~/.thanh/downloads/ (legacy layout — skips the thanh-latest indirection).
+    // Also update /usr/local/bin/cook if it points directly into
+    // ~/.cook/downloads/ (legacy layout — skips the cook-latest indirection).
     // Permission errors ignored. Never touches upstream's grok/agent links.
     #[cfg(unix)]
-    for name in ["thanh"] {
+    for name in ["cook"] {
         let system_link = std::path::PathBuf::from(format!("/usr/local/bin/{name}"));
         if let Ok(existing_target) = tokio::fs::read_link(&system_link).await {
             let target_str = existing_target.to_string_lossy();
-            if target_str.contains(".grok/downloads/") && !target_str.ends_with("thanh-latest") {
+            if target_str.contains(".grok/downloads/") && !target_str.ends_with("cook-latest") {
                 // Try to update; ignore permission errors
                 let _ = atomic_symlink_swap(&binary_path, &system_link).await;
             }
@@ -2323,7 +2323,7 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
     eprintln!();
 
     // Current, N-1, and any leftover a live process is still executing.
-    cleanup_old_downloads(&download_dir, "thanh", &version).await;
+    cleanup_old_downloads(&download_dir, "cook", &version).await;
     cleanup_old_downloads(&download_dir, "grok-pager", &version).await;
 
     // Persist installer to config.toml so future runs auto-detect gh-release.
@@ -2370,7 +2370,7 @@ fn create_temp_npmrc(npm_registry: Option<&str>) -> Result<Option<std::path::Pat
 /// Any grok process running from that vendored path will be SIGKILL'd by the kernel.
 /// macOS (Apple Silicon in particular) can no longer verify the code signature of the mmap'd executable pages once the backing inode is unlinked.
 ///
-/// While our postinstall.js now uses versioned binaries under ~/.thanh/bin/
+/// While our postinstall.js now uses versioned binaries under ~/.cook/bin/
 /// (so processes launched from there are safe), older installations or npx
 /// invocations may still be running the vendored binary directly.
 #[cfg(target_os = "macos")]
@@ -2491,7 +2491,7 @@ pub async fn apply_channel_switch(channel_switch: Option<&str>, update_config: &
     }
 }
 
-/// Run the `thanh update` command. Returns `Ok(Some(version))` when the target
+/// Run the `cook update` command. Returns `Ok(Some(version))` when the target
 /// version is present on disk afterwards — either installed by this call or
 /// found already installed (e.g. by a concurrent background download); returns
 /// `Ok(None)` when there is no installer or no applicable target. Callers use
@@ -2564,7 +2564,7 @@ pub async fn run_update(
 
     let (latest_version, install_target) = match plan {
         UpdatePlan::Skip { latest } => {
-            // Cache so an explicit `thanh update` doesn't re-prompt every run.
+            // Cache so an explicit `cook update` doesn't re-prompt every run.
             let stable_ptr = try_fetch_stable_pointer().await;
             write_version_cache(&latest, stable_ptr.as_deref()).await;
             eprintln!(
@@ -2697,11 +2697,11 @@ async fn refresh_deployment_config() {
     match xai_grok_shell::managed_config::sync().await {
         Ok(true) => eprintln!("  Applied managed configuration."),
         Ok(false) => tracing::debug!("no managed configuration to apply"),
-        // Auth issues aren't actionable mid-update: quiet here, loud on `thanh setup`.
+        // Auth issues aren't actionable mid-update: quiet here, loud on `cook setup`.
         Err(e) if e.is_auth_rejection() => tracing::debug!("managed config not applied: {e}"),
         Err(e) if e.is_retryable() => {
             tracing::debug!("managed config refresh failed: {e}");
-            eprintln!("  Couldn't apply managed configuration. Run `thanh setup` to retry.");
+            eprintln!("  Couldn't apply managed configuration. Run `cook setup` to retry.");
         }
         Err(e) => eprintln!("  Couldn't apply managed configuration. {e}"),
     }

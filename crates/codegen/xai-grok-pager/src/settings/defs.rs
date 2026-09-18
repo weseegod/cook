@@ -1527,7 +1527,7 @@ pub fn default_settings() -> Vec<SettingMeta> {
             category: SettingCategory::Advanced,
             owner: SettingOwner::Shell,
             label: "SSH wrap",
-            description: "Show a `/doctor` tip when an SSH session is not using `thanh wrap`.",
+            description: "Show a `/doctor` tip when an SSH session is not using `cook wrap`.",
             keywords: &[
                 "ssh",
                 "wrap",

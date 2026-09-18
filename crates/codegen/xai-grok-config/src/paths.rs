@@ -8,19 +8,19 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str =
 #[cfg(target_os = "linux")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.json";
 
-/// Canonical fork application path: `$GROK_HOME/bin/thanh` (Unix) or
-/// `thanh.exe` (Windows).
+/// Canonical fork application path: `$GROK_HOME/bin/cook` (Unix) or
+/// `cook.exe` (Windows).
 ///
-/// Fork-specific: the managed binary is named `thanh` (not upstream's `grok`)
+/// Fork-specific: the managed binary is named `cook` (not upstream's `grok`)
 /// so the fork never clobbers the official grok CLI's `bin/` entry point —
-/// the fork lives in its own `~/.thanh` home anyway.
+/// the fork lives in its own `~/.cook` home anyway.
 pub fn grok_application() -> PathBuf {
     grok_application_in(&grok_home())
 }
 
 /// [`grok_application`] under an explicit home instead of `$GROK_HOME`.
 pub fn grok_application_in(home: &std::path::Path) -> PathBuf {
-    let name = if cfg!(windows) { "thanh.exe" } else { "thanh" };
+    let name = if cfg!(windows) { "cook.exe" } else { "cook" };
     home.join("bin").join(name)
 }
 

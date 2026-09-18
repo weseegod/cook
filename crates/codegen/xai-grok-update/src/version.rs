@@ -18,7 +18,7 @@ pub const GH_RELEASE_REPO: &str = "weseegod/thanh";
 
 /// Primary CLI base URL: the fork's GitHub Releases "latest" download
 /// endpoint. Assets on each release are published as `stable` / `alpha`
-/// channel pointers (plain-text semver) plus `thanh-<version>-<os>-<arch>`
+/// channel pointers (plain-text semver) plus `cook-<version>-<os>-<arch>`
 /// binaries, so the existing channel-pointer fetch (`{base}/{channel}`) and
 /// binary download (`{base}/{object}`) keep working unchanged against
 /// `releases/latest/download/...` (GitHub redirects to the asset CDN, which
@@ -74,7 +74,7 @@ fn is_loopback_base(base: &str) -> bool {
 pub struct UpdateConfig {
     /// Chat API proxy base URL (versioned `https://cli-chat-proxy.grok.com/v1` endpoint).
     pub proxy_base_url: String,
-    /// Auth scope key for `~/.thanh/auth.json`.
+    /// Auth scope key for `~/.cook/auth.json`.
     pub auth_scope: String,
     /// Enterprise deployment key (GROK_DEPLOYMENT_KEY).
     pub deployment_key: Option<String>,
@@ -377,7 +377,7 @@ pub async fn fetch_latest_version(installer: &str, config: &UpdateConfig) -> Res
 /// version is current (no update needed) or after a successful install. `stable_version` records the current stable
 /// channel pointer so that `channel_label()` can derive `[alpha]` vs `[stable]` without network I/O.
 pub async fn write_version_cache(version: &str, stable_version: Option<&str>) {
-    let version_path = grok_home().join("version-thanh.json");
+    let version_path = grok_home().join("version-cook.json");
     let now = time::OffsetDateTime::now_utc();
     let json = GrokVersion::new(
         version.to_string(),
@@ -417,9 +417,9 @@ pub async fn get_latest_version(installer: &str, config: &UpdateConfig) -> Resul
     Ok(version)
 }
 
-/// True if `version-thanh.json` exists and is within TTL.
+/// True if `version-cook.json` exists and is within TTL.
 pub async fn is_version_cache_fresh() -> bool {
-    let version_path = grok_home().join("version-thanh.json");
+    let version_path = grok_home().join("version-cook.json");
     let now = time::OffsetDateTime::now_utc();
     if let Ok(version_str) = fs::read_to_string(&version_path).await
         && let Ok(version) = serde_json::from_str::<GrokVersion>(&version_str)
@@ -432,18 +432,18 @@ pub async fn is_version_cache_fresh() -> bool {
 
 pub use xai_grok_version::installed as get_installed_grok_version;
 
-/// Version of the managed thanh binary currently on disk, read from the
-/// `~/.thanh/bin/thanh` symlink target (`../downloads/thanh-<version>-<platform>`)
+/// Version of the managed cook binary currently on disk, read from the
+/// `~/.cook/bin/cook` symlink target (`../downloads/cook-<version>-<platform>`)
 /// without exec'ing anything.
 ///
 /// Concurrent updaters (TUI background download, leader hourly checker,
-/// explicit `thanh update`) decide staleness from this instead of their own
+/// explicit `cook update`) decide staleness from this instead of their own
 /// compiled-in version, so a binary another process already installed is
 /// never downloaded a second time.
 ///
 /// Returns `None` when there is no parseable managed symlink (Windows
 /// copy-based installs, dev builds) or when the symlink is DANGLING — a
-/// link whose target binary was deleted (e.g. manual `~/.thanh/downloads`
+/// link whose target binary was deleted (e.g. manual `~/.cook/downloads`
 /// cleanup) must not report an installed version, or every updater would
 /// claim "already up to date" forever while no runnable binary exists.
 /// NOTE: the symlink existing does not prove the *active installer* maintains it.
@@ -456,7 +456,7 @@ pub fn installed_on_disk_version() -> Option<String> {
         let target = std::fs::read_link(&app).ok()?;
         // metadata() follows the symlink: Err means the target is gone (dangling link) and the version it names is not actually on disk
         std::fs::metadata(&app).ok()?;
-        version_from_versioned_binary_name(target.file_name()?.to_str()?, "thanh")
+        version_from_versioned_binary_name(target.file_name()?.to_str()?, "cook")
     }
     #[cfg(not(unix))]
     {
@@ -474,8 +474,8 @@ pub fn installed_on_disk_version() -> Option<String> {
 /// and the npm layout without a platform suffix (`grok-0.1.150`,
 /// `grok-0.1.150-alpha.1`): everything between the `{bin_prefix}-` prefix
 /// and the first platform-OS component is the version, validated as semver
-/// so unknown layouts (`thanh-latest`, `grok-pager-*` when `bin_prefix` is
-/// `thanh`) return `None` instead of garbage.
+/// so unknown layouts (`cook-latest`, `grok-pager-*` when `bin_prefix` is
+/// `cook`) return `None` instead of garbage.
 ///
 /// Shared by the disk-version probe above and `cleanup_old_downloads` in
 /// `auto_update` — keep it the single place that understands this naming.
@@ -508,11 +508,11 @@ pub(crate) async fn try_fetch_stable_pointer() -> Option<String> {
     .unwrap_or(None)
 }
 
-/// Read the cached stable version from `~/.thanh/version-thanh.json` (sync, for display).
+/// Read the cached stable version from `~/.cook/version-cook.json` (sync, for display).
 ///
 /// Returns `None` if the file doesn't exist, can't be parsed, or has no `stable_version` field (e.g. written by an older binary).
 pub fn cached_stable_version() -> Option<String> {
-    let version_path = grok_home().join("version-thanh.json");
+    let version_path = grok_home().join("version-cook.json");
     let content = std::fs::read_to_string(&version_path).ok()?;
     let gv: GrokVersion = serde_json::from_str(&content).ok()?;
     gv.stable_version
@@ -544,7 +544,7 @@ pub fn channel_name() -> Option<&'static str> {
 /// Channel label derived from the cached stable pointer.
 ///
 /// Compares the compiled-in `VERSION` against the stable pointer stored in
-/// `~/.thanh/version-thanh.json` (written by the auto-updater):
+/// `~/.cook/version-cook.json` (written by the auto-updater):
 /// - `" [alpha]"` when the current version is ahead of stable,
 /// - `" [stable]"` when at or behind stable,
 /// - `""` when no cached pointer is available (first launch, old cache format).
@@ -603,40 +603,40 @@ mod tests {
     #[test]
     fn test_version_from_versioned_binary_name() {
         let cases: &[(&str, Option<&str>)] = &[
-            ("thanh-0.2.46-darwin-arm64", Some("0.2.46")),
-            ("thanh-0.1.220-linux-x86_64", Some("0.1.220")),
-            ("thanh-0.2.5-windows-x86_64.exe", Some("0.2.5")),
+            ("cook-0.2.46-darwin-arm64", Some("0.2.46")),
+            ("cook-0.1.220-linux-x86_64", Some("0.1.220")),
+            ("cook-0.2.5-windows-x86_64.exe", Some("0.2.5")),
             // Pre-releases must round-trip whole — truncating to "0.1.220"
             // would make an alpha install masquerade as the release and
             // mask alpha → stable updates.
-            ("thanh-0.1.220-alpha.4-linux-x86_64", Some("0.1.220-alpha.4")),
-            ("thanh-0.1.220-alpha.4", Some("0.1.220-alpha.4")), // npm layout
-            ("thanh-pager-0.1.5-darwin-arm64", None),           // "pager" is not a version
-            ("thanh-garbage-darwin-arm64", None),               // unparseable version
-            ("thanh-0.2.46", Some("0.2.46")),                   // no platform suffix
+            ("cook-0.1.220-alpha.4-linux-x86_64", Some("0.1.220-alpha.4")),
+            ("cook-0.1.220-alpha.4", Some("0.1.220-alpha.4")), // npm layout
+            ("cook-pager-0.1.5-darwin-arm64", None),           // "pager" is not a version
+            ("cook-garbage-darwin-arm64", None),               // unparseable version
+            ("cook-0.2.46", Some("0.2.46")),                   // no platform suffix
             ("grok-0.2.46-darwin-arm64", None),                 // wrong prefix (official grok)
             ("other-0.2.46-darwin-arm64", None),                // wrong prefix
-            ("thanh-latest", None),                             // symlink alias, not a version
-            ("thanh", None),                                    // bare name
+            ("cook-latest", None),                             // symlink alias, not a version
+            ("cook", None),                                    // bare name
             ("", None),
         ];
         for (name, expected) in cases {
             assert_eq!(
-                version_from_versioned_binary_name(name, "thanh").as_deref(),
+                version_from_versioned_binary_name(name, "cook").as_deref(),
                 *expected,
                 "version_from_versioned_binary_name({name:?})"
             );
         }
 
         // bin_prefix discrimination: a "grok-pager"-style binary parses under
-        // its own prefix but never under "thanh" (the fork's managed prefix).
+        // its own prefix but never under "cook" (the fork's managed prefix).
         assert_eq!(
             version_from_versioned_binary_name("grok-pager-0.1.5-darwin-arm64", "grok-pager")
                 .as_deref(),
             Some("0.1.5")
         );
         assert_eq!(
-            version_from_versioned_binary_name("grok-pager-0.1.5-darwin-arm64", "thanh").as_deref(),
+            version_from_versioned_binary_name("grok-pager-0.1.5-darwin-arm64", "cook").as_deref(),
             None
         );
     }

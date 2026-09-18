@@ -289,7 +289,7 @@ fn presets_match_the_shared_desktop_fixture() {
     // `provider-presets.fixture.json` is the contract the desktop's preset mirror also asserts
     // against, so the cards can never advertise a provider the agent does not know.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../frontend/apps/thanh-desktop/src/acp/provider-presets.fixture.json");
+        .join("../../../frontend/apps/cook-desktop/src/acp/provider-presets.fixture.json");
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let fixture: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
