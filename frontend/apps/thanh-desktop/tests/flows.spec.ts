@@ -746,7 +746,7 @@ test.describe("connectors", () => {
     expect(toggles).toHaveLength(1);
     expect(toggles[0].params).toMatchObject({ serverName: "filesystem", enabled: false });
 
-    // Adding a connector is an `x.ai/mcp/upsert` request as well.
+    // Adding a stdio connector is an `x.ai/mcp/upsert` request as well.
     await page.getByTestId("connector-add").click();
     await page.getByLabel("Connector name").fill("github");
     await page.getByLabel("Connector command").fill("npx");
@@ -774,6 +774,109 @@ test.describe("connectors", () => {
       url: "https://mcp.example.com/sse",
     });
     expect(errors).toEqual([]);
+  });
+
+  test("toggles a tool and deletes a connector through the agent", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByRole("button", { name: "New chat" }).click();
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+
+    const tools = page.getByTestId("connector-tools-filesystem");
+    await expect(tools).toBeVisible();
+    await expect(page.getByTestId("connector-tool-filesystem-list_dir")).toBeVisible();
+    await page.getByLabel("Toggle tool list_dir").click();
+    const toolToggles = await waitForCalls(page, "x.ai/mcp/toggle_tool");
+    expect(toolToggles[0].params).toMatchObject({
+      serverName: "filesystem",
+      toolName: "list_dir",
+      enabled: true,
+    });
+    await expect.poll(async () => {
+      const servers = (await mock.state()).mcpServers as Array<{ name: string; tools?: Array<{ name: string; enabled: boolean }> }>;
+      return servers.find((server) => server.name === "filesystem")?.tools?.find((tool) => tool.name === "list_dir")?.enabled;
+    }).toBe(true);
+
+    await page.getByTestId("connector-delete-linear").click();
+    await page.getByTestId("connector-delete-confirm").click();
+    const deletes = await waitForCalls(page, "x.ai/mcp/delete");
+    expect(deletes[0].params).toMatchObject({ serverName: "linear" });
+    await expect(page.getByTestId("connector-linear")).toHaveCount(0);
+    await expect.poll(async () => {
+      const servers = (await mock.state()).mcpServers as Array<{ name: string }>;
+      return servers.map((server) => server.name);
+    }).toEqual(["filesystem"]);
+    expect(errors).toEqual([]);
+  });
+
+  test("shows auth and setup actions when the agent requires them", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      mcpServers: [
+        {
+          name: "slack",
+          transport: "http",
+          url: "https://mcp.slack.example/sse",
+          enabled: false,
+          toolCount: 0,
+          tools: [],
+          authRequired: true,
+        },
+        {
+          name: "notion",
+          transport: "stdio",
+          command: "npx",
+          args: ["-y", "notion-mcp"],
+          enabled: false,
+          toolCount: 0,
+          tools: [],
+          setupRequired: true,
+          setup: {
+            fields: [
+              {
+                id: "workspace",
+                label: "Workspace",
+                type: "select",
+                required: true,
+                options: [
+                  { label: "Personal", value: "personal" },
+                  { label: "Team", value: "team" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    await page.getByRole("button", { name: "New chat" }).click();
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+
+    await page.getByTestId("connector-auth-status-slack").click();
+    await waitForCalls(page, "x.ai/mcp/auth_status");
+    await expect(page.getByTestId("connector-auth-note")).toContainText("slack");
+    await page.getByTestId("connector-auth-trigger-slack").click();
+    await waitForCalls(page, "x.ai/mcp/auth_trigger");
+
+    await page.getByTestId("connector-setup-notion").click();
+    const setupForm = page.getByTestId("connector-setup-form-notion");
+    await expect(setupForm).toBeVisible();
+    await setupForm.getByLabel("Workspace").selectOption("team");
+    await page.getByTestId("connector-setup-save-notion").click();
+    const setups = await waitForCalls(page, "x.ai/mcp/setup");
+    expect(setups[0].params).toMatchObject({
+      serverName: "notion",
+      values: { workspace: "team" },
+    });
+    await expect(page.getByTestId("connector-setup-form-notion")).toHaveCount(0);
+    await expect.poll(async () => {
+      const servers = (await mock.state()).mcpServers as Array<{ name: string; setupRequired?: boolean }>;
+      return servers.find((server) => server.name === "notion")?.setupRequired;
+    }).toBe(false);
   });
 });
 
@@ -810,6 +913,8 @@ test.describe("agent-driven surfaces", () => {
   test("lists and toggles skills, and browses memory", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
+    await page.getByRole("button", { name: "New chat" }).click();
+    await waitForCalls(page, "session/new");
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Skills" }).click();
     await expect(page.getByTestId("skill-help")).toBeVisible();
@@ -820,10 +925,18 @@ test.describe("agent-driven surfaces", () => {
     await expect(skillDescription).toHaveAttribute("aria-expanded", "false");
     await skillDescription.click();
     await expect(skillDescription).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByTestId("plugins-reload")).toBeVisible();
+    await expect(page.getByTestId("workflow-list")).toBeVisible();
+
+    await page.getByRole("tab", { name: "Hooks" }).click();
+    await expect(page.getByTestId("hooks-panel")).toBeVisible();
+    await page.getByTestId("hooks-trust").click();
+    await waitForCalls(page, "x.ai/hooks/action");
 
     await page.getByRole("tab", { name: "Memory & project" }).click();
     await page.getByTestId("memory-flush").click();
     await expect(page.getByTestId("memory-status")).toContainText("flush requested");
+    await expect(page.getByTestId("memory-browser")).toBeVisible();
   });
 });
 
@@ -1131,6 +1244,49 @@ test.describe("goal and plan presentation", () => {
   });
 });
 
+test.describe("session fork and export", () => {
+  test("forks a sidebar session with camelCase params then loads the child", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openWorkspace(page, CONNECTED_SEED);
+
+    const row = page.locator(".session-row", { hasText: "Fix login bug" });
+    await row.hover();
+    await row.getByTestId("session-fork-session-login").click();
+
+    const forks = await waitForCalls(page, "x.ai/session/fork");
+    expect(forks.at(-1)?.params).toMatchObject({
+      sourceSessionId: "session-login",
+      sourceCwd: "/tmp/thanh-demo",
+      newCwd: "/tmp/thanh-demo",
+      sessionKind: "fork",
+    });
+    expect(forks.at(-1)?.params).not.toHaveProperty("sessionId");
+
+    const loaded = await waitForCalls(page, "session/load");
+    expect(loaded.some((entry) => entry.params.sessionId === "fork-session-login")).toBe(true);
+    await expect(page.locator(".session-row.active", { hasText: "Fix login bug (fork)" })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("/fork from the composer uses the same RPC shape", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.locator(".session-row", { hasText: "Fix login bug" }).getByRole("button").first().click();
+    await waitForCalls(page, "session/load");
+
+    await page.getByPlaceholder("Ask Thanh anything…").fill("/fork");
+    await page.getByTestId("send-button").click();
+
+    const forks = await waitForCalls(page, "x.ai/session/fork");
+    expect(forks.at(-1)?.params).toMatchObject({
+      sourceSessionId: "session-login",
+      sourceCwd: "/tmp/thanh-demo",
+      newCwd: "/tmp/thanh-demo",
+    });
+    await waitForCalls(page, "session/load", 2);
+  });
+});
+
 test.describe("minimum window", () => {
   // `src-tauri/tauri.conf.json` pins the window to minWidth 840 / minHeight 600.
   test.use({ viewport: { width: 840, height: 600 } });
@@ -1178,5 +1334,30 @@ test.describe("minimum window", () => {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);
     expect(errors).toEqual([]);
+  });
+
+  test("activity panel lists backgrounded tasks and kill calls x.ai/task/kill", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByRole("button", { name: "New chat" }).click();
+    await page.getByLabel("Open tools panel").click();
+    await expect(page.getByTestId("utility-panel")).toBeVisible();
+    await page.getByTestId("utility-panel").getByRole("button", { name: /^Activity/ }).click();
+    await expect(page.getByTestId("activity-view")).toBeVisible();
+
+    await page.evaluate(() => window.__thanhMock!.taskBackgrounded({
+      task_id: "bg-e2e",
+      description: "Integration sleep",
+      command: "sleep 60",
+    }));
+    await expect(page.getByTestId("activity-row-bg-e2e")).toBeVisible();
+    await expect(page.getByTestId("activity-row-bg-e2e")).toContainText("Integration sleep");
+    await expect(page.getByTestId("activity-row-bg-e2e")).toHaveAttribute("data-status", "running");
+
+    await page.getByTestId("activity-kill-bg-e2e").click();
+    await expect.poll(async () => {
+      const requests = await api(page).requests();
+      return callsTo(requests, "x.ai/task/kill").some((entry) => entry.params.taskId === "bg-e2e");
+    }).toBe(true);
+    await expect(page.getByTestId("activity-row-bg-e2e")).toHaveAttribute("data-status", "killed");
   });
 });

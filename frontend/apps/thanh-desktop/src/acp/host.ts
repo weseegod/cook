@@ -203,3 +203,9 @@ export async function onLog(handler: (line: string) => void): Promise<UnlistenFn
   if (!isTauri()) return () => undefined;
   return listen<string>("acp-log", ({ payload }) => handler(payload));
 }
+
+/** Native OS notification (macOS osascript / Linux notify-send). No-op outside Tauri. */
+export async function osNotify(title: string, body: string): Promise<void> {
+  if (!isTauri()) return;
+  await invoke("os_notify", { title, body });
+}

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { useActivityStore } from "./activity";
 import {
   reduceTranscript,
   turnElapsedMs,
@@ -439,5 +440,55 @@ describe("plan review", () => {
     expect(state.planComments).toEqual([]);
     expect(state.planNextCommentId).toBe(0);
     expect(state.planDialogOpen).toBe(false);
+  });
+
+  it("honors turn_completed when the agent emits it (U-turn)", () => {
+    useSessionStore.setState({
+      turnRunning: true,
+      turnStartedAt: Date.now() - 500,
+      transcriptCursor: {
+        turnId: "turn-1",
+        assistantId: "a1",
+        thoughtId: null,
+        optimisticUserId: null,
+      },
+      blocks: [
+        {
+          type: "message",
+          id: "a1",
+          turnId: "turn-1",
+          role: "assistant",
+          text: "done",
+          images: [],
+          streaming: true,
+        },
+      ],
+    });
+    useSessionStore.getState().applyNotification({
+      sessionId: "s1",
+      update: { sessionUpdate: "turn_completed", stopReason: "end_turn" },
+    } as never);
+    const state = useSessionStore.getState();
+    expect(state.turnRunning).toBe(false);
+    expect(state.turnStartedAt).toBeNull();
+    expect(state.blocks.at(-1)).toMatchObject({ type: "session-event", kind: "turn" });
+  });
+});
+
+describe("activity session updates (P4)", () => {
+  it("routes U-sub-* into the activity store without transcript spam", () => {
+    useActivityStore.getState().reset();
+    useSessionStore.getState().resetConversation("s1");
+    useSessionStore.getState().applyNotification({
+      sessionId: "s1",
+      update: {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "child-1",
+        description: "scan src/",
+        subagent_type: "explore",
+      },
+    } as never);
+    expect(useSessionStore.getState().blocks).toEqual([]);
+    expect(useActivityStore.getState().subagents["child-1"]?.status).toBe("running");
   });
 });

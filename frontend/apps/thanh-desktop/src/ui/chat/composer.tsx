@@ -3,8 +3,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type Attachment } from "../../acp/attachments";
 import { onFileDrop, pickFiles, readFilePayload } from "../../acp/host";
+import { askBtw, interjectPrompt } from "../../acp/turn-ops";
 import { groupByProvider } from "../../acp/xai";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
+import { useActivityStore } from "../../state/activity";
 import { useSessionStore } from "../../state/session";
 import {
   clientCommand,
@@ -15,6 +17,9 @@ import {
   type SlashEntry,
 } from "./slash-commands";
 import { hasViewablePlan, viewPlan } from "./view-plan";
+import { openRecap } from "./view-recap";
+import { openRewind } from "./view-rewind";
+import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "./export-transcript";
 
 /** The window's own half of the slash commands; the agent's half arrives as an ordinary prompt. */
 const SLASH_HOST: SlashCommandHost = {
@@ -24,11 +29,28 @@ const SLASH_HOST: SlashCommandHost = {
   newSession: async () => {
     await acpClient.newSession();
   },
+  forkSession: () => acpClient.forkSession(),
+  exportTranscript: async () => {
+    const store = useSessionStore.getState();
+    const markdown = exportTranscriptMarkdown(store.blocks);
+    if (!markdown) throw new Error("Nothing to export yet.");
+    downloadMarkdown(exportFilename(store.sessionTitle, store.sessionId), markdown);
+  },
   sendPrompt: (text) => acpClient.prompt(text),
   sessionInfo: () => acpClient.sessionInfo(),
   openPlan: () => {
     viewPlan();
   },
+  openActivity: () => {
+    useActivityStore.getState().requestOpenPanel();
+  },
+  openMemory: () => {
+    useCatalogStore.getState().requestSettingsTab("context");
+  },
+  openRewind: () => {
+    openRewind();
+  },
+  openRecap: () => openRecap(),
 };
 
 export function Composer() {
@@ -54,14 +76,22 @@ export function Composer() {
   const hasPlan = useSessionStore((state) => hasViewablePlan(state));
   const commands = useCatalogStore((state) => state.commands);
   const models = useCatalogStore((state) => state.models);
+  const cancelRewindEnabled = useCatalogStore((state) => state.cancelRewindEnabled);
+  const sessionRecapEnabled = useCatalogStore((state) => state.sessionRecapEnabled);
   const { id: selectedModel, known: selectedModelKnown } = useModelSelection();
   // The name is still being typed while no space follows it; after that the text is arguments.
   const slashPrefix = /^\/([^\s/\\]*)(\s[\s\S]*)?$/.exec(text.trimStart());
   const typedName = slashPrefix ? slashPrefix[1].toLowerCase() : null;
   const typedArgs = Boolean(slashPrefix?.[2]);
   const matching = useMemo(
-    () => (typedName === null || typedArgs || menuClosed ? [] : matchSlashCommands(slashEntries(commands), typedName)),
-    [typedName, typedArgs, commands, menuClosed],
+    () =>
+      typedName === null || typedArgs || menuClosed
+        ? []
+        : matchSlashCommands(
+            slashEntries(commands, { cancelRewindEnabled, sessionRecapEnabled }),
+            typedName,
+          ),
+    [typedName, typedArgs, commands, menuClosed, cancelRewindEnabled, sessionRecapEnabled],
   );
   useEffect(() => setActive(0), [typedName]);
 
@@ -178,6 +208,30 @@ export function Composer() {
     }
     if (!prompt && attachments.length === 0) return;
     const slash = parseSlash(prompt);
+    // Mid-turn `/btw` is a side question (C-btw), not a queued session/prompt.
+    if (slash?.name.toLowerCase() === "btw" && turnRunning && attachments.length === 0) {
+      if (!sessionId) return;
+      const question = slash.args.trim();
+      if (!question) {
+        useSessionStore.getState().set({ notice: "Usage: /btw <question>" });
+        return;
+      }
+      setBusy(true);
+      setText("");
+      setMenuClosed(false);
+      try {
+        const result = await askBtw(sessionId, question);
+        useSessionStore.getState().set({
+          notice: result.answer?.trim() ? `/btw: ${result.answer.trim()}` : "/btw answered.",
+        });
+      } catch (error) {
+        reportError(error);
+      } finally {
+        setBusy(false);
+        textarea.current?.focus();
+      }
+      return;
+    }
     const command = slash && attachments.length === 0 ? clientCommand(slash.name) : undefined;
     setBusy(true);
     const sending = attachments;
@@ -189,7 +243,7 @@ export function Composer() {
       if (command && slash) {
         const message = await command.run(
           SLASH_HOST,
-          { sessionId, modelId, planMode, alwaysApprove, usage, models, hasPlan },
+          { sessionId, modelId, planMode, alwaysApprove, usage, models, hasPlan, cancelRewindEnabled, sessionRecapEnabled },
           slash.args,
         );
         if (message) useSessionStore.getState().set({ notice: message });
@@ -202,6 +256,42 @@ export function Composer() {
       useSessionStore.getState().set({
         error: error instanceof Error ? error.message : String(error),
       });
+    } finally {
+      setBusy(false);
+      textarea.current?.focus();
+    }
+  }
+
+  async function interject() {
+    const prompt = text.trim();
+    if (busy || blocked || !turnRunning || !sessionId || (!prompt && attachments.length === 0)) return;
+    setBusy(true);
+    const sending = text;
+    setText("");
+    setAttachments([]);
+    setMenuClosed(false);
+    try {
+      // Optimistic local echo; N-interject drops the matching broadcast via interjectionId.
+      const turnId = useSessionStore.getState().transcriptCursor.turnId ?? `turn-inj-${crypto.randomUUID()}`;
+      useSessionStore.getState().set({
+        blocks: [
+          ...useSessionStore.getState().blocks,
+          {
+            type: "message",
+            id: `inj-local-${crypto.randomUUID()}`,
+            turnId,
+            role: "user",
+            text: sending,
+            images: [],
+            streaming: false,
+          },
+        ],
+        notice: null,
+        error: null,
+      });
+      await interjectPrompt(sessionId, sending);
+    } catch (error) {
+      reportError(error);
     } finally {
       setBusy(false);
       textarea.current?.focus();
@@ -364,9 +454,20 @@ export function Composer() {
               }}
             />
             {turnRunning ? (
-              <button type="button" className="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
-                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="ghost-button"
+                  data-testid="interject-button"
+                  disabled={blocked || (!text.trim() && attachments.length === 0) || busy}
+                  onClick={() => void interject()}
+                >
+                  Interject
+                </button>
+                <button type="button" className="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
+                  {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
+                </button>
+              </>
             ) : (
               <button type="button" className="send-button" disabled={blocked || !text.trim() || busy} onClick={() => void submit()} data-testid="send-button">
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} {planReview ? "Request changes" : "Send"}

@@ -1,13 +1,26 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable, Plus, RefreshCw } from "lucide-react";
+import { Cable, KeyRound, Plus, RefreshCw, Settings2, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { listConnectors, serverEnabled, serverTransportLabel, toggleConnector, upsertConnector } from "../../acp/extensions";
+import {
+  deleteConnector,
+  listConnectors,
+  mcpAuthStatus,
+  mcpAuthTrigger,
+  mcpSetup,
+  serverEnabled,
+  serverTransportLabel,
+  toggleConnector,
+  toggleConnectorTool,
+  upsertConnector,
+  type McpServerView,
+} from "../../acp/extensions";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
+import { ConfirmDialog } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
 
-/** Settings → Connectors: the agent's MCP servers, their state, and add/toggle. */
+/** Settings → Connectors: the agent's MCP servers, tools, auth/setup, and add/toggle/delete. */
 export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const sessionId = useSessionStore((state) => state.sessionId);
   const mcpServers = useCatalogStore((state) => state.mcpServers);
@@ -18,6 +31,10 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   const [endpoint, setEndpoint] = useState("");
   const [args, setArgs] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [authNote, setAuthNote] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [setupFor, setSetupFor] = useState<string | null>(null);
+  const [setupValues, setSetupValues] = useState<Record<string, string>>({});
 
   // Seed the catalog once; live updates arrive via N-mcp-srv / N-mcp-tools (no poll required).
   const servers = useQuery({
@@ -39,6 +56,74 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       return toggleConnector(sessionId, serverName, enabled);
     },
     onSuccess: () => { setError(null); refresh(); },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  });
+
+  const toggleTool = useMutation({
+    mutationFn: ({ serverName, toolName, enabled }: { serverName: string; toolName: string; enabled: boolean }) => {
+      if (!sessionId) throw new Error("Start a conversation before changing tools");
+      return toggleConnectorTool(sessionId, serverName, toolName, enabled);
+    },
+    onSuccess: () => { setError(null); refresh(); },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  });
+
+  const remove = useMutation({
+    mutationFn: (serverName: string) => {
+      if (!sessionId) throw new Error("Start a conversation before deleting connectors");
+      return deleteConnector(sessionId, serverName);
+    },
+    onSuccess: () => {
+      setError(null);
+      setPendingDelete(null);
+      refresh();
+    },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  });
+
+  const authStatus = useMutation({
+    mutationFn: (serverName: string) => mcpAuthStatus(sessionId ?? undefined, serverName),
+    onSuccess: (result, serverName) => {
+      setError(null);
+      const entry = result.servers?.find((server) => server.serverName === serverName);
+      setAuthNote(entry ? `${serverName}: ${entry.status}` : `${serverName}: checked`);
+      refresh();
+    },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  });
+
+  const authTrigger = useMutation({
+    mutationFn: (serverName: string) => {
+      if (!sessionId) throw new Error("Start a conversation before authenticating connectors");
+      return mcpAuthTrigger(sessionId, serverName);
+    },
+    onSuccess: (result, serverName) => {
+      setError(null);
+      if (result.status === "setup_required") {
+        setAuthNote(`${serverName}: setup required`);
+        beginSetup(mcpServers.find((server) => server.name === serverName) ?? { name: serverName });
+      } else if (result.error) {
+        setError(result.error);
+      } else {
+        setAuthNote(`${serverName}: ${result.status}`);
+      }
+      refresh();
+    },
+    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+  });
+
+  const setup = useMutation({
+    mutationFn: ({ serverName, values }: { serverName: string; values: Record<string, string> }) => {
+      if (!sessionId) throw new Error("Start a conversation before completing connector setup");
+      return mcpSetup(sessionId, serverName, values);
+    },
+    onSuccess: () => {
+      setError(null);
+      setSetupFor(null);
+      setSetupValues({});
+      setAuthNote(null);
+      refresh();
+    },
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   });
 
@@ -67,6 +152,17 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   });
 
+  function beginSetup(server: McpServerView) {
+    const fields = server.setup?.fields ?? [];
+    const initial: Record<string, string> = { ...(server.setupValues ?? {}) };
+    for (const field of fields) {
+      if (initial[field.id] === undefined && field.default !== undefined) initial[field.id] = field.default;
+      if (initial[field.id] === undefined && field.options?.[0]) initial[field.id] = field.options[0].value;
+    }
+    setSetupValues(initial);
+    setSetupFor(server.name);
+  }
+
   const list = mcpServers;
   const showLoading = Boolean(sessionId) && servers.isLoading && list.length === 0;
 
@@ -90,24 +186,140 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
         <EmptyState label="No connectors" detail="Add an MCP server for this session." />
       ) : null}
       <ul className="connector-list">
-        {list.map((server) => (
-          <li key={server.name} data-testid={`connector-${server.name}`}>
-            <div className="connector-main">
-              <strong><Cable size={14} /> {server.name}</strong>
-              <small>{serverTransportLabel(server)}</small>
-              <small>{server.session?.tools?.length ?? 0} tools{server.session?.status ? ` · ${server.session.status}` : ""}</small>
-            </div>
-            <div className="toggle-row connector-toggle">
-              <span>{serverEnabled(server) ? "Enabled" : "Disabled"}</span>
-              <ToggleSwitch
-                checked={serverEnabled(server)}
-                ariaLabel={`Toggle ${server.name}`}
-                onChange={(enabled) => toggle.mutate({ serverName: server.name, enabled })}
-                disabled={toggle.isPending}
-              />
-            </div>
-          </li>
-        ))}
+        {list.map((server) => {
+          const tools = server.session?.tools ?? [];
+          const needsAuth = server.session?.authRequired === true;
+          const needsSetup = server.session?.setupRequired === true;
+          const settingUp = setupFor === server.name;
+          return (
+            <li key={server.name} data-testid={`connector-${server.name}`}>
+              <div className="connector-row">
+                <div className="connector-main">
+                  <strong><Cable size={14} /> {server.name}</strong>
+                  <small>{serverTransportLabel(server)}</small>
+                  <small>{tools.length} tools{server.session?.status ? ` · ${server.session.status}` : ""}</small>
+                  {server.session?.blockedReason && <small className="security-warning">{server.session.blockedReason}</small>}
+                </div>
+                <div className="connector-actions">
+                  {(needsAuth || needsSetup) && (
+                    <div className="connector-auth-actions">
+                      {needsAuth && (
+                        <>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            data-testid={`connector-auth-status-${server.name}`}
+                            disabled={authStatus.isPending}
+                            onClick={() => authStatus.mutate(server.name)}
+                          >
+                            <KeyRound size={13} /> Auth status
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost-button"
+                            data-testid={`connector-auth-trigger-${server.name}`}
+                            disabled={authTrigger.isPending}
+                            onClick={() => authTrigger.mutate(server.name)}
+                          >
+                            Authenticate
+                          </button>
+                        </>
+                      )}
+                      {needsSetup && (
+                        <button
+                          type="button"
+                          className="ghost-button"
+                          data-testid={`connector-setup-${server.name}`}
+                          onClick={() => beginSetup(server)}
+                        >
+                          <Settings2 size={13} /> Setup
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="toggle-row connector-toggle">
+                    <span>{serverEnabled(server) ? "Enabled" : "Disabled"}</span>
+                    <ToggleSwitch
+                      checked={serverEnabled(server)}
+                      ariaLabel={`Toggle ${server.name}`}
+                      onChange={(enabled) => toggle.mutate({ serverName: server.name, enabled })}
+                      disabled={toggle.isPending}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    data-testid={`connector-delete-${server.name}`}
+                    aria-label={`Delete ${server.name}`}
+                    onClick={() => setPendingDelete(server.name)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+
+              {tools.length > 0 && (
+                <ul className="connector-tools" data-testid={`connector-tools-${server.name}`}>
+                  {tools.map((tool) => (
+                    <li key={tool.name} data-testid={`connector-tool-${server.name}-${tool.name}`}>
+                      <span>{tool.displayName ?? tool.name}</span>
+                      <ToggleSwitch
+                        checked={tool.enabled !== false}
+                        ariaLabel={`Toggle tool ${tool.name}`}
+                        onChange={(enabled) => toggleTool.mutate({ serverName: server.name, toolName: tool.name, enabled })}
+                        disabled={toggleTool.isPending || !serverEnabled(server)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {settingUp && (
+                <form
+                  className="connector-form connector-setup-form"
+                  data-testid={`connector-setup-form-${server.name}`}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    setup.mutate({ serverName: server.name, values: setupValues });
+                  }}
+                >
+                  {(server.setup?.fields ?? []).length === 0 ? (
+                    <p className="settings-note">Submit to finish setup for this connector.</p>
+                  ) : (
+                    (server.setup?.fields ?? []).map((field) => (
+                      <label key={field.id} className="field">
+                        <span>{field.label}{field.required ? " *" : ""}</span>
+                        {field.options && field.options.length > 0 ? (
+                          <select
+                            aria-label={field.label}
+                            value={setupValues[field.id] ?? ""}
+                            onChange={(event) => setSetupValues((current) => ({ ...current, [field.id]: event.target.value }))}
+                          >
+                            {field.options.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <input
+                            aria-label={field.label}
+                            value={setupValues[field.id] ?? ""}
+                            onChange={(event) => setSetupValues((current) => ({ ...current, [field.id]: event.target.value }))}
+                          />
+                        )}
+                      </label>
+                    ))
+                  )}
+                  <div className="settings-actions">
+                    <button type="submit" className="primary-button" data-testid={`connector-setup-save-${server.name}`} disabled={setup.isPending}>
+                      Save setup
+                    </button>
+                    <button type="button" className="ghost-button" onClick={() => { setSetupFor(null); setSetupValues({}); }}>Cancel</button>
+                  </div>
+                </form>
+              )}
+            </li>
+          );
+        })}
       </ul>
 
       {adding && (
@@ -147,7 +359,21 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
           </div>
         </form>
       )}
+      {authNote && <p className="settings-note" data-testid="connector-auth-note">{authNote}</p>}
       {error && <p className="settings-note security-warning" data-testid="connector-error">{error}</p>}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title={`Delete ${pendingDelete}?`}
+          description={`Removes ${pendingDelete} from the agent config for this session.`}
+          confirmLabel="Delete connector"
+          confirmTestId="connector-delete-confirm"
+          danger
+          busy={remove.isPending}
+          onCancel={() => setPendingDelete(null)}
+          onConfirm={() => remove.mutate(pendingDelete)}
+        />
+      )}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { request } from "./host";
+import { notify, request } from "./host";
 
 export interface SessionSummary {
   id: string;
@@ -62,6 +62,29 @@ export interface SessionInfo {
 
 export type UnknownRecord = Record<string, unknown>;
 
+/** Params for `x.ai/session/fork` — matches agent `ForkSessionRequest` (camelCase). */
+export interface ForkSessionParams {
+  sourceSessionId: string;
+  sourceCwd: string;
+  newCwd: string;
+  newSessionId?: string;
+  newModelId?: string;
+  targetPromptIndex?: number;
+  sessionKind?: string;
+  sourceWorkspaceDir?: string;
+}
+
+/** Result of `x.ai/session/fork` — matches agent `ForkSessionResponse` (camelCase). */
+export interface ForkSessionResult {
+  newSessionId: string;
+  newCwd: string;
+  parentSessionId: string;
+  chatMessagesCopied?: number;
+  updatesCopied?: number;
+  planStateCopied?: boolean;
+  newModelId?: string;
+}
+
 export class XaiClient {
   call<T = UnknownRecord>(method: `x.ai/${string}` | `_x.ai/${string}`, params: UnknownRecord = {}) {
     return request<T>(method, params);
@@ -94,8 +117,21 @@ export class XaiClient {
     return this.call("x.ai/session/delete", { sessionId });
   }
 
-  forkSession(sessionId: string) {
-    return this.call("x.ai/session/fork", { sessionId });
+  /**
+   * `x.ai/session/fork` (map id `C-sess-fork`): camelCase `ForkSessionRequest`.
+   * Creates peer session files; the caller still has to `session/load` the new id.
+   */
+  forkSession(params: ForkSessionParams) {
+    return this.call<ForkSessionResult>("x.ai/session/fork", {
+      sourceSessionId: params.sourceSessionId,
+      sourceCwd: params.sourceCwd,
+      newCwd: params.newCwd,
+      ...(params.newSessionId ? { newSessionId: params.newSessionId } : {}),
+      ...(params.newModelId ? { newModelId: params.newModelId } : {}),
+      ...(params.targetPromptIndex !== undefined ? { targetPromptIndex: params.targetPromptIndex } : {}),
+      ...(params.sessionKind ? { sessionKind: params.sessionKind } : {}),
+      ...(params.sourceWorkspaceDir ? { sourceWorkspaceDir: params.sourceWorkspaceDir } : {}),
+    });
   }
 
   async listModels(): Promise<ModelCatalog> {
@@ -107,8 +143,9 @@ export class XaiClient {
     return extractArray(value, ["commands", "availableCommands", "items"]).map(normalizeCommand);
   }
 
+  /** C-perm: agent handles `x.ai/permissions/reset` as an ext_notification, not a request. */
   resetPermissions(sessionId: string) {
-    return this.call("x.ai/permissions/reset", { sessionId });
+    return notify("x.ai/permissions/reset", { sessionId });
   }
 
   /** Plan mode is an ACP session mode: `plan` engages it, `default` leaves it. */

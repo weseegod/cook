@@ -85,7 +85,13 @@ export class ThanhAcpClient {
   }
 
   private async initialize() {
-    await request<InitializeResponse>("initialize", buildInitializeRequest(__APP_VERSION__));
+    const response = await request<InitializeResponse>(
+      "initialize",
+      buildInitializeRequest(__APP_VERSION__),
+    );
+    // P5 / P10: feature gates from InitializeResponse.meta (cancelRewind, sessionRecap).
+    // Keep this parse minimal — another agent may own the rest of loadSession meta.
+    applyInitializeFeatureGates(response);
   }
 
   async newSession(): Promise<string> {
@@ -117,7 +123,18 @@ export class ThanhAcpClient {
   async loadSession(sessionId: string, cwd?: string): Promise<void> {
     const activeCwd = cwd ?? this.cwd;
     if (!activeCwd) throw new Error("Session has no workspace");
-    const params: LoadSessionRequest = { sessionId, cwd: activeCwd, mcpServers: [] };
+    const defaultModel = localStorage.getItem("thanh.defaultModel");
+    const yoloMode = localStorage.getItem("thanh.alwaysApprove") === "true";
+    const params: LoadSessionRequest = {
+      sessionId,
+      cwd: activeCwd,
+      mcpServers: [],
+      _meta: {
+        clientIdentifier: CAPABILITIES.clientIdentifier,
+        ...(defaultModel ? { modelId: defaultModel } : {}),
+        ...(yoloMode ? { yoloMode: true } : {}),
+      },
+    };
     useSessionStore.getState().resetConversation(sessionId);
     const response = await request<{ models?: unknown }>("session/load", params);
     await this.inboundMessages;
@@ -131,6 +148,34 @@ export class ThanhAcpClient {
     }
     await this.refreshCommands();
     void this.refreshUsage();
+  }
+
+  /**
+   * Fork a saved session (`C-sess-fork` / `/fork`), then `session/load` the new id.
+   * Same-cwd by default; optional overrides match `ForkSessionRequest`.
+   */
+  async forkSession(options?: {
+    sourceSessionId?: string;
+    sourceCwd?: string;
+    newCwd?: string;
+    newModelId?: string;
+  }): Promise<string> {
+    const store = useSessionStore.getState();
+    const sourceSessionId = options?.sourceSessionId ?? store.sessionId;
+    if (!sourceSessionId) throw new Error("No session to fork");
+    const sourceCwd = options?.sourceCwd ?? store.cwd ?? this.cwd;
+    if (!sourceCwd) throw new Error("Session has no workspace");
+    const newCwd = options?.newCwd ?? sourceCwd;
+    const result = await this.xai.forkSession({
+      sourceSessionId,
+      sourceCwd,
+      newCwd,
+      sessionKind: "fork",
+      ...(options?.newModelId ? { newModelId: options.newModelId } : {}),
+    });
+    await this.loadSession(result.newSessionId, result.newCwd || newCwd);
+    void this.refreshSessions();
+    return result.newSessionId;
   }
 
   async prompt(text: string, attachments: Attachment[] = []): Promise<PromptResponse> {
@@ -354,12 +399,28 @@ export class ThanhAcpClient {
     for (const message of messages) {
       const method = unwrapMethod(message);
       const params = unwrapParams(message);
-      // Both envelopes carry `{ sessionId, update }`. The extension one (`x.ai/session_notification`)
-      // is how the shell ships what ACP has no slot for — goal orchestration state above all.
-      if (method === "session/update" || method === "x.ai/session_notification") {
+      // Both envelopes carry `{ sessionId, update }`. The extension ones (`x.ai/session_notification`,
+      // `x.ai/session/update`) are how the shell ships what ACP has no slot for — goal orchestration above all.
+      if (
+        method === "session/update"
+        || method === "x.ai/session_notification"
+        || method === "x.ai/session/update"
+      ) {
         const update = params.update as Record<string, unknown> | undefined;
         if (update?.sessionUpdate === "available_commands_update") {
           useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
+        }
+        // P6–P8: catalog/settings notifs arrive as sessionUpdate tags (U-memf / U-plug / U-hook*).
+        const sessionKind = typeof update?.sessionUpdate === "string" ? update.sessionUpdate : "";
+        if (
+          sessionKind === "memory_files"
+          || sessionKind === "plugins_changed"
+          || sessionKind === "hooks_changed"
+          || sessionKind === "hook_annotation"
+          || sessionKind === "hook_run_started"
+          || sessionKind === "hook_execution"
+        ) {
+          await dispatchNotification(message, sessionKind, update ?? {});
         }
         updates.push(params as unknown as SessionNotification);
         continue;
@@ -403,7 +464,18 @@ export class ThanhAcpClient {
       const info = await startProcess(this.cwd);
       await this.initialize();
       if (sessionId) {
-        await request("session/load", { sessionId, cwd: this.cwd, mcpServers: [] } satisfies LoadSessionRequest);
+        const defaultModel = localStorage.getItem("thanh.defaultModel");
+        const yoloMode = localStorage.getItem("thanh.alwaysApprove") === "true";
+        await request("session/load", {
+          sessionId,
+          cwd: this.cwd,
+          mcpServers: [],
+          _meta: {
+            clientIdentifier: CAPABILITIES.clientIdentifier,
+            ...(defaultModel ? { modelId: defaultModel } : {}),
+            ...(yoloMode ? { yoloMode: true } : {}),
+          },
+        } satisfies LoadSessionRequest);
       }
       this.restartCount = 0;
       store.set({ connection: "ready", binaryVersion: info.binaryVersion, error: null });
@@ -434,6 +506,26 @@ function unwrapParams(message: RpcMessage): Record<string, unknown> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Store `cancelRewind` / `sessionRecap` from initialize meta. Matches the pager:
+ * cancelRewind defaults on when absent; sessionRecap is fail-closed (off until advertised).
+ */
+function applyInitializeFeatureGates(response: InitializeResponse): void {
+  const meta = (response as { _meta?: unknown; meta?: unknown })._meta
+    ?? (response as { meta?: unknown }).meta;
+  if (!isRecord(meta)) return;
+  const cancelRewind = meta.cancelRewind;
+  const sessionRecap = meta.sessionRecap;
+  useCatalogStore.getState().setFeatureGates({
+    ...(typeof cancelRewind === "boolean" ? { cancelRewindEnabled: cancelRewind } : {}),
+    ...(typeof sessionRecap === "boolean" ? { sessionRecapEnabled: sessionRecap } : {}),
+  });
+  // Seed slash catalog before the first `commands/list` / ACU (P10).
+  if (Array.isArray(meta.availableCommands) && meta.availableCommands.length > 0) {
+    useCatalogStore.getState().setCommands(commandsFromUpdate(meta.availableCommands));
+  }
 }
 
 function errorMessage(error: unknown): string {

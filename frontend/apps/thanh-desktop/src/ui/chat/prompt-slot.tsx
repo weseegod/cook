@@ -2,6 +2,8 @@ import { useSessionStore } from "../../state/session";
 import { PermissionModal } from "../permissions/permission-modal";
 import { InteractionModal } from "../permissions/interaction-modal";
 import { Composer } from "./composer";
+import { FollowUps } from "./follow-ups";
+import { QueueBar } from "./queue-bar";
 
 /**
  * Prompt-slot occupancy (catalog §9): one of Composer or a blocking card.
@@ -24,7 +26,9 @@ export function PromptSlot() {
         </>
       )}
       <div className={blocking ? "prompt-composer stashed" : "prompt-composer"}>
+        <QueueBar />
         <Composer />
+        <FollowUps />
       </div>
     </div>
   );

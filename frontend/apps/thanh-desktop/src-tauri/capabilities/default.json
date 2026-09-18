@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Minimal capabilities for the Thanh Desktop main window",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open"]
+  "permissions": ["core:default", "dialog:allow-open", "updater:default"]
 }

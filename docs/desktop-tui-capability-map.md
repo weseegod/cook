@@ -74,10 +74,10 @@ Related, do not merge:
 | `clientInfo` | pager `clientType` / `clientVersion` in request `_meta` | `{ name, title: "Thanh Desktop", version }` | `ok` | protocol |
 | `_meta.clientIdentifier` | pager default `PAGER_CLIENT_TYPE`; optional `--client-identifier` | `grok-desktop` (`CLIENT_META`) | `ok` | protocol |
 | `_meta.clientType` | pager product string | `grok_desktop` | `ok` | protocol |
-| `_meta.mcpApps` | not set by pager | `true` | `partial` — Desktop claims MCP-apps; does not register SDK servers (see H-mcp, R-sdk) | protocol |
+| `_meta.mcpApps` | not set by pager | `false` | `ok` — honest; SDK MCP stays off until R-sdk (see H-mcp) | protocol |
 | `_meta.bufferingSettings` | — | `{ minDelayMs: 16, maxDelayMs: 64, maxBytes: 65536 }` | `ok` | chrome |
 | `clientCapabilities.fs.readTextFile` / `writeTextFile` | CLI `--fs-read` / `--fs-write`, **default false**. Pager does **not** implement `fs/*` (`acp_handler` `_ => false` drops the oneshot) | `true` / `true`; host implements in `acp_host.rs` | `ok` (Desktop is ahead of default TUI) | protocol |
-| `clientCapabilities.terminal` | CLI `--terminal`, **default false**. If set, `WaitForTerminalExit` is rejected honestly (`wait_for_exit_not_supported`) | **`true`**, then stubs (H-term) | `stub` | protocol |
+| `clientCapabilities.terminal` | CLI `--terminal`, **default false**. If set, `WaitForTerminalExit` is rejected honestly (`wait_for_exit_not_supported`) | `false` (no PTY; host does not stub `terminal/*`) | `ok` | protocol |
 | `clientCapabilities.plan` | — | `{}` | `ok` | protocol |
 | `_meta["x.ai/folderTrust"].interactive` | not advertised by pager (folder-trust is a desktop/GUI round-trip) | `{ interactive: true }` | `ok` | protocol |
 | `x.ai/incrementalBashOutput` | `true` | — | `gap` | protocol |
@@ -96,7 +96,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 
 | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|
-| `mcpApps` | echo of client support | sent `true`, unused | `partial` | protocol |
+| `mcpApps` | echo of client support | client sends `false`; unused | `ok` | protocol |
 | `x.ai/mcp/sdk` | agent always `true` | unused | `gap` — enabling SDK MCP without `sdk_call` is class A | protocol |
 | `x.ai/pluginDirs` | agent `true` | unused | `na` | chrome |
 | `availableCommands` | parsed at connect | unused; later `x.ai/commands/list` | `partial` | surface |
@@ -123,8 +123,8 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 
 | Id | Bug | Class | Fix (not in this work) |
 |---|---|---|---|
-| **H-term** | Desktop advertises `terminal: true` then stubs `terminal/*` with empty output and `exitCode: 0`. TUI default is `terminal: false`; if `--terminal`, it **rejects** `WaitForTerminalExit`. | C | Stop advertising `terminal: true` until a real PTY exists (client-implement **C1**) |
-| **H-mcp** | `mcpServers: []` and no `_meta["x.ai/mcp/servers"]`, while `mcpApps: true` and agent `x.ai/mcp/sdk: true`. | F / A | Do not advertise MCP-apps; never register SDK servers without `sdk_call` (client-implement **C1**) |
+| **H-term** | Was: advertise `terminal: true` + stub `exitCode: 0`. **Fixed (C1):** `terminal: false`; host declines unknown `terminal/*` without stub success. | — | Keep closed until a real PTY |
+| **H-mcp** | Still `mcpServers: []` / no SDK servers (class F until R-sdk). **Fixed (C1):** `mcpApps: false`. | F | Keep SDK off until R-sdk |
 
 ---
 
@@ -144,11 +144,11 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-perm | `session/request_permission` | A→C | `handle_permission_request` | `client.ts` parks `pendingPermission` | `ok` | protocol |
 | ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (cwd + `~/.thanh/sessions`; ignores line/limit) | `ok` | protocol |
 | ACP-fs-w | `fs/write_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `write_text_file` (same sandbox; **plan.md allow-path**) | `ok` | protocol |
-| ACP-t-c | `terminal/create` | A→C | not advertised by default; unhandled if it arrives | `acp_host.rs` stub `desktop-stub-{id}` | `stub` | protocol |
-| ACP-t-o | `terminal/output` | A→C | — | stub `{ output: "", truncated: false }` | `stub` | protocol |
-| ACP-t-w | `terminal/wait_for_exit` | A→C | honest `-32601` if advertised | stub `{ exitCode: 0 }` | `stub` | protocol |
-| ACP-t-r | `terminal/release` | A→C | — | stub `{}` | `stub` | protocol |
-| ACP-t-k | `terminal/kill` | A→C | — | stub `{}` | `stub` | protocol |
+| ACP-t-c | `terminal/create` | A→C | not advertised by default; unhandled if it arrives | not advertised (`terminal: false`); no host stub | `ok` | protocol |
+| ACP-t-o | `terminal/output` | A→C | — | not advertised | `ok` | protocol |
+| ACP-t-w | `terminal/wait_for_exit` | A→C | honest `-32601` if advertised | not advertised | `ok` | protocol |
+| ACP-t-r | `terminal/release` | A→C | — | not advertised | `ok` | protocol |
+| ACP-t-k | `terminal/kill` | A→C | — | not advertised | `ok` | protocol |
 
 Plan-mode `plan.md` is written through ACP-fs-w into `$THANH_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.thanh/sessions`). That allow-path is load-bearing.
 
@@ -164,10 +164,10 @@ These block the agent until the client answers. A `-32601` is a user-visible fai
 |---|---|---|---|---|---|
 | R-ask | `x.ai/ask_user_question` | `handle_ask_user_question` | `client.ts` `pendingQuestion` | `ok` | protocol |
 | R-plan | `x.ai/exit_plan_mode` | `handle_exit_plan_mode` | `client.ts` `beginPlanReview` + plan card | `ok` | protocol |
-| R-elicit | `x.ai/mcp/elicit` | `handle_mcp_elicit` | `client.ts` elicit card | `partial` (`elicit_complete` ignored) | protocol |
-| R-trust | `x.ai/folder_trust/request` | not handled (not advertised) | `client.ts` trust card | `ok` | protocol |
-| R-sdk | `x.ai/mcp/sdk_call` | not handled; pager does not register SDK MCP | **`-32601`** if ever sent | `gap` | protocol |
-| R-hook | `x.ai/hooks/run` | not handled; pager does not stamp `_meta["x.ai/hooks"]` | **`-32601`** if ever sent | `gap` (latent) | protocol |
+| R-elicit | `x.ai/mcp/elicit` | `handle_mcp_elicit` | reverse registry parks elicit card; `N-mcp-elic` clears | `ok` | protocol |
+| R-trust | `x.ai/folder_trust/request` | not handled (not advertised) | reverse registry parks trust card | `ok` | protocol |
+| R-sdk | `x.ai/mcp/sdk_call` | not handled; pager does not register SDK MCP | typed decline `{ ok: false }` (known-unimplemented) | `partial` | protocol |
+| R-hook | `x.ai/hooks/run` | not handled; pager does not stamp `_meta["x.ai/hooks"]` | typed decline `{ ok: false }` (known-unimplemented) | `partial` (latent) | protocol |
 
 Standard ACP reverse (`session/request_permission`, `fs/*`, `terminal/*`) is §2.
 
@@ -178,7 +178,7 @@ Standard ACP reverse (`session/request_permission`, `fs/*`, `terminal/*`) is §2
 | Client | Unknown A→C **request** (`id` present) | Unknown A→C **notification** |
 |---|---|---|
 | TUI | `tracing::warn` **and** `-32601` (`handle_ext_method` unknown arm). TUI does not advertise caps it cannot honour, so the agent should not send R-sdk / R-hook / `terminal/*`. | `_ => false`; envelope still `Ok(())` |
-| Desktop | `console.warn` **and** `-32601` `Unsupported method` (`client.ts` L429–432). Desktop **does** advertise `terminal: true` and `mcpApps: true`, so a `-32601` is worse than TUI’s. | `console.debug("Ignored ACP notification: …")` |
+| Desktop | typed decline `{ ok: false }` via `acp/reverse` (C2); `-32601` only if advertised-required. Caps honest (`terminal`/`mcpApps` false). | log-only unknown notifications via `acp/notifications` |
 
 **Policy (architecture [`desktop-app.md`](desktop-app.md) §5.5; fold in
 [`desktop-app-client-implement.md`](desktop-app-client-implement.md) **C2**,
@@ -204,13 +204,13 @@ TUI match: `acp_handler/mod.rs` L605–628. Plus session-update carriers via `is
 | N-sn | `x.ai/session_notification` | `handle_session_notification` | `client.ts` merged with `session/update` | `partial` | protocol |
 | N-su | `x.ai/session/update` | same | **not consumed** (only `session/update` and `x.ai/session_notification`) | `gap` | protocol |
 | N-follow | `x.ai/follow_ups` | `handle_follow_ups` | ignored | `gap` | surface |
-| N-tbg | `x.ai/task_backgrounded` | `handle_task_backgrounded` | ignored | `gap` | surface |
-| N-tdone | `x.ai/task_completed` | `handle_task_completed` | ignored | `gap` | surface |
+| N-tbg | `x.ai/task_backgrounded` | `handle_task_backgrounded` | notice toast (no dock yet) | `partial` | surface |
+| N-tdone | `x.ai/task_completed` | `handle_task_completed` | notice toast (no dock yet) | `partial` | surface |
 | N-models | `x.ai/models/update` | `handle_models_update` | `client.ts` catalog refresh | `ok` | protocol |
 | N-settings | `x.ai/settings/update` | `handle_settings_update` | ignored | `gap` | surface |
 | N-sessions | `x.ai/sessions/changed` | `handle_sessions_changed` | ignored (sidebar polls `session/list`) | `partial` | surface |
-| N-queue | `x.ai/queue/changed` | `handle_queue_changed` | ignored (`queuedPromptCount` is local) | `gap` | surface |
-| N-pcomplete | `x.ai/session/prompt_complete` | `handle_prompt_complete` | inferred from `session/prompt` RPC return | `partial` (misses agent-driven complete) | protocol |
+| N-queue | `x.ai/queue/changed` | `handle_queue_changed` | syncs `queuedPromptCount` | `partial` (no queue list UI yet) | surface |
+| N-pcomplete | `x.ai/session/prompt_complete` | `handle_prompt_complete` | `finishTurn` via notification registry | `ok` | protocol |
 | N-interject | `x.ai/session/interjection` | `handle_interjection` | ignored | `gap` | surface |
 | N-mon | `x.ai/monitor_event` | `handle_monitor_event` | ignored | `gap` | surface |
 | N-sched-c | `x.ai/scheduled_task_created` | handler | ignored | `gap` | surface |
@@ -219,12 +219,12 @@ TUI match: `acp_handler/mod.rs` L605–628. Plus session-update carriers via `is
 | N-ann | `x.ai/announcements/update` | `handle_announcements_update` | ignored (generated type unused) | `na` | chrome |
 | N-git | `x.ai/git_head_changed` | `handle_git_head_changed` | ignored (Review is Tauri `loadWorkspaceReview`, not this notif) | `gap` | surface |
 | N-ver | `x.ai/leader/version_mismatch` | toast | ignored | `out` | out |
-| N-mcp-init | `x.ai/mcp/init_progress` | `handle_mcp_init_progress` | ignored | `gap` | surface |
-| N-mcp-tools | `x.ai/mcp/tools_changed` | `handle_mcp_tools_changed` | ignored | `gap` | surface |
-| N-mcp-inited | `x.ai/mcp_initialized` | same handler | ignored | `gap` | surface |
-| N-mcp-stat | `x.ai/mcp/server_status` | gated `handle_mcp_server_status` | ignored | `gap` | surface |
-| N-mcp-elic | `x.ai/mcp/elicit_complete` | `handle_mcp_elicit_complete` | ignored | `partial` | protocol |
-| N-mcp-srv | `x.ai/mcp/servers_updated` | `handle_mcp_servers_updated` | ignored (Connectors polls) | `gap` | surface |
+| N-mcp-init | `x.ai/mcp/init_progress` | `handle_mcp_init_progress` | catalog status patch | `ok` | surface |
+| N-mcp-tools | `x.ai/mcp/tools_changed` | `handle_mcp_tools_changed` | catalog tools patch | `ok` | surface |
+| N-mcp-inited | `x.ai/mcp_initialized` | same handler | status → ready | `ok` | surface |
+| N-mcp-stat | `x.ai/mcp/server_status` | gated `handle_mcp_server_status` | catalog status patch | `ok` | surface |
+| N-mcp-elic | `x.ai/mcp/elicit_complete` | `handle_mcp_elicit_complete` | clears pending elicit | `ok` | protocol |
+| N-mcp-srv | `x.ai/mcp/servers_updated` | `handle_mcp_servers_updated` | replaces MCP catalog (Connectors live) | `ok` | surface |
 | N-yolo | `x.ai/yolo_mode_changed` | settings path | consumed no-op | `ok` | protocol |
 | N-chunk | `x.ai/session/updates/chunk` | — | ignored | `na` | chrome |
 | N-hookev | `x.ai/hooks/event` | — | ignored | `gap` | surface |

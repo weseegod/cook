@@ -5,6 +5,7 @@ mod provider_config;
 mod workspace;
 
 use std::path::PathBuf;
+use std::process::Command;
 
 use acp_host::{AcpHost, RpcError, StartInfo};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -267,6 +268,54 @@ fn config_security() -> ConfigSecurity {
     }
 }
 
+/// Escape a string for embedding inside an AppleScript double-quoted literal.
+fn escape_applescript(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+        .replace('\r', " ")
+}
+
+/// Native OS notification when a turn finishes while the window is unfocused.
+#[tauri::command]
+async fn os_notify(title: String, body: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        {
+            let script = format!(
+                "display notification \"{}\" with title \"{}\"",
+                escape_applescript(&body),
+                escape_applescript(&title),
+            );
+            let status = Command::new("osascript")
+                .args(["-e", &script])
+                .status()
+                .map_err(|error| error.to_string())?;
+            if !status.success() {
+                return Err(format!("osascript exited with {status}"));
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            let status = Command::new("notify-send")
+                .args([&title, &body])
+                .status()
+                .map_err(|error| error.to_string())?;
+            if !status.success() {
+                return Err(format!("notify-send exited with {status}"));
+            }
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        {
+            let _ = (title, body);
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[tauri::command]
 async fn desktop_provider_list() -> Result<ProviderList, String> {
     tauri::async_runtime::spawn_blocking(provider_config::list)
@@ -332,8 +381,15 @@ async fn desktop_model_set_default(model_id: String) -> Result<Value, String> {
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+
+    // App-shell updater only (see plugins.updater). Never writes ~/.thanh/bin/thanh.
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    let app = builder
         .manage(AcpHost::default())
         .invoke_handler(tauri::generate_handler![
             acp_start,
@@ -351,6 +407,7 @@ pub fn run() {
             workspace_open,
             open_path,
             config_security,
+            os_notify,
             desktop_provider_list,
             desktop_provider_upsert,
             desktop_provider_delete,

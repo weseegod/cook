@@ -13,11 +13,23 @@ export interface SlashCommandHost {
   setModel(modelId: string): Promise<void>;
   setYolo(enabled: boolean): Promise<void>;
   newSession(): Promise<void>;
+  /** Fork the active session (`C-sess-fork` / `/fork`) and load the child. */
+  forkSession(): Promise<string>;
+  /** Export the active transcript as Markdown (`/export`). */
+  exportTranscript(): Promise<void>;
   sendPrompt(text: string): Promise<unknown>;
   /** `x.ai/session/info`, or `null` when the agent cannot report it. */
   sessionInfo(): Promise<SessionInfo | null>;
   /** Open the plan review popup (the TUI's `/view-plan`). */
   openPlan(): void;
+  /** Open the compact Activity panel (`/tasks`, `/dashboard` — map §10 TK-*). */
+  openActivity(): void;
+  /** Open Settings → Memory (`MEM-ui` / `/memory`). */
+  openMemory(): void;
+  /** Open the `/rewind` picker (`MEM-rew` / `C-rew`). */
+  openRewind(): void;
+  /** Fire `/recap` and show the result dialog (`C-recap`). */
+  openRecap(): void | Promise<void>;
 }
 
 export interface SlashCommandContext {
@@ -30,6 +42,10 @@ export interface SlashCommandContext {
   models: ModelSummary[];
   /** Whether the session holds a plan to show (`/view-plan`). */
   hasPlan: boolean;
+  /** `InitializeResponse.meta.cancelRewind` — gates `/rewind`. */
+  cancelRewindEnabled: boolean;
+  /** `InitializeResponse.meta.sessionRecap` — gates `/recap`. */
+  sessionRecapEnabled: boolean;
 }
 
 export interface SlashCommandSpec {
@@ -85,6 +101,26 @@ export const CLIENT_COMMANDS: SlashCommandSpec[] = [
     run: async (host) => {
       await host.newSession();
       return null;
+    },
+  },
+  {
+    // Map id `C-sess-fork` / `/fork`: peer session via `x.ai/session/fork`, then load.
+    name: "fork",
+    description: "Fork this conversation into a new session",
+    run: async (host, context) => {
+      if (!context.sessionId) return "Start a conversation before forking.";
+      await host.forkSession();
+      return null;
+    },
+  },
+  {
+    // Map id `/export`: Markdown of user/assistant transcript text (no tool dumps).
+    name: "export",
+    description: "Export this conversation as Markdown",
+    run: async (host, context) => {
+      if (!context.sessionId) return "No active session to export.";
+      await host.exportTranscript();
+      return "Exported conversation as Markdown.";
     },
   },
   {
@@ -148,6 +184,60 @@ export const CLIENT_COMMANDS: SlashCommandSpec[] = [
       return null;
     },
   },
+  {
+    // Map ids TK-dock / C-task-list: open the compact Activity panel.
+    name: "tasks",
+    description: "Show background tasks and subagents",
+    run: async (host) => {
+      host.openActivity();
+      return null;
+    },
+  },
+  {
+    // Map id TK-dash: same compact panel as `/tasks`.
+    name: "dashboard",
+    aliases: ["agents-dashboard", "sessions"],
+    description: "Open the activity dashboard",
+    run: async (host) => {
+      host.openActivity();
+      return null;
+    },
+  },
+  {
+    // Map ids `MEM-ui` / `/memory`: Settings memory browser; agent `/memory` refreshes U-memf.
+    name: "memory",
+    aliases: ["mem"],
+    description: "Open the memory browser",
+    run: async (host) => {
+      host.openMemory();
+      await host.sendPrompt("/memory");
+      return null;
+    },
+  },
+  {
+    // Map ids `MEM-rew` / `C-rew`: picker over `x.ai/rewind/points` → execute → `session/load`.
+    name: "rewind",
+    aliases: ["undo"],
+    description: "Rewind to a previous turn",
+    run: async (host, context) => {
+      if (!context.cancelRewindEnabled) return "Rewind is disabled for this agent.";
+      if (!context.sessionId) return "Start a conversation before rewinding.";
+      host.openRewind();
+      return null;
+    },
+  },
+  {
+    // Map id `C-recap`: `x.ai/recap` then show the summary dialog.
+    name: "recap",
+    aliases: ["summarize"],
+    description: "Summarize the session so far (where was I)",
+    run: async (host, context) => {
+      if (!context.sessionRecapEnabled) return "Session recap is disabled for this agent.";
+      if (!context.sessionId) return "Start a conversation before asking for a recap.";
+      await host.openRecap();
+      return null;
+    },
+  },
 ];
 
 export function clientCommand(name: string): SlashCommandSpec | undefined {
@@ -171,13 +261,24 @@ export function parseSlash(text: string): { name: string; args: string } | null 
 }
 
 /** The composer's dropdown: the window's own commands first, then the agent's, deduped by name. */
-export function slashEntries(commands: CommandSummary[]): SlashEntry[] {
-  const client: SlashEntry[] = CLIENT_COMMANDS.map((command) => ({
-    name: command.name,
-    description: command.description,
-    inputHint: command.inputHint,
-    source: "client",
-  }));
+export function slashEntries(
+  commands: CommandSummary[],
+  gates: { cancelRewindEnabled?: boolean; sessionRecapEnabled?: boolean } = {},
+): SlashEntry[] {
+  const cancelRewindEnabled = gates.cancelRewindEnabled !== false;
+  const sessionRecapEnabled = gates.sessionRecapEnabled === true;
+  const client: SlashEntry[] = CLIENT_COMMANDS
+    .filter((command) => {
+      if (command.name === "rewind") return cancelRewindEnabled;
+      if (command.name === "recap") return sessionRecapEnabled;
+      return true;
+    })
+    .map((command) => ({
+      name: command.name,
+      description: command.description,
+      inputHint: command.inputHint,
+      source: "client" as const,
+    }));
   const taken = new Set(client.map((entry) => entry.name));
   const agent: SlashEntry[] = commands
     .filter((command) => command.name && !taken.has(command.name.toLowerCase()))
@@ -185,7 +286,7 @@ export function slashEntries(commands: CommandSummary[]): SlashEntry[] {
       name: command.name,
       description: command.description,
       inputHint: command.inputHint,
-      source: "agent",
+      source: "agent" as const,
     }));
   return [...client, ...agent];
 }

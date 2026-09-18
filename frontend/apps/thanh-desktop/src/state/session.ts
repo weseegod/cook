@@ -1,6 +1,7 @@
 import type { RequestPermissionRequest, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { create } from "zustand";
 import { formatDuration } from "../ui/chat/format-duration";
+import { applySubagentSessionUpdate, applyWorkflowUpdated } from "./activity";
 import { reduceGoalUpdate, type GoalState } from "./goal";
 import { emptyPlanSlice, type PlanComment, type PlanSlice } from "./plan-review";
 
@@ -89,6 +90,21 @@ export interface PendingQuestion {
   raw: Record<string, unknown>;
 }
 
+/** One row from `x.ai/queue/changed` (`QueueEntryWire`). */
+export interface QueuedPromptEntry {
+  id: string;
+  version: number;
+  text: string;
+  kind?: string;
+  position?: number;
+}
+
+/** Streaming follow-up chips for the latest assistant response. */
+export interface FollowUpsState {
+  responseId: string;
+  suggestions: string[];
+}
+
 interface SessionState {
   connection: "idle" | "starting" | "ready" | "reconnecting" | "error";
   cwd: string | null;
@@ -116,11 +132,24 @@ interface SessionState {
   planDialogOpen: boolean;
   /** User-toggled ACP Plan checklist under the header; closed by default. */
   todoOverlayOpen: boolean;
+  /** `/rewind` picker dialog. */
+  rewindDialogOpen: boolean;
+  /** `/recap` result dialog. */
+  recapDialogOpen: boolean;
+  /** In-flight `/recap` waiting for `session_recap` / `session_recap_unavailable`. */
+  recapPending: boolean;
+  recapStatus: "idle" | "loading" | "ready" | "unavailable" | "error";
+  recapSummary: string | null;
+  recapError: string | null;
   alwaysApprove: boolean;
   pendingPermission: PendingPermission | null;
   pendingQuestion: PendingQuestion | null;
   /** Prompts the user sent while a turn was already running (drained one per finishing turn). */
   queuedPromptCount: number;
+  /** Full queue rows from `x.ai/queue/changed` (N-queue) for the queue bar. */
+  queuedEntries: QueuedPromptEntry[];
+  /** Follow-up chips from `x.ai/follow_ups` (N-follow). */
+  followUps: FollowUpsState | null;
   composerDraft: string;
   notice: string | null;
   error: string | null;
@@ -132,6 +161,10 @@ interface SessionState {
   endPlanReview: () => void;
   setPlanDialogOpen: (open: boolean) => void;
   setTodoOverlayOpen: (open: boolean) => void;
+  setRewindDialogOpen: (open: boolean) => void;
+  beginRecap: () => void;
+  failRecap: (error: string) => void;
+  closeRecapDialog: () => void;
   savePlanComment: (id: number | null, lineRange: [number, number], text: string) => void;
   removePlanComment: (id: number) => void;
   resetConversation: (sessionId?: string | null) => void;
@@ -177,10 +210,18 @@ export const useSessionStore = create<SessionState>((set) => ({
   goalClearedId: null,
   ...emptyPlanSlice,
   todoOverlayOpen: false,
+  rewindDialogOpen: false,
+  recapDialogOpen: false,
+  recapPending: false,
+  recapStatus: "idle",
+  recapSummary: null,
+  recapError: null,
   alwaysApprove: localStorage.getItem("thanh.alwaysApprove") === "true",
   pendingPermission: null,
   pendingQuestion: null,
   queuedPromptCount: 0,
+  queuedEntries: [],
+  followUps: null,
   composerDraft: "",
   notice: null,
   error: null,
@@ -213,6 +254,30 @@ export const useSessionStore = create<SessionState>((set) => ({
     set((state) => (state.planReview ? { planReview: { ...state.planReview, pending: false } } : {})),
   setPlanDialogOpen: (planDialogOpen) => set({ planDialogOpen }),
   setTodoOverlayOpen: (todoOverlayOpen) => set({ todoOverlayOpen }),
+  setRewindDialogOpen: (rewindDialogOpen) => set({ rewindDialogOpen }),
+  beginRecap: () =>
+    set({
+      recapDialogOpen: true,
+      recapPending: true,
+      recapStatus: "loading",
+      recapSummary: null,
+      recapError: null,
+    }),
+  failRecap: (error) =>
+    set({
+      recapDialogOpen: true,
+      recapPending: false,
+      recapStatus: "error",
+      recapError: error,
+    }),
+  closeRecapDialog: () =>
+    set({
+      recapDialogOpen: false,
+      recapPending: false,
+      recapStatus: "idle",
+      recapSummary: null,
+      recapError: null,
+    }),
   savePlanComment: (id, lineRange, text) =>
     set((state) => {
       const trimmed = text.trim();
@@ -245,9 +310,17 @@ export const useSessionStore = create<SessionState>((set) => ({
       goalClearedId: null,
       ...emptyPlanSlice,
       todoOverlayOpen: false,
+      rewindDialogOpen: false,
+      recapDialogOpen: false,
+      recapPending: false,
+      recapStatus: "idle",
+      recapSummary: null,
+      recapError: null,
       pendingPermission: null,
       pendingQuestion: null,
       queuedPromptCount: 0,
+      queuedEntries: [],
+      followUps: null,
       composerDraft: "",
       notice: null,
       error: null,
@@ -264,6 +337,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         transcriptCursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: localId },
         turnStartedAt: Date.now(),
         turnPausedMs: 0,
+        followUps: null,
       };
     }),
   applyNotification: (notification) =>
@@ -346,7 +420,17 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
   let sessionTitle = state.sessionTitle;
   let modelId = state.modelId;
   let turnStartedAt = state.turnStartedAt;
+  let turnPausedMs = state.turnPausedMs;
+  let questionOpenedAt = state.questionOpenedAt;
+  let turnRunning = state.turnRunning;
+  let pendingPermission = state.pendingPermission;
+  let pendingQuestion = state.pendingQuestion;
   let goalSlice = { goal: state.goal, clearedGoalId: state.goalClearedId };
+  let recapPending = state.recapPending;
+  let recapStatus = state.recapStatus;
+  let recapSummary = state.recapSummary;
+  let recapError = state.recapError;
+  let recapDialogOpen = state.recapDialogOpen;
 
   for (const notification of notifications) {
     const raw = notification.update as SessionUpdate & Record<string, unknown>;
@@ -383,6 +467,66 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
       }
       continue;
     }
+    // Manual `/recap` lands here as `session_recap` / `session_recap_unavailable` (U-recap).
+    if (kind === "session_recap") {
+      if (recapPending || recapDialogOpen) {
+        recapPending = false;
+        recapStatus = "ready";
+        recapSummary = typeof raw.summary === "string" ? raw.summary : "";
+        recapError = null;
+        recapDialogOpen = true;
+      }
+      continue;
+    }
+    if (kind === "session_recap_unavailable") {
+      if (recapPending || recapDialogOpen) {
+        recapPending = false;
+        recapStatus = "unavailable";
+        recapSummary = null;
+        recapError = null;
+        recapDialogOpen = true;
+      }
+      continue;
+    }
+    // U-turn: honor `turn_completed` when the agent emits it (alongside prompt RPC completion).
+    if (kind === "turn_completed") {
+      if (turnStartedAt !== null || cursor.turnId) {
+        const stop = String(raw.stopReason ?? raw.stop_reason ?? "");
+        const outcome: TurnOutcome = /cancel/i.test(stop)
+          ? { kind: "cancelled" }
+          : /fail|error/i.test(stop) || raw.error != null
+            ? { kind: "failed", error: typeof raw.error === "string" ? raw.error : undefined }
+            : { kind: "completed" };
+        const finished = finishStreamingBlocks(blocks);
+        blocks = appendTurnMarker(
+          finished,
+          {
+            turnStartedAt,
+            turnPausedMs,
+            questionOpenedAt,
+            transcriptCursor: cursor,
+          },
+          outcome,
+        );
+        cursor = emptyCursor();
+        turnStartedAt = null;
+        turnPausedMs = 0;
+        questionOpenedAt = null;
+        turnRunning = false;
+        pendingPermission = null;
+        pendingQuestion = null;
+      }
+      continue;
+    }
+    // U-sub-* / U-wf: activity dock only — do not spam the transcript.
+    if (kind === "subagent_spawned" || kind === "subagent_progress" || kind === "subagent_finished") {
+      applySubagentSessionUpdate(raw);
+      continue;
+    }
+    if (kind === "workflow_updated") {
+      applyWorkflowUpdated(raw);
+      continue;
+    }
     const next = reduceTranscript({ blocks, cursor }, raw);
     blocks = next.blocks;
     cursor = next.cursor;
@@ -396,8 +540,18 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
     sessionTitle,
     modelId,
     turnStartedAt,
+    turnPausedMs,
+    questionOpenedAt,
+    turnRunning,
+    pendingPermission,
+    pendingQuestion,
     goal: goalSlice.goal,
     goalClearedId: goalSlice.clearedGoalId,
+    recapPending,
+    recapStatus,
+    recapSummary,
+    recapError,
+    recapDialogOpen,
   };
 }
 

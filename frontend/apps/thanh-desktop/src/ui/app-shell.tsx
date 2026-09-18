@@ -4,20 +4,51 @@ import { acpClient } from "../acp/client";
 import { pickFolder, request } from "../acp/host";
 import { shouldShowConnectProvider } from "../acp/provider-presets";
 import { listProviders } from "../acp/providers";
+import { useActivityStore } from "../state/activity";
+import { useArtifactStore } from "../state/artifacts";
+import { useCatalogStore } from "../state/catalog";
 import { useSessionStore } from "../state/session";
 import { AgentHeader } from "./chat/agent-header";
 import { ChatView } from "./chat/chat-view";
+import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "./chat/export-transcript";
+import { viewPlan } from "./chat/view-plan";
+import { openRecap } from "./chat/view-recap";
+import { openRewind } from "./chat/view-rewind";
 import { CommandPalette } from "./palette/command-palette";
 import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
-import { SettingsPanel } from "./settings/settings-panel";
+import { SettingsPanel, type SettingsTab } from "./settings/settings-panel";
+import { ShortcutsSheet } from "./shortcuts/shortcuts-sheet";
 import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
-import { viewPlan } from "./chat/view-plan";
 
 const DISMISSED_KEY = "thanh.connectProviderDismissed";
-type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "about";
+const SETTINGS_TABS = new Set<SettingsTab>(["general", "models", "connectors", "context", "skills", "hooks", "about"]);
+
+function isSettingsTab(value: string): value is SettingsTab {
+  return SETTINGS_TABS.has(value as SettingsTab);
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+function exportActiveTranscript() {
+  const store = useSessionStore.getState();
+  if (!store.sessionId) {
+    store.set({ notice: "No active session to export." });
+    return;
+  }
+  const markdown = exportTranscriptMarkdown(store.blocks);
+  if (!markdown) {
+    store.set({ notice: "Nothing to export yet." });
+    return;
+  }
+  downloadMarkdown(exportFilename(store.sessionTitle, store.sessionId), markdown);
+  store.set({ notice: "Exported conversation as Markdown." });
+}
 
 export function AppShell() {
   const { cwd, connection } = useSessionStore();
@@ -26,11 +57,37 @@ export function AppShell() {
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [settingsCloseRequest, setSettingsCloseRequest] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISSED_KEY) === "true");
+  const activityPanelNonce = useActivityStore((state) => state.panelNonce);
+  const artifactEpoch = useArtifactStore((state) => state.openEpoch);
+
+  useEffect(() => {
+    if (activityPanelNonce > 0) setUtilityPanelOpen(true);
+  }, [activityPanelNonce]);
+
+  useEffect(() => {
+    if (artifactEpoch > 0) setUtilityPanelOpen(true);
+  }, [artifactEpoch]);
+
+  const pendingSettingsTab = useCatalogStore((state) => state.pendingSettingsTab);
 
   function openSettings(tab: SettingsTab) {
     setPaletteOpen(false);
+    setShortcutsOpen(false);
     setSettingsTab(tab);
+  }
+
+  useEffect(() => {
+    if (!pendingSettingsTab || !isSettingsTab(pendingSettingsTab)) return;
+    openSettings(pendingSettingsTab);
+    useCatalogStore.getState().clearPendingSettingsTab();
+  }, [pendingSettingsTab]);
+
+  function openShortcuts() {
+    setPaletteOpen(false);
+    setSettingsTab(null);
+    setShortcutsOpen(true);
   }
 
   useEffect(() => {
@@ -50,6 +107,7 @@ export function AppShell() {
       if (document.querySelector(".dialog, .modal")) return;
       if (commandKey && key === "k") {
         event.preventDefault();
+        setShortcutsOpen(false);
         setPaletteOpen((open) => !open);
         return;
       }
@@ -58,15 +116,22 @@ export function AppShell() {
         openSettings("general");
         return;
       }
+      if (event.key === "?" && !commandKey && !event.altKey && !isTypingTarget(event.target)) {
+        event.preventDefault();
+        setPaletteOpen(false);
+        setShortcutsOpen((open) => !open);
+        return;
+      }
       if (commandKey && key === "w") {
         event.preventDefault();
         if (paletteOpen) setPaletteOpen(false);
+        else if (shortcutsOpen) setShortcutsOpen(false);
         else if (settingsTab) setSettingsCloseRequest((request) => request + 1);
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [paletteOpen, settingsTab]);
+  }, [paletteOpen, settingsTab, shortcutsOpen]);
 
   // Provider gate: only shown once the agent answers, so the wizard never flashes.
   const connected = connection === "ready";
@@ -98,8 +163,18 @@ export function AppShell() {
     if (item.action === "settings") return openSettings("general");
     if (item.action === "connect-provider") return openSettings("models");
     if (item.action === "new-session") return void acpClient.newSession();
+    // Map ids `C-sess-fork` / `/fork` and `/export`.
+    if (item.action === "fork-session") return void acpClient.forkSession().catch((error) => {
+      useSessionStore.getState().set({
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    if (item.action === "export-transcript") return exportActiveTranscript();
     if (item.action === "view-plan") return viewPlan();
-    if (item.action === "shortcuts") return setSettingsTab("about");
+    if (item.action === "open-activity") return useActivityStore.getState().requestOpenPanel();
+    if (item.action === "rewind") return openRewind();
+    if (item.action === "recap") return void openRecap();
+    if (item.action === "shortcuts") return openShortcuts();
     if (item.action === "model" && item.value) return void acpClient.setDefaultModel(item.value);
     if (item.action === "session" && item.value) return void acpClient.loadSession(item.value);
     if (item.action === "command" && item.value) {
@@ -140,6 +215,7 @@ export function AppShell() {
       {cwd && utilityPanelOpen && <UtilityPanel onClose={() => setUtilityPanelOpen(false)} />}
       {settingsTab && <SettingsPanel initialTab={settingsTab} closeRequest={settingsCloseRequest} onClose={() => setSettingsTab(null)} />}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSelect={runPaletteAction} />}
+      {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
     </div>
   );
 }

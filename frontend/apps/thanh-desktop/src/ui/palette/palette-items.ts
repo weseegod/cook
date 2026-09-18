@@ -28,13 +28,32 @@ export interface PaletteSource {
 
 export const DEFAULT_ACTIONS: PaletteItem[] = [
   { id: "action:new-session", kind: "action", label: "New chat", action: "new-session" },
+  { id: "action:fork-session", kind: "action", label: "Fork conversation", action: "fork-session" },
+  { id: "action:export-transcript", kind: "action", label: "Export transcript", action: "export-transcript" },
   { id: "action:open-folder", kind: "action", label: "Open folder…", action: "open-folder" },
   { id: "action:settings", kind: "action", label: "Open settings", action: "settings" },
   // `views/modal.rs` indexes the TUI's `/view-plan` in the palette as "View Plan".
   { id: "action:view-plan", kind: "action", label: "View plan", action: "view-plan" },
+  { id: "action:open-activity", kind: "action", label: "Show activity", action: "open-activity" },
+  { id: "action:rewind", kind: "action", label: "Rewind conversation", action: "rewind" },
+  { id: "action:recap", kind: "action", label: "Recap session", action: "recap" },
   { id: "action:connect-provider", kind: "action", label: "Connect a provider", action: "connect-provider" },
   { id: "action:palette", kind: "action", label: "Show keyboard shortcuts", action: "shortcuts" },
 ];
+
+/** Palette actions filtered by initialize feature gates (`cancelRewind` / `sessionRecap`). */
+export function paletteActions(gates: {
+  cancelRewindEnabled?: boolean;
+  sessionRecapEnabled?: boolean;
+} = {}): PaletteItem[] {
+  const cancelRewindEnabled = gates.cancelRewindEnabled !== false;
+  const sessionRecapEnabled = gates.sessionRecapEnabled === true;
+  return DEFAULT_ACTIONS.filter((item) => {
+    if (item.action === "rewind") return cancelRewindEnabled;
+    if (item.action === "recap") return sessionRecapEnabled;
+    return true;
+  });
+}
 
 const KIND_PRIORITY: Record<PaletteKind, number> = { action: 0, command: 1, model: 2, session: 3 };
 

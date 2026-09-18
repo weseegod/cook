@@ -1,25 +1,29 @@
 import { useQuery } from "@tanstack/react-query";
-import { Cable, Cpu, Info, Monitor, Moon, Palette, ShieldCheck, SlidersHorizontal, Sparkles, Sun, X } from "lucide-react";
+import { Cable, Cpu, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { getConfigSecurity } from "../../acp/host";
 import { useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
+import { checkForAppUpdates, UPDATER_CONFIGURED, type UpdateCheckResult } from "../../updater";
 import { ConnectorsPanel } from "./connectors";
 import { MemoryPanel, ProjectInstructionsPanel, SkillsPanel } from "./context-panels";
+import { HooksPanel } from "./hooks-panel";
 import { ProvidersPanel } from "./providers";
 import { useTheme, type ThemePreference } from "../theme/theme";
 import { ConfirmDialog } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
 
-type Tab = "general" | "models" | "connectors" | "context" | "skills" | "about";
+export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "about";
+type Tab = SettingsTab;
 
 const TABS: Array<{ id: Tab; label: string; description: string; icon: React.ReactNode }> = [
   { id: "general", label: "General", description: "Appearance and behavior", icon: <SlidersHorizontal size={16} /> },
   { id: "models", label: "Models", description: "Providers, connections and model catalog", icon: <Cpu size={16} /> },
   { id: "connectors", label: "Connectors", description: "MCP servers and tools", icon: <Cable size={16} /> },
   { id: "context", label: "Memory & project", description: "Instructions and memory", icon: <Palette size={16} /> },
-  { id: "skills", label: "Skills", description: "Skills and plugins", icon: <Sparkles size={16} /> },
+  { id: "skills", label: "Skills", description: "Skills, plugins and workflows", icon: <Sparkles size={16} /> },
+  { id: "hooks", label: "Hooks", description: "Lifecycle hooks and event log", icon: <Webhook size={16} /> },
   { id: "about", label: "About", description: "Thanh Desktop details", icon: <Info size={16} /> },
 ];
 
@@ -162,17 +166,30 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
             </Section>
           )}
 
+          {tab === "hooks" && (
+            <Section title="Hooks" description="Trust, enable, and inspect lifecycle hooks." icon={<Webhook size={15} />}>
+              <HooksPanel connected={connected} />
+            </Section>
+          )}
+
           {tab === "about" && (
             <Section title="About" description="Thanh Desktop version and keyboard shortcuts." icon={<Info size={15} />}>
               <div className="about-summary">
                 <strong>Thanh Desktop</strong>
                 <span>Version {__APP_VERSION__}</span>
               </div>
+              <AboutUpdates />
               <div className="shortcut-list" aria-label="Keyboard shortcuts">
                 <span><kbd>⌘K</kbd> Search everything</span>
                 <span><kbd>⌘,</kbd> Settings</span>
                 <span><kbd>⌘W</kbd> Close current panel</span>
                 <span><kbd>Esc</kbd> Cancel</span>
+              </div>
+              <div className="settings-note">
+                macOS builds for this fork ship unsigned (same as the CLI). The app updater
+                refreshes the desktop shell only and never writes <code>~/.thanh/bin/thanh</code>.
+                An optional bundled <code>thanh</code> sidecar may appear in stable packages;
+                otherwise install the CLI or set <code>THANH_BIN</code>.
               </div>
               {configSecurity.data?.worldReadable && (
                 <div className="settings-note security-warning">
@@ -207,6 +224,55 @@ function Section({ title, description, icon, children }: { title: string; descri
       {description && <p className="settings-section-description">{description}</p>}
       {children}
     </section>
+  );
+}
+
+function AboutUpdates() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<UpdateCheckResult | null>(null);
+
+  async function onCheck() {
+    setBusy(true);
+    setResult(null);
+    try {
+      setResult(await checkForAppUpdates());
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="about-updates">
+      <button
+        type="button"
+        className="ghost-button"
+        disabled={!UPDATER_CONFIGURED || busy}
+        title={
+          UPDATER_CONFIGURED
+            ? "Check for Thanh Desktop shell updates"
+            : "Updater endpoints are not configured for this build"
+        }
+        onClick={() => void onCheck()}
+      >
+        <RefreshCw size={15} /> {busy ? "Checking…" : "Check for updates"}
+      </button>
+      {!UPDATER_CONFIGURED && (
+        <p className="settings-note">
+          Auto-update is wired but inactive until a release pubkey and endpoint are set
+          in <code>tauri.conf.json</code> (and <code>UPDATER_CONFIGURED</code> in{" "}
+          <code>src/updater.ts</code>).
+        </p>
+      )}
+      {result?.status === "up-to-date" && <p className="settings-note">You are on the latest desktop build.</p>}
+      {result?.status === "available" && (
+        <p className="settings-note">
+          Update available: <strong>{result.version}</strong>
+          {result.notes ? ` — ${result.notes}` : ""}. Download from the release page; the
+          updater never touches the CLI binary.
+        </p>
+      )}
+      {result?.status === "error" && <p className="settings-note">{result.message}</p>}
+    </div>
   );
 }
 

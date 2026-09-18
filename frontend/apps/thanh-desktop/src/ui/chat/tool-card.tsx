@@ -11,12 +11,16 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { openPath } from "../../acp/host";
+import { useArtifactStore } from "../../state/artifacts";
 import { useSessionStore, type ToolBlock } from "../../state/session";
 import { Markdown } from "./markdown";
 import { copyText, displayPath } from "./clipboard";
 import { formatThinkingDuration } from "./format-duration";
 import { isLiveTool, isTerminalToolStatus } from "./transcript-projection";
 import { verbGroupLabel } from "./verb-group";
+
+/** Tall edit diffs open in the Preview dock instead of drowning the transcript. */
+const TALL_DIFF_LINES = 40;
 
 /** Header text for a collapsed tool row (`scrollback/blocks/tool/*`). */
 export function toolHeader(tool: ToolBlock): { prefix?: string; text: string } {
@@ -104,6 +108,8 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
   const text = tool.content.map(contentText).filter(Boolean).join("\n");
   const images = tool.content.flatMap(contentImages);
   const pathText = tool.paths.map(displayPath).join("\n");
+  const tallDiff = looksLikeDiff(text) && text.split("\n").length >= TALL_DIFF_LINES;
+  const isEdit = ["edit", "write", "write_file"].includes((tool.kind ?? "").toLowerCase()) || tallDiff;
 
   async function copy(label: string, value: string) {
     if (!value) return;
@@ -124,17 +130,44 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
           {pathText && <button type="button" onClick={() => void copy("path", pathText)}><Clipboard size={12} /> {copied === "path" ? "Copied" : "Copy path"}</button>}
           {text && <button type="button" onClick={() => void copy("output", text)}><Files size={12} /> {copied === "output" ? "Copied" : "Copy output"}</button>}
           {tool.paths[0] && <button type="button" onClick={() => void openPath(displayPath(tool.paths[0])).catch(reportError)}><FolderOpen size={12} /> Open</button>}
+          {isEdit && tallDiff && (
+            <button
+              type="button"
+              data-testid="open-diff-preview"
+              onClick={() => useArtifactStore.getState().openArtifact({
+                kind: "diff",
+                title: tool.paths[0] ? displayPath(tool.paths[0]) : tool.title,
+                content: text,
+              })}
+            >
+              <FileCode2 size={12} /> Open full diff
+            </button>
+          )}
         </div>
       )}
       {tool.command && <pre className="tool-command"><span className="shell-prefix">$ </span>{tool.command}</pre>}
-      {text && (
+      {text && !tallDiff && (
         <pre className={looksLikeDiff(text) ? "diff" : ""}>
           {text.split("\n").map((line, index) => (
             <span key={index} className={line.startsWith("+") ? "diff-add" : line.startsWith("-") ? "diff-remove" : ""}>{line}{"\n"}</span>
           ))}
         </pre>
       )}
-      {images.length > 0 && <div className="tool-images">{images.map((src, index) => <img key={`${src.slice(-20)}-${index}`} src={src} alt="Tool output" />)}</div>}
+      {tallDiff && <div className="utility-state">Diff is large — open it in Preview.</div>}
+      {images.length > 0 && (
+        <div className="tool-images">
+          {images.map((src, index) => (
+            <button
+              key={`${src.slice(-20)}-${index}`}
+              type="button"
+              className="markdown-image-button"
+              onClick={() => useArtifactStore.getState().openArtifact({ kind: "image", title: "Tool output", content: src })}
+            >
+              <img src={src} alt="Tool output" />
+            </button>
+          ))}
+        </div>
+      )}
       {tool.paths.length > 0 && <div className="tool-locations">{tool.paths.map((path) => <code key={path} title={displayPath(path)}>{displayPath(path)}</code>)}</div>}
     </div>
   );

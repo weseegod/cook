@@ -7,6 +7,27 @@ import { request } from "./host";
 
 export interface McpToolSummary {
   name: string;
+  enabled?: boolean;
+  displayName?: string;
+  description?: string;
+}
+
+export interface McpSetupOption {
+  label: string;
+  value: string;
+}
+
+export interface McpSetupField {
+  id: string;
+  label: string;
+  type?: string;
+  required?: boolean;
+  default?: string;
+  options?: McpSetupOption[];
+}
+
+export interface McpSetupConfig {
+  fields?: McpSetupField[];
 }
 
 export interface McpServerView {
@@ -16,6 +37,8 @@ export interface McpServerView {
   url?: string;
   command?: string;
   args?: string[];
+  setup?: McpSetupConfig;
+  setupValues?: Record<string, string>;
   session?: {
     enabled?: boolean;
     status?: string;
@@ -35,6 +58,32 @@ export function listConnectors(sessionId?: string, cache = false) {
 
 export function toggleConnector(sessionId: string, serverName: string, enabled: boolean) {
   return request<{ ok: boolean }>("x.ai/mcp/toggle", { sessionId, serverName, enabled });
+}
+
+export function deleteConnector(sessionId: string, serverName: string) {
+  return request<{ ok: boolean }>("x.ai/mcp/delete", { sessionId, serverName });
+}
+
+export function toggleConnectorTool(sessionId: string, serverName: string, toolName: string, enabled: boolean) {
+  return request<{ ok: boolean }>("x.ai/mcp/toggle_tool", { sessionId, serverName, toolName, enabled });
+}
+
+export function mcpAuthStatus(sessionId?: string, serverName?: string) {
+  return request<{ servers: Array<{ serverName: string; status: string }> }>("x.ai/mcp/auth_status", {
+    ...(sessionId ? { sessionId } : {}),
+    ...(serverName ? { serverName } : {}),
+  });
+}
+
+export function mcpAuthTrigger(sessionId: string, serverName: string) {
+  return request<{ status: string; setup?: McpSetupConfig; error?: string }>("x.ai/mcp/auth_trigger", {
+    sessionId,
+    serverName,
+  });
+}
+
+export function mcpSetup(sessionId: string, serverName: string, values: Record<string, string> = {}) {
+  return request<{ ok: boolean }>("x.ai/mcp/setup", { sessionId, serverName, values });
 }
 
 export function upsertConnector(
@@ -84,13 +133,19 @@ export function toggleSkill(name: string, enabled: boolean, cwd?: string) {
 
 export interface PluginView {
   name: string;
+  /** Stable id (`<scope>/<hex8>/<name>`); required for enable/disable. */
+  id?: string;
   version?: string;
   enabled?: boolean;
   description?: string;
+  scope?: string;
 }
 
-export function listPlugins() {
-  return request<{ plugins?: PluginView[]; items?: PluginView[] }>("x.ai/plugins/list", {});
+export function listPlugins(sessionId?: string) {
+  return request<{ plugins?: PluginView[]; items?: PluginView[] }>(
+    "x.ai/plugins/list",
+    sessionId ? { sessionId } : {},
+  );
 }
 
 export function flushMemory() {

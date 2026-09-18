@@ -23,9 +23,18 @@ function host(info: SessionInfo | null = null): SlashCommandHost & { calls: stri
     setModel: vi.fn(async (modelId: string) => void calls.push(`model:${modelId}`)),
     setYolo: vi.fn(async (enabled: boolean) => void calls.push(`yolo:${enabled}`)),
     newSession: vi.fn(async () => void calls.push("new")),
+    forkSession: vi.fn(async () => {
+      calls.push("fork");
+      return "forked-session";
+    }),
+    exportTranscript: vi.fn(async () => void calls.push("export")),
     sendPrompt: vi.fn(async (text: string) => void calls.push(`prompt:${text}`)),
     sessionInfo: vi.fn(async () => info),
     openPlan: vi.fn(() => void calls.push("open-plan")),
+    openActivity: vi.fn(() => void calls.push("open-activity")),
+    openMemory: vi.fn(() => void calls.push("open-memory")),
+    openRewind: vi.fn(() => void calls.push("open-rewind")),
+    openRecap: vi.fn(async () => void calls.push("open-recap")),
   };
 }
 
@@ -38,6 +47,8 @@ function context(overrides: Partial<SlashCommandContext> = {}): SlashCommandCont
     usage: null,
     models: MODELS,
     hasPlan: false,
+    cancelRewindEnabled: true,
+    sessionRecapEnabled: true,
     ...overrides,
   };
 }
@@ -82,7 +93,28 @@ describe("slashEntries", () => {
       expect.objectContaining({ source: "client" }),
     ]);
   });
+
+  it("includes /memory as a client command", () => {
+    expect(slashEntries(agent).map((entry) => entry.name)).toContain("memory");
+  });
 });
+
+describe("/memory", () => {
+  it("opens the memory settings tab and asks the agent to list files", async () => {
+    const h = host();
+    const message = await clientCommand("memory")!.run(h, context(), "");
+    expect(h.calls).toEqual(["open-memory", "prompt:/memory"]);
+    expect(message).toBeNull();
+  });
+});
+
+
+  it("opens the activity panel for /tasks and /dashboard", async () => {
+    const h = host();
+    expect(await clientCommand("tasks")!.run(h, context(), "")).toBeNull();
+    expect(await clientCommand("dashboard")!.run(h, context(), "")).toBeNull();
+    expect(h.calls.filter((c) => c === "open-activity")).toEqual(["open-activity", "open-activity"]);
+  });
 
 describe("matchSlashCommands", () => {
   it("ranks prefix matches above names that merely contain the query", () => {
@@ -93,7 +125,7 @@ describe("matchSlashCommands", () => {
 
   it("returns everything for an empty query and caps the list", () => {
     const entries = slashEntries([{ name: "goal" }]);
-    expect(matchSlashCommands(entries, "").length).toBe(entries.length);
+    expect(matchSlashCommands(entries, "", entries.length).length).toBe(entries.length);
     expect(matchSlashCommands(entries, "", 2)).toHaveLength(2);
   });
 });
@@ -159,6 +191,37 @@ describe("/new", () => {
     const h = host();
     expect(await clientCommand("new")!.run(h, context(), "")).toBeNull();
     expect(h.calls).toEqual(["new"]);
+  });
+});
+
+describe("/fork", () => {
+  it("forks the active session", async () => {
+    const h = host();
+    expect(await clientCommand("fork")!.run(h, context(), "")).toBeNull();
+    expect(h.calls).toEqual(["fork"]);
+  });
+
+  it("refuses when there is no session", async () => {
+    const h = host();
+    const message = await clientCommand("fork")!.run(h, context({ sessionId: null }), "");
+    expect(h.calls).toEqual([]);
+    expect(message).toContain("Start a conversation");
+  });
+});
+
+describe("/export", () => {
+  it("exports the active transcript", async () => {
+    const h = host();
+    const message = await clientCommand("export")!.run(h, context(), "");
+    expect(h.calls).toEqual(["export"]);
+    expect(message).toContain("Exported");
+  });
+
+  it("refuses when there is no session", async () => {
+    const h = host();
+    const message = await clientCommand("export")!.run(h, context({ sessionId: null }), "");
+    expect(h.calls).toEqual([]);
+    expect(message).toContain("No active session");
   });
 });
 
@@ -232,5 +295,38 @@ describe("/always-approve", () => {
     const usage = await clientCommand("always-approve")!.run(h, context(), "maybe");
     expect(usage).toBe("Usage: /always-approve on|off");
     expect(h.calls).toEqual(["yolo:false"]);
+  });
+});
+
+describe("/rewind + /recap", () => {
+  it("opens the rewind picker when the feature is on", async () => {
+    const h = host();
+    expect(await clientCommand("rewind")!.run(h, context(), "")).toBeNull();
+    expect(h.calls).toEqual(["open-rewind"]);
+    expect(clientCommand("undo")?.name).toBe("rewind");
+  });
+
+  it("refuses rewind when cancelRewind is off", async () => {
+    const h = host();
+    const message = await clientCommand("rewind")!.run(h, context({ cancelRewindEnabled: false }), "");
+    expect(message).toContain("disabled");
+    expect(h.calls).toEqual([]);
+  });
+
+  it("opens the recap dialog when the feature is on", async () => {
+    const h = host();
+    expect(await clientCommand("recap")!.run(h, context(), "")).toBeNull();
+    expect(h.calls).toEqual(["open-recap"]);
+    expect(clientCommand("summarize")?.name).toBe("recap");
+  });
+
+  it("hides gated commands from slashEntries", () => {
+    const enabled = slashEntries([], { cancelRewindEnabled: true, sessionRecapEnabled: true }).map((e) => e.name);
+    expect(enabled).toContain("rewind");
+    expect(enabled).toContain("recap");
+
+    const disabled = slashEntries([], { cancelRewindEnabled: false, sessionRecapEnabled: false }).map((e) => e.name);
+    expect(disabled).not.toContain("rewind");
+    expect(disabled).not.toContain("recap");
   });
 });

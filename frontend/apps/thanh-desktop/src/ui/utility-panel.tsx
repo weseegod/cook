@@ -1,4 +1,4 @@
-import { ClipboardCheck, Copy, FileCode2, Folder, FolderOpen, FolderTree, PanelRightClose, RefreshCw, X } from "lucide-react";
+import { Activity, ClipboardCheck, Copy, Eye, FileCode2, Folder, FolderOpen, FolderTree, PanelRightClose, RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fileExtension,
@@ -12,18 +12,42 @@ import {
   type ReviewSnapshot,
   type WorkspaceEntry,
 } from "../acp/workspace";
+import { GIT_HEAD_CHANGED_EVENT, useArtifactStore } from "../state/artifacts";
+import { useActivityStore } from "../state/activity";
+import { ActivityPanel } from "./activity/activity-panel";
+import { ArtifactsPanel } from "./artifacts-panel";
 import { copyText } from "./chat/clipboard";
 
-type UtilityId = "review" | "files";
+type UtilityId = "review" | "files" | "activity" | "preview";
 type PanelView = "launcher" | UtilityId;
 
 const UTILITIES: Array<{ id: UtilityId; label: string; shortcut?: string; icon: typeof ClipboardCheck }> = [
   { id: "review", label: "Review", shortcut: "⌃⇧G", icon: ClipboardCheck },
   { id: "files", label: "Files", shortcut: "⌘P", icon: FolderOpen },
+  { id: "activity", label: "Activity", icon: Activity },
+  { id: "preview", label: "Preview", icon: Eye },
 ];
 
-export function UtilityPanel({ onClose }: { onClose: () => void }) {
-  const [view, setView] = useState<PanelView>("launcher");
+export function UtilityPanel({ onClose, initialView }: { onClose: () => void; initialView?: UtilityId }) {
+  const [view, setView] = useState<PanelView>(initialView ?? "launcher");
+  const panelNonce = useActivityStore((state) => state.panelNonce);
+  const panelTarget = useActivityStore((state) => state.panelTarget);
+  const artifactEpoch = useArtifactStore((state) => state.openEpoch);
+
+  useEffect(() => {
+    if (panelTarget === "activity") {
+      setView("activity");
+      useActivityStore.getState().clearPanelTarget();
+    }
+  }, [panelNonce, panelTarget]);
+
+  useEffect(() => {
+    if (artifactEpoch > 0) setView("preview");
+  }, [artifactEpoch]);
+
+  useEffect(() => {
+    if (initialView) setView(initialView);
+  }, [initialView]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -58,6 +82,8 @@ export function UtilityPanel({ onClose }: { onClose: () => void }) {
           </div>
           {view === "review" && <ReviewView />}
           {view === "files" && <FilesView />}
+          {view === "activity" && <ActivityPanel />}
+          {view === "preview" && <ArtifactsPanel />}
         </div>
       )}
     </aside>
@@ -112,6 +138,12 @@ function ReviewView() {
       });
     return () => { cancelled = true; };
   }, [refresh]);
+
+  useEffect(() => {
+    const onGitHead = () => setRefresh((value) => value + 1);
+    window.addEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
+    return () => window.removeEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
+  }, []);
 
   const selected = snapshot?.files.find((file) => file.path === selectedPath) ?? null;
   return (

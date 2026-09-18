@@ -37,6 +37,20 @@ export interface MockProvider {
   models: MockSeedModel[];
 }
 
+export interface MockMcpTool {
+  name: string;
+  enabled: boolean;
+}
+
+export interface MockMcpSetupField {
+  id: string;
+  label: string;
+  type?: string;
+  required?: boolean;
+  default?: string;
+  options?: Array<{ label: string; value: string }>;
+}
+
 export interface MockMcpServer {
   name: string;
   transport: "stdio" | "http";
@@ -44,7 +58,13 @@ export interface MockMcpServer {
   args?: string[];
   url?: string;
   enabled: boolean;
+  /** Prefer `tools`; `toolCount` seeds anonymous tools when `tools` is omitted. */
   toolCount: number;
+  tools?: MockMcpTool[];
+  authRequired?: boolean;
+  setupRequired?: boolean;
+  setup?: { fields: MockMcpSetupField[] };
+  setupValues?: Record<string, string>;
 }
 
 export interface MockSkill {
@@ -63,8 +83,25 @@ export interface MockSession {
 
 export interface MockPlugin {
   name: string;
+  id?: string;
   version?: string;
   enabled: boolean;
+  description?: string;
+  scope?: string;
+}
+
+export interface MockHook {
+  name: string;
+  event: string;
+  disabled?: boolean;
+  pinned?: boolean;
+  matcher?: string;
+}
+
+export interface MockWorkflow {
+  name: string;
+  description?: string;
+  source?: string;
 }
 
 export interface MockWorkspaceState {
@@ -93,6 +130,10 @@ export interface MockState {
   mcpServers: MockMcpServer[];
   skills: MockSkill[];
   plugins: MockPlugin[];
+  hooks: MockHook[];
+  hooksProjectTrusted: boolean;
+  workflows: MockWorkflow[];
+  skillPaths: string[];
   /** Force the next `providers/test` to fail, for the error-state path. */
   testFails: boolean;
   /** Force the next read-only `/models` probe to fail, for the error-state path. */
@@ -112,6 +153,25 @@ export interface MockState {
   /** Base64 payloads keyed by path, as `read_file_base64` would return them. */
   filePayloads: Record<string, { data: string; mediaType: string; size: number }>;
   workspace: MockWorkspaceState;
+  /** Feature gates from initialize meta (`cancelRewind` / `sessionRecap`). */
+  cancelRewind: boolean;
+  sessionRecap: boolean;
+  /** Checkpoints returned by `x.ai/rewind/points`. */
+  rewindPoints: Array<{
+    promptIndex: number;
+    createdAt: string;
+    numFileSnapshots: number;
+    hasFileChanges?: boolean;
+    promptPreview?: string;
+  }>;
+  /** Summary emitted after `x.ai/recap` (null → `session_recap_unavailable`). */
+  recapSummary: string | null;
+  /** Background tasks for `x.ai/task/list` (snake_case snapshots). */
+  tasks: Array<Record<string, unknown>>;
+  /** Running subagents for `x.ai/subagent/list_running`. */
+  subagents: Array<Record<string, unknown>>;
+  /** Scheduled `/loop` tasks for scheduler delete tests. */
+  schedules: Array<Record<string, unknown>>;
 }
 
 function defaultState(): MockState {
@@ -128,14 +188,32 @@ function defaultState(): MockState {
       { id: "session-providers", title: "Provider settings", cwd: "/tmp/thanh-demo", updatedAt: "2026-09-14T10:00:00Z" },
     ],
     mcpServers: [
-      { name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"], enabled: true, toolCount: 3 },
-      { name: "linear", transport: "http", url: "https://mcp.linear.app/sse", enabled: false, toolCount: 0 },
+      {
+        name: "filesystem",
+        transport: "stdio",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem"],
+        enabled: true,
+        toolCount: 3,
+        tools: [
+          { name: "read_file", enabled: true },
+          { name: "write_file", enabled: true },
+          { name: "list_dir", enabled: false },
+        ],
+      },
+      { name: "linear", transport: "http", url: "https://mcp.linear.app/sse", enabled: false, toolCount: 0, tools: [] },
     ],
     skills: [
       { name: "help", description: "Documentation help", enabled: true },
       { name: "review", description: "Review my changes", enabled: false },
     ],
-    plugins: [{ name: "thanh-core", version: "1.0.0", enabled: true }],
+    plugins: [{ name: "thanh-core", id: "user/abcd1234/thanh-core", version: "1.0.0", enabled: true, scope: "user" }],
+    hooks: [
+      { name: "global/safety:pre_tool_use[0]", event: "pre_tool_use", disabled: false, matcher: "Bash" },
+    ],
+    hooksProjectTrusted: false,
+    workflows: [{ name: "ship", description: "Ship a release", source: "project" }],
+    skillPaths: [],
     testFails: false,
     probeFails: false,
     setDefaultUnsupported: false,
@@ -171,6 +249,28 @@ function defaultState(): MockState {
         files: [{ path: "src/main.tsx", status: "modified", additions: 3, deletions: 1, diff: "diff --git a/src/main.tsx b/src/main.tsx\n@@ -1,2 +1,4 @@\n import { AppShell } from \"./ui/app-shell\";\n+\n+export const ready = true;\n" }],
       },
     },
+    cancelRewind: true,
+    sessionRecap: true,
+    rewindPoints: [
+      {
+        promptIndex: 0,
+        createdAt: "2026-09-18T08:00:00Z",
+        numFileSnapshots: 0,
+        hasFileChanges: false,
+        promptPreview: "Explain the architecture",
+      },
+      {
+        promptIndex: 1,
+        createdAt: "2026-09-18T08:05:00Z",
+        numFileSnapshots: 2,
+        hasFileChanges: true,
+        promptPreview: "Refactor the auth module",
+      },
+    ],
+    recapSummary: "We reviewed the architecture and started refactoring auth.",
+    tasks: [],
+    subagents: [],
+    schedules: [],
     ...seedFromWindow(),
     // Whatever the agent already wrote wins: the renderer's own memory is not the source of truth.
     ...persisted(),
@@ -232,6 +332,14 @@ function emit(message: unknown): void {
 
 function notify(method: string, params: unknown): void {
   emit({ jsonrpc: "2.0", method, params });
+}
+
+/** Session-update shaped notif (U-memf / U-plug / U-hook*). */
+function notifySessionUpdate(sessionUpdate: string, update: Record<string, unknown>): void {
+  notify("session/update", {
+    sessionId: "mock-session",
+    update: { sessionUpdate, ...update },
+  });
 }
 
 /** A reverse request (agent → client) that expects an answer; the id is what the client responds to. */
@@ -296,6 +404,14 @@ function modelCatalog() {
   };
 }
 
+function mcpToolsFor(server: MockMcpServer): MockMcpTool[] {
+  if (server.tools) return server.tools;
+  return Array.from({ length: server.toolCount }, (_, index) => ({
+    name: `${server.name}_tool_${index}`,
+    enabled: true,
+  }));
+}
+
 function mcpList() {
   return {
     servers: state.mcpServers.map((server) => ({
@@ -305,10 +421,20 @@ function mcpList() {
       ...(server.transport === "stdio"
         ? { command: server.command ?? "npx", args: server.args ?? [] }
         : { url: server.url ?? "" }),
+      ...(server.setup ? { setup: server.setup } : {}),
+      ...(server.setupValues ? { setupValues: server.setupValues } : {}),
       session: {
         enabled: server.enabled,
-        status: server.enabled ? "ready" : "unavailable",
-        tools: Array.from({ length: server.toolCount }, (_, index) => ({ name: `${server.name}_tool_${index}` })),
+        status: server.setupRequired
+          ? "setup_required"
+          : server.authRequired
+            ? "unavailable"
+            : server.enabled
+              ? "ready"
+              : "unavailable",
+        tools: mcpToolsFor(server).map((tool) => ({ name: tool.name, enabled: tool.enabled })),
+        ...(server.authRequired ? { authRequired: true } : {}),
+        ...(server.setupRequired ? { setupRequired: true } : {}),
       },
     })),
   };
@@ -375,7 +501,16 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
 
   switch (method) {
     case "initialize":
-      return respond({ protocolVersion: 1, agentCapabilities: {} });
+      return respond({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        // ACP InitializeResponse carries agent meta as `_meta` on the wire for Desktop.
+        _meta: {
+          cancelRewind: state.cancelRewind,
+          sessionRecap: state.sessionRecap,
+          availableCommands: commandList().commands,
+        },
+      });
     case "session/new": {
       // The agent spawns the session on `_meta.modelId`, which is how a choice made before the
       // first prompt reaches it.
@@ -471,6 +606,45 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
     }
     case "x.ai/session/list":
       return respond({ sessions: state.sessions });
+    case "x.ai/session/fork": {
+      // Map id `C-sess-fork`: camelCase ForkSessionRequest → new peer session.
+      const sourceSessionId = String(p.sourceSessionId ?? "");
+      const sourceCwd = String(p.sourceCwd ?? "/tmp/thanh-demo");
+      const newCwd = String(p.newCwd ?? sourceCwd);
+      if (!sourceSessionId) return respond({ error: "sourceSessionId is required" });
+      const newSessionId = typeof p.newSessionId === "string" && p.newSessionId
+        ? p.newSessionId
+        : `fork-${sourceSessionId}`;
+      const parent = state.sessions.find((session) => session.id === sourceSessionId);
+      state.sessions = [
+        {
+          id: newSessionId,
+          title: parent ? `${parent.title} (fork)` : "Forked conversation",
+          cwd: newCwd,
+          updatedAt: new Date().toISOString(),
+        },
+        ...state.sessions,
+      ];
+      return respond({
+        newSessionId,
+        newCwd,
+        parentSessionId: sourceSessionId,
+        chatMessagesCopied: 2,
+        updatesCopied: 4,
+        planStateCopied: false,
+      });
+    }
+    case "x.ai/session/rename": {
+      const id = String(p.sessionId ?? "");
+      const title = String(p.title ?? "");
+      state.sessions = state.sessions.map((session) => (session.id === id ? { ...session, title } : session));
+      return respond({ ok: true });
+    }
+    case "x.ai/session/delete": {
+      const id = String(p.sessionId ?? "");
+      state.sessions = state.sessions.filter((session) => session.id !== id);
+      return respond({ ok: true });
+    }
     case "x.ai/commands/list":
       return respond(commandList());
     case "x.ai/auth/info":
@@ -639,7 +813,63 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       const server = state.mcpServers.find((entry) => entry.name === p.serverName);
       if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
       server.enabled = p.enabled !== false;
-      notify("x.ai/mcp/servers_updated", mcpList());
+      notify("_x.ai/mcp/servers_updated", mcpList());
+      return respond({ result: { ok: true } });
+    }
+    case "x.ai/mcp/toggle_tool": {
+      const server = state.mcpServers.find((entry) => entry.name === p.serverName);
+      if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
+      const toolName = String(p.toolName ?? "");
+      const tools = mcpToolsFor(server);
+      const tool = tools.find((entry) => entry.name === toolName);
+      if (!tool) return respond({ error: `unknown MCP tool: ${toolName}` });
+      tool.enabled = p.enabled !== false;
+      server.tools = tools;
+      server.toolCount = tools.length;
+      notify("_x.ai/mcp/tools_changed", { serverName: server.name, tools: tools.map((entry) => ({ name: entry.name, enabled: entry.enabled })) });
+      notify("_x.ai/mcp/servers_updated", mcpList());
+      return respond({ result: { ok: true } });
+    }
+    case "x.ai/mcp/delete": {
+      const name = String(p.serverName ?? "");
+      if (!state.mcpServers.some((entry) => entry.name === name)) {
+        return respond({ error: `server '${name}' not found in config.toml (only locally-configured servers can be deleted)` });
+      }
+      state.mcpServers = state.mcpServers.filter((entry) => entry.name !== name);
+      notify("_x.ai/mcp/servers_updated", mcpList());
+      return respond({ result: { ok: true } });
+    }
+    case "x.ai/mcp/auth_status": {
+      const filter = typeof p.serverName === "string" ? p.serverName : null;
+      const servers = state.mcpServers
+        .filter((entry) => !filter || entry.name === filter)
+        .map((entry) => ({
+          serverName: entry.name,
+          status: entry.authRequired ? "auth_required" : entry.setupRequired ? "setup_required" : "authenticated",
+        }));
+      return respond({ result: { servers } });
+    }
+    case "x.ai/mcp/auth_trigger": {
+      const server = state.mcpServers.find((entry) => entry.name === p.serverName);
+      if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
+      if (server.setupRequired) {
+        return respond({ result: { status: "setup_required", setup: server.setup ?? { fields: [] } } });
+      }
+      server.authRequired = false;
+      notify("_x.ai/mcp/servers_updated", mcpList());
+      return respond({ result: { status: "authenticated" } });
+    }
+    case "x.ai/mcp/setup": {
+      const server = state.mcpServers.find((entry) => entry.name === p.serverName);
+      if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
+      const values = (p.values && typeof p.values === "object" && !Array.isArray(p.values))
+        ? Object.fromEntries(Object.entries(p.values as Record<string, unknown>).map(([key, value]) => [key, String(value)]))
+        : {};
+      server.setupValues = values;
+      server.setupRequired = false;
+      server.authRequired = false;
+      server.enabled = true;
+      notify("_x.ai/mcp/servers_updated", mcpList());
       return respond({ result: { ok: true } });
     }
     case "x.ai/mcp/upsert": {
@@ -656,18 +886,67 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
             : { command: String(p.command ?? ""), args: Array.isArray(p.args) ? p.args.map(String) : [] }),
           enabled: true,
           toolCount: 0,
+          tools: [],
         },
       ];
-      notify("x.ai/mcp/servers_updated", mcpList());
+      notify("_x.ai/mcp/servers_updated", mcpList());
       return respond({ result: { ok: true } });
     }
     case "x.ai/skills/list":
       return respond({ result: { skills: state.skills } });
+    case "x.ai/skills/toggle": {
+      const name = String(p.name ?? "");
+      state.skills = state.skills.map((skill) =>
+        skill.name === name ? { ...skill, enabled: p.enabled !== false } : skill,
+      );
+      return respond({ result: { ok: true } });
+    }
+    case "x.ai/skills/add":
+    case "x.ai/skills/remove":
+    case "x.ai/skills/reset":
+    case "x.ai/skills/config":
+      return respond({ result: { ok: true, skills: state.skills, message: "ok" } });
     case "x.ai/plugins/list":
       return respond({ result: { plugins: state.plugins } });
+    case "x.ai/plugins/action": {
+      const action = isRecord(p.action) ? p.action : {};
+      const type = String(action.type ?? "");
+      if (type === "enable" || type === "disable") {
+        const id = String(action.plugin_id ?? "");
+        state.plugins = state.plugins.map((plugin) =>
+          plugin.id === id || plugin.name === id ? { ...plugin, enabled: type === "enable" } : plugin,
+        );
+      }
+      return respond({ result: { status: "ok", message: type || "action" } });
+    }
+    case "x.ai/plugins/reload":
+      return respond({ result: { status: "ok", message: "reloaded" } });
+    case "x.ai/workflows/list":
+      return respond({ result: { workflows: state.workflows ?? [] } });
+    case "x.ai/hooks/list":
+      return respond({
+        result: {
+          hooks: state.hooks ?? [],
+          projectTrusted: state.hooksProjectTrusted === true,
+        },
+      });
+    case "x.ai/hooks/action": {
+      const action = isRecord(p.action) ? p.action : {};
+      const type = String(action.type ?? "");
+      if (type === "trust") state.hooksProjectTrusted = true;
+      if (type === "enable" || type === "disable") {
+        const name = String(action.hook_name ?? "");
+        state.hooks = (state.hooks ?? []).map((hook) =>
+          hook.name === name ? { ...hook, disabled: type === "disable" } : hook,
+        );
+      }
+      return respond({ result: { status: "ok", message: type || "action" } });
+    }
     case "x.ai/memory/flush":
       return respond({ result: { ok: true } });
     case "x.ai/memory/rewrite":
+      return respond({ result: { ok: true } });
+    case "x.ai/memory/forget":
       return respond({ result: { ok: true } });
     case "x.ai/fs/read_file":
       return respond(fileRead(String(p.path ?? "")));
@@ -677,6 +956,101 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       state.files[String(p.path ?? "")] = String(p.content ?? "");
       return respond({ result: {} });
     }
+    case "x.ai/task/list":
+      return respond({
+        result: {
+          tasks: (state.tasks ?? []).filter((task) => !p.sessionId || task.owner_session_id === p.sessionId || !task.owner_session_id),
+        },
+      });
+    case "x.ai/task/kill": {
+      const taskId = String(p.taskId ?? "");
+      state.tasks = (state.tasks ?? []).map((task) =>
+        task.task_id === taskId ? { ...task, completed: true, explicitly_killed: true, exit_code: null } : task,
+      );
+      return respond({ result: { taskId, outcome: { kind: "killed" } } });
+    }
+    case "x.ai/subagent/list_running":
+      return respond({ result: { subagents: state.subagents ?? [] } });
+    case "x.ai/subagent/get": {
+      const id = String(p.subagentId ?? "");
+      const snap = (state.subagents ?? []).find((row) => row.subagent_id === id) ?? null;
+      return respond({ result: { snapshot: snap } });
+    }
+    case "x.ai/subagent/cancel":
+      return respond({ result: { subagentId: p.subagentId, cancelled: true, outcome: { kind: "cancelled" } } });
+    case "x.ai/subagent/message":
+      return respond({ result: { ok: true } });
+    case "x.ai/scheduler/delete": {
+      const taskId = String(p.taskId ?? "");
+      state.schedules = (state.schedules ?? []).filter((row) => row.task_id !== taskId);
+      return respond({ result: { taskId, deleted: true } });
+    }
+    case "x.ai/rewind/points": {
+      return respond({
+        result: {
+          rewindPoints: state.rewindPoints.map((point) => ({
+            promptIndex: point.promptIndex,
+            createdAt: point.createdAt,
+            numFileSnapshots: point.numFileSnapshots,
+            hasFileChanges: point.hasFileChanges === true,
+            promptPreview: point.promptPreview ?? null,
+          })),
+        },
+      });
+    }
+    case "x.ai/rewind/execute": {
+      const target = Number(p.targetPromptIndex ?? p.target_prompt_index);
+      if (!Number.isFinite(target)) {
+        return respond({ result: { success: false, target_prompt_index: 0, error: "targetPromptIndex required" } });
+      }
+      return respond({
+        result: {
+          success: true,
+          target_prompt_index: target,
+          mode: "all",
+          reverted_files: [],
+          clean_files: [],
+          conflicts: [],
+        },
+      });
+    }
+    case "x.ai/recap": {
+      if (!state.sessionRecap) return respond({ result: { ok: true, disabled: true } });
+      // Fire-and-forget: the summary (or unavailable) arrives as a session_notification.
+      queueMicrotask(() => {
+        if (state.recapSummary) {
+          notify("_x.ai/session_notification", {
+            sessionId,
+            update: { sessionUpdate: "session_recap", summary: state.recapSummary, auto: p.auto === true },
+          });
+        } else {
+          notify("_x.ai/session_notification", {
+            sessionId,
+            update: { sessionUpdate: "session_recap_unavailable" },
+          });
+        }
+      });
+      return respond({ result: { ok: true } });
+    }
+    // P9 mid-turn / queue
+    case "x.ai/btw":
+      return respond({ result: { answer: `Side answer: ${String(p.question ?? "")}` } });
+    case "x.ai/interject": {
+      const text = String(p.text ?? "");
+      const interjectionId = typeof p.interjectionId === "string" ? p.interjectionId : undefined;
+      queueMicrotask(() => {
+        notify("x.ai/session/interjection", {
+          sessionId: String(p.sessionId ?? sessionId),
+          text,
+          ...(interjectionId ? { interjectionId } : {}),
+        });
+      });
+      return respond({ result: { status: "queued" } });
+    }
+    case "x.ai/queue/remove":
+    case "x.ai/queue/clear":
+    case "x.ai/permissions/reset":
+      return respond({});
     default:
       return respond({});
   }
@@ -811,6 +1185,51 @@ export function mockSessionNotification(update: Record<string, unknown>): void {
   notify("_x.ai/session_notification", { sessionId: "mock-session", update });
 }
 
+/** Ext notif helpers for activity panel tests (SessionNotification envelope). */
+export function mockTaskBackgrounded(overrides: Record<string, unknown> = {}): void {
+  notify("_x.ai/task_backgrounded", {
+    sessionId: "mock-session",
+    update: {
+      sessionUpdate: "task_backgrounded",
+      tool_call_id: "tc-1",
+      task_id: "task-1",
+      command: "sleep 30",
+      cwd: "/tmp",
+      output_file: "/tmp/out.log",
+      description: "Wait for server",
+      ...overrides,
+    },
+  });
+}
+
+export function mockTaskCompleted(overrides: Record<string, unknown> = {}): void {
+  notify("_x.ai/task_completed", {
+    sessionId: "mock-session",
+    update: {
+      sessionUpdate: "task_completed",
+      will_wake: false,
+      task_snapshot: {
+        task_id: "task-1",
+        command: "sleep 30",
+        cwd: "/tmp",
+        output: "",
+        output_file: "/tmp/out.log",
+        truncated: false,
+        completed: true,
+        exit_code: 0,
+        description: "Wait for server",
+        is_backgrounded: true,
+        ...(isRecord(overrides.task_snapshot) ? overrides.task_snapshot : {}),
+      },
+      ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "task_snapshot")),
+    },
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /** A goal snapshot with the wire's required fields; callers override what they exercise. */
 export function goalUpdate(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -841,6 +1260,8 @@ export interface MockControl {
   question(overrides?: Record<string, unknown>): number;
   plan(overrides?: Record<string, unknown>): number;
   sessionNotification(update: Record<string, unknown>): void;
+  taskBackgrounded(overrides?: Record<string, unknown>): void;
+  taskCompleted(overrides?: Record<string, unknown>): void;
   goalUpdate(overrides?: Record<string, unknown>): Record<string, unknown>;
   modelsUpdate(params?: Record<string, unknown>): void;
 }
@@ -862,6 +1283,8 @@ if (typeof window !== "undefined") {
     question: mockQuestion,
     plan: mockPlan,
     sessionNotification: mockSessionNotification,
+    taskBackgrounded: mockTaskBackgrounded,
+    taskCompleted: mockTaskCompleted,
     goalUpdate,
     modelsUpdate: mockModelsUpdate,
   };

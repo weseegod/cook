@@ -99,6 +99,7 @@ export function ConfirmDialog({
   danger = false,
   busy = false,
   error,
+  confirmTestId,
   onCancel,
   onConfirm,
 }: {
@@ -109,6 +110,7 @@ export function ConfirmDialog({
   danger?: boolean;
   busy?: boolean;
   error?: string | null;
+  confirmTestId?: string;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -122,7 +124,12 @@ export function ConfirmDialog({
       {error && <p className="field-error" role="alert">{error}</p>}
       <DialogActions>
         <button className="ghost-button" onClick={onCancel} disabled={busy}>{cancelLabel}</button>
-        <button className={danger ? "danger-button" : "primary-button"} onClick={onConfirm} disabled={busy}>
+        <button
+          className={danger ? "danger-button" : "primary-button"}
+          data-testid={confirmTestId}
+          onClick={onConfirm}
+          disabled={busy}
+        >
           {busy ? "Working…" : <><Check size={15} /> {confirmLabel}</>}
         </button>
       </DialogActions>

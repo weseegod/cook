@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ACTIONS, buildPaletteItems, rankPaletteItems, scoreItem } from "./palette-items";
+import { DEFAULT_ACTIONS, buildPaletteItems, paletteActions, rankPaletteItems, scoreItem } from "./palette-items";
 
 const source = {
   sessions: [
@@ -23,10 +23,19 @@ describe("palette items", () => {
     expect(items.filter((item) => item.kind === "model").map((item) => item.value)).toEqual(["deepseek-chat", "grok-4.5"]);
     expect(items.filter((item) => item.kind === "command").map((item) => item.label)).toEqual(["/model", "/memory"]);
     const actions = items.filter((item) => item.kind === "action").map((item) => item.action);
-    for (const expected of ["new-session", "open-folder", "settings", "connect-provider"]) {
+    for (const expected of ["new-session", "open-folder", "settings", "connect-provider", "fork-session", "export-transcript", "rewind", "recap"]) {
       expect(actions).toContain(expected);
     }
     expect(DEFAULT_ACTIONS.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("gates rewind and recap actions on initialize feature flags", () => {
+    expect(paletteActions({ cancelRewindEnabled: false, sessionRecapEnabled: true }).map((a) => a.action))
+      .not.toContain("rewind");
+    expect(paletteActions({ cancelRewindEnabled: true, sessionRecapEnabled: false }).map((a) => a.action))
+      .not.toContain("recap");
+    expect(paletteActions({ cancelRewindEnabled: true, sessionRecapEnabled: true }).map((a) => a.action))
+      .toEqual(expect.arrayContaining(["rewind", "recap"]));
   });
 
   it("carries the payload each action needs to run", () => {
@@ -42,7 +51,7 @@ describe("palette ranking", () => {
   const items = buildPaletteItems(source);
 
   it("lists actions first when the query is empty, then commands, models, sessions", () => {
-    const ranked = rankPaletteItems(items, "");
+    const ranked = rankPaletteItems(items, "", 24);
     const kinds = ranked.map((item) => item.kind);
     expect(kinds[0]).toBe("action");
     expect(kinds.indexOf("command")).toBeLessThan(kinds.indexOf("model"));

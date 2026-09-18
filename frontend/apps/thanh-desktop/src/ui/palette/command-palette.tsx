@@ -2,7 +2,7 @@ import { ArrowDownUp, CornerDownLeft, MessageSquarePlus, ShieldCheck, Sparkles, 
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 import { useCatalogStore } from "../../state/catalog";
 import { slashEntries } from "../chat/slash-commands";
-import { buildPaletteItems, rankPaletteItems, type PaletteItem, type PaletteKind } from "./palette-items";
+import { buildPaletteItems, paletteActions, rankPaletteItems, type PaletteItem, type PaletteKind } from "./palette-items";
 
 const ICONS: Record<PaletteKind, ReactElement> = {
   action: <Sparkles size={15} />,
@@ -12,14 +12,23 @@ const ICONS: Record<PaletteKind, ReactElement> = {
 };
 
 export function CommandPalette({ onClose, onSelect }: { onClose: () => void; onSelect: (item: PaletteItem) => void }) {
-  const { sessions, models, commands } = useCatalogStore();
+  const { sessions, models, commands, cancelRewindEnabled, sessionRecapEnabled } = useCatalogStore();
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const items = useMemo(
     // The window's own commands are part of the same catalog here, so Search everything reaches `/plan` too.
-    () => rankPaletteItems(buildPaletteItems({ sessions, models, commands: slashEntries(commands) }), query),
-    [sessions, models, commands, query],
+    () =>
+      rankPaletteItems(
+        buildPaletteItems({
+          sessions,
+          models,
+          commands: slashEntries(commands, { cancelRewindEnabled, sessionRecapEnabled }),
+          actions: paletteActions({ cancelRewindEnabled, sessionRecapEnabled }),
+        }),
+        query,
+      ),
+    [sessions, models, commands, query, cancelRewindEnabled, sessionRecapEnabled],
   );
 
   useEffect(() => setActive(0), [query]);

@@ -1,3 +1,16 @@
+//! Resolve the `thanh` agent binary for ACP stdio.
+//!
+//! Preference order (the desktop app updater never writes these paths):
+//! 1. `THANH_BIN` — explicit override
+//! 2. `$THANH_HOME/bin/thanh` or `~/.thanh/bin/thanh` — CLI install
+//! 3. Optional bundled sidecar `thanh-<target-triple>` next to the app / under
+//!    `Resources/binaries` / AppImage `usr/bin` (stable bundles only)
+//!
+//! Enable the sidecar by placing `binaries/thanh-<triple>` and setting
+//! `bundle.externalBin` in `tauri.conf.json` (see README). Alpha builds leave
+//! that unset and expect the CLI. The Tauri updater updates the app shell only
+//! and must never overwrite `~/.thanh/bin/thanh`.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 

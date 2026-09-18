@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe("utility panel", () => {
-  it("opens the Review and Files views", async () => {
+  it("opens the Review, Files, and Activity views", async () => {
     render(<UtilityPanel onClose={vi.fn()} />);
 
     fireEvent.click(screen.getByRole("button", { name: /^Review/ }));
@@ -39,5 +39,9 @@ describe("utility panel", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Files/ }));
     await waitFor(() => expect(screen.getByTestId("files-view")).toBeInTheDocument());
     expect(workspace.listWorkspace).toHaveBeenCalledWith("");
+
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Activity/ }));
+    await waitFor(() => expect(screen.getByTestId("activity-view")).toBeInTheDocument());
   });
 });

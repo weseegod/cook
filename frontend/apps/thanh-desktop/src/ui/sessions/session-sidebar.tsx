@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleHelp, Folder, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
+import { CircleHelp, CopyPlus, Download, Folder, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { acpClient } from "../../acp/client";
 import type { SessionSummary } from "../../acp/xai";
 import { useSessionStore } from "../../state/session";
+import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "../chat/export-transcript";
 import { ConfirmDialog, Dialog, DialogActions } from "../components/dialog";
 
 export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSettings: () => void; onOpenSearch: () => void }) {
@@ -36,6 +37,43 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     setTarget(session);
     setError(null);
     setDialog("delete");
+  }
+
+  /** Map id `C-sess-fork` / `/fork`: fork then load the child session. */
+  async function fork(session: SessionSummary) {
+    const cwd = session.cwd ?? useSessionStore.getState().cwd;
+    if (!cwd) {
+      useSessionStore.getState().set({ error: "Session has no workspace to fork." });
+      return;
+    }
+    try {
+      await acpClient.forkSession({
+        sourceSessionId: session.id,
+        sourceCwd: cwd,
+        newCwd: cwd,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    } catch (caught) {
+      useSessionStore.getState().set({
+        error: caught instanceof Error ? caught.message : String(caught),
+      });
+    }
+  }
+
+  /** Map id `/export`: Markdown of the active transcript (user/assistant only). */
+  function exportSession(session: SessionSummary) {
+    const store = useSessionStore.getState();
+    if (store.sessionId !== session.id) {
+      useSessionStore.getState().set({ notice: "Load this conversation before exporting." });
+      return;
+    }
+    const markdown = exportTranscriptMarkdown(store.blocks);
+    if (!markdown) {
+      useSessionStore.getState().set({ notice: "Nothing to export yet." });
+      return;
+    }
+    downloadMarkdown(exportFilename(session.title, session.id), markdown);
+    useSessionStore.getState().set({ notice: "Exported conversation as Markdown." });
   }
 
   async function confirmRename() {
@@ -108,6 +146,12 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                 <span className="session-date">{formatDate(session.updatedAt)}</span>
               </button>
               <div className="session-actions">
+                <button type="button" data-testid={`session-fork-${session.id}`} onClick={() => void fork(session)} aria-label="Fork" title="Fork">
+                  <CopyPlus size={13} />
+                </button>
+                <button type="button" data-testid={`session-export-${session.id}`} onClick={() => exportSession(session)} aria-label="Export" title="Export">
+                  <Download size={13} />
+                </button>
                 <button type="button" onClick={() => void rename(session)} aria-label="Rename"><Pencil size={13} /></button>
                 <button type="button" onClick={() => void remove(session)} aria-label="Delete"><Trash2 size={13} /></button>
               </div>

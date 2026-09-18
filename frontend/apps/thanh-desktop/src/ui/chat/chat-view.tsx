@@ -6,6 +6,8 @@ import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
 import { PlanDialog } from "./plan-dialog";
 import { PromptSlot } from "./prompt-slot";
+import { RecapDialog } from "./recap-dialog";
+import { RewindDialog } from "./rewind-dialog";
 import { TodoOverlay } from "./todo-overlay";
 import { TurnStatus } from "./turn-status";
 import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
@@ -67,6 +69,8 @@ export function ChatView() {
       {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
       <PromptSlot />
       <PlanDialog />
+      <RewindDialog />
+      <RecapDialog />
     </div>
   );
 }

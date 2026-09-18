@@ -43,20 +43,28 @@ Shipped and usable as a local ACP chat shell:
   tree; Files browses and previews the active workspace read-only.
 - Alpha AppImage/deb path; CLI still required at runtime
 
-**Not production yet.** Settings “Bring your own key” is a single text field
-that does **not** connect third-party providers. Attachments, MCP UI, memory,
-skills, command palette, notifications, light theme, macOS/Windows installers,
-and auto-update are missing.
+**P0 and most P1/P2 chrome are in the tree.** Provider wizard + Settings,
+attachments, MCP connectors (list/toggle/add + live `N-mcp-*`), memory
+flush/rewrite/forget, skills toggle, command palette, system/light/dark theme,
+and honest caps (`terminal: false`, `mcpApps: false`) all shipped. Client
+layering C1–C5 is done — see
+[`desktop-app-client-implement.md`](desktop-app-client-implement.md).
 
-### Known v1 bugs to fix first
+**Still not production.** Remaining capability-map `protocol` / `surface` work
+(fork/export, MCP delete/tool/auth, activity panel, rewind/recap, memory
+browser, plugins/hooks/workflows mutate, follow-ups/queue, artifacts dock,
+updater/sidecar) is the production PR DAG in §6 (P1–P12). Do not treat this
+paragraph as a missing-attachments checklist.
+
+### Known handshake bugs — resolved by C1–C3
 
 | Bug | Detail |
 |---|---|
-| `setApiKey` param mismatch | **Resolved by dropping the path.** Map row `A-setkey`. The desktop no longer calls `x.ai/setApiKey` for BYOK: the provider form hands the typed credential to the Rust host, which writes `[model_providers.<id>]`. The agent handler is upstream's, unchanged. |
-| No provider catalog | User must hand-edit `~/.thanh/config.toml` (see [`byok-models.md`](byok-models.md)). Claude Desktop does not make you write JSON to chat. Map §13 is the healthiest Desktop slice. |
-| Prompt is text-only | `session/prompt` sends `[{ type: "text" }]`. No image/file parts, so vision models and “drop a PDF” are dead. |
-| `mcpServers: []` on every `session/new` | Map `H-mcp` / class F. Relies on agent-side config discovery. SDK MCP must not be enabled until `R-sdk`. Connectors UI is still stale without `N-mcp-*` (class B). Fold: client-implement **C1** (stop advertising `mcpApps`) then **C3** (`N-mcp-*`). |
-| `terminal: true` + stub | Map `H-term` / class C. Host answers `terminal/*` with empty output and `exitCode: 0`. Fold: client-implement **C1** (`terminal: false`, delete stub). |
+| `setApiKey` param mismatch | **Resolved.** Map `A-setkey`. BYOK never calls `x.ai/setApiKey`; host writes `[model_providers.<id>]`. |
+| No provider catalog | **Resolved.** Wizard + Settings → Providers (`x.ai/providers/*`). |
+| Prompt is text-only | **Resolved.** Composer sends image parts when modalities allow. |
+| `mcpServers: []` + `mcpApps` lie | **Resolved for honesty.** Still `mcpServers: []` / no SDK servers (class F until `R-sdk`). Caps: `mcpApps: false`. Live Connectors via `N-mcp-*` (C3). |
+| `terminal: true` + stub | **Resolved.** `CAPABILITIES.terminal === false`; host no longer stubs `terminal/*`. |
 
 ---
 
@@ -244,9 +252,15 @@ Ship in layers. Each layer is independently reviewable.
 
 ### P3 — Ship
 
-20. **macOS dmg** (unsigned ok for the fork, same as CLI).
-21. **Tauri updater** for the app binary only; never touch `~/.thanh/bin/thanh`.
-22. **Stable sidecar optional** — bundle `thanh` for users without CLI.
+20. **macOS dmg** — targeted in `tauri.conf.json` (`appimage` / `deb` / `dmg`).
+    Unsigned ok for this fork (same as CLI).
+21. **Tauri updater** — `tauri-plugin-updater` for the **app shell only**; never
+    write `~/.thanh/bin/thanh`. Placeholder pubkey + empty endpoints +
+    `createUpdaterArtifacts: false` until release signing is wired; Settings →
+    About **Check for updates** gated via `UPDATER_CONFIGURED`.
+22. **Stable sidecar optional** — `bin_resolve` prefers `THANH_BIN` →
+    `~/.thanh/bin/thanh` → bundled `thanh-<triple>`; enable with
+    `bundle.externalBin` when binaries are present (see app README).
 23. **Windows** after Linux+macOS are boring.
 24. Voice, embedded xterm PTY, worktree UI: keep as post-1.0.
 
@@ -277,21 +291,33 @@ turns follow TUI grouping rather than rendering every ACP update as a card.
 
 ## 6. PR plan
 
-| PR | Title | Scope | Depends |
-|---|---|---|---|
-| D1 | Fix BYOK key plumbing | Resolved by stopping the BYOK UI from calling `x.ai/setApiKey`: credentials go renderer → Rust host → `config.toml`. Agent handler kept upstream. | — |
-| D2 | Provider ACP | `x.ai/providers/{list,presets,upsert,delete,test,discover_models}`, `x.ai/models/set_default`; tests; no TS UI | D1 |
-| D3 | Provider UI + onboarding | Cards, key/env, test, default model, Settings → Providers | D2 |
-| D4 | Attachments | Paste/drop/paperclip → ACP parts; hide image attach on text-only models | — |
-| D5 | Command palette | Ctrl/K: sessions, models, commands, settings | D3 |
-| D6 | MCP connectors UI | List/toggle/add; elicit reuse; **registry entries for `N-mcp-*` / `R-elicit`** | D2, client-implement C3 |
-| D7 | Memory + skills + project files | Settings surfaces | D2 |
-| D8 | Export + usage + shortcuts + theme | Polish | — |
-| D9 | Artifacts dock + tasks/subagents | Preview pane; **registry entries for `N-tdone` / `TK-*`** | client-implement C3 |
-| D10 | Notifications + macOS dmg + updater | Ship | D3 |
+### Done (D1–D7 + client C1–C5)
 
-Do not start D10 until a new user can: install (or `pnpm tauri dev`), pick a
-folder, click DeepSeek/OpenRouter, paste a key, Test, and send a message.
+| PR | Title | Status |
+|---|---|---|
+| D1–D7 | BYOK, providers, attachments, palette, MCP list/toggle/add + elicit, memory/skills/project | **done** |
+| C1–C5 | Honest caps, reverse policy, notification registry, module split, host isolation | **done** |
+
+### Remaining production DAG (P1–P12)
+
+```
+P1  session fork + export
+P2  MCP connectors complete (delete, tool toggle, auth)
+P3  shortcuts sheet + OS notifications
+P4  activity panel (tasks / subagents / scheduler / monitor)
+P5  rewind + recap
+P6  memory browser
+P7  skills mutate + plugins action/reload + workflows list
+P8  hooks list/action (do not stamp session hooks meta)
+P9  follow-ups + interject / btw + queue pane
+P10 protocol leftovers (init response, load meta, envelopes, git head, sessions/changed)
+P11 artifacts preview dock
+P12 ship: updater + optional sidecar
+```
+
+P1–P3 independent of P4. P4 before P9 if they share the activity column.
+P12 last. P8 after P7. P10 can parallel P4–P9. Keep `terminal: false` /
+`mcpApps: false`. Do not implement `chrome` / `na` / `out` map rows.
 
 ---
 
@@ -310,12 +336,12 @@ Do not add these to `xai-grok-pager-pty-harness`.
 
 ## 8. Packaging reminder
 
-- Alpha: keep requiring CLI.
-- Production Linux: AppImage + deb (already sketched).
-- Production macOS: dmg; signing follow-up.
-- App updater ≠ CLI updater.
+- Alpha: keep requiring CLI; optional sidecar documented, not required.
+- Production Linux: AppImage + deb (targets already in `tauri.conf.json`).
+- Production macOS: dmg; **unsigned ok for this fork**; signing follow-up.
+- App updater ≠ CLI updater (plugin updates shell only; never `~/.thanh/bin/thanh`).
 - Linux runtime: `webkit2gtk-4.1`.
-
+- Windows installers: after Linux + macOS.
 ---
 
 ## 9. Explicit non-goals

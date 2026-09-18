@@ -30,10 +30,42 @@ an empty `[workspace]` and is not a member of the generated root workspace.
 pnpm build
 pnpm test:e2e
 cargo test --manifest-path src-tauri/Cargo.toml
+cargo check --manifest-path src-tauri/Cargo.toml
 pnpm tauri build --bundles appimage,deb   # Linux
+pnpm tauri build --bundles dmg            # macOS (unsigned ok for this fork)
 ```
 
+Bundle targets in `tauri.conf.json` are `appimage`, `deb`, and `dmg`. Windows
+installers are deferred until Linux + macOS are boring.
+
+### Agent binary resolution
+
+The host resolves `thanh` in this order (`src-tauri/src/bin_resolve.rs`):
+
+1. `THANH_BIN`
+2. `~/.thanh/bin/thanh` (or `$THANH_HOME/bin/thanh`)
+3. Optional bundled sidecar `thanh-<target-triple>` next to the app
+
 Alpha packages discover the existing CLI and do not bundle or overwrite it.
+Stable builds may ship a sidecar by placing
+`src-tauri/binaries/thanh-<triple>` and adding
+`"externalBin": ["binaries/thanh"]` under `bundle` in `tauri.conf.json`.
+
+### App updater (shell only)
+
+`tauri-plugin-updater` updates the **desktop app binary** only. It must never
+write `~/.thanh/bin/thanh`. Dev/default config keeps
+`bundle.createUpdaterArtifacts: false`, a placeholder `pubkey`, and empty
+`endpoints` so builds work without signing keys. Before shipping updates:
+
+1. `pnpm tauri signer generate -w ~/.tauri/thanh-desktop.key`
+2. Put the public key and HTTPS endpoints in `plugins.updater`
+3. Set `createUpdaterArtifacts: true` and export `TAURI_SIGNING_PRIVATE_KEY`
+4. Flip `UPDATER_CONFIGURED` in `src/updater.ts` so Settings → About enables
+   **Check for updates**
+
+macOS packages for this fork are unsigned (same policy as the CLI).
+
 See [`scripts/install.sh`](scripts/install.sh) for local artifact installation.
 
 Advanced BYOK model configuration remains in `~/.thanh/config.toml`; the API

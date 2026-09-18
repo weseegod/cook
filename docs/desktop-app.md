@@ -156,7 +156,8 @@ Do not register SDK MCP (`session/new` `_meta["x.ai/mcp/servers"]`) until
 `x.ai/mcp/sdk_call` is implemented. Keep `mcpServers: []` until then; agent-
 hosted servers still attach via `x.ai/mcp/*`.
 
-Live code still sends `terminal: true` and `mcpApps: true`. That is a
+Live code sends `terminal: false` and `mcpApps: false` (C1). Advertising
+`terminal: true` or `mcpApps: true` without a real PTY / `sdk_call` is a
 documented lie (map `H-term`, `H-mcp`), not this contract. Fold in
 [`desktop-app-client-implement.md`](desktop-app-client-implement.md).
 
@@ -291,7 +292,8 @@ Reverse requests block the agent until the client answers.
    (or the agent marked the method required). `-32601` means “I claimed this
    and I refuse it” (TUI `WaitForTerminalExit`), not “I never heard of this.”
 4. Do not register SDK MCP until `R-sdk` is implemented. Do not advertise
-   `terminal: true` until ACP `terminal/*` is real. Do not stamp
+   `terminal: true` until ACP `terminal/*` is real (Desktop already sends
+   `false`). Do not stamp
    `_meta["x.ai/hooks"]` until `R-hook` is implemented.
 
 ---

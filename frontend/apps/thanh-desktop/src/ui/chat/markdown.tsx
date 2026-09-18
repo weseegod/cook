@@ -1,8 +1,9 @@
-import { Check, Copy } from "lucide-react";
+import { Check, Copy, Eye } from "lucide-react";
 import { useEffect, useId, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeToHtml } from "shiki";
+import { useArtifactStore } from "../../state/artifacts";
 import { copyText } from "./clipboard";
 
 export function Markdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
@@ -17,7 +18,22 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
             if (!language) return <code>{children}</code>;
             if (streaming) return <CodeBlock code={value} streaming />;
             if (language === "mermaid") return <Mermaid source={value} />;
+            if (language === "html" || language === "htm") {
+              return <CodeBlock code={value} language={language} openPreview={() => useArtifactStore.getState().openArtifact({ kind: "html", title: "HTML preview", content: value })} />;
+            }
             return <CodeBlock code={value} language={language} />;
+          },
+          img({ src, alt }) {
+            if (!src) return null;
+            return (
+              <button
+                type="button"
+                className="markdown-image-button"
+                onClick={() => useArtifactStore.getState().openArtifact({ kind: "image", title: alt ?? "Image", content: src })}
+              >
+                <img src={src} alt={alt ?? ""} />
+              </button>
+            );
           },
           a({ href, children }) {
             return <a href={href} target="_blank" rel="noreferrer">{children}</a>;
@@ -30,7 +46,17 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
   );
 }
 
-function CodeBlock({ code, language, streaming = false }: { code: string; language?: string; streaming?: boolean }) {
+function CodeBlock({
+  code,
+  language,
+  streaming = false,
+  openPreview,
+}: {
+  code: string;
+  language?: string;
+  streaming?: boolean;
+  openPreview?: () => void;
+}) {
   const [copied, setCopied] = useState(false);
   async function copy() {
     try {
@@ -45,7 +71,14 @@ function CodeBlock({ code, language, streaming = false }: { code: string; langua
     <div className="code-block">
       <div className="code-toolbar">
         <span>{language ?? "text"}</span>
-        <button type="button" className="text-button" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}</button>
+        <div className="code-toolbar-actions">
+          {openPreview && (
+            <button type="button" className="text-button" onClick={openPreview}>
+              <Eye size={12} /> Preview
+            </button>
+          )}
+          <button type="button" className="text-button" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}</button>
+        </div>
       </div>
       {streaming ? <pre className="streaming-code"><code>{code}</code></pre> : <HighlightedCode code={code} language={language ?? "text"} />}
     </div>
@@ -77,5 +110,19 @@ function Mermaid({ source }: { source: string }) {
     }).catch(() => undefined);
     return () => { active = false; };
   }, [id, source]);
-  return content;
+  return (
+    <div className="mermaid-block">
+      <div className="code-toolbar">
+        <span>mermaid</span>
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => useArtifactStore.getState().openArtifact({ kind: "mermaid", title: "Mermaid diagram", content: source })}
+        >
+          <Eye size={12} /> Open
+        </button>
+      </div>
+      {content}
+    </div>
+  );
 }
