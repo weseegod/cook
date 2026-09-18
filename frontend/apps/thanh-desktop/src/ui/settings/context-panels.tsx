@@ -18,6 +18,7 @@ import {
   resetSkills,
   skillsConfig,
 } from "../../acp/settings-ext";
+import { normalizeError } from "../../acp/errors";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, LoadingState } from "../components/async-state";
@@ -67,7 +68,7 @@ export function ProjectInstructionsPanel({ connected, onDirtyChange }: { connect
       onDirtyChange?.(false);
       void queryClient.invalidateQueries({ queryKey: ["project-file"] });
     },
-    onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
+    onError: (error) => setStatus(normalizeError(error, "Could not update project instructions")),
   });
 
   return (
@@ -152,14 +153,14 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
     onSuccess: (result, op) => {
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
       if (op === "config") {
-        setConfigMessage(typeof result === "object" && result && "message" in result ? String(result.message ?? "") : null);
+        setConfigMessage(typeof result === "object" && result && "message" in result ? normalizeError(result.message, "") : null);
         setStatus("Config loaded");
       } else {
-        setStatus(typeof result === "object" && result && "message" in result ? String(result.message ?? `${op} ok`) : `${op} ok`);
+        setStatus(typeof result === "object" && result && "message" in result ? normalizeError(result.message, `${op} ok`) : `${op} ok`);
         if (op === "add" || op === "remove") setSkillPath("");
       }
     },
-    onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
+    onError: (error) => setStatus(normalizeError(error, "Could not update skills")),
   });
 
   const pluginMut = useMutation({
@@ -175,7 +176,7 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
       setStatus("Plugins updated");
     },
-    onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
+    onError: (error) => setStatus(normalizeError(error, "Could not update plugins")),
   });
 
   return (

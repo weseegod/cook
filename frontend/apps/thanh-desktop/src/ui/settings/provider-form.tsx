@@ -15,6 +15,7 @@ import {
   type ProviderSummary,
   type ProviderTestResult,
 } from "../../acp/providers";
+import { normalizeError } from "../../acp/errors";
 import { InfoTip } from "../components/info-tip";
 import { ToggleSwitch } from "../components/toggle-switch";
 
@@ -75,7 +76,7 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
       setTest(result);
     } catch (caught) {
       setTest(null);
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not test the provider"));
     } finally {
       setBusy(null);
     }
@@ -92,13 +93,13 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
         ...credentialParams(),
       });
       if (!result.ok) {
-        setError(result.error ?? "model discovery failed");
+        setError(normalizeError(result.error, "The provider did not return any models"));
       } else {
         setDiscovered(result.discovered.map((model) => model.id));
         patch({ customModelIds: [...new Set([...form.customModelIds, ...result.discovered.map((model) => model.id)])] });
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not discover provider models"));
     } finally {
       setBusy(null);
     }
@@ -113,7 +114,7 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
       await upsertProvider(formToUpsertRequest(form, preset_, { includeModels: !connectionOnly }));
       onSaved(form.presetId);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not save the provider"));
     } finally {
       setBusy(null);
     }
@@ -183,10 +184,10 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
               value={form.apiKey}
               aria-label="API key"
               autoComplete="off"
-              placeholder={form.keepExistingKey ? `Leave blank to keep ${provider?.keyHint ?? "the saved key"}` : "sk-…"}
+              placeholder={form.keepExistingKey ? "Leave blank to keep the saved key" : "sk-…"}
               onChange={(event) => patch({ apiKey: event.target.value })}
             />
-            {provider?.keyHint && <small className="credential-hint">Current key: <code>{provider.keyHint}</code></small>}
+            {provider?.inlineKey && <small className="credential-hint">A saved API key will be kept when this field is blank.</small>}
             {validation.errors.apiKey && <small className="field-error">{validation.errors.apiKey}</small>}
           </>
         ) : (

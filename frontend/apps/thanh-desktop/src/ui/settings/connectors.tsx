@@ -14,6 +14,7 @@ import {
   upsertConnector,
   type McpServerView,
 } from "../../acp/extensions";
+import { normalizeError } from "../../acp/errors";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
@@ -56,7 +57,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       return toggleConnector(sessionId, serverName, enabled);
     },
     onSuccess: () => { setError(null); refresh(); },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not update the connector")),
   });
 
   const toggleTool = useMutation({
@@ -65,7 +66,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       return toggleConnectorTool(sessionId, serverName, toolName, enabled);
     },
     onSuccess: () => { setError(null); refresh(); },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not update the connector")),
   });
 
   const remove = useMutation({
@@ -78,7 +79,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       setPendingDelete(null);
       refresh();
     },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not update the connector")),
   });
 
   const authStatus = useMutation({
@@ -89,7 +90,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       setAuthNote(entry ? `${serverName}: ${entry.status}` : `${serverName}: checked`);
       refresh();
     },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not update the connector")),
   });
 
   const authTrigger = useMutation({
@@ -103,13 +104,13 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
         setAuthNote(`${serverName}: setup required`);
         beginSetup(mcpServers.find((server) => server.name === serverName) ?? { name: serverName });
       } else if (result.error) {
-        setError(result.error);
+        setError(normalizeError(result.error, "Connector authentication failed"));
       } else {
         setAuthNote(`${serverName}: ${result.status}`);
       }
       refresh();
     },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not authenticate the connector")),
   });
 
   const setup = useMutation({
@@ -124,7 +125,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       setAuthNote(null);
       refresh();
     },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not set up the connector")),
   });
 
   const add = useMutation({
@@ -149,7 +150,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       setArgs("");
       refresh();
     },
-    onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
+    onError: (caught) => setError(normalizeError(caught, "Could not remove the connector")),
   });
 
   function beginSetup(server: McpServerView) {

@@ -1,4 +1,5 @@
 import { check } from "@tauri-apps/plugin-updater";
+import { normalizeError } from "./acp/errors";
 
 /**
  * Flip to `true` only after `plugins.updater` in `tauri.conf.json` has a real
@@ -24,7 +25,7 @@ export async function checkForAppUpdates(): Promise<UpdateCheckResult> {
     if (!update) return { status: "up-to-date" };
     return { status: "available", version: update.version, notes: update.body };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = normalizeError(error, "Could not check for updates");
     return { status: "error", message };
   }
 }

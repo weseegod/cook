@@ -2,6 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { Brain, FileText, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { flushMemory, forgetMemory, readProjectFile, rewriteMemory } from "../../acp/extensions";
+import { normalizeError } from "../../acp/errors";
 import { memoryFileSize, type MemoryFileView } from "../../acp/settings-ext";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
@@ -43,7 +44,7 @@ export function MemoryBrowserPanel({ connected }: { connected: boolean }) {
       return forgetMemory();
     },
     onSuccess: (_result, action) => setStatus(`${action} requested`),
-    onError: (error) => setStatus(error instanceof Error ? error.message : String(error)),
+    onError: (error) => setStatus(normalizeError(error, "Could not update memory")),
   });
 
   const grouped = groupBySource(memoryFiles);

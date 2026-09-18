@@ -230,15 +230,15 @@ test.describe("visual audit", () => {
     }));
 
     await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByRole("dialog")).toContainText("plan.md");
+    await expect(page.getByTestId("plan-pane")).toContainText("plan.md");
     await expectNoHorizontalOverflow(page);
     await capture(page, "chat-plan-chip");
 
     await page.getByTestId("dialog-hide").click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     await page.getByTestId("plan-chip").click();
     await expect(page.getByTestId("plan-lines")).toBeVisible();
-    expect(await page.locator(".dialog").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    expect(await page.locator(".plan-pane").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
     await capture(page, "chat-plan-popup");
     await page.keyboard.press("Escape");
 
@@ -265,13 +265,18 @@ test.describe("visual audit", () => {
     const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     await page.evaluate(() => window.__thanhMock!.plan());
     await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(baseline + 1);
 
-    const box = (await page.locator(".dialog").boundingBox())!;
-    expect(box.x).toBeGreaterThanOrEqual(0);
-    expect(box.x + box.width).toBeLessThanOrEqual(390);
-    expect(await page.locator(".dialog").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
+    const box = (await page.locator(".plan-pane").boundingBox())!;
+    const main = (await page.locator(".chat-main").boundingBox())!;
+    // The narrow shell keeps its desktop sidebar minimum; the pane must match the transcript
+    // region exactly and must not create any additional document overflow.
+    expect(box.x).toBe(main.x);
+    expect(box.width).toBe(main.width);
+    await expect(page.getByTestId("composer-input")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toBeEnabled();
+    expect(await page.locator(".plan-pane").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
     await capture(page, "narrow-plan-popup");
   });
 
@@ -375,12 +380,15 @@ test.describe("visual audit", () => {
     await expect(page.locator(".modal-backdrop")).toHaveCount(0);
     await page.getByTestId("inline-permission").getByRole("button", { name: /Allow once/ }).click();
     await page.evaluate(() => window.__thanhMock?.plan());
-    // Plan review auto-opens PlanDialog; no inline interaction card; composer stays after hide.
-    await expect(page.getByRole("dialog")).toContainText("plan.md");
+    // Plan review auto-opens the transcript pane; no inline interaction card; composer stays live
+    // underneath it rather than only reappearing after Hide.
+    await expect(page.getByTestId("plan-pane")).toContainText("plan.md");
     await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
     await expect(page.getByTestId("plan-chip")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toBeEnabled();
     await page.getByTestId("dialog-hide").click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     await expect(page.getByTestId("composer-input")).toBeVisible();
     await expect(page.getByTestId("composer-input")).toHaveAttribute("placeholder", "Request changes…");
     await capture(page, "chat-turn-status-inline-decisions");

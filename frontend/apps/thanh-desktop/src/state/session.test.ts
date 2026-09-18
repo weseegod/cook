@@ -384,6 +384,51 @@ describe("plan review", () => {
     expect(useSessionStore.getState().planComments).toEqual([]);
     expect(useSessionStore.getState().planNextCommentId).toBe(0);
     expect(useSessionStore.getState().planDialogOpen).toBe(true);
+    expect(useSessionStore.getState().planFocus).toBe("preview");
+    expect(useSessionStore.getState().planCommentRange).toBeNull();
+  });
+
+  it("stashes the ordinary composer draft while saving a line comment, then restores it", () => {
+    useSessionStore.getState().resetConversation("session-plan-comment");
+    useSessionStore.getState().beginPlanReview("# Plan\n\n1. Do it");
+    useSessionStore.getState().setComposerDraft("ordinary draft");
+
+    useSessionStore.getState().beginPlanComment([2, 3]);
+    expect(useSessionStore.getState()).toMatchObject({
+      planFocus: "commenting",
+      planCommentRange: [2, 3],
+      planEditingCommentId: null,
+      planStashedDraft: "ordinary draft",
+      composerDraft: "",
+    });
+
+    useSessionStore.getState().savePlanComment("rewrite this");
+    expect(useSessionStore.getState()).toMatchObject({
+      planFocus: "preview",
+      planCommentRange: null,
+      planEditingCommentId: null,
+      planStashedDraft: null,
+      composerDraft: "ordinary draft",
+    });
+    expect(useSessionStore.getState().planComments).toEqual([{ id: 0, lineRange: [2, 3], text: "rewrite this" }]);
+  });
+
+  it("cancels line commenting without losing the ordinary composer draft", () => {
+    useSessionStore.getState().resetConversation("session-plan-cancel-comment");
+    useSessionStore.getState().beginPlanReview("# Plan");
+    useSessionStore.getState().setComposerDraft("keep this");
+    useSessionStore.getState().beginPlanComment([1, 2]);
+    useSessionStore.getState().setComposerDraft("partial comment");
+
+    useSessionStore.getState().cancelPlanComment();
+    expect(useSessionStore.getState()).toMatchObject({
+      planFocus: "preview",
+      planCommentRange: null,
+      planEditingCommentId: null,
+      planStashedDraft: null,
+      composerDraft: "keep this",
+    });
+    expect(useSessionStore.getState().planComments).toEqual([]);
   });
 
   it("keeps the body but stops blocking once the review is answered", () => {

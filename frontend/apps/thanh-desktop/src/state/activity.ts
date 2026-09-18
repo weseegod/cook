@@ -3,6 +3,7 @@
  * Fed by N-tbg, N-tdone, N-sched-*, N-mon and U-sub-*, U-wf — not transcript rows.
  */
 import { create } from "zustand";
+import { normalizeError } from "../acp/errors";
 import {
   activityPayload,
   cancelSubagent,
@@ -118,7 +119,7 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
         lastError: null,
       }));
     } catch (error) {
-      set({ lastError: error instanceof Error ? error.message : String(error) });
+      set({ lastError: normalizeError(error, "Could not load activity") });
     }
   },
   killActivity: async (sessionId, item) => {
@@ -135,7 +136,7 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
       }
       set({ lastError: null });
     } catch (error) {
-      set({ lastError: error instanceof Error ? error.message : String(error) });
+      set({ lastError: normalizeError(error, "Could not load activity") });
       throw error;
     }
   },

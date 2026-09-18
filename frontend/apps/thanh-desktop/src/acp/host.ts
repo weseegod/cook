@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { normalizeError } from "./errors";
+import { desktopError, desktopTrace } from "./trace";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -32,6 +34,28 @@ export interface ConfigSecurity {
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 const isMock = () => !isTauri() && import.meta.env.VITE_MOCK_ACP === "1";
 
+/** Whether the renderer is running in the native Desktop shell. */
+export function isTauriRuntime(): boolean {
+  return isTauri();
+}
+
+async function invokeDesktop<T>(command: string, args: Record<string, unknown>): Promise<T> {
+  const started = performance.now();
+  desktopTrace("invoke.start", { command, keys: Object.keys(args) });
+  try {
+    const result = await invoke<T>(command, args);
+    desktopTrace("invoke.ok", { command, elapsedMs: Math.round(performance.now() - started) });
+    return result;
+  } catch (error) {
+    desktopError("invoke.error", {
+      command,
+      elapsedMs: Math.round(performance.now() - started),
+      error: normalizeError(error),
+    });
+    throw new Error(normalizeError(error, `Desktop command failed: ${command}`));
+  }
+}
+
 /** The browser stand-in, loaded lazily so the mock never ships in the Tauri path. */
 async function mock() {
   return import("./mock-transport");
@@ -43,7 +67,7 @@ export async function desktopCommand<T>(
   args: Record<string, unknown>,
   fallback: () => Promise<T>,
 ): Promise<T> {
-  return isTauri() ? invoke<T>(command, args) : fallback();
+  return isTauri() ? invokeDesktop<T>(command, args) : fallback();
 }
 
 export async function startProcess(cwd: string): Promise<StartInfo> {
@@ -53,11 +77,11 @@ export async function startProcess(cwd: string): Promise<StartInfo> {
     }
     throw new Error("Thanh Desktop must run inside Tauri (use pnpm tauri dev)");
   }
-  return invoke<StartInfo>("acp_start", { cwd });
+  return invokeDesktop<StartInfo>("acp_start", { cwd });
 }
 
 export async function stopProcess(): Promise<void> {
-  if (isTauri()) await invoke("acp_stop");
+  if (isTauri()) await invokeDesktop("acp_stop", {});
 }
 
 /**
@@ -93,14 +117,18 @@ export function wireMethod(method: string): string {
 export async function request<T>(method: string, params: unknown = {}): Promise<T> {
   // Both transports deliver the same shape: the JSON-RPC `result` field, which for most
   // `x.ai/*` methods is the agent's `{ result, error }` envelope.
-  const value = isTauri()
-    ? await invoke<T>("acp_request", { method: wireMethod(method), params })
-    : await (await mock()).mockRequest<T>(wireMethod(method), params);
-  return unwrapExtResult<T>(value);
+  try {
+    const value = isTauri()
+      ? await invokeDesktop<T>("acp_request", { method: wireMethod(method), params })
+      : await (await mock()).mockRequest<T>(wireMethod(method), params);
+    return unwrapExtResult<T>(value);
+  } catch (error) {
+    throw new Error(normalizeError(error, `ACP request failed: ${method}`));
+  }
 }
 
 export async function notify(method: string, params: unknown = {}): Promise<void> {
-  if (isTauri()) await invoke("acp_notify", { method: wireMethod(method), params });
+  if (isTauri()) await invokeDesktop("acp_notify", { method: wireMethod(method), params });
   else if (isMock()) {
     const { mockRequest } = await mock();
     await mockRequest(wireMethod(method), params);
@@ -112,7 +140,7 @@ export async function respond(
   result?: unknown,
   error?: { code: number; message: string; data?: unknown },
 ): Promise<void> {
-  if (isTauri()) await invoke("acp_respond", { id, result, error });
+  if (isTauri()) await invokeDesktop("acp_respond", { id, result, error });
   else if (isMock()) {
     const { mockRespond } = await mock();
     mockRespond(id, error ? { error } : result);
@@ -121,7 +149,7 @@ export async function respond(
 
 export async function pickFolder(): Promise<string | null> {
   if (!isTauri()) return "/tmp/thanh-demo";
-  return invoke<string | null>("pick_folder");
+  return invokeDesktop<string | null>("pick_folder", {});
 }
 
 export interface FilePayload {
@@ -139,19 +167,19 @@ export async function pickFiles(): Promise<string[] | null> {
     if (isMock()) return (await mock()).mockPickFiles();
     return null;
   }
-  return invoke<string[]>("pick_files");
+  return invokeDesktop<string[]>("pick_files", {});
 }
 
 /** Read one attached file (base64) for an ACP `image` part. */
 export async function readFilePayload(path: string): Promise<FilePayload> {
-  if (isTauri()) return invoke<FilePayload>("read_file_base64", { path });
+  if (isTauri()) return invokeDesktop<FilePayload>("read_file_base64", { path });
   return (await mock()).mockReadFilePayload(path);
 }
 
 /** Open a tool-reported file or directory with the operating system default handler. */
 export async function openPath(path: string): Promise<void> {
   if (isTauri()) {
-    await invoke("open_path", { path });
+    await invokeDesktop("open_path", { path });
     return;
   }
   if (isMock()) return;
@@ -175,7 +203,7 @@ export async function onFileDrop(handler: (paths: string[], phase: "over" | "dro
 
 export async function getConfigSecurity(): Promise<ConfigSecurity> {
   if (!isTauri()) return { path: "~/.thanh/config.toml", exists: false, worldReadable: false };
-  return invoke<ConfigSecurity>("config_security");
+  return invokeDesktop<ConfigSecurity>("config_security", {});
 }
 
 export async function onMessage(handler: (message: RpcMessage) => void): Promise<UnlistenFn> {
@@ -207,5 +235,5 @@ export async function onLog(handler: (line: string) => void): Promise<UnlistenFn
 /** Native OS notification (macOS osascript / Linux notify-send). No-op outside Tauri. */
 export async function osNotify(title: string, body: string): Promise<void> {
   if (!isTauri()) return;
-  await invoke("os_notify", { title, body });
+  await invokeDesktop("os_notify", { title, body });
 }

@@ -21,6 +21,16 @@ pnpm test
 pnpm tauri dev
 ```
 
+Desktop diagnostics are written to `~/.thanh/logs/desktop.log`. To include ACP
+method/response tracing and sanitized agent stderr, run:
+
+```sh
+THANH_DESKTOP_TRACE=1 pnpm tauri dev
+```
+
+The trace records method names and ids only; credentials and request payloads are
+not logged. Agent stderr is included in the same sanitized `desktop.log`.
+
 The app and CLI major versions must match. `src-tauri` deliberately contains
 an empty `[workspace]` and is not a member of the generated root workspace.
 

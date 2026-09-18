@@ -22,6 +22,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::oneshot;
 
 use crate::bin_resolve::{resolve_and_gate, ResolvedBinary};
+use crate::{logging, provider_config};
 
 type PendingResult = Result<Value, String>;
 
@@ -29,6 +30,7 @@ pub struct AcpHost {
     runtime: Mutex<Option<ChildRuntime>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<PendingResult>>>>,
     next_id: AtomicU64,
+    generation: Arc<AtomicU64>,
     workspace: Arc<Mutex<Option<PathBuf>>>,
     live_session: Mutex<Option<String>>,
 }
@@ -39,6 +41,7 @@ impl Default for AcpHost {
             runtime: Mutex::new(None),
             pending: Arc::new(Mutex::new(HashMap::new())),
             next_id: AtomicU64::new(1),
+            generation: Arc::new(AtomicU64::new(0)),
             workspace: Arc::new(Mutex::new(None)),
             live_session: Mutex::new(None),
         }
@@ -50,6 +53,33 @@ struct ChildRuntime {
     stdin: Arc<Mutex<ChildStdin>>,
     binary: ResolvedBinary,
     cwd: PathBuf,
+}
+
+#[derive(Default)]
+struct ChildDiagnostics {
+    stderr: Mutex<Vec<String>>,
+}
+
+impl ChildDiagnostics {
+    fn push_stderr(&self, line: String) {
+        let mut lines = self.stderr.lock();
+        if lines.len() == 32 {
+            lines.remove(0);
+        }
+        lines.push(line);
+    }
+
+    fn stderr_tail(&self) -> String {
+        self.stderr
+            .lock()
+            .iter()
+            .rev()
+            .take(8)
+            .rev()
+            .map(|line| logging::sanitize(line))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -78,7 +108,9 @@ pub struct RpcError {
 
 impl AcpHost {
     pub fn start(&self, app: AppHandle, cwd: PathBuf) -> Result<StartInfo, String> {
+        logging::info("acp.start", format!("cwd={}", cwd.display()));
         self.stop();
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let cwd = cwd
             .canonicalize()
             .map_err(|error| format!("invalid workspace {}: {error}", cwd.display()))?;
@@ -86,6 +118,14 @@ impl AcpHost {
             return Err(format!("workspace is not a directory: {}", cwd.display()));
         }
         let binary = resolve_and_gate().map_err(|error| error.to_string())?;
+        logging::info(
+            "acp.binary",
+            format!("path={} version={}", binary.path.display(), binary.version),
+        );
+        provider_config::validate_config().map_err(|error| {
+            logging::error("acp.config.invalid", &error);
+            format!("Thanh cannot start because its config is invalid: {error}")
+        })?;
         let mut command = Command::new(&binary.path);
         command
             .args(["agent", "stdio"])
@@ -116,6 +156,7 @@ impl AcpHost {
         let stderr = child.stderr.take().ok_or("agent stderr was not piped")?;
         let child = Arc::new(Mutex::new(child));
         let stdin = Arc::new(Mutex::new(stdin));
+        let diagnostics = Arc::new(ChildDiagnostics::default());
 
         *self.workspace.lock() = Some(cwd.clone());
         *self.runtime.lock() = Some(ChildRuntime {
@@ -127,12 +168,16 @@ impl AcpHost {
 
         spawn_stdout_reader(
             app.clone(),
+            child.clone(),
             stdout,
             stdin,
             self.pending.clone(),
             self.workspace.clone(),
+            diagnostics.clone(),
+            self.generation.clone(),
+            generation,
         );
-        spawn_stderr_reader(app.clone(), stderr);
+        spawn_stderr_reader(app.clone(), stderr, diagnostics);
         let _ = app.emit(
             "acp-status",
             StatusEvent {
@@ -140,6 +185,7 @@ impl AcpHost {
                 detail: None,
             },
         );
+        logging::info("acp.running", format!("cwd={}", cwd.display()));
 
         Ok(StartInfo {
             binary_path: binary.path,
@@ -149,10 +195,15 @@ impl AcpHost {
     }
 
     pub fn stop(&self) {
+        // Invalidate the old reader before terminating the child. Its EOF handler can run after
+        // a replacement process has started; without a generation guard it would emit a stale
+        // `exited` event and make the renderer restart the healthy replacement in a loop.
+        self.generation.fetch_add(1, Ordering::SeqCst);
         // Take the runtime out before the shutdown handshake: the kill/wait loop below can take
         // hundreds of milliseconds, and holding the mutex would stall any `acp_info` caller.
         let runtime = self.runtime.lock().take();
         if let Some(runtime) = runtime {
+            logging::info("acp.stop", format!("cwd={}", runtime.cwd.display()));
             if let Some(session_id) = self.live_session.lock().take() {
                 let _ = write_message(
                     &runtime.stdin,
@@ -213,6 +264,7 @@ impl AcpHost {
             *self.live_session.lock() = Some(session_id.clone());
         }
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        logging::trace("acp.request", format!("id={id} method={method}"));
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().insert(id, sender);
         if let Err(error) = self.send_value(&json!({
@@ -291,10 +343,14 @@ fn write_message(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), St
 
 fn spawn_stdout_reader(
     app: AppHandle,
+    child: Arc<Mutex<Child>>,
     stdout: impl Read + Send + 'static,
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<PendingResult>>>>,
     workspace: Arc<Mutex<Option<PathBuf>>>,
+    diagnostics: Arc<ChildDiagnostics>,
+    active_generation: Arc<AtomicU64>,
+    generation: u64,
 ) {
     let (sender, receiver) = mpsc::sync_channel::<Value>(256);
     let reader_app = app.clone();
@@ -319,6 +375,9 @@ fn spawn_stdout_reader(
                     continue;
                 }
             };
+            if should_trace_stdout(&message) {
+                logging::trace("acp.stdout", summarize_message(&message));
+            }
             if sender.send(message).is_err() {
                 break;
             }
@@ -356,14 +415,22 @@ fn spawn_stdout_reader(
                 }
             }
         }
+        // A replaced child also reaches EOF, but its requests were already failed by `stop()`.
+        // Only the active generation may fail pending calls or notify the renderer.
+        if active_generation.load(Ordering::SeqCst) != generation {
+            return;
+        }
         for (_, sender) in pending.lock().drain() {
             let _ = sender.send(Err("ACP process exited".to_owned()));
         }
+        let status = child.lock().try_wait().ok().flatten();
+        let detail = exit_detail(status.as_ref(), &diagnostics);
+        logging::error("acp.exit", &detail);
         let _ = app.emit(
             "acp-status",
             StatusEvent {
                 state: "exited",
-                detail: Some("The Thanh agent process exited".to_owned()),
+                detail: Some(detail),
             },
         );
     });
@@ -390,12 +457,62 @@ fn route_pending_response(
     true
 }
 
-fn spawn_stderr_reader(app: AppHandle, stderr: impl Read + Send + 'static) {
+fn spawn_stderr_reader(
+    app: AppHandle,
+    stderr: impl Read + Send + 'static,
+    diagnostics: Arc<ChildDiagnostics>,
+) {
     thread::spawn(move || {
         for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            let _ = app.emit("acp-log", line);
+            let safe_line = logging::sanitize(&line);
+            diagnostics.push_stderr(safe_line.clone());
+            logging::warn("acp.stderr", &safe_line);
+            let _ = app.emit("acp-log", safe_line);
         }
     });
+}
+
+fn summarize_message(message: &Value) -> String {
+    let id = message
+        .get("id")
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_owned());
+    if let Some(method) = message.get("method").and_then(Value::as_str) {
+        return format!("id={id} method={method}");
+    }
+    if message.get("error").is_some() {
+        return format!("id={id} response=error");
+    }
+    format!("id={id} response=result")
+}
+
+/// Streaming updates arrive much more frequently than actionable RPC traffic. Logging every
+/// token-sized update makes a trace session compete with the renderer for disk and stderr I/O.
+fn should_trace_stdout(message: &Value) -> bool {
+    let raw_method = message
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let method = raw_method.strip_prefix('_').unwrap_or(raw_method);
+    !matches!(
+        method,
+        "session/update" | "x.ai/session_notification" | "x.ai/session/update"
+    )
+}
+
+fn exit_detail(
+    status: Option<&std::process::ExitStatus>,
+    diagnostics: &ChildDiagnostics,
+) -> String {
+    let status = status
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "unknown status".to_owned());
+    let stderr = diagnostics.stderr_tail();
+    if stderr.is_empty() {
+        format!("Thanh agent exited ({status})")
+    } else {
+        format!("Thanh agent exited ({status}): {stderr}")
+    }
 }
 
 /// Layer 1 host intercept: ACP `fs/*` only until a real PTY exists (H-term).
@@ -656,6 +773,21 @@ mod tests {
         ));
         assert_eq!(receiver.try_recv().unwrap().unwrap(), json!({"ok": true}));
         assert!(pending.lock().is_empty());
+    }
+
+    #[test]
+    fn does_not_trace_high_frequency_acp_or_xai_updates() {
+        for method in [
+            "session/update",
+            "_x.ai/session_notification",
+            "_x.ai/session/update",
+        ] {
+            assert!(!should_trace_stdout(&json!({"method": method})), "{method}");
+        }
+        assert!(should_trace_stdout(
+            &json!({"method": "_x.ai/queue/changed"})
+        ));
+        assert!(should_trace_stdout(&json!({"method": "fs/read_text_file"})));
     }
 
     #[cfg(unix)]

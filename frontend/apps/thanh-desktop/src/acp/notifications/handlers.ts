@@ -3,6 +3,7 @@ import type { HookView, MemoryFileView } from "../settings-ext";
 import { activityPayload } from "../activity";
 import { notifyTurnComplete, shouldNotifyTurnComplete, turnCompleteNotifyCopy } from "../os-notify";
 import { modelCatalog } from "../xai";
+import { normalizeError } from "../errors";
 import {
   applyMonitorEvent,
   applyScheduledTask,
@@ -148,9 +149,9 @@ function outcomeFromPromptComplete(params: Record<string, unknown>): TurnOutcome
     return {
       kind: "failed",
       error: typeof params.error === "string"
-        ? params.error
+        ? normalizeError(params.error)
         : typeof params.errorKind === "string"
-          ? params.errorKind
+          ? normalizeError(params.errorKind)
           : undefined,
     };
   }

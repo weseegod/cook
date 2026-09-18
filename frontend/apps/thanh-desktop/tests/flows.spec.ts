@@ -123,10 +123,10 @@ test.describe("first run", () => {
     expect(callsTo(requests, "x.ai/providers/test")[0].params).toMatchObject({ id: "deepseek" });
     expect(callsTo(requests, "x.ai/models/set_default")[0].params).toEqual({ modelId: "deepseek-reasoner" });
     await expect.poll(async () => (await mock.state()).defaultModel).toBe("deepseek-reasoner");
-    // The agent holds the key; what comes back out is only a hint.
+    // The agent holds the key; credentials never come back to the renderer.
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Models" }).click();
-    await expect(page.getByTestId("provider-row-deepseek")).toContainText("sk-l…abcd");
+    await expect(page.getByTestId("provider-row-deepseek")).toContainText("Connected · API key");
     await expect(page.locator(".settings-panel")).not.toContainText("sk-live-deepseek-0123456789abcd");
     expect(errors).toEqual([]);
   });
@@ -186,7 +186,7 @@ test.describe("first run", () => {
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Models" }).click();
     await expect(page.getByTestId("provider-row-openai")).toContainText("Connected · API key");
-    await expect(page.getByTestId("provider-row-openai")).toContainText("sk-m…cdef");
+    await expect(page.getByTestId("provider-row-openai")).not.toContainText("sk-m…cdef");
     await expect(page.locator(".settings-panel")).not.toContainText("sk-mock-0123456789abcdef");
   });
 
@@ -344,10 +344,11 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByRole("tab", { name: "Models" }).click();
 
     const row = page.getByTestId("provider-row-openai");
-    await expect(row).toContainText("sk-m…cdef");
+    await expect(row).not.toContainText("sk-m…cdef");
     await page.getByTestId("provider-edit-openai").click();
     const editor = page.getByRole("dialog", { name: "Edit OpenAI" });
-    await expect(editor.getByText("Current key:")).toContainText("sk-m…cdef");
+    await expect(editor.getByText(/Current key:/)).toHaveCount(0);
+    await expect(editor.getByText("A saved API key will be kept when this field is blank.")).toBeVisible();
     // Connection settings only: models live on the provider row.
     await expect(editor.getByText("Extra model IDs")).toHaveCount(0);
     await expect(editor.getByTestId("provider-discover")).toHaveCount(0);
@@ -401,6 +402,57 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(row).toContainText("Context 256K");
     await expect(row).toContainText("Output 32K");
     expect((await mock.state()).providers).toEqual(expect.arrayContaining([expect.objectContaining({ id: "openai" })]));
+  });
+
+  test("edits context and output for a local model through the same model settings path", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      providers: [
+        ...CONNECTED_SEED.providers,
+        {
+          id: "local",
+          name: "Local API",
+          baseUrl: "http://thanhpc:8080/v1",
+          apiBackend: "chat_completions",
+          apiKey: "local-test-key",
+          models: [{
+            id: "local/spark25",
+            model: "spark25",
+            name: "Spark 2.5 (Local)",
+            input: ["text"],
+            contextWindow: 32_768,
+            maxCompletionTokens: 2_000,
+          }],
+        },
+      ],
+    });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+
+    const row = page.getByTestId("model-row-local/spark25");
+    await expect(row).toContainText("Context 32.8K");
+    await expect(row).toContainText("Output 2K");
+    await page.getByLabel("Edit model local/spark25").click();
+    const editor = page.getByRole("dialog", { name: "Edit Spark 2.5 (Local)" });
+    await editor.getByLabel("Model context window").fill("65536");
+    await editor.getByLabel("Model output limit").fill("4096");
+    await editor.getByRole("button", { name: "Save model" }).click();
+
+    const call = (await waitForCalls(page, "x.ai/models/upsert")).at(-1)!;
+    expect(call.params).toMatchObject({
+      id: "local/spark25",
+      model: "spark25",
+      providerId: "local",
+      contextWindow: 65_536,
+      maxCompletionTokens: 4_096,
+      input: ["text"],
+    });
+    await expect(row).toContainText("Context 65.5K");
+    await expect(row).toContainText("Output 4.1K");
+    const state = await mock.state();
+    const local = (state.providers as Array<{ id: string; models: Array<{ id: string; contextWindow?: number; maxCompletionTokens?: number }> }>).find((provider) => provider.id === "local")!;
+    expect(local.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "local/spark25", contextWindow: 65_536, maxCompletionTokens: 4_096 })]));
   });
 
   test("re-lists the catalog when the agent broadcasts an empty models update", async ({ page }) => {
@@ -984,90 +1036,72 @@ test.describe("goal and plan presentation", () => {
     await expect(page.getByTestId("todo-overlay")).toHaveCount(1);
   });
 
-  test("offers run-as-goal on the plan review", async ({ page }) => {
-    const mock = api(page);
+  test("keeps the plan pane in the transcript region and the composer enabled", async ({ page }) => {
     await openWorkspace(page, CONNECTED_SEED);
-    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
-    // PlanDialog auto-opens; verdicts live on its decision bar.
-    await expect(page.getByRole("dialog")).toContainText("plan.md");
-    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+    await page.evaluate(() => window.__thanhMock!.plan());
 
-    await page.getByTestId("plan-goal").click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    const answer = (await mock.responses()).find((entry) => entry.id === requestId);
-    expect(answer?.result).toEqual({ outcome: "approved_as_goal" });
-  });
-
-  test("keeps the composer live during a plan review and sends typed feedback as request changes", async ({ page }) => {
-    const mock = api(page);
-    await openWorkspace(page, CONNECTED_SEED);
-    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
-    await page.getByTestId("dialog-hide").click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    // The TUI's parked review keeps its prompt slot (`PlanApprovalFocus::Prompt`).
-    await expect(page.locator(".prompt-slot")).toBeVisible();
-
+    const pane = page.getByTestId("plan-pane");
     const input = page.getByTestId("composer-input");
+    await expect(pane).toBeVisible();
     await expect(input).toBeVisible();
     await expect(input).toBeEnabled();
-    await expect(input).toHaveAttribute("placeholder", "Request changes…");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("plan-notes")).toHaveCount(0);
+    await expect(page.getByTestId("plan-comment-input")).toHaveCount(0);
+    const paneBox = await pane.boundingBox();
+    const inputBox = await input.boundingBox();
+    const status = page.getByTestId("turn-status");
+    const statusBox = (await status.count()) > 0 ? await status.boundingBox() : null;
+    if (statusBox) {
+      expect(paneBox!.y + paneBox!.height).toBeLessThanOrEqual(statusBox.y + 1);
+      expect(inputBox!.y).toBeGreaterThanOrEqual(statusBox.y + statusBox.height - 1);
+    } else {
+      expect(paneBox!.y + paneBox!.height).toBeLessThanOrEqual(inputBox!.y + 1);
+    }
+  });
 
-    // Empty `Enter` answers nothing (`empty_enter_on_revise_prompt_does_not_approve`).
+  test("uses the live composer for request changes without hiding the pane", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
+    const input = page.getByTestId("composer-input");
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
+    await expect(input).toHaveAttribute("placeholder", "Request changes…");
     await input.press("Enter");
     expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
-    await expect(page.getByTestId("plan-chip")).toBeVisible();
-
     await input.fill("split these into two steps");
-    await expect(input).toHaveValue("split these into two steps");
-    await page.getByTestId("send-button").click();
+    await input.press("Enter");
     await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({
       outcome: "cancelled",
       feedback: "split these into two steps",
     });
   });
 
-  test("opens the plan from the chip and hides without deciding", async ({ page }) => {
+  test("supports pane hide, chip reopen, and focus-only Escape", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
-    await page.evaluate(() => window.__thanhMock!.sessionNotification({
-      sessionUpdate: "plan",
-      entries: [{ content: "Update the transcript renderer", status: "pending" }],
-    }));
     const requestId = await page.evaluate(() => window.__thanhMock!.plan());
-
-    // Auto-open on exit_plan_mode; chip reopens after hide.
-    await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByRole("dialog")).toContainText("plan.md");
-    await expect(page.getByTestId("plan-line-1")).toContainText("Implementation plan");
-    await expect(page.getByTestId("plan-line-3")).toContainText("Update the transcript renderer");
-    for (const id of ["plan-approve", "plan-goal", "plan-changes", "plan-comment", "plan-copy", "plan-quit"]) {
-      await expect(page.getByTestId(id)).toBeVisible();
-    }
-
-    // The minimize dash hides the surface; it is not a close button and sends no verdict.
+    await expect(page.getByTestId("plan-pane")).toContainText("plan.md");
     await page.getByTestId("dialog-hide").click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
-    await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
 
-    await page.getByTestId("plan-chip").click();
-    await expect(page.getByRole("dialog")).toBeVisible();
-    // Escape hides the surface too, and still answers nothing.
+    const input = page.getByTestId("composer-input");
+    await input.click();
+    await expect(input).toHaveAttribute("placeholder", "Request changes…");
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
-    await page.getByTestId("plan-chip").click();
-    await expect(page.getByTestId("plan-line-1")).toBeVisible();
   });
 
-  test("anchors a comment to the dragged lines and sends them with request changes", async ({ page }) => {
+  test("anchors a comment to dragged lines and sends it through the composer", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
     const requestId = await page.evaluate(() => window.__thanhMock!.plan());
-    await expect(page.getByRole("dialog")).toBeVisible();
-
     const first = await page.getByTestId("plan-line-3").boundingBox();
     const last = await page.getByTestId("plan-line-4").boundingBox();
     await page.mouse.move(first!.x + 60, first!.y + first!.height / 2);
@@ -1075,75 +1109,62 @@ test.describe("goal and plan presentation", () => {
     await page.mouse.move(last!.x + 60, last!.y + last!.height / 2);
     await page.mouse.up();
 
-    const input = page.getByTestId("plan-comment-input");
-    await expect(input).toBeVisible();
+    const input = page.getByTestId("composer-input");
+    await expect(input).toHaveAttribute("placeholder", "Type your comment…");
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
     await input.fill("split these into two steps");
     await input.press("Enter");
     await expect(page.getByTestId("plan-comment-0")).toContainText("L3-4");
     await expect(page.getByTestId("plan-comment-badge")).toHaveText("1 ●");
 
     await page.getByTestId("plan-changes").click();
-    await expect(page.getByTestId("plan-notes")).toBeVisible();
-    await page.getByTestId("plan-notes").press("Enter");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    const answer = (await mock.responses()).find((entry) => entry.id === requestId);
-    expect(answer?.result).toEqual({
+    await expect(input).toHaveAttribute("placeholder", "Request changes…");
+    await input.press("Enter");
+    await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({
       outcome: "cancelled",
       feedback: "Proposed plan lines 3-4:\n> 1. Update the transcript renderer\n> 2. Verify the desktop flow\n\nComment:\nsplit these into two steps",
     });
   });
 
-  test("approves from the popup with a key and keeps the plan reachable", async ({ page }) => {
+  test("approves on empty a, but types a when the composer has text", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
     const requestId = await page.evaluate(() => window.__thanhMock!.plan());
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await page.keyboard.press("a");
-
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    expect((await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "approved" });
-    // The review is answered, so the verdict buttons are gone rather than dead.
-    await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await page.getByTestId("plan-chip").click();
-    await expect(page.getByTestId("plan-comment")).toBeVisible();
-    await expect(page.getByTestId("plan-copy")).toBeVisible();
-    await expect(page.getByTestId("plan-approve")).toHaveCount(0);
-    await expect(page.getByTestId("plan-quit")).toHaveCount(0);
-  });
-
-  test("approves from an empty notes box, but types the letter once there is text", async ({ page }) => {
-    const mock = api(page);
-    await openWorkspace(page, CONNECTED_SEED);
-    const requestId = await page.evaluate(() => window.__thanhMock!.plan());
-    await expect(page.getByRole("dialog")).toBeVisible();
-    await page.getByTestId("plan-changes").click();
-    const notes = page.getByTestId("plan-notes");
-    await expect(notes).toBeVisible();
-
-    // With text in the box `a` is a letter, not a verdict (`a_with_nonempty_freeform_types_letter`).
-    await notes.fill("keep");
-    await notes.press("a");
-    await expect(notes).toHaveValue("keepa");
+    const input = page.getByTestId("composer-input");
+    await input.click();
+    await input.fill("keep");
+    await input.press("a");
+    await expect(input).toHaveValue("keepa");
     expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
-
-    // Empty, it approves (`a_on_empty_revise_prompt_approves`).
-    await notes.fill("");
-    await notes.press("a");
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    expect((await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "approved" });
+    await input.fill("");
+    await input.press("a");
+    await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "approved" });
   });
 
-  test("shows the empty-plan placeholder and quits from it", async ({ page }) => {
+  test("queues a follow-up while a turn is running", async ({ page }) => {
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 250 });
+    const input = page.getByTestId("composer-input");
+    await input.fill("hello");
+    await input.press("Enter");
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+    await expect(input).toBeEnabled();
+    await input.fill("follow up");
+    await input.press("Enter");
+    const prompts = await waitForCalls(page, "session/prompt", 2);
+    expect((prompts.at(-1)?.params.prompt as Array<Record<string, unknown>>)).toEqual([{ type: "text", text: "follow up" }]);
+    await expect(page.getByTestId("send-button")).toContainText("Queue");
+  });
+
+  test("shows an empty plan without an inline card and can quit it", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
     const requestId = await page.evaluate(() => window.__thanhMock!.plan({ planContent: null }));
     await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
-    const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("plan.md (empty)");
-    await expect(dialog).toContainText("No plan written yet");
-
+    const pane = page.getByTestId("plan-pane");
+    await expect(pane).toContainText("plan.md (empty)");
+    await expect(pane).toContainText("No plan written yet");
     await page.getByTestId("plan-quit").click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     expect((await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "abandoned" });
   });
 

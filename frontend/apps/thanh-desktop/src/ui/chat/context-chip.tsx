@@ -1,6 +1,7 @@
 import { ChevronDown, LoaderCircle, Minimize2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
+import { normalizeError } from "../../acp/errors";
 import { useSessionStore } from "../../state/session";
 import { formatTokensCompact } from "./format-duration";
 
@@ -33,7 +34,7 @@ export function ContextChip() {
       else await acpClient.prompt("/compact");
     } catch (error) {
       useSessionStore.getState().set({
-        error: error instanceof Error ? error.message : String(error),
+        error: normalizeError(error, "Could not compact the conversation"),
       });
     } finally {
       setCompacting(false);

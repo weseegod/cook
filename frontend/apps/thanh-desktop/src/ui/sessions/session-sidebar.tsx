@@ -2,6 +2,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleHelp, CopyPlus, Download, Folder, MessageSquarePlus, Pencil, Search, Settings, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { acpClient } from "../../acp/client";
+import { normalizeError } from "../../acp/errors";
+import { basename } from "../../acp/attachments";
 import type { SessionSummary } from "../../acp/xai";
 import { useSessionStore } from "../../state/session";
 import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "../chat/export-transcript";
@@ -55,7 +57,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
     } catch (caught) {
       useSessionStore.getState().set({
-        error: caught instanceof Error ? caught.message : String(caught),
+        error: normalizeError(caught, "Could not fork the conversation"),
       });
     }
   }
@@ -88,7 +90,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setDialog(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not rename the conversation"));
     } finally {
       setBusy(false);
     }
@@ -104,7 +106,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
       setDialog(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not remove the conversation"));
     } finally {
       setBusy(false);
     }
@@ -139,13 +141,17 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
             <div key={session.id} className={`session-row ${activeId === session.id ? "active" : ""}`}>
               <button className="session-open" onClick={() => void acpClient.loadSession(session.id, session.cwd)}>
                 <strong>{session.title || "Untitled conversation"}</strong>
-                <span className="session-path" title={session.cwd ?? "Workspace unavailable"}>
-                  <Folder size={11} aria-hidden="true" />
-                  <span>{session.cwd || "Workspace unavailable"}</span>
+                <span className="session-meta">
+                  <span className="session-path" title={session.cwd ?? "Workspace unavailable"}>
+                    <Folder size={11} aria-hidden="true" />
+                    <span className="session-workspace-name">{session.cwd ? basename(session.cwd) : "Workspace unavailable"}</span>
+                    {session.cwd && <span className="sr-only">{session.cwd}</span>}
+                  </span>
+                  <span className="session-meta-separator" aria-hidden="true">·</span>
+                  <span className="session-date">{formatDate(session.updatedAt)}</span>
                 </span>
-                <span className="session-date">{formatDate(session.updatedAt)}</span>
               </button>
-              <div className="session-actions">
+              <div className="session-actions" role="group" aria-label="Conversation actions">
                 <button type="button" data-testid={`session-fork-${session.id}`} onClick={() => void fork(session)} aria-label="Fork" title="Fork">
                   <CopyPlus size={13} />
                 </button>

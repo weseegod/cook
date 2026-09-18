@@ -1,4 +1,5 @@
 import type { RpcMessage } from "../host";
+import { normalizeError } from "../errors";
 import { notificationEntries } from "./handlers";
 import type { NotificationContext, NotificationEntry } from "./types";
 
@@ -30,6 +31,6 @@ export async function dispatchNotification(
   try {
     await entry.handle({ message, method, params, ...hooks });
   } catch (error) {
-    console.debug(`Notification handler failed (${method}):`, error);
+    console.debug(`Notification handler failed (${method}): ${normalizeError(error)}`);
   }
 }

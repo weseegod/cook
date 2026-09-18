@@ -1,6 +1,7 @@
 import { ChevronDown, CornerDownLeft, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
+import { normalizeError } from "../../acp/errors";
 import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type Attachment } from "../../acp/attachments";
 import { onFileDrop, pickFiles, readFilePayload } from "../../acp/host";
 import { askBtw, interjectPrompt } from "../../acp/turn-ops";
@@ -8,6 +9,7 @@ import { groupByProvider } from "../../acp/xai";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useActivityStore } from "../../state/activity";
 import { useSessionStore } from "../../state/session";
+import { planFeedback } from "../../state/plan-review";
 import {
   clientCommand,
   matchSlashCommands,
@@ -64,9 +66,15 @@ export function Composer() {
   const text = useSessionStore((state) => state.composerDraft);
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
+  const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const interactionPending = useSessionStore((state) => Boolean(state.pendingPermission || state.pendingQuestion));
-  const planReview = useSessionStore((state) => state.pendingQuestion?.kind === "plan");
-  // A parked plan review owns the composer for its feedback; every other interaction stops input.
+  const planReview = pendingQuestion?.kind === "plan";
+  const reviewBody = useSessionStore((state) => state.planReview?.body ?? null);
+  const planComments = useSessionStore((state) => state.planComments);
+  const planFocus = useSessionStore((state) => state.planFocus);
+  const setPlanFocus = useSessionStore((state) => state.setPlanFocus);
+  const savePlanComment = useSessionStore((state) => state.savePlanComment);
+  // Permission/question/elicit cards stop input; a parked plan review deliberately does not.
   const blocked = interactionPending && !planReview;
   const sessionId = useSessionStore((state) => state.sessionId);
   const planMode = useSessionStore((state) => state.planMode);
@@ -102,17 +110,27 @@ export function Composer() {
     node.style.height = `${Math.min(Math.max(node.scrollHeight, 56), 180)}px`;
   }, [text]);
 
+  useEffect(() => {
+    if (planReview && (planFocus === "prompt" || planFocus === "commenting")) {
+      textarea.current?.focus();
+    }
+  }, [planFocus, planReview]);
+
   // Native drops arrive as paths from the Tauri webview, not as HTML5 events.
   useEffect(() => {
     let dispose: (() => void) | undefined;
     void onFileDrop((paths, phase) => {
+      if (blocked) {
+        setDragging(false);
+        return;
+      }
       setDragging(phase === "over");
       if (phase === "drop") void addPaths(paths);
     }).then((unlisten) => {
       dispose = unlisten;
     });
     return () => dispose?.();
-  }, []);
+  }, [blocked]);
 
   async function addFiles(files: FileList | File[] | null) {
     if (!files) return;
@@ -188,16 +206,26 @@ export function Composer() {
    */
   async function submit() {
     const prompt = text.trim();
-    if (busy || blocked) return;
+    // A first prompt is still awaiting its response while the turn is already live. Keep that
+    // textarea submit path open so Enter can dispatch the second `session/prompt` immediately.
+    if ((busy && !turnRunning) || blocked) return;
+    if (planFocus === "commenting") {
+      // Comments use this same textarea. Empty Enter is intentionally a no-op.
+      if (!prompt) return;
+      savePlanComment(text);
+      setMenuClosed(false);
+      textarea.current?.blur();
+      return;
+    }
     if (planReview) {
       // The TUI's park-time prompt: `Enter` sends the typed text as `request changes`, an empty
       // line does nothing (`empty_enter_on_revise_prompt_does_not_approve`).
-      if (!prompt) return;
+      if (!prompt && planComments.length === 0) return;
       setBusy(true);
       setText("");
       setMenuClosed(false);
       try {
-        await acpClient.resolvePlan("cancelled", prompt);
+        await acpClient.resolvePlan("cancelled", planFeedback(planComments, prompt, reviewBody));
       } catch (error) {
         reportError(error);
       } finally {
@@ -254,7 +282,7 @@ export function Composer() {
       }
     } catch (error) {
       useSessionStore.getState().set({
-        error: error instanceof Error ? error.message : String(error),
+        error: normalizeError(error, "Could not send the prompt"),
       });
     } finally {
       setBusy(false);
@@ -337,7 +365,7 @@ export function Composer() {
   }
 
   function reportError(error: unknown) {
-    useSessionStore.getState().set({ error: error instanceof Error ? error.message : String(error) });
+    useSessionStore.getState().set({ error: normalizeError(error, "Could not run that command") });
   }
 
   return (
@@ -365,10 +393,10 @@ export function Composer() {
       <div
         className={`composer${planMode ? " plan-mode" : ""}${dragging ? " dragging" : ""}`}
         data-testid="composer-drop"
-        onDragOver={(event) => { if (interactionPending) return; event.preventDefault(); setDragging(true); }}
+        onDragOver={(event) => { if (blocked) return; event.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={(event) => {
-          if (interactionPending) return;
+          if (blocked) return;
           event.preventDefault();
           setDragging(false);
           void addFiles(event.dataTransfer?.files ?? null);
@@ -404,10 +432,13 @@ export function Composer() {
             }
           }}
           onKeyDown={onComposerKeyDown}
-          placeholder={planReview ? "Request changes…" : blocked ? "Waiting for your decision…" : turnRunning ? "Queue another prompt…" : "Ask Thanh anything…"}
+          placeholder={planFocus === "commenting" ? "Type your comment…" : planReview ? "Request changes…" : blocked ? "Waiting for your decision…" : turnRunning ? "Queue another prompt…" : "Ask Thanh anything…"}
           aria-label="Message"
           data-testid="composer-input"
           rows={1}
+          onFocus={() => {
+            if (planReview && planFocus === "preview") setPlanFocus("prompt");
+          }}
           disabled={blocked}
         />
         <div className="composer-footer">
@@ -438,7 +469,7 @@ export function Composer() {
               aria-label="Attach files"
               data-testid="attach-button"
               onClick={() => void openPicker()}
-              disabled={interactionPending}
+              disabled={blocked}
             >
               <Plus size={16} />
             </button>
@@ -453,7 +484,27 @@ export function Composer() {
                 event.target.value = "";
               }}
             />
-            {turnRunning ? (
+            {planFocus === "commenting" ? (
+              <button
+                type="button"
+                className="send-button"
+                data-testid="send-button"
+                disabled={!text.trim() || busy}
+                onClick={() => void submit()}
+              >
+                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Save comment
+              </button>
+            ) : planReview ? (
+              <button
+                type="button"
+                className="send-button"
+                data-testid="send-button"
+                disabled={!text.trim() || busy}
+                onClick={() => void submit()}
+              >
+                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Request changes
+              </button>
+            ) : turnRunning ? (
               <>
                 <button
                   type="button"
@@ -464,13 +515,13 @@ export function Composer() {
                 >
                   Interject
                 </button>
-                <button type="button" className="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
+                <button type="button" className="send-button" data-testid="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
                   {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
                 </button>
               </>
             ) : (
               <button type="button" className="send-button" disabled={blocked || !text.trim() || busy} onClick={() => void submit()} data-testid="send-button">
-                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} {planReview ? "Request changes" : "Send"}
+                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Send
               </button>
             )}
           </div>

@@ -2,6 +2,7 @@ import { ArrowLeft, CheckCircle2, MessageSquareCode, Sparkles } from "lucide-rea
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listProviders, setDefaultModel, type ProviderPreset } from "../../acp/providers";
+import { normalizeError } from "../../acp/errors";
 import { PresetGrid, ProviderEditor } from "../settings/provider-form";
 import { useProviderPresets } from "../settings/providers";
 
@@ -37,7 +38,7 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
       await queryClient.invalidateQueries({ queryKey: ["models"] });
       onDone();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not save the default model"));
     } finally {
       setSaving(false);
     }

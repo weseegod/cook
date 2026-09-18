@@ -3,6 +3,7 @@
  * `session_recap` / `session_recap_unavailable` on the session store.
  */
 import { sessionRecap } from "../../acp/session-ops";
+import { normalizeError } from "../../acp/errors";
 import { useSessionStore } from "../../state/session";
 
 export async function openRecap(): Promise<void> {
@@ -18,6 +19,6 @@ export async function openRecap(): Promise<void> {
       useSessionStore.getState().failRecap("Session recap is disabled for this agent.");
     }
   } catch (error) {
-    useSessionStore.getState().failRecap(error instanceof Error ? error.message : String(error));
+    useSessionStore.getState().failRecap(normalizeError(error, "Could not create a session recap"));
   }
 }

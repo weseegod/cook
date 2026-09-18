@@ -6,6 +6,7 @@
  * `extensions/recap.rs`).
  */
 import { request } from "./host";
+import { normalizeError } from "./errors";
 
 export interface RewindPoint {
   promptIndex: number;
@@ -85,19 +86,21 @@ export async function executeRewind(params: RewindExecuteParams): Promise<Rewind
     ...(params.mode ? { mode: params.mode } : {}),
   });
   const record = isRecord(value) ? value : {};
+  const revertedFiles = record.revertedFiles ?? record.reverted_files;
+  const cleanFiles = record.cleanFiles ?? record.clean_files;
   return {
     success: record.success === true,
     targetPromptIndex: numberOr(record.targetPromptIndex ?? record.target_prompt_index, params.targetPromptIndex),
-    error: typeof (record.error) === "string" ? record.error : null,
+    error: typeof (record.error) === "string" ? normalizeError(record.error) : null,
     mode: typeof (record.mode) === "string" ? record.mode : null,
     promptText: typeof (record.promptText ?? record.prompt_text) === "string"
       ? String(record.promptText ?? record.prompt_text)
       : null,
-    revertedFiles: Array.isArray(record.revertedFiles ?? record.reverted_files)
-      ? (record.revertedFiles ?? record.reverted_files as unknown[]).map(String)
+    revertedFiles: Array.isArray(revertedFiles)
+      ? revertedFiles.map(String)
       : [],
-    cleanFiles: Array.isArray(record.cleanFiles ?? record.clean_files)
-      ? (record.cleanFiles ?? record.clean_files as unknown[]).map(String)
+    cleanFiles: Array.isArray(cleanFiles)
+      ? cleanFiles.map(String)
       : [],
   };
 }

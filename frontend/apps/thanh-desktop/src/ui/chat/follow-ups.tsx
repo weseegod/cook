@@ -1,4 +1,5 @@
 import { acpClient } from "../../acp/client";
+import { normalizeError } from "../../acp/errors";
 import { useSessionStore } from "../../state/session";
 
 /** Follow-up suggestion chips under the composer (`x.ai/follow_ups` / N-follow). */
@@ -13,7 +14,7 @@ export function FollowUps() {
       await acpClient.prompt(label);
     } catch (error) {
       useSessionStore.getState().set({
-        error: error instanceof Error ? error.message : String(error),
+        error: normalizeError(error, "Could not send the follow-up"),
       });
     }
   }

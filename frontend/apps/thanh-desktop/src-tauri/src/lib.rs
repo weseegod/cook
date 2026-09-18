@@ -1,6 +1,7 @@
 mod acp_host;
 mod bin_resolve;
 mod http;
+mod logging;
 mod provider_config;
 mod workspace;
 
@@ -381,6 +382,11 @@ async fn desktop_model_set_default(model_id: String) -> Result<Value, String> {
 }
 
 pub fn run() {
+    logging::init();
+    logging::info(
+        "desktop.version",
+        format!("version={}", env!("CARGO_PKG_VERSION")),
+    );
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
 
     // App-shell updater only (see plugins.updater). Never writes ~/.thanh/bin/thanh.

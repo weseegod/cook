@@ -4,7 +4,8 @@
  * Tauri owns `~/.thanh/config.toml`; the renderer receives redacted DTOs. Browser tests fall back
  * to the mock ACP contract, while network probes and preset discovery remain agent operations.
  */
-import { desktopCommand, request } from "./host";
+import { PROVIDER_PRESETS } from "./provider-presets";
+import { desktopCommand, isTauriRuntime, request } from "./host";
 
 export interface ProviderModelLink {
   id: string;
@@ -23,7 +24,6 @@ export interface ProviderSummary {
   apiBackend?: string | null;
   hasKey: boolean;
   inlineKey: boolean;
-  keyHint?: string | null;
   envKey?: string | null;
   envKeyPresent: boolean;
   extraHeaders: Record<string, string>;
@@ -125,6 +125,9 @@ export function listProviders() {
 }
 
 export function providerPresets() {
+  // The current agent may not implement x.ai/providers/presets. Tauri already ships the same
+  // renderer-side catalog, so settings must not turn an optional catalog call into a -32601.
+  if (isTauriRuntime()) return Promise.resolve({ presets: PROVIDER_PRESETS });
   return request<{ presets: ProviderPreset[] }>("x.ai/providers/presets", {});
 }
 

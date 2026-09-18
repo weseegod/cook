@@ -1,9 +1,10 @@
 import type { RequestPermissionRequest, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { create } from "zustand";
+import { normalizeError } from "../acp/errors";
 import { formatDuration } from "../ui/chat/format-duration";
 import { applySubagentSessionUpdate, applyWorkflowUpdated } from "./activity";
 import { reduceGoalUpdate, type GoalState } from "./goal";
-import { emptyPlanSlice, type PlanComment, type PlanSlice } from "./plan-review";
+import { emptyPlanSlice, type PlanComment, type PlanFocus, type PlanSlice } from "./plan-review";
 
 export interface MessageBlock {
   type: "message";
@@ -130,6 +131,10 @@ interface SessionState {
   planComments: PlanComment[];
   planNextCommentId: number;
   planDialogOpen: boolean;
+  planFocus: PlanSlice["planFocus"];
+  planCommentRange: PlanSlice["planCommentRange"];
+  planEditingCommentId: PlanSlice["planEditingCommentId"];
+  planStashedDraft: PlanSlice["planStashedDraft"];
   /** User-toggled ACP Plan checklist under the header; closed by default. */
   todoOverlayOpen: boolean;
   /** `/rewind` picker dialog. */
@@ -160,12 +165,17 @@ interface SessionState {
   /** The review was answered: it stops blocking, but the body stays viewable for the session. */
   endPlanReview: () => void;
   setPlanDialogOpen: (open: boolean) => void;
+  setPlanFocus: (focus: PlanFocus) => void;
+  setPlanCommentRange: (range: [number, number] | null) => void;
+  beginPlanComment: (lineRange: [number, number], id?: number | null) => void;
+  cancelPlanComment: () => void;
   setTodoOverlayOpen: (open: boolean) => void;
   setRewindDialogOpen: (open: boolean) => void;
   beginRecap: () => void;
   failRecap: (error: string) => void;
   closeRecapDialog: () => void;
-  savePlanComment: (id: number | null, lineRange: [number, number], text: string) => void;
+  /** One-argument form commits the shared composer; the three-argument form remains useful for reducers/tests. */
+  savePlanComment: (...args: [text: string] | [id: number | null, lineRange: [number, number], text: string]) => void;
   removePlanComment: (id: number) => void;
   resetConversation: (sessionId?: string | null) => void;
   appendOptimisticUser: (text: string, images?: string[]) => void;
@@ -249,10 +259,40 @@ export const useSessionStore = create<SessionState>((set) => ({
       planNextCommentId: 0,
       // TUI shows the line viewer immediately on `exit_plan_mode`.
       planDialogOpen: true,
+      planFocus: "preview",
+      planCommentRange: null,
+      planEditingCommentId: null,
+      planStashedDraft: null,
     }),
   endPlanReview: () =>
-    set((state) => (state.planReview ? { planReview: { ...state.planReview, pending: false } } : {})),
+    set((state) => (state.planReview
+      ? {
+          planReview: { ...state.planReview, pending: false },
+          planFocus: "preview" as const,
+          planCommentRange: null,
+          planEditingCommentId: null,
+          planStashedDraft: null,
+        }
+      : {})),
   setPlanDialogOpen: (planDialogOpen) => set({ planDialogOpen }),
+  setPlanFocus: (planFocus) => set({ planFocus }),
+  setPlanCommentRange: (planCommentRange) => set({ planCommentRange }),
+  beginPlanComment: (planCommentRange, planEditingCommentId = null) =>
+    set((state) => ({
+      planFocus: "commenting",
+      planCommentRange,
+      planEditingCommentId,
+      planStashedDraft: state.composerDraft,
+      composerDraft: "",
+    })),
+  cancelPlanComment: () =>
+    set((state) => ({
+      planFocus: "preview",
+      planCommentRange: null,
+      planEditingCommentId: null,
+      composerDraft: state.planStashedDraft ?? state.composerDraft,
+      planStashedDraft: null,
+    })),
   setTodoOverlayOpen: (todoOverlayOpen) => set({ todoOverlayOpen }),
   setRewindDialogOpen: (rewindDialogOpen) => set({ rewindDialogOpen }),
   beginRecap: () =>
@@ -278,20 +318,44 @@ export const useSessionStore = create<SessionState>((set) => ({
       recapSummary: null,
       recapError: null,
     }),
-  savePlanComment: (id, lineRange, text) =>
+  savePlanComment: (...args) =>
     set((state) => {
+      const sharedComposer = args.length === 1;
+      const id = sharedComposer ? state.planEditingCommentId : args[0];
+      const lineRange = sharedComposer ? state.planCommentRange : args[1];
+      const text = sharedComposer ? args[0] : args[2];
       const trimmed = text.trim();
-      if (trimmed === "") return {};
+      if (trimmed === "" || lineRange === null || lineRange === undefined) return {};
       if (id !== null) {
-        return {
+        const next = {
           planComments: state.planComments.map((comment) =>
             comment.id === id ? { ...comment, lineRange, text: trimmed } : comment),
         };
+        return sharedComposer
+          ? {
+              ...next,
+              planFocus: "preview" as const,
+              planCommentRange: null,
+              planEditingCommentId: null,
+              composerDraft: state.planStashedDraft ?? state.composerDraft,
+              planStashedDraft: null,
+            }
+          : next;
       }
-      return {
+      const next = {
         planComments: [...state.planComments, { id: state.planNextCommentId, lineRange, text: trimmed }],
         planNextCommentId: state.planNextCommentId + 1,
       };
+      return sharedComposer
+        ? {
+            ...next,
+            planFocus: "preview" as const,
+            planCommentRange: null,
+            planEditingCommentId: null,
+            composerDraft: state.planStashedDraft ?? state.composerDraft,
+            planStashedDraft: null,
+          }
+        : next;
     }),
   removePlanComment: (id) =>
     set((state) => ({ planComments: state.planComments.filter((comment) => comment.id !== id) })),
@@ -495,7 +559,7 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
         const outcome: TurnOutcome = /cancel/i.test(stop)
           ? { kind: "cancelled" }
           : /fail|error/i.test(stop) || raw.error != null
-            ? { kind: "failed", error: typeof raw.error === "string" ? raw.error : undefined }
+            ? { kind: "failed", error: typeof raw.error === "string" ? normalizeError(raw.error) : undefined }
             : { kind: "completed" };
         const finished = finishStreamingBlocks(blocks);
         blocks = appendTurnMarker(

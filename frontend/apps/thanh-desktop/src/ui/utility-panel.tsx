@@ -12,6 +12,7 @@ import {
   type ReviewSnapshot,
   type WorkspaceEntry,
 } from "../acp/workspace";
+import { normalizeError } from "../acp/errors";
 import { GIT_HEAD_CHANGED_EVENT, useArtifactStore } from "../state/artifacts";
 import { useActivityStore } from "../state/activity";
 import { ActivityPanel } from "./activity/activity-panel";
@@ -131,7 +132,7 @@ function ReviewView() {
         setSelectedPath((current) => current && next.files.some((file) => file.path === current) ? current : next.files[0]?.path ?? null);
       })
       .catch((reason: unknown) => {
-        if (!cancelled) setError(errorMessage(reason));
+        if (!cancelled) setError(normalizeError(reason, "Could not load the workspace review"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -224,7 +225,7 @@ function FilesView() {
       const next = await listWorkspace(path);
       setEntries((current) => ({ ...current, [path]: next }));
     } catch (reason: unknown) {
-      setError(errorMessage(reason));
+      setError(normalizeError(reason, "Could not load the workspace files"));
     } finally {
       setLoadingPaths((current) => { const next = new Set(current); next.delete(path); return next; });
     }
@@ -239,7 +240,7 @@ function FilesView() {
       const next = await readWorkspaceFile(path);
       if (request === previewRequest.current) setPreview(next);
     } catch (reason: unknown) {
-      if (request === previewRequest.current) setError(errorMessage(reason));
+      if (request === previewRequest.current) setError(normalizeError(reason, "Could not read that file"));
     }
   }
 
@@ -290,8 +291,4 @@ function FilePreviewView({ preview }: { preview: FilePreview }) {
       {!preview.binary && <button type="button" className="text-button" onClick={() => void openWorkspacePath(preview.path).catch(() => undefined)}><FolderOpen size={12} /> Open externally</button>}
     </div>
   );
-}
-
-function errorMessage(reason: unknown): string {
-  return reason instanceof Error ? reason.message : String(reason);
 }

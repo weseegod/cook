@@ -1,6 +1,7 @@
 import { Check, Download, LoaderCircle, Sparkles } from "lucide-react";
 import { useState } from "react";
 import type { ModelSummary } from "../../acp/xai";
+import { normalizeError } from "../../acp/errors";
 import { probeProviderModels, upsertModel, type ProviderSummary } from "../../acp/providers";
 import { Dialog, DialogActions } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
@@ -78,14 +79,14 @@ export function ModelDialog({
       const result = await probeProviderModels(provider.id);
       if (!result.ok) {
         setCandidates([]);
-        setError(result.error ?? `${provider.name ?? provider.id} did not list any models`);
+        setError(normalizeError(result.error, `${provider.name ?? provider.id} did not list any models`));
         return;
       }
       const known = new Set(existingIds);
       setCandidates(result.models.filter((entry) => !known.has(entry.id)).slice(0, CANDIDATE_LIMIT));
     } catch (caught) {
       setCandidates([]);
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not load provider models"));
     } finally {
       setProbing(false);
     }
@@ -114,7 +115,7 @@ export function ModelDialog({
       });
       onSaved();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : String(caught));
+      setError(normalizeError(caught, "Could not save the model"));
     } finally {
       setBusy(false);
     }

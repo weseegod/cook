@@ -1,6 +1,7 @@
 import { History, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { acpClient } from "../../acp/client";
+import { normalizeError } from "../../acp/errors";
 import { executeRewind, listRewindPoints, type RewindPoint } from "../../acp/session-ops";
 import { useSessionStore } from "../../state/session";
 import { Dialog, DialogActions } from "../components/dialog";
@@ -38,7 +39,7 @@ export function RewindDialog() {
         if (next.length === 0) setError("No rewind points yet. Send a prompt first.");
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setError(normalizeError(err, "Could not load rewind points"));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -62,13 +63,13 @@ export function RewindDialog() {
         force: turnRunning,
       });
       if (!result.success) {
-        setError(result.error ?? "Rewind failed.");
+        setError(normalizeError(result.error, "Rewind failed."));
         return;
       }
       await acpClient.loadSession(sessionId);
       setOpen(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(normalizeError(err, "Could not rewind the conversation"));
     } finally {
       setBusy(false);
     }

@@ -31,8 +31,9 @@ export function InteractionModal() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [pending]);
 
-  // Plan review verdicts live only on PlanDialog — no second inline card.
+  // Plan review verdicts live on the transcript pane + shared composer — no second inline card.
   if (!pending || pending.kind === "plan") return null;
+  const activePending = pending;
 
   function choose(question: string, label: string, multi: boolean) {
     setAnswers((current) => {
@@ -60,10 +61,10 @@ export function InteractionModal() {
   }
 
   async function pickSpecial(id: string) {
-    if (pending.kind === "trust") return acpClient.answerQuestion({ outcome: id });
-    if (pending.kind === "elicit") {
+    if (activePending.kind === "trust") return acpClient.answerQuestion({ outcome: id });
+    if (activePending.kind === "elicit") {
       if (id === "decline") return acpClient.answerQuestion({ outcome: "decline" });
-      const url = pending.raw.url;
+      const url = activePending.raw.url;
       if (typeof url === "string" && url.startsWith("http")) window.open(url, "_blank", "noopener");
       const content = elicitContent(fields, values);
       return acpClient.answerQuestion({ outcome: "accept", ...(Object.keys(content).length ? { content } : {}) });

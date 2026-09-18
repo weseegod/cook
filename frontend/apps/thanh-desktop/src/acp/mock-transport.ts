@@ -369,9 +369,6 @@ function providerList() {
       apiBackend: provider.apiBackend,
       hasKey: Boolean(provider.apiKey) || Boolean(provider.apiKeyPresent) || Boolean(provider.envKey),
       inlineKey: Boolean(provider.apiKey) || Boolean(provider.apiKeyPresent),
-      keyHint: provider.apiKey && provider.apiKey.length >= 12
-        ? `${provider.apiKey.slice(0, 4)}…${provider.apiKey.slice(-4)}`
-        : null,
       envKey: provider.envKey ?? null,
       envKeyPresent: false,
       extraHeaders: presetFor(provider.id)?.extraHeaders ?? {},

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { openPath } from "../../acp/host";
+import { normalizeError } from "../../acp/errors";
 import { useArtifactStore } from "../../state/artifacts";
 import { useSessionStore, type ToolBlock } from "../../state/session";
 import { Markdown } from "./markdown";
@@ -223,6 +224,6 @@ function normalizedStatus(status: string): string {
 }
 
 function reportError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = normalizeError(error, "The tool action failed");
   useSessionStore.getState().set({ error: message });
 }

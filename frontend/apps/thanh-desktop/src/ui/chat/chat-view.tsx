@@ -35,40 +35,42 @@ export function ChatView() {
   return (
     <div className="chat-layout">
       <TodoOverlay />
-      <div
-        className="transcript"
-        ref={transcriptRef}
-        onScroll={(event) => {
-          const element = event.currentTarget;
-          stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
-        }}
-      >
-        {blocks.length === 0 ? (
-          <div className="empty-chat">
-            <div className="empty-chat-mark"><Bot size={22} /></div>
-            <h2>{sessionId ? "What should we work on?" : "Start a conversation"}</h2>
-            <p>Ask about this codebase, request a change, or type <kbd>/</kbd> for commands.</p>
-            <div className="empty-chat-actions">
-              <button type="button" onClick={() => setComposerDraft("Review this project and suggest the next step.")}><FileCode2 size={14} /> Review this project</button>
-              <button type="button" onClick={() => setComposerDraft("Explain the architecture of this project.")}><Brain size={14} /> Explain the architecture</button>
+      <div className="chat-main">
+        <div
+          className="transcript"
+          ref={transcriptRef}
+          onScroll={(event) => {
+            const element = event.currentTarget;
+            stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 96;
+          }}
+        >
+          {blocks.length === 0 ? (
+            <div className="empty-chat">
+              <div className="empty-chat-mark"><Bot size={22} /></div>
+              <h2>{sessionId ? "What should we work on?" : "Start a conversation"}</h2>
+              <p>Ask about this codebase, request a change, or type <kbd>/</kbd> for commands.</p>
+              <div className="empty-chat-actions">
+                <button type="button" onClick={() => setComposerDraft("Review this project and suggest the next step.")}><FileCode2 size={14} /> Review this project</button>
+                <button type="button" onClick={() => setComposerDraft("Explain the architecture of this project.")}><Brain size={14} /> Explain the architecture</button>
+              </div>
             </div>
-          </div>
-        ) : projected.map((block) => {
-          if (block.type === "message") {
-            if (block.role === "thought") return <ThinkingRow key={block.id} block={block} />;
-            return <Message key={`${block.role}-${block.id}`} block={block} />;
-          }
-          if (block.type === "verb-group") return <VerbGroupRow key={block.id} tools={block.tools} />;
-          if (block.type === "tool") return <ToolRow key={block.id} tool={block.tool} />;
-          if (block.type === "session-event") return <SessionEvent key={block.id} block={block} />;
-          return null;
-        })}
+          ) : projected.map((block) => {
+            if (block.type === "message") {
+              if (block.role === "thought") return <ThinkingRow key={block.id} block={block} />;
+              return <Message key={`${block.role}-${block.id}`} block={block} />;
+            }
+            if (block.type === "verb-group") return <VerbGroupRow key={block.id} tools={block.tools} />;
+            if (block.type === "tool") return <ToolRow key={block.id} tool={block.tool} />;
+            if (block.type === "session-event") return <SessionEvent key={block.id} block={block} />;
+            return null;
+          })}
+        </div>
+        <PlanDialog />
       </div>
       <TurnStatus />
       {error && <ChatError error={error} connection={connection} cwd={cwd} />}
       {notice && <div className="notice-banner" data-testid="notice-banner">{notice}</div>}
       <PromptSlot />
-      <PlanDialog />
       <RewindDialog />
       <RecapDialog />
     </div>

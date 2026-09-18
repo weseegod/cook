@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { acpClient } from "../acp/client";
+import { normalizeError } from "../acp/errors";
 import { pickFolder, request } from "../acp/host";
 import { shouldShowConnectProvider } from "../acp/provider-presets";
 import { listProviders } from "../acp/providers";
@@ -155,7 +156,12 @@ export function AppShell() {
 
   async function chooseWorkspace() {
     const selected = await pickFolder();
-    if (selected) await acpClient.connect(selected);
+    if (!selected) return;
+    try {
+      await acpClient.connect(selected);
+    } catch {
+      // The client has already placed the normalized message in the session store.
+    }
   }
 
   function runPaletteAction(item: PaletteItem) {
@@ -166,7 +172,7 @@ export function AppShell() {
     // Map ids `C-sess-fork` / `/fork` and `/export`.
     if (item.action === "fork-session") return void acpClient.forkSession().catch((error) => {
       useSessionStore.getState().set({
-        error: error instanceof Error ? error.message : String(error),
+        error: normalizeError(error, "Could not fork the conversation"),
       });
     });
     if (item.action === "export-transcript") return exportActiveTranscript();

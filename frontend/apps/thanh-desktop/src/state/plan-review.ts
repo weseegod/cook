@@ -16,6 +16,9 @@ export interface PlanComment {
   text: string;
 }
 
+/** The shared focus state for the plan viewer and the live prompt widget. */
+export type PlanFocus = "preview" | "prompt" | "commenting";
+
 export interface PlanReview {
   /** The `planContent` the shell sent; `null` when it parked with no body. */
   body: string | null;
@@ -29,6 +32,14 @@ export interface PlanSlice {
   planNextCommentId: number;
   /** Popup visibility. Hiding is never a verdict: the parked review stays parked. */
   planDialogOpen: boolean;
+  /** Which side of the shared TUI-style prompt currently owns keyboard input. */
+  planFocus: PlanFocus;
+  /** The selected 1-based source-line range while a comment is being composed. */
+  planCommentRange: [number, number] | null;
+  /** Existing comment being edited, or `null` when composing a new comment. */
+  planEditingCommentId: number | null;
+  /** The ordinary composer draft saved while the shared prompt is composing a comment. */
+  planStashedDraft: string | null;
 }
 
 export const emptyPlanSlice: PlanSlice = {
@@ -36,6 +47,10 @@ export const emptyPlanSlice: PlanSlice = {
   planComments: [],
   planNextCommentId: 0,
   planDialogOpen: false,
+  planFocus: "preview",
+  planCommentRange: null,
+  planEditingCommentId: null,
+  planStashedDraft: null,
 };
 
 /** `LineViewerState::open_markdown_content` renders nothing for a whitespace-only body. */

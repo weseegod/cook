@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
 import { clearQueuedPrompts, removeQueuedPrompt } from "../../acp/turn-ops";
+import { normalizeError } from "../../acp/errors";
 import { useSessionStore } from "../../state/session";
 
 /** Compact queue list above the composer (`x.ai/queue/changed` + C-q-rm / C-q-cl). */
@@ -44,6 +45,6 @@ export function QueueBar() {
 
 function reportError(error: unknown) {
   useSessionStore.getState().set({
-    error: error instanceof Error ? error.message : String(error),
+    error: normalizeError(error, "Could not update the prompt queue"),
   });
 }

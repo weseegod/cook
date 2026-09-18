@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw, ShieldCheck } from "lucide-react";
 import { hooksAction, listHooks } from "../../acp/settings-ext";
+import { normalizeError } from "../../acp/errors";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, LoadingState } from "../components/async-state";
@@ -100,7 +101,7 @@ export function HooksPanel({ connected }: { connected: boolean }) {
         <p className="settings-note security-warning">{loadErrors.join("; ")}</p>
       )}
       {action.isError && (
-        <p className="settings-note">{action.error instanceof Error ? action.error.message : String(action.error)}</p>
+        <p className="settings-note">{normalizeError(action.error, "The hook action failed")}</p>
       )}
       <h3>Event log</h3>
       {hookEvents.length === 0 ? (

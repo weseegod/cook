@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CheckCircle2, Cpu, LoaderCircle, LogIn, Pencil, Plus, RefreshCw, Star, Trash2, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { isVisibleProviderPreset, mergedProviderStatus, PROVIDER_PRESETS } from "../../acp/provider-presets";
+import { normalizeError } from "../../acp/errors";
 import { request } from "../../acp/host";
 import {
   deleteProvider,
@@ -103,7 +104,7 @@ export function ProvidersPanel({
       refresh();
     },
     onError: (error, request_) => {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = normalizeError(error, "Could not save the provider");
       if (message.includes("would dangle")) {
         setDeletingProvider(null);
         setNotice(null);
@@ -121,7 +122,7 @@ export function ProvidersPanel({
       setNotice(null);
       refresh();
     },
-    onError: (error) => setNotice(error instanceof Error ? error.message : String(error)),
+    onError: (error) => setNotice(normalizeError(error, "Could not load providers")),
   });
 
   const list = providers.data?.providers ?? [];
@@ -252,7 +253,6 @@ export function ProvidersPanel({
                     <strong>{label}</strong>
                     <span className={`badge badge-${status.tone}`}>
                       {status.tone === "ok" ? <CheckCircle2 size={12} /> : <TriangleAlert size={12} />} {status.label}
-                      {row.provider?.keyHint ? ` · ${row.provider.keyHint}` : ""}
                     </span>
                   </div>
                   <small>{row.oauthConnected ? row.oauthEmail ?? "Thanh account" : row.provider?.baseUrl ?? row.preset.baseUrl ?? "Provider endpoint"}</small>

@@ -9,6 +9,9 @@ import type {
 } from "@agentclientprotocol/sdk";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { buildPromptParts, imageAttachEnabled, optimisticImages, type Attachment } from "./attachments";
+import { normalizeError } from "./errors";
+import { PromptCorrelation, SessionEventDedupe } from "./session-events";
+import { desktopTrace } from "./trace";
 import { buildInitializeRequest, CAPABILITIES } from "./handshake";
 import { dispatchNotification } from "./notifications";
 import { dispatchReverseRequest, elicitInteraction } from "./reverse";
@@ -37,11 +40,18 @@ export class ThanhAcpClient {
   private unlisten: UnlistenFn[] = [];
   private stopping = false;
   private restartCount = 0;
+  private restartInFlight: Promise<void> | null = null;
   private startup: Promise<void> | null = null;
   private pendingPromptRequests = 0;
+  private readonly sessionEvents = new SessionEventDedupe();
+  private readonly promptCorrelation = new PromptCorrelation();
   private inboundMessages: Promise<void> = Promise.resolve();
 
   async connect(cwd: string): Promise<void> {
+    const connection = useSessionStore.getState().connection;
+    if (this.cwd === cwd && (connection === "starting" || connection === "ready" || connection === "reconnecting")) {
+      return;
+    }
     if (this.startup) return this.startup;
     this.startup = this.connectInner(cwd).finally(() => {
       this.startup = null;
@@ -66,8 +76,9 @@ export class ThanhAcpClient {
       rememberWorkspace(info.cwd);
       await this.refreshCatalogs();
     } catch (error) {
-      store.set({ connection: "error", error: errorMessage(error) });
-      throw error;
+      const safeError = new Error(normalizeError(error, "Could not connect to Thanh"));
+      store.set({ connection: "error", error: safeError.message });
+      throw safeError;
     }
   }
 
@@ -80,7 +91,7 @@ export class ThanhAcpClient {
       await onStatus((status) => {
         if (status.state === "exited" && !this.stopping) void this.restartAfterCrash(status.detail);
       }),
-      await onLog((line) => console.debug(`[thanh agent] ${line}`)),
+      await onLog((line) => desktopTrace("agent.stderr", normalizeError(line))),
     );
   }
 
@@ -108,6 +119,7 @@ export class ThanhAcpClient {
       },
     };
     const response = await request<NewSessionResponse>("session/new", params);
+    this.promptCorrelation.clear();
     useSessionStore.getState().resetConversation(response.sessionId);
     // `session/new` reports the catalog it spawned with, which is authoritative for this session.
     const catalog = modelCatalog((response as unknown as { models?: unknown }).models);
@@ -136,6 +148,7 @@ export class ThanhAcpClient {
       },
     };
     useSessionStore.getState().resetConversation(sessionId);
+    this.promptCorrelation.clear();
     const response = await request<{ models?: unknown }>("session/load", params);
     await this.inboundMessages;
     useSessionStore.getState().finishTurn();
@@ -216,17 +229,23 @@ export class ThanhAcpClient {
   }
 
   private async dispatchPrompt(sessionId: string, parts: PromptRequest["prompt"]): Promise<PromptResponse> {
-    const params: PromptRequest = { sessionId, prompt: parts };
+    const promptId = crypto.randomUUID();
+    this.promptCorrelation.begin(promptId);
+    const params: PromptRequest = {
+      sessionId,
+      prompt: parts,
+      _meta: { promptId },
+    };
     this.pendingPromptRequests += 1;
     useSessionStore.getState().set({ turnRunning: true, error: null });
     let outcome: TurnOutcome = { kind: "completed" };
     try {
       return await request<PromptResponse>("session/prompt", params);
     } catch (error) {
-      const message = errorMessage(error);
+      const message = normalizeError(error, "The request failed");
       outcome = { kind: "failed", error: message };
       useSessionStore.getState().set({ error: message });
-      throw error;
+      throw new Error(message);
     } finally {
       await this.inboundMessages;
       // N-pcomplete may already have finalized; finishTurn is idempotent on the marker.
@@ -234,6 +253,7 @@ export class ThanhAcpClient {
         useSessionStore.getState().finishTurn(outcome);
       }
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
+      this.promptCorrelation.end(promptId);
       const store = useSessionStore.getState();
       store.set({
         turnRunning: this.pendingPromptRequests > 0,
@@ -276,7 +296,7 @@ export class ThanhAcpClient {
     try {
       await setDefaultModelOnAgent(modelId);
     } catch (error) {
-      const detail = errorMessage(error);
+      const detail = normalizeError(error, "The request failed");
       useSessionStore.getState().set({
         notice: /-32601|method not found/i.test(detail)
           ? "This agent build cannot write [models] default, so the choice applies to this window only."
@@ -406,6 +426,9 @@ export class ThanhAcpClient {
         || method === "x.ai/session_notification"
         || method === "x.ai/session/update"
       ) {
+        if (!this.promptCorrelation.accept(params)) continue;
+        const rail: "acp" | "xai" = method === "session/update" ? "acp" : "xai";
+        if (!this.sessionEvents.accept(rail, params)) continue;
         const update = params.update as Record<string, unknown> | undefined;
         if (update?.sessionUpdate === "available_commands_update") {
           useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
@@ -422,13 +445,32 @@ export class ThanhAcpClient {
         ) {
           await dispatchNotification(message, sessionKind, update ?? {});
         }
-        updates.push(params as unknown as SessionNotification);
+        if (this.shouldApplyToActiveSession(params, update)) {
+          updates.push(params as unknown as SessionNotification);
+        }
         continue;
       }
       flushUpdates();
+      if (method === "x.ai/session/prompt_complete" && !this.promptCorrelation.accept(params)) continue;
       await this.handleMessage(message, method, params);
     }
     flushUpdates();
+  }
+
+  private shouldApplyToActiveSession(
+    params: Record<string, unknown>,
+    update: Record<string, unknown> | undefined,
+  ): boolean {
+    const sessionId = typeof (params.sessionId ?? params.session_id) === "string"
+      ? String(params.sessionId ?? params.session_id)
+      : null;
+    const activeSessionId = useSessionStore.getState().sessionId;
+    if (!sessionId || !activeSessionId || sessionId === activeSessionId) return true;
+    const kind = typeof update?.sessionUpdate === "string" ? update.sessionUpdate : "";
+    return kind === "subagent_spawned"
+      || kind === "subagent_progress"
+      || kind === "subagent_finished"
+      || kind === "workflow_updated";
   }
 
   private async handleMessage(
@@ -451,17 +493,28 @@ export class ThanhAcpClient {
   }
 
   private async restartAfterCrash(detail?: string) {
+    if (this.restartInFlight) return this.restartInFlight;
+    this.restartInFlight = this.restartAfterCrashInner(detail).finally(() => {
+      this.restartInFlight = null;
+    });
+    return this.restartInFlight;
+  }
+
+  private async restartAfterCrashInner(detail?: string) {
+    const safeDetail = detail ? normalizeError(detail, "Agent process exited") : null;
     if (!this.cwd || this.restartCount >= 3) {
-      useSessionStore.getState().set({ connection: "error", error: detail ?? "Agent process exited" });
+      useSessionStore.getState().set({ connection: "error", error: safeDetail ?? "Agent process exited" });
       return;
     }
     this.restartCount += 1;
     const store = useSessionStore.getState();
     const sessionId = store.sessionId;
-    store.set({ connection: "reconnecting", error: detail ?? null });
+    store.set({ connection: "reconnecting", error: safeDetail });
     await new Promise((resolve) => window.setTimeout(resolve, 300 * 2 ** (this.restartCount - 1)));
     try {
+      this.stopping = true;
       const info = await startProcess(this.cwd);
+      this.stopping = false;
       await this.initialize();
       if (sessionId) {
         const defaultModel = localStorage.getItem("thanh.defaultModel");
@@ -480,7 +533,8 @@ export class ThanhAcpClient {
       this.restartCount = 0;
       store.set({ connection: "ready", binaryVersion: info.binaryVersion, error: null });
     } catch (error) {
-      void this.restartAfterCrash(errorMessage(error));
+      this.stopping = false;
+      void this.restartAfterCrash(normalizeError(error, "The Thanh agent could not restart"));
     }
   }
 
@@ -488,6 +542,7 @@ export class ThanhAcpClient {
     this.stopping = true;
     if (useSessionStore.getState().turnRunning) await this.cancel();
     await stopProcess();
+    this.promptCorrelation.clear();
     for (const dispose of this.unlisten.splice(0)) dispose();
   }
 }
@@ -528,9 +583,6 @@ function applyInitializeFeatureGates(response: InitializeResponse): void {
   }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function rememberWorkspace(cwd: string) {
   const previous = JSON.parse(localStorage.getItem("thanh.recentWorkspaces") ?? "[]") as string[];

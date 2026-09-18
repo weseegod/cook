@@ -5,9 +5,8 @@
 //! path and the mock/test fallback (`desktopCommand`). Do not dual-write the same
 //! edit through both in Tauri.
 //!
-//! Secrets stay in this native process. The renderer receives only credential presence and a
-//! first-four/last-four hint. Every write is a locked, atomic TOML edit so comments and unrelated
-//! upstream fields survive.
+//! Secrets stay in this native process. The renderer receives only credential presence. Every
+//! write is a locked, atomic TOML edit so comments and unrelated upstream fields survive.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -40,7 +39,6 @@ struct ProviderView {
     api_backend: Option<String>,
     has_key: bool,
     inline_key: bool,
-    key_hint: Option<String>,
     env_key: Option<String>,
     env_key_present: bool,
     extra_headers: std::collections::BTreeMap<String, String>,
@@ -185,7 +183,9 @@ pub fn probe_target(id: &str) -> Result<ProbeTarget, String> {
             headers
                 .iter()
                 .filter_map(|(name, value)| {
-                    value.as_str().map(|value| (name.to_owned(), value.to_owned()))
+                    value
+                        .as_str()
+                        .map(|value| (name.to_owned(), value.to_owned()))
                 })
                 .collect()
         })
@@ -238,10 +238,13 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
         .content_length()
         .is_some_and(|length| length > PROBE_BODY_LIMIT)
     {
-        return Ok(failure("/models answered with more data than this probe accepts".to_owned()));
+        return Ok(failure(
+            "/models answered with more data than this probe accepts".to_owned(),
+        ));
     }
     let body = response.bytes().await.map_err(|error| error.to_string())?;
-    let body = String::from_utf8_lossy(&body[..body.len().min(PROBE_BODY_LIMIT as usize)]).into_owned();
+    let body =
+        String::from_utf8_lossy(&body[..body.len().min(PROBE_BODY_LIMIT as usize)]).into_owned();
     if !status.is_success() {
         return Ok(failure(format!(
             "HTTP {}: {}",
@@ -251,7 +254,11 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
     }
     let parsed: serde_json::Value = match serde_json::from_str(&body) {
         Ok(value) => value,
-        Err(error) => return Ok(failure(format!("could not parse the /models response: {error}"))),
+        Err(error) => {
+            return Ok(failure(format!(
+                "could not parse the /models response: {error}"
+            )))
+        }
     };
     let models = parse_models_listing(&parsed);
     if models.is_empty() {
@@ -386,7 +393,6 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
                 api_backend: string(table, "api_backend"),
                 has_key: inline.is_some() || env_key.is_some(),
                 inline_key: inline.is_some(),
-                key_hint: inline.as_deref().and_then(key_hint),
                 env_key,
                 env_key_present,
                 extra_headers,
@@ -785,15 +791,6 @@ fn integer(table: &Table, key: &str) -> Option<i64> {
     table.get(key).and_then(Item::as_integer)
 }
 
-fn key_hint(key: &str) -> Option<String> {
-    let chars: Vec<char> = key.chars().collect();
-    (chars.len() >= 12).then(|| {
-        let first: String = chars[..4].iter().collect();
-        let last: String = chars[chars.len() - 4..].iter().collect();
-        format!("{first}…{last}")
-    })
-}
-
 /// The app home (`$THANH_HOME`, else `~/.thanh`). Shared with the agent host so Settings and the
 /// filesystem surface can never disagree about which tree belongs to the agent.
 pub(crate) fn config_home() -> PathBuf {
@@ -804,6 +801,21 @@ pub(crate) fn config_home() -> PathBuf {
 }
 fn config_path() -> PathBuf {
     config_home().join("config.toml")
+}
+
+/// Validate the shared config before spawning the agent. The agent otherwise reports the
+/// parse error on stderr and exits, which is much harder for a desktop user to diagnose.
+pub(crate) fn validate_config() -> Result<(), String> {
+    let path = config_path();
+    match fs::read_to_string(&path) {
+        Ok(source) if source.trim().is_empty() => Ok(()),
+        Ok(source) => source
+            .parse::<DocumentMut>()
+            .map(|_| ())
+            .map_err(|error| format!("{} is invalid TOML: {error}", path.display())),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("could not read {}: {error}", path.display())),
+    }
 }
 
 fn load() -> Result<DocumentMut, String> {
@@ -892,7 +904,7 @@ fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table,
 
 #[cfg(test)]
 mod tests {
-    use super::{child_table, key_hint, list_document, parse_models_listing, redact};
+    use super::{child_table, list_document, parse_models_listing, redact, write_model};
 
     #[test]
     fn models_listing_reads_openai_and_top_provider_limits() {
@@ -935,15 +947,6 @@ mod tests {
     }
 
     #[test]
-    fn key_hint_is_first_four_last_four_only() {
-        assert_eq!(
-            key_hint("sk-live-0123456789abcd").as_deref(),
-            Some("sk-l…abcd")
-        );
-        assert_eq!(key_hint("short"), None);
-    }
-
-    #[test]
     fn config_snapshot_detects_inline_keys_and_model_limits() {
         let source = r#"
 [models]
@@ -971,13 +974,64 @@ api_backend = "chat_completions"
             .expect("provider");
         assert!(provider.has_key);
         assert!(provider.inline_key);
-        assert_eq!(provider.key_hint.as_deref(), Some("sk-l…abcd"));
         assert_eq!(provider.models[0].context_window, Some(300_000));
         assert_eq!(provider.models[0].max_completion_tokens, Some(64_000));
         assert_eq!(
             snapshot.default_model.as_deref(),
             Some("deepseek/deepseek-flash")
         );
+    }
+
+    #[test]
+    fn model_limit_upsert_is_provider_agnostic() {
+        let mut doc = toml_edit::DocumentMut::new();
+        let models = child_table(&mut doc, "model").expect("model table");
+        let input = vec!["text".to_owned()];
+        write_model(
+            models,
+            "local/spark25",
+            "spark25",
+            Some("local"),
+            Some("Spark 2.5 (Local)"),
+            &input,
+            Some(32_768),
+            Some(2_000),
+        )
+        .expect("write local model");
+
+        let snapshot = list_document(&doc);
+        let model = snapshot
+            .models
+            .iter()
+            .find(|model| model.id == "local/spark25")
+            .expect("local model");
+        assert_eq!(model.provider, "local");
+        assert_eq!(model.context_window, Some(32_768));
+        assert_eq!(model.max_completion_tokens, Some(2_000));
+
+        // Editing the same model uses the identical path and updates both limits.
+        let models = doc
+            .get_mut("model")
+            .and_then(toml_edit::Item::as_table_mut)
+            .expect("model table");
+        write_model(
+            models,
+            "local/spark25",
+            "spark25",
+            Some("local"),
+            Some("Spark 2.5 (Local)"),
+            &input,
+            Some(65_536),
+            Some(4_096),
+        )
+        .expect("edit local model");
+        let edited = list_document(&doc)
+            .models
+            .into_iter()
+            .find(|model| model.id == "local/spark25")
+            .expect("edited local model");
+        assert_eq!(edited.context_window, Some(65_536));
+        assert_eq!(edited.max_completion_tokens, Some(4_096));
     }
 
     #[test]
