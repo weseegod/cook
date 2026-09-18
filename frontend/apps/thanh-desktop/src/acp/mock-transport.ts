@@ -144,6 +144,8 @@ export interface MockState {
   reply: string;
   /** Optional exact ACP update sequence for transcript and visual tests. */
   promptUpdates: MockPromptUpdate[];
+  /** Optional replayed session/update sequence emitted by `session/load` for long-session tests. */
+  historyUpdates: MockPromptUpdate[];
   /** Hold the prompt response open so visual tests can inspect live activity. */
   promptDelayMs: number;
   /** Agent-side project instruction files keyed by path. */
@@ -219,6 +221,7 @@ function defaultState(): MockState {
     setDefaultUnsupported: false,
     reply: "Mock assistant reply.",
     promptUpdates: [],
+    historyUpdates: [],
     promptDelayMs: 0,
     files: {},
     pickedFiles: [],
@@ -533,7 +536,10 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       });
     }
     case "session/load":
-      notify("session/update", availableCommandsUpdate());
+      notify("session/update", { ...availableCommandsUpdate(), sessionId: String(p.sessionId ?? sessionId) });
+      for (const update of state.historyUpdates) {
+        notify("session/update", { sessionId: String(p.sessionId ?? sessionId), update });
+      }
       return respond({ modes: null, models: modelCatalog() });
     case "session/prompt": {
       // A real turn reports its context through `x.ai/session/info`, never an ACP `usage_update`.
@@ -542,6 +548,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
         turns: state.context.turns + 1,
         messageCount: state.context.messageCount + 2,
       };
+      const promptSessionId = String(p.sessionId ?? sessionId);
       const updates = state.promptUpdates.length > 0
         ? state.promptUpdates
         : splitReply(state.reply).map((text) => ({
@@ -553,10 +560,10 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
         // how the shell ships goal updates; everything else is a plain `session/update`.
         const envelope = update as { notify?: string; update?: Record<string, unknown> };
         if (typeof envelope.notify === "string" && envelope.update) {
-          notify(`_${envelope.notify}`, { sessionId, update: envelope.update });
+          notify(`_${envelope.notify}`, { sessionId: promptSessionId, update: envelope.update });
           continue;
         }
-        notify("session/update", { sessionId, update });
+        notify("session/update", { sessionId: promptSessionId, update });
       }
       if (state.promptDelayMs > 0) await new Promise((resolve) => window.setTimeout(resolve, state.promptDelayMs));
       return respond({ stopReason: "end_turn" });

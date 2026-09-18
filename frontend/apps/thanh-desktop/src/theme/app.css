@@ -1462,6 +1462,43 @@ body { font-size: 14px; }
 
 /* Long tool output and pasted code must wrap inside the chat viewport. */
 .transcript { min-width: 0; max-width: 100%; overflow-x: hidden; }
+.transcript-shell { position: relative; display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; overflow: hidden; }
+.transcript-shell > .transcript { min-width: 0; min-height: 0; flex: 1 1 auto; }
+.transcript-row { min-width: 0; max-width: 100%; }
+.transcript-spacer { flex: 0 0 auto; width: 100%; pointer-events: none; }
+.transcript-nav-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 2px;
+  background: var(--panel);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.transcript-nav-button:hover, .transcript-nav-button:focus-visible { border-color: var(--border-strong); color: var(--text-soft); background: var(--panel-elevated); }
+.jump-latest { position: absolute; left: 50%; bottom: 14px; z-index: 2; transform: translateX(-50%); }
+.sticky-prompt {
+  position: absolute;
+  top: 4px;
+  right: max(24px, calc((100% - var(--content-max)) / 2));
+  left: max(24px, calc((100% - var(--content-max)) / 2));
+  z-index: 1;
+  min-width: 0;
+  padding: 7px 10px 4px;
+  border-bottom: 1px solid var(--border);
+  border-left: 2px solid var(--accent);
+  background: var(--panel);
+  color: var(--text);
+  pointer-events: none;
+}
+.sticky-prompt-text { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-height: 1.45; font-size: 12px; }
+.sticky-prompt .response-top { position: static; display: grid; margin: 3px auto 0; pointer-events: auto; }
 .message, .verb-group, .tool-row, .thinking-row, .session-event, .tool-card { min-width: 0; max-width: 100%; }
 .message-body, .markdown, .tool-detail { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .markdown pre, .shiki-wrap pre, .tool-detail > pre { max-width: 100%; overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }

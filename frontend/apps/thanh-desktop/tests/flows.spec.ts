@@ -253,6 +253,69 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(input).toHaveValue("typed while the response is running");
   });
 
+  test("windows a long history and returns from scrolled-up mode", async ({ page }) => {
+    const historyUpdates = Array.from({ length: 100 }, (_, index) => [
+      {
+        sessionUpdate: "user_message_chunk",
+        messageId: `history-user-${index}`,
+        content: { type: "text", text: `Long prompt ${index}` },
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: `Long response ${index}` },
+      },
+    ]).flat();
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      sessions: [{ id: "long-history", title: "Long transcript", cwd: "/tmp/thanh-demo", updatedAt: "2026-09-18T10:00:00Z" }],
+      historyUpdates,
+    });
+
+    const session = page.locator(".session-open").filter({ hasText: "Long transcript" });
+    await expect(session).toBeVisible();
+    await session.click();
+    await expect(page.getByText("Long response 99")).toBeVisible();
+    await expect.poll(() => page.locator(".transcript-row").count()).toBeLessThan(64);
+
+    const transcript = page.locator(".transcript");
+    await transcript.evaluate((node) => {
+      node.scrollTop = 0;
+      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await expect(page.getByText("Long response 99")).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Jump to latest" }).click();
+    await expect(page.getByText("Long response 99")).toBeVisible();
+    await expect.poll(async () => transcript.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(96);
+
+    await transcript.evaluate((node) => {
+      node.scrollTop = Math.min(900, node.scrollHeight / 2);
+      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(page.getByTestId("sticky-prompt")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Jump to start of response" })).toBeVisible();
+
+    const input = page.getByTestId("composer-input");
+    await input.focus();
+    const beforePageUp = await transcript.evaluate((node) => node.scrollTop);
+    await input.press("PageUp");
+    await expect.poll(() => transcript.evaluate((node) => node.scrollTop)).toBeLessThan(beforePageUp);
+    const beforePageDown = await transcript.evaluate((node) => node.scrollTop);
+    await input.press("PageDown");
+    await expect.poll(() => transcript.evaluate((node) => node.scrollTop)).toBeGreaterThan(beforePageDown);
+
+    await transcript.evaluate((node) => {
+      node.scrollTop = 0;
+      node.dispatchEvent(new Event("scroll", { bubbles: true }));
+    });
+    await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+    await input.fill("send from scrolled history");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+    await expect.poll(async () => transcript.evaluate((node) => node.scrollHeight - node.scrollTop - node.clientHeight)).toBeLessThanOrEqual(96);
+  });
+
   test("adds a model through the add-model popup", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);

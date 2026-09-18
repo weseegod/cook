@@ -22,6 +22,7 @@ import { hasViewablePlan, viewPlan } from "./view-plan";
 import { openRecap } from "./view-recap";
 import { openRewind } from "./view-rewind";
 import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "./export-transcript";
+import { useTranscriptActions } from "./transcript-context";
 
 /** The window's own half of the slash commands; the agent's half arrives as an ordinary prompt. */
 const SLASH_HOST: SlashCommandHost = {
@@ -86,6 +87,7 @@ export function Composer() {
   const cancelRewindEnabled = useCatalogStore((state) => state.cancelRewindEnabled);
   const sessionRecapEnabled = useCatalogStore((state) => state.sessionRecapEnabled);
   const { id: selectedModel, known: selectedModelKnown } = useModelSelection();
+  const { enableFollow, pageScroll } = useTranscriptActions();
   // The name is still being typed while no space follows it; after that the text is arguments.
   const slashPrefix = /^\/([^\s/\\]*)(\s[\s\S]*)?$/.exec(text.trimStart());
   const typedName = slashPrefix ? slashPrefix[1].toLowerCase() : null;
@@ -220,6 +222,7 @@ export function Composer() {
       // The TUI's park-time prompt: `Enter` sends the typed text as `request changes`, an empty
       // line does nothing (`empty_enter_on_revise_prompt_does_not_approve`).
       if (!prompt && planComments.length === 0) return;
+      enableFollow();
       setBusy(true);
       setText("");
       setMenuClosed(false);
@@ -260,6 +263,7 @@ export function Composer() {
       return;
     }
     const command = slash && attachments.length === 0 ? clientCommand(slash.name) : undefined;
+    enableFollow();
     setBusy(true);
     const sending = attachments;
     setText("");
@@ -293,6 +297,7 @@ export function Composer() {
   async function interject() {
     const prompt = text.trim();
     if (busy || blocked || !turnRunning || !sessionId || (!prompt && attachments.length === 0)) return;
+    enableFollow();
     setBusy(true);
     const sending = text;
     setText("");
@@ -354,6 +359,11 @@ export function Composer() {
         accept(matching[Math.min(active, matching.length - 1)]);
         return;
       }
+    }
+    if (matching.length === 0 && (event.key === "PageUp" || event.key === "PageDown")) {
+      event.preventDefault();
+      pageScroll(event.key === "PageUp" ? "up" : "down");
+      return;
     }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
