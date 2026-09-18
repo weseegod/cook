@@ -23,10 +23,14 @@ The product runs in four modes, all sharing one agent runtime:
   [Agent Client Protocol](https://agentclientprotocol.com) server used by
   editor integrations.
 - **Desktop ACP client** — Tauri 2 + React application in
-  `frontend/apps/thanh-desktop/`. Architecture:
-  [`docs/desktop-app.md`](docs/desktop-app.md). Production plan:
-  [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md). Same agent
-  process as the TUI; does not reimplement tools or sampling.
+  `frontend/apps/thanh-desktop/`. Architecture contract:
+  [`docs/desktop-app.md`](docs/desktop-app.md). Client-layering fold:
+  [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md).
+  Production plan: [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md).
+  Wire status: [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md).
+  Same agent process as the TUI; does not reimplement tools or sampling.
+  `src-tauri` is a leaf crate (empty `[workspace]`); do not add it to the
+  generated root workspace or path-depend on shell/pager/tools.
 
 System context (arrows = data flow):
 
@@ -430,7 +434,7 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
 | Read the TUI presentation catalog (screens, realtime, timers, tool rows, folds, cards) | [`docs/tui-presentation.md`](docs/tui-presentation.md) |
-| Change / start the desktop app | `frontend/apps/thanh-desktop/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md). Keep model/tool execution in `thanh agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). |
+| Change / start the desktop app | `frontend/apps/thanh-desktop/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); client fold [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md); wire map [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md). Keep model/tool execution in `thanh agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). Do not add `src-tauri` to the Cargo workspace. |
 
 ### Agent / shell
 
@@ -507,9 +511,12 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
   in `xai-grok-pager`.
 - Build/release: `build.sh`, `scripts/publish_release.sh` (local builds, no
   CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
-  `docs/desktop-app.md` + `docs/desktop-app-implement.md` (desktop ACP
-  client; code in `frontend/apps/thanh-desktop/`, not a workspace crate).
-- Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D).
+  `docs/desktop-app.md` + `docs/desktop-app-client-implement.md` +
+  `docs/desktop-app-implement.md` + `docs/desktop-tui-capability-map.md`
+  (desktop ACP client; code in `frontend/apps/thanh-desktop/`, not a
+  workspace crate).
+- Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D;
+  Desktop is a fork-owned leaf).
 
 ### Conventions every engineer should know
 
@@ -526,6 +533,12 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
 - The tool RPC stack is branded "xAI Computer Hub" (`xai-computer-hub-*`,
   `xai-tool-*`): the unified `Tool` trait and dispatch live in
   `xai-tool-runtime`, wire types in `xai-tool-protocol`.
+- **Desktop is a leaf ACP client.** Architecture:
+  [`docs/desktop-app.md`](docs/desktop-app.md). Never link
+  `frontend/apps/thanh-desktop/src-tauri` into the generated root workspace,
+  never path-depend it on `xai-grok-shell` / pager / tools, and never patch
+  those crates for Desktop-only behaviour (BYOK `providers/*` and
+  `clientIdentifier: grok-desktop` are the existing exceptions).
 
 ---
 

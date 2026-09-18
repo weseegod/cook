@@ -38,7 +38,9 @@ separate from `~/.grok`, so both can run side by side.
 |-------|------|
 | How the repo is organized (for engineers/AI) | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Desktop app architecture | [`docs/desktop-app.md`](docs/desktop-app.md) |
+| Desktop client-layering fold (honesty, registry) | [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md) |
 | Desktop production plan (providers, Claude Desktop–class) | [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md) |
+| Desktop ↔ TUI capability map | [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md) |
 | BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
 | Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
 | Restore core surfaces after a sync (implement + test) | [`docs/post-merge-core-fix.md`](docs/post-merge-core-fix.md) |

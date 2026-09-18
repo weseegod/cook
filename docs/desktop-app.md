@@ -3,17 +3,25 @@
 Thanh Desktop is a **chat-first ACP client** for the existing `thanh` agent.
 It does not reimplement sampling, tools, or session storage.
 
-**Code:** `frontend/apps/thanh-desktop/` (Tauri 2 + React, shipped as v1).  
-**Agent:** `thanh agent stdio` (`xai-grok-shell` / `MvpAgent`).  
+This file is the **architecture source of truth**: product boundary, process
+model, capability honesty, inbound routing, and host roles. Live wire status
+(which methods the running app actually speaks) lives in the capability map,
+not here.
+
+**Code:** `frontend/apps/thanh-desktop/` (Tauri 2 + React, shipped as v1).
+**Agent:** `thanh agent stdio` (`xai-grok-shell` / `MvpAgent`).
 **Home:** `~/.thanh`, shared with the CLI.
 
-Production work (providers, Claude Desktop–class features, packaging) lives in
-[`docs/desktop-app-implement.md`](desktop-app-implement.md). BYOK TOML:
-[`docs/byok-models.md`](byok-models.md). Runtime map: [`ARCHITECTURE.md`](../ARCHITECTURE.md).
-TUI presentation (screens, realtime, timers, tool rows — source of truth to copy, not §5.4):
-[`docs/tui-presentation.md`](tui-presentation.md).
-Method-level TUI ↔ Desktop protocol map (ACP, `x.ai/*`, tools, slash, MCP):
-[`docs/desktop-tui-capability-map.md`](desktop-tui-capability-map.md).
+| Doc | Role |
+|---|---|
+| This file | Architecture contract |
+| [`desktop-tui-capability-map.md`](desktop-tui-capability-map.md) | Method-level TUI ↔ Desktop status (cite row ids) |
+| [`desktop-app-client-implement.md`](desktop-app-client-implement.md) | Fold live client onto this contract (honesty, registry, host roles) |
+| [`desktop-app-implement.md`](desktop-app-implement.md) | Production product work (providers, Claude Desktop–class, packaging) |
+| [`tui-presentation.md`](tui-presentation.md) | How the TUI paints — Desktop copies this, does not invent chrome |
+| [`byok-models.md`](byok-models.md) | BYOK TOML |
+| [`ARCHITECTURE.md`](../ARCHITECTURE.md) | Repo runtime map |
+| [`UPSTREAM-MERGE.md`](../UPSTREAM-MERGE.md) | Desktop is a fork-owned leaf |
 
 ---
 
@@ -30,7 +38,8 @@ Desktop is a presentation client, not an IDE and not a second agent.
 
 Upstream Grok Build already used this shape (`frontend/apps/grok-desktop`,
 `clientIdentifier: grok-desktop`). This fork does not ship that tree. Thanh
-Desktop is a new app on the **same ACP contract**.
+Desktop is a new app on the **same ACP contract**. If upstream lands
+`grok-desktop`, do not rename this tree; cherry-pick protocol patterns.
 
 ---
 
@@ -48,10 +57,13 @@ Desktop is a new app on the **same ACP contract**.
 
 `src-tauri` is **not** a member of the generated root Cargo workspace. It has
 an empty `[workspace]` so `cargo` in that directory does not join the 93-crate
-tree.
+tree. Never add a path dependency on `xai-grok-shell`, pager, or tools.
 
 Electron remains an escape hatch only if WebKitGTK fails streaming or a future
 xterm embed. Native GUI (egui/GPUI) would invent a third markdown stack.
+In-process agent, leader-socket attach, and WASM-sharing the pager reducer
+are rejected: they either join the workspace or add a second compile target
+for no user value.
 
 ---
 
@@ -66,9 +78,10 @@ xterm embed. Native GUI (egui/GPUI) would invent a third markdown stack.
 │  │  chat · sessions · settings │                                │
 │  │  permissions · diffs · mcp  │   ┌─────────────────────────┐  │
 │  └─────────────────────────────┘   │ Rust host (src-tauri)   │  │
+│                                    │  (1) ACP stdio mux      │  │
+│                                    │  (2) secret TOML writer │  │
+│                                    │  (3) read-only workspace│  │
 │                                    │  window · dialog        │  │
-│                                    │  spawn/kill sidecar     │  │
-│                                    │  ACP stdio mux          │  │
 │                                    │  updater · deep link    │  │
 │                                    └────────────┬────────────┘  │
 └─────────────────────────────────────────────────┼───────────────┘
@@ -80,7 +93,6 @@ xterm embed. Native GUI (egui/GPUI) would invent a third markdown stack.
                                    │ xai-grok-shell · MvpAgent    │
                                    │ clientIdentifier:            │
                                    │   grok-desktop               │
-                                   │   (alias thanh-desktop)      │
                                    └──────────────┬───────────────┘
                                                   │
                                    ~/.thanh  (config, auth, sessions,
@@ -91,271 +103,285 @@ xterm embed. Native GUI (egui/GPUI) would invent a third markdown stack.
 
 1. Resolve binary: `THANH_BIN` → `~/.thanh/bin/thanh` → bundled sidecar (stable).
 2. Major-version gate against `xai-grok-version`.
-3. Spawn `thanh agent stdio` with the workspace cwd.
-4. `initialize` **once per agent process**.
+3. Spawn `thanh agent stdio` with the workspace cwd. Pin `GROK_HOME` to the
+   same directory Settings writes (`THANH_HOME` if set).
+4. `initialize` **once per agent process**, from the capabilities table (§5.1).
 5. `session/new` or `session/load` per conversation.
 6. Crash → host restart + client `session/load` replay.
 7. Quit → cancel in-flight turn, kill the child process group.
 
-v1: one window ↔ one agent process.
+v1: one window ↔ one agent process. Multi-conversation is `session/new` /
+`session/load` on that process. Do not spawn N agents. Leader attach is out
+unless TUI and Desktop must share one live agent.
 
 ---
 
 ## 4. Invariants
 
-**Forbidden**
+### 4.1 Forbidden
 
 - Calling the LLM or tools from React or from a Tauri command.
 - Workspace FS via `@tauri-apps/plugin-fs` except folder pick / reveal-in-finder.
 - A second session store. Canonical records stay `events.jsonl` + agent SQLite.
-- A `config.toml` writer in the renderer. The renderer holds no credentials: it
-  hands the typed credential to the Rust host, which owns the write, or lets the
-  agent write through `x.ai/providers/*`.
+- A `config.toml` writer in the renderer. The renderer holds no credentials.
+- Advertising a capability the host+renderer cannot honour (class C).
+- `-32601` on an unknown reverse **request** the client did not advertise
+  (class A). See §5.5.
+- Dual-writing `config.toml` in production (host upsert **and**
+  `x.ai/providers/upsert` for the same edit).
+- Linking `src-tauri` into the root Cargo workspace.
+- Patching `xai-grok-shell` / pager for Desktop-only behaviour, except the
+  existing BYOK `providers/*` layer and the upstream `grok-desktop`
+  `clientIdentifier`.
 
-**Allowed in the Rust host**
+### 4.2 Capability honesty
 
-- Spawn/restart the sidecar, stdio, JSON-RPC id map, notification coalescing.
-- Native folder dialog, notifications, window state, app updater, OIDC deep link.
-- Locked, atomic `~/.thanh/config.toml` edits for providers and models
-  (`provider_config.rs`), and the credential-carrying `/models` probe.
+`initialize` is a function of a single capabilities table. A cap is `true`
+only when both of these hold:
 
-Unknown `x.ai/*` methods: log and ignore. Never crash the host.
+1. The matching reverse method or notification is implemented (or hosted
+   natively, for `fs/*`).
+2. A test asserts advertised keys ⊆ implemented handlers.
+
+| Cap | Contract | Until |
+|---|---|---|
+| `fs.readTextFile` / `writeTextFile` | `true` | host implements, cwd + sessions-root allow-path |
+| `terminal` | `false` | a real PTY exists (map `H-term`) |
+| `plan` | `{}` | already honoured |
+| `_meta["x.ai/folderTrust"].interactive` | `true` | reverse `x.ai/folder_trust/request` is implemented |
+| `_meta.mcpApps` | `false` | `H-mcp` + `R-sdk` both exist |
+| `x.ai/incrementalBashOutput`, `hunkTracker`, `bashOutputNoColor`, `gitHeadChanged`, `statusLine`, `userMessageEcho`, client `x.ai/hooks` | advertise only when the matching notif/reverse is consumed | map §1.1 |
+
+Do not register SDK MCP (`session/new` `_meta["x.ai/mcp/servers"]`) until
+`x.ai/mcp/sdk_call` is implemented. Keep `mcpServers: []` until then; agent-
+hosted servers still attach via `x.ai/mcp/*`.
+
+Live code still sends `terminal: true` and `mcpApps: true`. That is a
+documented lie (map `H-term`, `H-mcp`), not this contract. Fold in
+[`desktop-app-client-implement.md`](desktop-app-client-implement.md).
+
+### 4.3 Host roles (three, isolated)
+
+| Role | Code | Allowed | Forbidden |
+|---|---|---|---|
+| **ACP mux** | `acp_host.rs` | Spawn/kill sidecar, JSON-RPC id map, notification coalescing, native reverse `fs/*`, future real PTY | Stub a method while the cap is advertised |
+| **Secret-bearing TOML writer** | `provider_config.rs` | Locked, atomic `~/.thanh/config.toml` edits; credential-carrying `/models` probe; redacted DTOs to the renderer | Echo full keys to the WebView |
+| **Read-only workspace sidecar** | `workspace.rs` | Git review vs `HEAD`, file tree/preview, native open; paths confined to the workspace root | Write, commit, LSP, growing into a git GUI |
+
+The TOML writer is the **only production Desktop write path** for
+`[model_providers.*]` / `[model.*]`. Agent `x.ai/providers/*` is the CLI/TUI
+path and the mock/test fallback (`desktopCommand`). A later credential-proxy
+(renderer → host injects the key into ACP params → agent writes) is optional
+if the two schemas drift; it is not required to scale the client.
+
+The workspace sidecar is a Claude-Desktop-like “right tools” panel, not ACP.
+Git mutation, if ever needed, goes through `x.ai/git/*`.
+
+Other host duties that stay: native folder/file dialog, window state, app
+updater, OIDC deep link.
 
 ---
 
 ## 5. ACP contract
 
+Method-level inventory (every TUI ACP / `x.ai/*` / tool / slash / MCP row and
+its live Desktop status) is
+[`desktop-tui-capability-map.md`](desktop-tui-capability-map.md). Do not
+duplicate its tables here. Production and client-layering PRs cite map row
+ids (`H-term`, `R-sdk`, `N-mcp-tools`, …).
+
 ### 5.1 `initialize`
+
+Contract (honest):
 
 ```json
 {
   "protocolVersion": "1",
   "clientCapabilities": {
     "fs": { "readTextFile": true, "writeTextFile": true },
-    "terminal": true
+    "terminal": false,
+    "plan": {}
   },
-  "clientInfo": { "name": "Thanh Desktop" },
+  "clientInfo": { "name": "Thanh Desktop", "title": "Thanh Desktop" },
   "_meta": {
     "clientIdentifier": "grok-desktop",
     "clientType": "grok_desktop",
-    "mcpApps": true
+    "mcpApps": false,
+    "bufferingSettings": { "minDelayMs": 16, "maxDelayMs": 64, "maxBytes": 65536 }
   }
 }
 ```
 
-`grok-desktop` maps to `ClientType::Desktop` in
-`xai-grok-workspace` (`permission/types.rs`). The client sends that identifier
-as-is, so the agent needs no fork-side alias: permission prompts, MCP apps, and
-folder trust all come from the upstream mapping.
+`clientCapabilities._meta["x.ai/folderTrust"] = { interactive: true }` is
+set because Desktop implements the reverse round-trip.
 
-`terminal: true` is advertised even when the UI stubs PTY, so the agent can
-emit terminal methods.
+`grok-desktop` maps to `ClientType::Desktop` in `xai-grok-workspace`
+(`permission/types.rs`). Send it verbatim so the agent needs no fork-side
+alias.
+
+Consume `InitializeResponse.meta` (`availableCommands`, `sessionRecap`,
+`cancelRewind`, `defaultAuthMethodId`, `x.ai/mcp/sdk`). Do not advertise
+`mcpApps` because the agent echoes `x.ai/mcp/sdk: true`.
+
+`wireMethod` prefixes C→A `x.ai/*` as `_x.ai/…` (`host.ts`). That envelope
+(map class E) is already handled; do not “fix” it twice.
 
 ### 5.2 Standard ACP
 
 | Direction | Methods |
 |---|---|
-| Client → Agent | `initialize`, `authenticate`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/set_model` |
-| Agent → Client | `session/update`, `session/request_permission`, `fs/read_text_file`, `fs/write_text_file`, terminal create/output, `x.ai/session_notification` |
+| Client → Agent | `initialize`, `authenticate`, `session/new`, `session/load`, `session/prompt`, `session/cancel`, `session/set_model`, `session/set_mode` |
+| Agent → Client | `session/update`, `session/request_permission`, `fs/read_text_file`, `fs/write_text_file`, `x.ai/session_notification` |
+| Agent → Client, **not advertised** | `terminal/*` until a real PTY exists |
 
-`session/update` reasons are reduced by the same path as `x.ai/session_notification`, because both
-carry `{ sessionId, update }`: the extension envelope is how the shell ships what ACP has no slot
-for, goal orchestration state (`sessionUpdate: "goal_updated"`) above all. An unknown reason is
-ignored, never rendered.
+`session/update` and `x.ai/session_notification` both carry
+`{ sessionId, update }`. The extension envelope is how the shell ships what
+ACP has no slot for (`goal_updated` above all). An unknown `sessionUpdate`
+tag is ignored, never rendered as a row.
 
 Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
 to the session cwd plus one allow-path: the agent's own session store
 (`$THANH_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.thanh/sessions`).
-Without it plan mode cannot write `<session>/plan.md`, which lives outside every
-workspace.
+Without it plan mode cannot write `<session>/plan.md`, which lives outside
+every workspace. That allow-path is load-bearing.
 
 ### 5.3 `x.ai/*` groups
 
-Method-level inventory of every TUI ACP / `x.ai/*` / tool / slash / MCP row
-and its live Desktop status lives in
-[`docs/desktop-tui-capability-map.md`](desktop-tui-capability-map.md). That
-file is the source of truth. Do not duplicate its tables here.
+See the capability map. Agent dispatch remains
+`mvp_agent/acp_agent.rs` and `xai-grok-mcp/src/wire.rs`.
 
-Agent dispatch remains `mvp_agent/acp_agent.rs` and
-`xai-grok-mcp/src/wire.rs`; the map was harvested from those plus the pager
-handlers and Desktop `handleMessage` / `handle_host_request`. Production work
-cites map row ids (`H-term`, `R-sdk`, `N-mcp-tools`, …) instead of inventing
-method names — see [`desktop-app-implement.md`](desktop-app-implement.md).
+### 5.4 Three-layer inbound router
 
-### 5.4 Transcript presentation
+Every A→C message takes one of these layers. There is no catch-all
+`-32601` for “I have not heard of this.”
 
-Desktop copies the TUI's presentation, catalogued in
-[`docs/tui-presentation.md`](tui-presentation.md). That catalog is the source of
-truth for the strings, clocks, folds, and flows below; this section only maps
-them onto the Desktop client. Do not invent chrome it does not list.
+```
+Agent stdout
+  → (pending C→A response?)  complete the renderer promise; stop
+  → Layer 1  Host native intercept
+             fs/read_text_file, fs/write_text_file
+             terminal/* only if advertised (today: not advertised)
+  → Layer 2  Renderer reverse-request registry (message has id)
+             known interaction → typed UI
+             known but unimplemented → typed decline / { ok: false }
+             unknown, not advertised → typed decline / { ok: false }
+             unknown + advertised-required → -32601
+  → Layer 3  Notification registry (no id, or notif methods)
+             known → catalog / session / settings store
+             unknown → log, never crash, never -32601
+```
 
-**Streaming machine (catalog §4).** A turn-scoped tracker, not a blinking caret.
-`current_agent_msg` / `current_thinking` / `pending_tools` live in
-`src/state/session.ts`:
+Each registry entry cites a map row id. A protocol PR is one row + one test,
+not a new `if` in `handleMessage`.
 
-- adjacent `AgentMessageChunk` updates append to the active assistant segment;
-  clients must not require a `messageId`, because standard ACP chunks do not
-  guarantee one;
-- `AgentThoughtChunk` opens a thinking row (`Thinking…`); the first non-empty
-  agent text freezes it into `Thought for 1.2s`. Thinking uses its own
-  formatter, not the turn formatter;
-- a tool call closes the thinking and prose segments, updates in place by
-  `toolCallId`, and leaves sibling pending tools alone;
-- prompt completion, cancellation, load completion, or failure finalizes every
-  running segment before syntax highlighting and Mermaid rendering, and writes
-  the turn marker `Worked for {duration}` (catalog §7.3);
-- replay and live updates use the same reducer so loading a session cannot
-  produce a different transcript shape.
+Live code is still a linear if-chain in `client.ts` `handleMessage` plus
+`acp_host.rs` `handle_host_request` (fs + terminal stub). Fold in
+[`desktop-app-client-implement.md`](desktop-app-client-implement.md).
 
-**Live activity is the turn-status row (catalog §6).** One row between the
-scrollback and the prompt slot, hidden while idle. It carries the spinner
-(braille, ~7.5 fps), the activity label with the exact strings from catalog §6.2
-(`Thinking…`, `Responding…`, `Run {cmd}`, `Search {query}`, `Fetch {url}`,
-`Waiting for response…`, `Cancelling…`, …), a timer for the current phase on the
-left, and the turn timer, optional `⇣12k` tokens and `[stop]` on the right.
-Phase and turn clocks use `format_duration` (catalog §5.1) — no spaces, e.g.
-`0.5s`, `32s`, `1m20s`, `1h2m`. A permission, question, or trust card swaps the
-spinner for the pulsing `◆` and replaces the prompt slot; the composer stays
-mounted but hidden so a draft and its attachments survive. A parked plan review
-keeps the composer (placeholder `Request changes…`) and uses `◆` on turn-status
-instead of an inline card. Question time is netted out of the turn clock. Live
-activity is never duplicated into the header.
+### 5.5 Reverse-request policy (class A)
 
-**Status bar (catalog §3.3).** The Chat column header is cwd on the left (short
-path + full-path tooltip) and chips on the right: `plan` (while a review is
-parked or already answered), Goal, context `8.5K/1.0M` (with `/compact`), and
-the Desktop-only tools toggle. Idle is an empty turn-status (height 0), not a
-Ready/Processing label in the header.
+Reverse requests block the agent until the client answers.
 
-**Plans (catalog §3.3, §9.4, §9.8).** The agent's todo tool emits an ACP
-`Plan`. Entries stay in session state for GoalDetail `Progress:` and an optional
-todo overlay (`src/ui/chat/plan-list.tsx` / `todo-overlay.tsx`) — pending `□`,
-in progress `▶` (bold, amber), completed `✓` (green), cancelled `✗` (red,
-struck through). ACP has no cancelled status, so a cancelled entry arrives as
-`completed` plus `_meta.cancelled`, which the renderer reads. A newer `Plan`
-update replaces the entries in place. The todo overlay is **not** auto-shown on
-Plan updates (catalog §9.8); toggle it from the header checklist control while
-entries exist, or from palette / `/view-plan` when there is no parked `plan.md`
-review. Plan entries are **not** transcript rows.
-
-The plan review itself is the popup (`src/ui/chat/plan-dialog.tsx`), auto-opened
-on `x.ai/exit_plan_mode`. Reopen it from the header's `plan` chip, or with
-`/view-plan` (aliases `/show-plan`, `/plan-view`) and its `View plan` palette
-entry when a review exists. The body is rendered as the TUI's line viewer holds
-it (`src/ui/chat/plan-lines.tsx`): one row per source line with its 1-based
-number, so a comment range is exact. The decision bar is a static footer below
-the scroll container, in the TUI's order and with its keys — `a approve` (or
-`approve w/ comments`), `g run as goal`, `s request changes`, `c comment` with a
-` N ●` badge, `y copy plan`, `q quit plan`. Approve, run as goal, request changes
-and quit plan exist only while the review is parked; after the decision the bar
-drops to comment / copy / send, so no button is a dead end. Verdicts live only
-on this bar — there is no second inline review card.
-
-Comments are line-anchored (`x.ai/exit_plan_mode` carries the whole `plan.md`;
-ACP `Plan` updates carry entries only, and this fork emits no `plan_kept`). Drag
-across lines — or click one — opens the comment box, `Enter` saves, `Enter` on a
-saved comment edits it and `x` deletes it. `s request changes` sends the pager's
-own format: `Proposed plan lines 3-4:` with the quoted lines, `Comment:`, and any
-freeform note as `Additional feedback:`. Hiding is not a verdict: the `−` control
-closes only the surface, the parked review stays parked, and the chip reopens it.
-That is why the popup shows a minimize dash rather than a close cross, and why
-the plan stays reachable for the rest of the session after a decision.
-
-While the review is parked, the composer stays live under the dialog
-(`PlanApprovalFocus::Prompt`): placeholder `Request changes…`, `Enter` on
-non-empty text sends `cancelled` with the typed note, and an empty line answers
-nothing. Every other interaction (permission / question / elicit / trust) still
-swaps the prompt slot out.
-
-**Goals (catalog §3.3, §6.2, §7.3).** Goal state arrives as
-`x.ai/session_notification` with `sessionUpdate: "goal_updated"` and lives in
-`src/state/goal.ts`, which mirrors the pager's `GoalDisplayState`: the same
-status/phase parsing (an unknown status reads as a resumable pause), the same
-chip labels, the same live elapsed and token accounting, and the same monotonic
-elapsed floor. The header shows the chip
-`[Goal: {label}]  {tokens} tokens  {elapsed}` with the TUI's spinner while
-active, a warning tone while paused and an error tone when failed or
-interrupted; clicking it opens the detail surface: status, `Budget:`/`Tokens:`
-with the budget bar, `Progress:` (the session's plan), the active subagent and
-its per-model tokens, the completion review, the last event, and the `/goal`
-hint. While `verifying_completion` is set the turn-status row reads
-`Verifying…` (it outranks stale streaming activity, as in the TUI). The
-transition into `complete` writes one `Goal complete in {duration} end-to-end.`
-row timed from the goal's own clock; `cleared` drops the chip, and a late update
-for the cleared goal id is dropped. Goal state is session-scoped: a new or
-loaded session starts with none.
-
-**Transcript rows (catalog §7).** Each block paints its own collapsed one-liner
-(`Read path`, `$ cmd`, `Edit path +N/-M`, `Message sent to …`). Tool rows do not
-show elapsed time — elapsed exists for stats, and only `SentMessage` surfaces it
-(expanded, ≥100 ms). Running rows use an animated accent bullet, not a per-row
-spinner. Expansion shows the body, diff, or output.
-
-**Verb-group folding (catalog §8).** Consecutive collapsed foldable tools
-(`File`, `Skill`, `Search`, `Dir`, `WebFetch`, `WebSearch`, `MemorySearch`,
-`IntegrationSearch`, `Subagent`) collapse under one aggregated header whose
-label rebuilds every frame: `Read 2 files, Searched 1 pattern`,
-`Reading 1 file, Searching 1 pattern`, `Read 3 files · 2 failed`. `Execute`,
-`Edit`, `UseTool`, `Message`, and `Other` keep their own rows.
-
-**Forbidden chrome.** Desktop must not add any of these, because the TUI does
-not have them: a pinned live-tool activity rail, per-tool elapsed on collapsed
-rows, in-transcript command rerun/Execute, a `Waiting…` row inside the
-transcript, a 1 s timer tick, `ProcessStatus` / Ready–Processing header copy,
-a `plan-banner`, an in-transcript plan card, an inline plan-review card, or a
-header duplicate of turn-status activity. Command output, assistant messages,
-paths, commands and queries expose copy actions; opening a path uses the native
-desktop opener.
-
-The visual language intentionally follows VS Code Dark Modern for density,
-typography, controls, focus states, and colors. This does not change the product
-boundary: Thanh Desktop remains chat-first and does not add an editor, LSP,
-debugger, or git workbench.
+1. **Known interaction** (`session/request_permission`, `x.ai/ask_user_question`,
+   `x.ai/exit_plan_mode`, `x.ai/mcp/elicit`, `x.ai/folder_trust/request`):
+   implement the UI, or answer a typed cancel/decline so the turn continues.
+2. **Unknown notifications**: log and ignore. Never `-32601` a notification.
+3. **Unknown requests** (`id` present): answer `{ ok: false }` or a typed
+   decline. **Do not `-32601`** unless the client advertised that capability
+   (or the agent marked the method required). `-32601` means “I claimed this
+   and I refuse it” (TUI `WaitForTerminalExit`), not “I never heard of this.”
+4. Do not register SDK MCP until `R-sdk` is implemented. Do not advertise
+   `terminal: true` until ACP `terminal/*` is real. Do not stamp
+   `_meta["x.ai/hooks"]` until `R-hook` is implemented.
 
 ---
 
-## 6. Layout
+## 6. Client layering
+
+Target renderer layout. Live tree is still the god-object (`client.ts` +
+`xai.ts` / `extensions.ts` / `providers.ts`); the client-implement doc is
+the move, not a rewrite of `ui/`.
 
 ```
 frontend/apps/thanh-desktop/
   src/
-    acp/          # host IPC, ThanhAcpClient, x.ai wrappers, ts-rs generated/
-    state/        # session transcript, catalogs
-    ui/           # app-shell, chat, permissions, sessions, settings, welcome
+    acp/
+      host.ts              # IPC + wireMethod (unchanged)
+      handshake.ts         # CAPABILITIES table + initialize / session meta
+      reverse/             # A→C requests, one file per method family
+      notifications/       # A→C notifs → catalog / session / settings stores
+      methods/             # C→A grouped (session, models, mcp, skills, memory, …)
+      client.ts            # lifecycle only: connect, crash-restart, dispatch
+    state/                 # transcript machine (session, goal, plan-review, catalog)
+    ui/                    # presentation; Chat UI rebuild is a separate track
     theme/
-  src-tauri/src/  # acp_host.rs, bin_resolve.rs — not a workspace crate
+  src-tauri/src/
+    acp_host.rs            # mux + fs only
+    provider_config.rs     # fork-owned secrets
+    workspace.rs           # read-only sidecar
+    bin_resolve.rs
   scripts/install.sh
 ```
 
-Announcements and updater tests target this path:
+Zustand holds the transcript; TanStack Query (or equivalent catalog store)
+holds MCP/skills/models lists. Catalogs must subscribe to the notification
+registry (`N-mcp-*`, `x.ai/models/update`, …) or they go stale (class B).
+
+Announcements and updater tests already target this path:
 
 - `crates/codegen/xai-grok-announcements/generate.sh`
 - `crates/codegen/xai-grok-update/tests/test_install_sh.rs`
 
 ---
 
-## 7. Key decisions
+## 7. Transcript presentation
+
+Desktop copies the TUI's presentation, catalogued in
+[`tui-presentation.md`](tui-presentation.md). That catalog is the source of
+truth for strings, clocks, folds, and flows. This architecture file does not
+duplicate them.
+
+The transcript machine lives in `src/state/session.ts` (`reduceTranscript` /
+`reduceNotifications`) plus `goal.ts` / `plan-review.ts`. Replay and live
+updates use the same reducer.
+
+**Forbidden chrome** (the TUI does not have these): a pinned live-tool
+activity rail, per-tool elapsed on collapsed rows, in-transcript command
+rerun/Execute, a `Waiting…` row inside the transcript, a 1 s timer tick,
+`ProcessStatus` / Ready–Processing header copy, a `plan-banner`, an
+in-transcript plan card, an inline plan-review card, or a header duplicate
+of turn-status activity.
+
+Visual language follows VS Code Dark Modern for density. That does not
+change the product boundary.
+
+---
+
+## 8. Key decisions
 
 1. Desktop is an ACP client. Reuse `thanh agent stdio` and `~/.thanh`.
 2. Tauri 2 + React + Vite + TypeScript.
 3. Chat-first, not an IDE.
-4. `clientIdentifier: grok-desktop` — upstream's desktop value, sent verbatim so
-   the agent needs no fork-side change.
+4. `clientIdentifier: grok-desktop` — upstream's desktop value, sent verbatim.
 5. Path `frontend/apps/thanh-desktop/` avoids colliding with upstream
-   `grok-desktop` if that tree is ever merged.
+   `grok-desktop`.
 6. `src-tauri` stays out of the Cargo workspace.
 7. Alpha requires the CLI binary; stable may bundle a sidecar. The app never
    overwrites `~/.thanh/bin/thanh`.
-8. Renderer does not merge `config.toml`.
-
-9. The right tools panel uses native, read-only workspace commands for Git
-   review and file browsing. Paths are resolved relative to the active workspace;
-   symlinks and traversal outside that root are rejected.
-9. This fork is BYOK: no xAI subscription required.
+8. Renderer does not merge `config.toml`. Host is the only production Desktop
+   writer; agent `x.ai/providers/*` is CLI/TUI + mock fallback.
+9. Never advertise a cap the client cannot honour. `terminal: false` until a
+   real PTY; `mcpApps: false` until SDK MCP + `sdk_call` exist.
+10. Scale the client with a method registry keyed to map row ids, not by
+    growing `handleMessage`.
+11. The right tools panel is a read-only host sidecar (Git review + file
+    browse). Symlinks and traversal outside the workspace root are rejected.
+12. This fork is BYOK: no xAI subscription required. Never call
+    `x.ai/setApiKey` for BYOK (map `A-setkey`).
 
 ---
 
-## 8. Dev loop
+## 9. Dev loop
 
 ```sh
 cd frontend/apps/thanh-desktop

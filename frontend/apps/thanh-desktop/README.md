@@ -5,8 +5,10 @@ Chat-first Tauri 2 + React ACP client for the existing Thanh agent. It runs
 tools from the renderer.
 
 Architecture: [`docs/desktop-app.md`](../../../docs/desktop-app.md).  
+Client-layering fold: [`docs/desktop-app-client-implement.md`](../../../docs/desktop-app-client-implement.md).  
 Production plan (providers, Claude Desktop–class features):
-[`docs/desktop-app-implement.md`](../../../docs/desktop-app-implement.md).
+[`docs/desktop-app-implement.md`](../../../docs/desktop-app-implement.md).  
+Wire map: [`docs/desktop-tui-capability-map.md`](../../../docs/desktop-tui-capability-map.md).
 
 ## Develop
 

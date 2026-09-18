@@ -2,7 +2,7 @@
 
 Source of truth for **how the current Thanh TUI looks and behaves**. This is a presentation map of `xai-grok-pager`, not a Desktop spec and not an agent-runtime spec.
 
-Desktop is a separate ACP client (`frontend/apps/thanh-desktop/`). Do not treat [`docs/desktop-app.md`](desktop-app.md) §5.4 as a description of the TUI: that section already invents chrome the TUI does not have (a pinned tool-activity rail, in-transcript command rerun). This catalog is what the TUI actually paints.
+Desktop is a separate ACP client (`frontend/apps/thanh-desktop/`). Architecture: [`desktop-app.md`](desktop-app.md) §7 (forbidden chrome + pointer here). This catalog is what the TUI actually paints — Desktop copies it and does not invent chrome.
 
 **Runtime map:** [`ARCHITECTURE.md`](../ARCHITECTURE.md).  
 **User-facing TUI docs:** `~/.thanh/docs/user-guide/` (shortcuts, status line, dashboard, plan mode, …).

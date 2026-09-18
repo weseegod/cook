@@ -1,6 +1,6 @@
 # Desktop ↔ TUI capability map
 
-Method-level inventory of what the TUI (pager + agent) actually uses, and the live Desktop status of each. This is the protocol track. Presentation (how a tool row *looks*) stays in [`tui-presentation.md`](tui-presentation.md). Architecture stays in [`desktop-app.md`](desktop-app.md). Production sequencing after this map: [`desktop-app-implement.md`](desktop-app-implement.md).
+Method-level inventory of what the TUI (pager + agent) actually uses, and the live Desktop status of each. This is the protocol track. Presentation (how a tool row *looks*) stays in [`tui-presentation.md`](tui-presentation.md). Architecture contract stays in [`desktop-app.md`](desktop-app.md). Folding the live client onto that contract: [`desktop-app-client-implement.md`](desktop-app-client-implement.md). Production sequencing after honesty/registry: [`desktop-app-implement.md`](desktop-app-implement.md).
 
 **This file does not implement any `gap` / `stub` row.**
 
@@ -12,7 +12,7 @@ Harvested 2026-09-18 from git `705f3572`. A string is in this map only if it app
 
 | Column | Meaning |
 |---|---|
-| Id | Stable row id for later PRs (`docs/desktop-app-implement.md` should cite these, not invent method names) |
+| Id | Stable row id for later PRs (`desktop-app-client-implement.md` and `desktop-app-implement.md` cite these, not invent method names) |
 | Wire | Exact method / `sessionUpdate` / `ToolKind` string |
 | Dir | `C→A` client request, `C→A notif`, `A→C` reverse request, `A→C notif`, or agent-internal |
 | TUI | File:function that handles it (pager or shell) |
@@ -58,8 +58,9 @@ Harvested 2026-09-18 from git `705f3572`. A string is in this map only if it app
 Related, do not merge:
 
 - [`tui-presentation.md`](tui-presentation.md) — how the TUI paints
-- [`desktop-app.md`](desktop-app.md) — Desktop architecture; §5.3 points here
-- [`desktop-app-implement.md`](desktop-app-implement.md) — production roadmap; cite row ids
+- [`desktop-app.md`](desktop-app.md) — Desktop architecture contract; §5.3 points here
+- [`desktop-app-client-implement.md`](desktop-app-client-implement.md) — honesty / reverse policy / notification registry fold; cite row ids
+- [`desktop-app-implement.md`](desktop-app-implement.md) — production roadmap; cite row ids; registry entry required
 
 ---
 
@@ -122,8 +123,8 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 
 | Id | Bug | Class | Fix (not in this work) |
 |---|---|---|---|
-| **H-term** | Desktop advertises `terminal: true` then stubs `terminal/*` with empty output and `exitCode: 0`. TUI default is `terminal: false`; if `--terminal`, it **rejects** `WaitForTerminalExit`. | C | Stop advertising `terminal: true` until a real PTY exists |
-| **H-mcp** | `mcpServers: []` and no `_meta["x.ai/mcp/servers"]`, while `mcpApps: true` and agent `x.ai/mcp/sdk: true`. | F / A | Do not advertise MCP-apps; never register SDK servers without `sdk_call` |
+| **H-term** | Desktop advertises `terminal: true` then stubs `terminal/*` with empty output and `exitCode: 0`. TUI default is `terminal: false`; if `--terminal`, it **rejects** `WaitForTerminalExit`. | C | Stop advertising `terminal: true` until a real PTY exists (client-implement **C1**) |
+| **H-mcp** | `mcpServers: []` and no `_meta["x.ai/mcp/servers"]`, while `mcpApps: true` and agent `x.ai/mcp/sdk: true`. | F / A | Do not advertise MCP-apps; never register SDK servers without `sdk_call` (client-implement **C1**) |
 
 ---
 
@@ -179,7 +180,9 @@ Standard ACP reverse (`session/request_permission`, `fs/*`, `terminal/*`) is §2
 | TUI | `tracing::warn` **and** `-32601` (`handle_ext_method` unknown arm). TUI does not advertise caps it cannot honour, so the agent should not send R-sdk / R-hook / `terminal/*`. | `_ => false`; envelope still `Ok(())` |
 | Desktop | `console.warn` **and** `-32601` `Unsupported method` (`client.ts` L429–432). Desktop **does** advertise `terminal: true` and `mcpApps: true`, so a `-32601` is worse than TUI’s. | `console.debug("Ignored ACP notification: …")` |
 
-**Policy (adopt in the next protocol PR, do not implement here):**
+**Policy (architecture [`desktop-app.md`](desktop-app.md) §5.5; fold in
+[`desktop-app-client-implement.md`](desktop-app-client-implement.md) **C2**,
+do not implement in the map PR):**
 
 1. Known interaction methods (R-ask, R-plan, R-elicit, R-trust): implement, or answer a **typed cancel/decline** so the turn continues.
 2. Unknown **notifications**: log and ignore (Desktop already does this). Do not `-32601` a notification.
@@ -750,11 +753,18 @@ Two channels:
 
 ## 17. After the map: implementation order (pointer only)
 
-Do not implement in the map PR. Cite row ids:
+Do not implement in the map PR. Cite row ids. The fold onto the architecture
+contract is sequenced in
+[`desktop-app-client-implement.md`](desktop-app-client-implement.md):
 
-1. **Stop class C and class A.** Honest `initialize` caps (H-term: `terminal: false`). Unknown reverse policy (§3.2). Implement R-sdk **only if** we send MCP SDK servers (H-mcp).
-2. **Consume the notifs Settings and Chat already need:** N-pcomplete, N-mcp-srv / N-mcp-tools / N-mcp-init / N-mcp-elic, N-queue, N-tdone.
-3. **Surfaces:** MEM-rew, TK-* compact panel, remaining slash `ok-prompt` vs `gap` (§9).
+1. **Stop class C and class A** (client-implement **C1–C2**). Honest
+   `initialize` caps (H-term: `terminal: false`). Unknown reverse policy
+   (§3.2). Implement R-sdk **only if** we send MCP SDK servers (H-mcp).
+2. **Consume the notifs Settings and Chat already need** (**C3**):
+   N-pcomplete, N-mcp-srv / N-mcp-tools / N-mcp-init / N-mcp-elic, N-queue,
+   N-tdone.
+3. **Surfaces** (production / later PRs, **registry entry required**):
+   MEM-rew, TK-* compact panel, remaining slash `ok-prompt` vs `gap` (§9).
 4. **Terminal:** real PTY **or** `terminal: false` (keep H-term closed).
 
 Chat UI rebuild stays a separate track (presentation). This map is the protocol track.

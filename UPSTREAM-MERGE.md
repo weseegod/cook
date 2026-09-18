@@ -27,6 +27,15 @@ Everything else is taken from upstream exactly as shipped.
   grok.com usage-limit / `/usage` / `/cost` / upgrade CTAs / announcements;
   product telemetry (`xai-grok-telemetry` — Mixpanel, Sentry, OTel). Hide at
   chokepoints after each sync — do not delete whole upstream modules.
+- **LEAF (fork-owned, no upstream equivalent today):** entire
+  `frontend/apps/thanh-desktop/` and the Desktop docs
+  (`docs/desktop-app.md`, `docs/desktop-app-client-implement.md`,
+  `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md`).
+  A sync must not rewrite this tree. Never patch `xai-grok-shell` / pager
+  for Desktop-only behaviour except existing BYOK `providers/*` and
+  `clientIdentifier: grok-desktop` (already upstream’s desktop value). If
+  upstream lands `grok-desktop`, do not rename; cherry-pick protocol
+  patterns into `thanh-desktop`.
 - **NEVER:** reimplement upstream features, redesign upstream UI, restructure
   upstream modules, or carry features that only this fork would maintain.
 
@@ -38,6 +47,9 @@ Everything else is taken from upstream exactly as shipped.
 3. A trim — hide/remove grok.com product chrome this fork doesn't need
    (billing, Privacy, usage limits, announcements, telemetry, …) — or a
    genuine bug fix that upstream hasn't accepted yet.
+4. Desktop client work under `frontend/apps/thanh-desktop/` (leaf; see
+   [`docs/desktop-app.md`](docs/desktop-app.md)). Not an upstream-crate
+   change.
 
 Anything else belongs upstream, not here.
 
@@ -252,6 +264,7 @@ These paths contain fork customizations. Preserve them during merges.
 | Category | Paths | Rule |
 |----------|-------|------|
 | Fork-only files | `build.sh`, `docs/byok-models.md`, `docs/post-merge-core-fix.md` | Never delete; keep fork version |
+| Desktop ACP client (leaf) | entire `frontend/apps/thanh-desktop/`; `docs/desktop-app.md`, `docs/desktop-app-client-implement.md`, `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md` | Never delete; never fold into an upstream `grok-desktop` tree. Do not patch shell/pager for Desktop-only behaviour. |
 | Fork release pipeline | `scripts/publish_release.sh` (self-build via `./build.sh`; **no CI** — `.github/` is removed) | Never delete; keep fork-owned |
 | Self-update feed (`thanh`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/thanh` releases), fork home `~/.thanh` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `thanh` managed binary name (`~/.thanh/bin/thanh`, assets `thanh-<ver>-<os>-<arch>`), `version-thanh.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
 | User home (`~/.thanh`) | `crates/codegen/xai-dirs/src/lib.rs` (`grok_home_in`) | **Single source of truth.** Upstream rewrites this file every sync (`GrokHomeSource`, `home_dir()`). Keep those APIs; re-apply `.join(".thanh")`. Never take upstream's `.join(".grok")` wholesale. |

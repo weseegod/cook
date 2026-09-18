@@ -11,6 +11,12 @@ Protocol coverage (what the TUI uses vs what Desktop actually speaks):
 [`docs/desktop-tui-capability-map.md`](desktop-tui-capability-map.md).
 P1/P2 items should cite map row ids, not invent new method names.
 
+Client-layering fold (honesty, reverse-request policy, notification
+registry) is **not this file**:
+[`docs/desktop-app-client-implement.md`](desktop-app-client-implement.md)
+(C1–C3). A production PR that adds a reverse method or notification
+**must add a registry entry**. Do not grow `handleMessage` if-chains.
+
 ---
 
 ## 1. Where v1 stands
@@ -49,8 +55,8 @@ and auto-update are missing.
 | `setApiKey` param mismatch | **Resolved by dropping the path.** Map row `A-setkey`. The desktop no longer calls `x.ai/setApiKey` for BYOK: the provider form hands the typed credential to the Rust host, which writes `[model_providers.<id>]`. The agent handler is upstream's, unchanged. |
 | No provider catalog | User must hand-edit `~/.thanh/config.toml` (see [`byok-models.md`](byok-models.md)). Claude Desktop does not make you write JSON to chat. Map §13 is the healthiest Desktop slice. |
 | Prompt is text-only | `session/prompt` sends `[{ type: "text" }]`. No image/file parts, so vision models and “drop a PDF” are dead. |
-| `mcpServers: []` on every `session/new` | Map `H-mcp` / class F. Relies on agent-side config discovery. SDK MCP must not be enabled until `R-sdk`. Connectors UI is still stale without `N-mcp-*` (class B). |
-| `terminal: true` + stub | Map `H-term` / class C. Host answers `terminal/*` with empty output and `exitCode: 0`. Until a real PTY exists, advertise `terminal: false`. |
+| `mcpServers: []` on every `session/new` | Map `H-mcp` / class F. Relies on agent-side config discovery. SDK MCP must not be enabled until `R-sdk`. Connectors UI is still stale without `N-mcp-*` (class B). Fold: client-implement **C1** (stop advertising `mcpApps`) then **C3** (`N-mcp-*`). |
+| `terminal: true` + stub | Map `H-term` / class C. Host answers `terminal/*` with empty output and `exitCode: 0`. Fold: client-implement **C1** (`terminal: false`, delete stub). |
 
 ---
 
@@ -203,11 +209,15 @@ Ship in layers. Each layer is independently reviewable.
 
 ### P1 — Connectors and project context (Claude Desktop core)
 
-8. **Connectors (MCP)**
+8. **Connectors (MCP)** — map `N-mcp-*`, `R-elicit`; **registry entry required**
+   (client-implement C3). Do not ship a connectors UI that only polls
+   `x.ai/mcp/list`.
    - List from agent (`x.ai/mcp/*` status + config).
    - Toggle enabled, add stdio (`command`, `args`, `env`) or HTTP URL.
-   - Surface `x.ai/mcp/elicit` in the existing interaction modal.
+   - Surface `x.ai/mcp/elicit` in the existing interaction modal; consume
+     `elicit_complete`.
    - Do not spawn MCP from Tauri; agent already does.
+   - Do not register SDK MCP until `R-sdk` exists (architecture §4.2).
 9. **Project instructions** — show/edit `AGENTS.md` / `.thanh` rules for the
    cwd (read/write through ACP fs or a small `x.ai/project/files` helper).
 10. **Memory** — settings panel + transcript “remember this”:
@@ -223,7 +233,10 @@ Ship in layers. Each layer is independently reviewable.
     for HTML preview (sandboxed iframe), image gen output, full-file diffs.
 14. **Tasks / subagents** — `x.ai/task/*` + `x.ai/subagent/*` cards (Claude
     Desktop doesn’t have this; Thanh should, because the agent does).
-15. **Rewind / compact** buttons wired to existing extensions.
+    Map §10 / `N-tdone` / `TK-*`. **Registry entry required** (C3 must land
+    first; a compact panel is enough, not a TUI dock clone).
+15. **Rewind / compact** buttons wired to existing extensions
+    (`MEM-rew`, `MEM-compact`). **Registry entry required.**
 16. **Theme:** system / dark / light. Map TUI tokens.
 17. **Desktop notifications** when a turn finishes in background.
 18. **Keyboard shortcuts sheet** (Claude-like `?`).
@@ -271,10 +284,10 @@ turns follow TUI grouping rather than rendering every ACP update as a card.
 | D3 | Provider UI + onboarding | Cards, key/env, test, default model, Settings → Providers | D2 |
 | D4 | Attachments | Paste/drop/paperclip → ACP parts; hide image attach on text-only models | — |
 | D5 | Command palette | Ctrl/K: sessions, models, commands, settings | D3 |
-| D6 | MCP connectors UI | List/toggle/add; elicit reuse | D2 |
+| D6 | MCP connectors UI | List/toggle/add; elicit reuse; **registry entries for `N-mcp-*` / `R-elicit`** | D2, client-implement C3 |
 | D7 | Memory + skills + project files | Settings surfaces | D2 |
 | D8 | Export + usage + shortcuts + theme | Polish | — |
-| D9 | Artifacts dock + tasks/subagents | Preview pane | — |
+| D9 | Artifacts dock + tasks/subagents | Preview pane; **registry entries for `N-tdone` / `TK-*`** | client-implement C3 |
 | D10 | Notifications + macOS dmg + updater | Ship | D3 |
 
 Do not start D10 until a new user can: install (or `pnpm tauri dev`), pick a
@@ -312,3 +325,6 @@ Do not add these to `xai-grok-pager-pty-harness`.
 - Cursor-like IDE
 - Claude.ai account sync / Anthropic OAuth as the only login
 - Bundling Chromium (Electron) unless WebKitGTK is a proven blocker
+- Client-layering / honesty / reverse-policy work — that is
+  [`desktop-app-client-implement.md`](desktop-app-client-implement.md), not
+  this product roadmap
