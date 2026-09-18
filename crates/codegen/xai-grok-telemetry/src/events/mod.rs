@@ -250,6 +250,11 @@ telemetry_event!(
     external = crate::external::schema::map_session_new
 );
 telemetry_event!(
+    SessionCreateFailed,
+    "session_create_failed",
+    external = crate::external::schema::map_session_create_failed
+);
+telemetry_event!(
     PromptSubmitted,
     "prompt_submitted",
     external = crate::external::schema::map_user_prompt
@@ -462,6 +467,10 @@ telemetry_event!(
 telemetry_event!(
     crate::memory_telemetry::MemoryV2GcCompleted,
     "memory_v2_gc_completed"
+);
+telemetry_event!(
+    crate::memory_telemetry::MemoryV2CarryoverCompleted,
+    "memory_v2_carryover_completed"
 );
 telemetry_event!(
     crate::memory_telemetry::MemoryV2Forgotten,

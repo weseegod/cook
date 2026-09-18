@@ -19,7 +19,7 @@ pub use bg_task::{BgTaskBlock, BgTaskKind};
 pub use btw::BtwBlock;
 pub use cancel_cause::CancelledBy;
 pub use context_info::ContextInfoBlock;
-pub use session_event::{MemoryCaptureBlock, SessionEvent, SessionEventBlock};
+pub use session_event::{MemoryCaptureBlock, MemoryCommandKind, SessionEvent, SessionEventBlock};
 pub use subagent::{SubagentBlock, SubagentBlockKind};
 pub use system::SystemMessageBlock;
 pub use thinking::ThinkingBlock;

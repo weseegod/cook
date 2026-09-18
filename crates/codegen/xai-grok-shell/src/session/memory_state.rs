@@ -131,6 +131,17 @@ pub(crate) struct SessionMemory {
     /// Storage layout resolved at spawn. Retained while disabled so re-enabling
     /// restores the pinned mode and any configured root override.
     pub configured_storage: Option<crate::session::memory::MemoryStorage>,
+    /// `--no-memory` / `GROK_MEMORY=0`: memory stays off for the whole process.
+    pub process_disabled: bool,
+    /// The effective TOML started this session with `[memory] enabled = false`.
+    /// The `/memory` toggle can still enable memory for the session.
+    pub config_opt_out: bool,
+    /// Whether enabling v2 carries curated legacy `MEMORY.md` files into the v2 scopes.
+    /// Resolved at spawn from the root override and the maintenance rollout gate.
+    pub v2_legacy_carryover: bool,
+    /// A `/memory` toggle changed v2 state while a turn was running, so the system prompt's
+    /// `<memory>` section is stale. Applied before the next turn is promoted.
+    pub prompt_sync_pending: AtomicBool,
     /// Memory storage handle for writing flush output (None when memory disabled).
     /// Wrapped in `RefCell` to allow `/memory on|off` toggle from `&Arc<SessionActor>`.
     pub storage: RefCell<Option<crate::session::memory::MemoryStorage>>,
@@ -227,7 +238,7 @@ impl SessionMemory {
     }
 
     /// Why memory is off, or `None` while it is on. `/memory on` refuses unless this is
-    /// `SessionToggle`; the `/memory` modal offers its turn-on hint under the same rule.
+    /// `SessionToggle` or `ConfigOptOut`; the `/memory` modal offers its turn-on hint under the same rule.
     pub(crate) fn disabled_reason(
         &self,
     ) -> Option<crate::extensions::notification::MemoryDisabledReason> {
@@ -238,10 +249,14 @@ impl SessionMemory {
         let v2_restricted = self.mode() == Some(crate::config::MemoryMode::V2)
             && (self.v2_config.rollout == crate::config::MemoryV2Rollout::Off
                 || !self.v2_config.file_writes_enabled);
-        Some(if v2_restricted {
+        Some(if self.process_disabled {
+            MemoryDisabledReason::ProcessDisabled
+        } else if v2_restricted {
             MemoryDisabledReason::RolloutRestricted
         } else if self.configured_storage.is_none() {
             MemoryDisabledReason::NotConfigured
+        } else if self.config_opt_out {
+            MemoryDisabledReason::ConfigOptOut
         } else {
             MemoryDisabledReason::SessionToggle
         })

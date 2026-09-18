@@ -306,7 +306,8 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
             #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             let mut grove_lost_to_daemon = false;
 
-            // macOS: grove-nfs first. Linux: overlay → btrfs → grove-fuse.
+            // macOS: grove-nfs first. Linux: overlay → btrfs → grove-fuse,
+            // except a Grove parent skips overlay/Btrfs (those arms discover git on the mount).
             // Windows: grove-projfs first (the copy engine reflinks on ReFS by itself).
             #[cfg(windows)]
             {
@@ -332,40 +333,40 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
                 }
             }
 
-            // 1. Try overlay-on-FUSE snapshot (O(1), no file copies)
             #[cfg(target_os = "linux")]
             {
-                match try_overlay_worktree(&plan) {
-                    Ok(Some(mut result)) => {
-                        result.skipped = skipped;
-                        return Ok(result);
+                // Mount table only (exact nfs/fuse or inside Grove FUSE/NFS).
+                // No Status-RPC: overlay/Btrfs on a plain checkout must not
+                // wait on a down daemon, even if Status would say forkable.
+                let skip_snapshots = crate::nfs::source_is_grove_parent(&plan.source);
+                if !skip_snapshots {
+                    match try_overlay_worktree(&plan) {
+                        Ok(Some(mut result)) => {
+                            result.skipped = skipped;
+                            return Ok(result);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "overlay snapshot failed, falling back to next strategy"
+                            );
+                            skipped.push(arm_failed(WorktreeArm::Overlay, &e));
+                        }
                     }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "overlay snapshot failed, falling back to next strategy"
-                        );
-                        skipped.push(arm_failed(WorktreeArm::Overlay, &e));
-                    }
-                }
-            }
-
-            // 2. Try BTRFS snapshot (O(1), no file copies)
-            #[cfg(target_os = "linux")]
-            {
-                match try_btrfs_worktree(&plan) {
-                    Ok(Some(mut result)) => {
-                        result.skipped = skipped;
-                        return Ok(result);
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "btrfs snapshot failed, falling back to file copy"
-                        );
-                        skipped.push(arm_failed(WorktreeArm::Btrfs, &e));
+                    match try_btrfs_worktree(&plan) {
+                        Ok(Some(mut result)) => {
+                            result.skipped = skipped;
+                            return Ok(result);
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "btrfs snapshot failed, falling back to file copy"
+                            );
+                            skipped.push(arm_failed(WorktreeArm::Btrfs, &e));
+                        }
                     }
                 }
             }
@@ -399,37 +400,7 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
                 .then(|| crate::nfs::probe_daemon_capability_class(plan.nfs.as_ref()))
                 .flatten();
 
-            let mut result = match &plan.creation_mode {
-                CreationMode::Linked => {
-                    // Status-confirmed linked Grove views must not copy the
-                    // projection (hang / projected state) when CreateWorktree
-                    // declines. Preserve fails; projected+clean may git-checkout.
-                    let linked_view = plan.nfs.as_ref().is_some_and(|opts| {
-                        crate::nfs::source_is_linked_local_view(opts, &plan.source)
-                    });
-                    if crate::nfs::dest_is_projected_mount(&plan.source) {
-                        if matches!(
-                            plan.working_tree,
-                            crate::WorkingTreeMode::PreserveWorkingTree
-                        ) {
-                            anyhow::bail!("preserve on a projected Grove source is not supported");
-                        }
-                        tracing::info!(
-                            source = %plan.source.display(),
-                            "projected source: skipping copy fallback, using git checkout"
-                        );
-                        execute_git_checkout_worktree(plan)
-                    } else if linked_view {
-                        anyhow::bail!(
-                            "linked Grove source: CreateWorktree declined; refusing copy fallback"
-                        );
-                    } else {
-                        execute_copy_worktree(plan)
-                    }
-                }
-                CreationMode::Standalone => execute_standalone_worktree(plan),
-                _ => unreachable!(),
-            }?;
+            let mut result = grove_copy_fallback(plan)?;
             #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             {
                 result.skipped = skipped;
@@ -438,6 +409,54 @@ fn execute_create_worktree_dispatch(plan: WorktreePlan) -> Result<CreateWorktree
             Ok(result)
         }
         CreationMode::GitCheckout => execute_git_checkout_worktree(plan),
+    }
+}
+
+/// Linked/Standalone refuse-vs-git-checkout-vs-copy after Grove declined.
+/// Status RPC runs only when the mount table did not already name a Grove parent.
+fn grove_copy_fallback(plan: WorktreePlan) -> Result<CreateWorktreeResult> {
+    use crate::CreationMode;
+
+    match &plan.creation_mode {
+        CreationMode::Linked => {
+            if crate::nfs::source_is_grove_parent(&plan.source) {
+                if matches!(
+                    plan.working_tree,
+                    crate::WorkingTreeMode::PreserveWorkingTree
+                ) {
+                    anyhow::bail!("preserve on a projected Grove source is not supported");
+                }
+                tracing::info!(
+                    source = %plan.source.display(),
+                    "projected source: skipping copy fallback, using git checkout"
+                );
+                execute_git_checkout_worktree(plan)
+            } else if plan
+                .nfs
+                .as_ref()
+                .is_some_and(|opts| crate::nfs::source_keeps_grove_create(opts, &plan.source))
+            {
+                anyhow::bail!("Grove source: CreateWorktree declined; refusing copy fallback");
+            } else {
+                execute_copy_worktree(plan)
+            }
+        }
+        CreationMode::Standalone => {
+            // dest_is_projected_mount is any NFS/FUSE (including an NFS home);
+            // do not block Standalone copy of a plain repo there.
+            if crate::nfs::dest_is_grove_projection(&plan.source) {
+                anyhow::bail!("Grove source: CreateWorktree declined; refusing copy fallback");
+            }
+            if plan
+                .nfs
+                .as_ref()
+                .is_some_and(|opts| crate::nfs::source_keeps_grove_create(opts, &plan.source))
+            {
+                anyhow::bail!("Grove source: CreateWorktree declined; refusing copy fallback");
+            }
+            execute_standalone_worktree(plan)
+        }
+        _ => unreachable!(),
     }
 }
 

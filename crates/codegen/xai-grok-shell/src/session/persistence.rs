@@ -883,7 +883,7 @@ fn resumed_session_sandbox_profile_in_root(
 
 /// Owner-only and durable session dir for writers that bypass `init_session` (chat-kind, pre-init fork stamp).
 /// A later occupied `init_session` will not re-sync the encoded-cwd direntry.
-pub(crate) fn ensure_owner_only_session_dir(info: &Info) -> std::io::Result<PathBuf> {
+pub fn ensure_owner_only_session_dir(info: &Info) -> std::io::Result<PathBuf> {
     ensure_owner_only_session_dir_in(&grok_home(), info)
 }
 

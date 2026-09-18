@@ -29,9 +29,10 @@ pub enum WorkspaceEvent {
     /// Filesystem watcher fired: every path that changed the same way within one settle window,
     /// coalesced so a checkout is one frame per session rather than one per file (the producer
     /// splits a window past ~1024 paths into several frames). A `Renamed` batch is `[from, to]`
-    /// when the watcher saw both halves, or the one path it saw.
+    /// when the watcher saw both halves, or the one path it saw; a rename across the root boundary
+    /// arrives as the half inside it, `Removed` (left the root) or `Created` (arrived).
     FsChanged {
-        /// Affected paths (absolute).
+        /// Affected paths, relative to the workspace root. Paths outside it are never reported.
         paths: Vec<PathBuf>,
         kind: FsEventKind,
     },

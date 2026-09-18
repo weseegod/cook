@@ -737,8 +737,6 @@
         assert!(!pw.can_send()); // trailing backslash
     }
 
-    // ── Paste element tests ──────────────────────────────────────────
-
     #[test]
     fn paste_single_line_inline() {
         let mut pw = PromptWidget::new();
@@ -993,8 +991,6 @@
         pw.textarea.set_cursor(end);
         assert_eq!(pw.paste_element_for_preview(), None);
     }
-
-    // ── Image preview activation (paste-chip parity) ─────────────────
 
     #[test]
     fn image_for_preview_shows_right_after_insert() {
@@ -1437,22 +1433,6 @@
         assert_eq!(raw.get(mapped..mapped + 2).unwrap_or(""), "/x");
     }
 
-    // -- PromptStyle prefix_override tests --
-
-    #[test]
-    fn prompt_style_default_has_no_prefix_override() {
-        let style = PromptStyle::default();
-        assert!(style.prefix_override.is_none());
-    }
-
-    #[test]
-    fn prompt_style_overlay_has_no_prefix_override() {
-        let style = PromptStyle::overlay();
-        assert!(style.prefix_override.is_none());
-    }
-
-    // ── Voice interim wrapping ───────────────────────────────────────
-
     #[test]
     fn wrap_voice_interim_wraps_on_word_boundaries() {
         let lines = wrap_voice_interim("the quick brown fox", 10, 5);
@@ -1474,8 +1454,6 @@
         assert!(wrap_voice_interim("hello", 0, 3).is_empty());
         assert!(wrap_voice_interim("hello", 10, 0).is_empty());
     }
-
-    // ── Slash state integration tests ───────────────────────────────
 
     #[test]
     fn refresh_slash_produces_snapshot_for_slash_input() {
@@ -1572,8 +1550,6 @@
             "/loop should be visible once scheduler_create is advertised",
         );
     }
-
-    // ── Slash completion acceptance tests ──────────────────────────
 
     #[test]
     fn accept_completion_inserts_alias_for_alias() {
@@ -1800,8 +1776,6 @@
         );
     }
 
-    // ── Regression tests ────────────────────────────────────────────
-
     #[test]
     fn sync_acp_then_refresh_ordering() {
         // Regression: sync_acp_commands must update the registry BEFORE refreshing the snapshot
@@ -1833,8 +1807,8 @@
         let models = crate::acp::model_state::ModelState::default();
 
         let acp_cmds = vec![agent_client_protocol::AvailableCommand::new(
-            "flush".to_string(),
-            "Flush memory".to_string(),
+            "goal".to_string(),
+            "Run a goal".to_string(),
         )];
 
         // Sync three times.
@@ -1842,13 +1816,13 @@
         pw.sync_acp_commands(&acp_cmds, None, &models);
         pw.sync_acp_commands(&acp_cmds, None, &models);
 
-        // Should have exactly all pager-local builtins + 1 ACP ("flush").
+        // Should have exactly all pager-local builtins + 1 ACP ("goal").
         // The expected count comes from `builtin_commands()` so the assertion stays accurate as the builtin set grows
         let expected = crate::slash::commands::builtin_commands().len() + 1;
         let registry = &pw.slash_controller.registry();
         assert_eq!(registry.command_count(), expected);
         assert!(registry.get("quit").is_some());
-        assert!(registry.get("flush").is_some());
+        assert!(registry.get("goal").is_some());
     }
 
     #[test]
@@ -1862,8 +1836,6 @@
         assert!(!snap.active);
         assert!(!snap.open);
     }
-
-    // ── CR normalization tests ────────────────────────────────────
 
     #[test]
     fn paste_bare_cr_becomes_lf() {
@@ -1901,8 +1873,6 @@
         pw.handle_paste("no carriage returns\nhere");
         assert_eq!(pw.textarea.text(), "no carriage returns\nhere");
     }
-
-    // ── Paste chip threshold boundary tests ───────────────────────
 
     #[test]
     fn paste_3_lines_inline_normal_mode() {
@@ -1949,8 +1919,6 @@
         assert!(pw.textarea.elements().is_empty());
     }
 
-    // ── normalize_line_breaks tests ────────────────────────────────
-
     #[test]
     fn normalize_line_breaks_bare_cr() {
         assert_eq!(normalize_line_breaks("a\rb\rc"), "a\nb\nc");
@@ -1979,8 +1947,6 @@
         assert_eq!(normalize_line_breaks("a\u{2028}\r\nb"), "a\n\r\nb");
     }
 
-    // ── Inline paste (handle_paste without element) ──────────────
-
     #[test]
     fn inline_paste_multiline_no_element() {
         let mut pw = PromptWidget::new();
@@ -2008,8 +1974,6 @@
         assert!(!snap.active, "cleared text should deactivate slash");
         assert!(!snap.open, "cleared text should close dropdown");
     }
-
-    // ── Image chip tests ──────────────────────────────────────────
 
     /// Helper: create a minimal `PastedImage` for testing.
     fn test_image() -> PastedImage {
@@ -2354,8 +2318,6 @@
         );
     }
 
-    // ── set_images: identity-based pairing ───────────────────────────
-
     /// Two restored chips with identical placeholder byte length must get distinct `element_id`s after `set_images`.
     /// A naive `find()`-by-byte-length match would collapse both chips onto the same `element_id`.
     /// The next `sync_images_with_textarea` would then drop one entry as a "duplicate element_id" warn.
@@ -2651,8 +2613,6 @@
             post_eids,
         );
     }
-
-    // ── parse_image_display_number ───────────────────────────────────
 
     #[test]
     fn parse_image_display_number_bracketed_form() {
@@ -3148,8 +3108,6 @@
         assert!(!snap.matches.is_empty());
     }
 
-    // ── Lifecycle edge-case tests ────────────────────────────────────
-
     #[test]
     fn ctrl_c_clears_image_state() {
         let mut pw = PromptWidget::new();
@@ -3318,8 +3276,6 @@
         assert_eq!(pw.textarea.text(), "[Image #2] ");
         assert_eq!(at(&pw.images, 0).display_number, 2);
     }
-
-    // ── File search Right Arrow (drill-down) ────────────────────────────
 
     /// Build a `FuzzyMatchResult` for use in test fixtures.
     fn fuzzy_result(path: &str, is_dir: bool) -> xai_grok_workspace::file_system::FuzzyMatchResult {
@@ -3705,8 +3661,6 @@
         assert_eq!(pw.textarea.cursor(), "@README.md ".len());
     }
 
-    // ── Ghost text tests ────────────────────────────────────────────
-
     /// Chromeless prompt style for rendering tests (no borders, no prefix, no vpad; the textarea starts at the area origin).
     fn ghost_test_style() -> PromptStyle {
         PromptStyle {
@@ -4023,6 +3977,7 @@
                 text: "suffix".into(),
                 token_range: 0..2,
                 full_name: "cmd".into(),
+                highlight: false,
             }),
             ..Default::default()
         });
@@ -4168,8 +4123,6 @@
         assert_eq!(buf_text_at(&buf, 5, 10, 0).trim(), "");
     }
 
-    // --- paint_slash_token_highlight (wrap-aware token painting) ---
-
     /// Sentinel highlight color, never produced by the textarea's own render.
     const TOKEN_FG: ratatui::style::Color = ratatui::style::Color::Rgb(9, 99, 199);
 
@@ -4289,8 +4242,6 @@
         assert!(!pw.has_ghost_text());
     }
 
-    // -- Ghost acceptance through PromptWidget --------------------------------
-
     #[test]
     fn accept_ghost_full_appends_to_textarea() {
         let mut pw = PromptWidget::new();
@@ -4345,8 +4296,6 @@
         pw.clear_ghost();
         assert!(!pw.has_ghost_text());
     }
-
-    // -- completion accept / splice application ---------------------------------
 
     /// Wire-shaped token item: `insert_text` carries the whole line, `token_text` carries the span replacement a range-emitting shell sends.
     fn token_completion(
@@ -4438,8 +4387,6 @@
         assert_eq!(pw.text(), "echo something else");
     }
 
-    // -- apply_completion_fill ---------------------------------------------
-
     /// The widget-level fill writes the decided LCP over the typed token and parks the cursor after it.
     /// The decision matrix lives in `suggestion_controller`'s `tab_decision` tests.
     #[test]
@@ -4479,8 +4426,6 @@
         assert_eq!(pw.textarea.text(), format!("{text_before}notes.md"));
     }
 
-
-    // -- Predicted-next-prompt suggestion through PromptWidget ----------------
 
     /// Widget with an active gate and a loaded suggestion: the state right after a turn ends with `x.ai/suggestPrompt` resolved.
     fn widget_with_prompt_suggestion(text: &str) -> PromptWidget {
@@ -4580,6 +4525,7 @@
                 text: "del".into(),
                 token_range: 6..9,
                 full_name: "model".into(),
+                highlight: false,
             }),
             ..Default::default()
         });
@@ -4642,8 +4588,6 @@
         assert!(!pw.try_progressive_match("x"));
         assert!(!pw.has_ghost_text());
     }
-
-    // ── Inline title on the top border ──────────────────────────────
 
     /// Bordered chrome style (the agent-view prompt shape) with an optional session title.
     fn title_test_style(title: Option<&str>) -> PromptStyle {
@@ -4728,8 +4672,6 @@
         let buf = draw_bordered(11, &title_test_style(Some("my session")));
         assert_eq!(buf_text_at(&buf, 1, 10, 0), "\u{2500}".repeat(9));
     }
-
-    // ── PromptBg::Panel chip remap (inline surfaces) ────────────────
 
     fn any_cell_with_bg(buf: &Buffer, bg: ratatui::style::Color) -> bool {
         let area = *buf.area();
@@ -4869,4 +4811,15 @@
         assert_eq!(event, PromptEvent::Edited);
         assert_eq!(pw.textarea.text(), "\n beta");
         assert_eq!(pw.textarea.selection_range(), None);
+    }
+
+    /// Delivered SUPER+Enter misses is_mod_enter and bare-Enter send; the widget
+    /// inserts a newline instead of depending on textarea's any-Enter fallthrough.
+    #[test]
+    fn delivered_super_enter_inserts_newline() {
+        let mut pw = PromptWidget::new();
+        pw.textarea.insert_str("hello");
+        let event = pw.handle_key(&KeyEvent::new(KeyCode::Enter, KeyModifiers::SUPER));
+        assert_eq!(event, PromptEvent::Edited);
+        assert_eq!(pw.textarea.text(), "hello\n");
     }

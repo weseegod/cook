@@ -21,6 +21,8 @@ pub enum Tool {
     Grep,
     Glob,
     List,
+    MemorySearch,
+    MemoryGet,
     Task,
     Skill,
     SendMessage,
@@ -36,6 +38,7 @@ pub enum Tool {
     SchedulerList,
     SchedulerDelete,
     Workflow,
+    Lsp,
     /// A created task in the cases' vocabulary; becomes one todo write.
     TaskCreate,
     /// A task update in the cases' vocabulary; also one todo write.
@@ -60,6 +63,8 @@ impl fmt::Display for Tool {
             | Tool::Grep
             | Tool::Glob
             | Tool::List
+            | Tool::MemorySearch
+            | Tool::MemoryGet
             | Tool::Task
             | Tool::Skill
             | Tool::SendMessage
@@ -75,6 +80,7 @@ impl fmt::Display for Tool {
             | Tool::SchedulerList
             | Tool::SchedulerDelete
             | Tool::Workflow
+            | Tool::Lsp
             | Tool::TaskCreate
             | Tool::TaskUpdate
             | Tool::CronCreate
@@ -147,6 +153,8 @@ impl Tool {
             Tool::Grep => GrokBuildRow::new("grep"),
             Tool::Glob => GrokBuildRow::new("glob"),
             Tool::List => GrokBuildRow::new("list_dir"),
+            Tool::MemorySearch => GrokBuildRow::new("memory_search"),
+            Tool::MemoryGet => GrokBuildRow::new("memory_get"),
             Tool::Task => GrokBuildRow::new("spawn_subagent").with_fills(&[FieldFill {
                 field: "description",
                 source: "prompt",
@@ -165,6 +173,7 @@ impl Tool {
             Tool::SchedulerList => GrokBuildRow::new("scheduler_list"),
             Tool::SchedulerDelete => GrokBuildRow::new("scheduler_delete"),
             Tool::Workflow => GrokBuildRow::new("workflow"),
+            Tool::Lsp => GrokBuildRow::new("lsp"),
             Tool::TaskCreate => {
                 GrokBuildRow::new("todo_write").with_shape(todo_write_from_created_task)
             }

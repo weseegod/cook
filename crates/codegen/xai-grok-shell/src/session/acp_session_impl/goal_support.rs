@@ -1818,6 +1818,16 @@ mod compaction_goal_section_tests {
     }
 
     #[test]
+    fn wraps_continuation_style_body() {
+        let out = format_compaction_goal_section(
+            "Objective: device test\nGoal NOT complete — continue working. Next step:\nssh in",
+        );
+        assert!(out.starts_with("## Active Goal\n"));
+        assert!(out.contains("Goal NOT complete — continue working. Next step:"));
+        assert!(out.contains("Objective: device test"));
+    }
+
+    #[test]
     fn splices_goal_as_its_own_section() {
         let existing = "<system-reminder>\n## Running Background Tasks\nThese tasks are still running:\n- \"t1\": `sleep 1` (running)\n</system-reminder>";
         let out = super::splice_goal_section(existing, "A goal has been set: ship it");

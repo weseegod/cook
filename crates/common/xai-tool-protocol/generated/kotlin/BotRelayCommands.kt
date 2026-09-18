@@ -51,6 +51,7 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "getHostSettings",
     "getListenerConnectUrl",
     "getListenerIntegrations",
+    "getMainAgent",
     "getMcpCatalog",
     "getMcpState",
     "getPublicBotTemplate",
@@ -69,7 +70,6 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "readAttachmentChunk",
     "readAttachmentImage",
     "readAttachmentText",
-    "readVoiceCallAgentContext",
     "refreshChannel",
     "refreshMcp",
     "resolveAutoReviewApproval",
@@ -87,6 +87,7 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "setBotTemplateVisibility",
     "setGroupMembers",
     "setHostSettings",
+    "setMainAgent",
     "startTeachRecording",
     "stopTeachRecording",
     "submitSecret",
@@ -283,7 +284,7 @@ sealed interface BotCommand {
     data class DismissWidget(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
-        val args: ArgsDiscardDraft,
+        val args: ArgsDismissWidget,
     ) : BotCommand {
         companion object {
             const val NAME = "dismissWidget"
@@ -382,7 +383,7 @@ sealed interface BotCommand {
     data class GetAgentTranscriptWindow(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
-        val args: ArgsGetAgentTranscriptTail,
+        val args: ArgsGetAgentTranscriptWindow,
     ) : BotCommand {
         companion object {
             const val NAME = "getAgentTranscriptWindow"
@@ -500,6 +501,17 @@ sealed interface BotCommand {
     }
 
     @Serializable
+    data class GetMainAgent(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsGetMainAgent,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getMainAgent"
+        }
+    }
+
+    @Serializable
     data class GetMcpCatalog(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -591,7 +603,7 @@ sealed interface BotCommand {
     data class InterruptAgentRun(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
-        val args: SandAsyncTaskLabelParams,
+        val args: ArgsInterruptAgentRun,
     ) : BotCommand {
         companion object {
             const val NAME = "interruptAgentRun"
@@ -698,17 +710,6 @@ sealed interface BotCommand {
     }
 
     @Serializable
-    data class ReadVoiceCallAgentContext(
-        val agentId: String,
-        @EncodeDefault override val name: String = NAME,
-        val args: SandAsyncTaskLabelParams,
-    ) : BotCommand {
-        companion object {
-            const val NAME = "readVoiceCallAgentContext"
-        }
-    }
-
-    @Serializable
     data class RefreshChannel(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -778,7 +779,7 @@ sealed interface BotCommand {
     data class RunAgentAutomationNow(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
-        val args: ArgsDeleteAgentAutomation,
+        val args: ArgsRunAgentAutomationNow,
     ) : BotCommand {
         companion object {
             const val NAME = "runAgentAutomationNow"
@@ -896,6 +897,17 @@ sealed interface BotCommand {
     }
 
     @Serializable
+    data class SetMainAgent(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsSetMainAgent,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "setMainAgent"
+        }
+    }
+
+    @Serializable
     data class StartTeachRecording(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -921,7 +933,7 @@ sealed interface BotCommand {
     data class SubmitSecret(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
-        val args: ArgsRespondToWidget,
+        val args: ArgsSubmitSecret,
     ) : BotCommand {
         companion object {
             const val NAME = "submitSecret"
@@ -1013,6 +1025,7 @@ object BotCommandSerializer :
             BotCommand.GetHostSettings.NAME -> BotCommand.GetHostSettings.serializer()
             BotCommand.GetListenerConnectUrl.NAME -> BotCommand.GetListenerConnectUrl.serializer()
             BotCommand.GetListenerIntegrations.NAME -> BotCommand.GetListenerIntegrations.serializer()
+            BotCommand.GetMainAgent.NAME -> BotCommand.GetMainAgent.serializer()
             BotCommand.GetMcpCatalog.NAME -> BotCommand.GetMcpCatalog.serializer()
             BotCommand.GetMcpState.NAME -> BotCommand.GetMcpState.serializer()
             BotCommand.GetPublicBotTemplate.NAME -> BotCommand.GetPublicBotTemplate.serializer()
@@ -1031,7 +1044,6 @@ object BotCommandSerializer :
             BotCommand.ReadAttachmentChunk.NAME -> BotCommand.ReadAttachmentChunk.serializer()
             BotCommand.ReadAttachmentImage.NAME -> BotCommand.ReadAttachmentImage.serializer()
             BotCommand.ReadAttachmentText.NAME -> BotCommand.ReadAttachmentText.serializer()
-            BotCommand.ReadVoiceCallAgentContext.NAME -> BotCommand.ReadVoiceCallAgentContext.serializer()
             BotCommand.RefreshChannel.NAME -> BotCommand.RefreshChannel.serializer()
             BotCommand.RefreshMcp.NAME -> BotCommand.RefreshMcp.serializer()
             BotCommand.ResolveAutoReviewApproval.NAME -> BotCommand.ResolveAutoReviewApproval.serializer()
@@ -1049,6 +1061,7 @@ object BotCommandSerializer :
             BotCommand.SetBotTemplateVisibility.NAME -> BotCommand.SetBotTemplateVisibility.serializer()
             BotCommand.SetGroupMembers.NAME -> BotCommand.SetGroupMembers.serializer()
             BotCommand.SetHostSettings.NAME -> BotCommand.SetHostSettings.serializer()
+            BotCommand.SetMainAgent.NAME -> BotCommand.SetMainAgent.serializer()
             BotCommand.StartTeachRecording.NAME -> BotCommand.StartTeachRecording.serializer()
             BotCommand.StopTeachRecording.NAME -> BotCommand.StopTeachRecording.serializer()
             BotCommand.SubmitSecret.NAME -> BotCommand.SubmitSecret.serializer()
@@ -1103,6 +1116,7 @@ typealias BotCommandReplyGetForeverBoxStatus = SandForeverBoxStatus?
 typealias BotCommandReplyGetHostSettings = SandHostSettings
 typealias BotCommandReplyGetListenerConnectUrl = ReplyGetListenerConnectUrl
 typealias BotCommandReplyGetListenerIntegrations = SandListenerIntegrationsView
+typealias BotCommandReplyGetMainAgent = ReplyGetMainAgent
 typealias BotCommandReplyGetMcpCatalog = List<SandMcpCatalogEntryView>
 typealias BotCommandReplyGetMcpState = SandMcpState
 typealias BotCommandReplyGetPublicBotTemplate = BotTemplateImport?
@@ -1121,7 +1135,6 @@ typealias BotCommandReplyReactToMessage = JsonElement
 typealias BotCommandReplyReadAttachmentChunk = SandAttachmentChunk?
 typealias BotCommandReplyReadAttachmentImage = ResolvedImageAttachment?
 typealias BotCommandReplyReadAttachmentText = ReplyReadAttachmentTextValue?
-typealias BotCommandReplyReadVoiceCallAgentContext = SandVoiceCallAgentContext
 typealias BotCommandReplyRefreshChannel = SandChannelsView
 typealias BotCommandReplyRefreshMcp = JsonElement
 typealias BotCommandReplyResolveAutoReviewApproval = JsonElement
@@ -1139,6 +1152,7 @@ typealias BotCommandReplySetAgentUnread = JsonElement
 typealias BotCommandReplySetBotTemplateVisibility = SandBotTemplateView
 typealias BotCommandReplySetGroupMembers = SandAgentSummary?
 typealias BotCommandReplySetHostSettings = SandHostSettings
+typealias BotCommandReplySetMainAgent = ReplyGetMainAgent
 typealias BotCommandReplyStartTeachRecording = SandTeachRecordingStatus
 typealias BotCommandReplyStopTeachRecording = SandTeachRecordingStatus
 typealias BotCommandReplySubmitSecret = JsonElement

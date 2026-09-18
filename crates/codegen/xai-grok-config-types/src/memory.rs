@@ -638,6 +638,10 @@ impl Default for PruningConfig {
 #[serde(default)]
 pub struct MemoryConfig {
     pub enabled: bool,
+    /// Memory was turned off for the whole process (`--no-memory` or `GROK_MEMORY=0`).
+    /// Unlike a TOML opt-out, the `/memory` session toggle cannot override this.
+    #[serde(skip)]
+    pub force_disabled: bool,
     pub mode: MemoryMode,
     pub index: MemoryIndexConfig,
     pub embedding: MemoryEmbeddingConfig,
@@ -744,12 +748,15 @@ impl MemoryConfig {
         // A false CLI/env value disables both implementations, as does a local
         // `[memory] enabled = false` unless the same TOML sets `[memory_v2] enabled = true`.
         // A remote v2 gate alone never overrides a local opt-out.
-        let globally_disabled = !legacy_enabled.value
-            && match legacy_enabled.source {
-                crate::ConfigSource::Cli | crate::ConfigSource::Env => true,
-                crate::ConfigSource::Config => memory_v2.enabled != Some(true),
-                _ => false,
-            };
+        let force_disabled = !legacy_enabled.value
+            && matches!(
+                legacy_enabled.source,
+                crate::ConfigSource::Cli | crate::ConfigSource::Env
+            );
+        let globally_disabled = force_disabled
+            || (!legacy_enabled.value
+                && legacy_enabled.source == crate::ConfigSource::Config
+                && memory_v2.enabled != Some(true));
         // A false v2 gate is not a global kill switch: it delegates to the
         // independent legacy waterfall. Local `[memory_v2]` has precedence
         // over the dedicated remote v2 settings.
@@ -763,6 +770,7 @@ impl MemoryConfig {
 
         Self {
             enabled,
+            force_disabled,
             mode,
             index: MemoryIndexConfig {
                 max_chunk_chars: index
@@ -1205,6 +1213,11 @@ mod tests {
         let resolved = MemoryConfig::resolve(false, false, &config, Some(&remote));
 
         assert!(!resolved.enabled);
+        assert!(
+            !resolved.force_disabled,
+            "a TOML opt-out is not a process-wide force-disable"
+        );
+        assert_eq!(resolved.mode, MemoryMode::V2);
     }
 
     #[test]
@@ -1260,6 +1273,16 @@ mod tests {
         let resolved = MemoryConfig::resolve(false, true, &config, Some(&remote));
 
         assert!(!resolved.enabled);
+        assert!(resolved.force_disabled);
+    }
+
+    #[test]
+    fn enabled_memory_is_not_force_disabled() {
+        let config: toml::Value = toml::from_str("[memory]\nenabled = true").unwrap();
+        let resolved = MemoryConfig::resolve(false, false, &config, None);
+
+        assert!(resolved.enabled);
+        assert!(!resolved.force_disabled);
     }
 
     #[test]

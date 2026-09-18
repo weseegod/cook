@@ -180,10 +180,15 @@ fn render(
     step: NextStep,
     request: &ScriptRequest,
     held: Option<ObservedFailure>,
+    reasoning: Option<String>,
 ) -> (ModelReply, Option<ObservedFailure>, Vec<ScriptViolation>) {
     match step {
         NextStep::RepeatReply { text, .. } | NextStep::Reply { text, .. } => {
-            (ModelReply::Text(text), held, Vec::new())
+            let reply = match reasoning {
+                Some(reasoning) => ModelReply::ReasoningReply { reasoning, text },
+                None => ModelReply::Text(text),
+            };
+            (reply, held, Vec::new())
         }
         NextStep::Failure {
             failure,
@@ -197,6 +202,8 @@ fn render(
                 Failure::StreamError(stream_error) => ModelReply::StreamError(stream_error),
                 Failure::Cut { .. } => ModelReply::CutReply,
                 Failure::Dropped { .. } => ModelReply::Dropped,
+                Failure::MalformedBody { .. } => ModelReply::Malformed,
+                Failure::Hang { .. } => ModelReply::Hang,
                 Failure::DoomLoop { .. } => match looping_call {
                     Some((call_id, call)) => ModelReply::ToolCall { call_id, call },
                     None => ModelReply::LoopingReply {
@@ -261,9 +268,11 @@ impl ReplayingScript {
         }
         let step = self.next_step(request)?;
         self.record(&step, request);
-        let hold = self.entries.at(step.entry_index()).stall;
+        let entry = self.entries.at(step.entry_index());
+        let hold = entry.stall;
+        let reasoning = entry.reasoning.clone();
         let held = hold.map(|_| ObservedFailure::Stalled);
-        let (reply, observed, rendered) = render(step, request, held);
+        let (reply, observed, rendered) = render(step, request, held, reasoning);
         violations.extend(rendered);
         Some(ServedRequest {
             served: ServedReply {
@@ -417,7 +426,9 @@ impl ReplayingScript {
             Failure::Status(_)
             | Failure::StreamError(_)
             | Failure::Cut { .. }
-            | Failure::Dropped { .. } => (None, None),
+            | Failure::Dropped { .. }
+            | Failure::MalformedBody { .. }
+            | Failure::Hang { .. } => (None, None),
             Failure::DoomLoop { .. } => {
                 match self.entries.calls(entry_index, request.conversation).next() {
                     None => (None, None),

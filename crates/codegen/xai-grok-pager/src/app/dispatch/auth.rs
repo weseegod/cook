@@ -11,10 +11,6 @@ use crate::app::app_view::{ActiveView, AppView, AuthMode, AuthState};
 use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::SessionEvent;
 
-// ---------------------------------------------------------------------------
-// Auth dispatch
-// ---------------------------------------------------------------------------
-
 /// `/logout`: ask the shell to clear auth, then return to the login screen.
 pub(super) fn dispatch_logout(_app: &mut AppView) -> Vec<Effect> {
     vec![Effect::Logout]

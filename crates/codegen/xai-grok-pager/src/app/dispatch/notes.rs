@@ -468,8 +468,11 @@ pub(super) fn keep_unsent_feedback_report(agent: &mut AgentView, report: UnsentF
         )));
         return;
     }
-    let saved = agent.session.local_session_dir().map(|session_dir| {
-        FeedbackDraftStore::new(session_dir).append_predraft(&derive_title(text), text)
+    let saved = agent.session.ensure_local_session_dir().map(|session_dir| {
+        let session_dir = session_dir.map_err(|error| error.to_string())?;
+        FeedbackDraftStore::new(session_dir)
+            .append_predraft(&derive_title(text), text)
+            .map_err(|error| error.to_string())
     });
     let notice = match saved {
         Some(Ok(_)) => {

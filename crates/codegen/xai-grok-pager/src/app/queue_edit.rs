@@ -53,8 +53,9 @@ impl AgentView {
             let (id, server_id) = (*id, server_id.clone());
             let ctrl_c_empty = key!('c', CONTROL).matches(key) && self.prompt.text().is_empty();
 
-            // Before bare-Enter save: Shift/Alt flags, or Apple Terminal bare Enter with Cmd/Shift/Opt held (CoreGraphics rescue in is_mod_enter)
-            if crate::input::is_mod_enter(key) {
+            // Before bare-Enter save: Shift/Alt (or Apple Terminal CoreGraphics rescue in
+            // is_mod_enter), plus delivered SUPER+Enter (Kitty) which is not send.
+            if crate::input::is_mod_enter(key) || crate::input::is_delivered_super_enter(key) {
                 self.prompt.textarea.insert_str("\n");
                 return Some(InputOutcome::Changed);
             }
@@ -703,11 +704,12 @@ mod tests {
     }
 
     /// Shift/Alt+Enter inserts a newline in edit mode (must not save).
-    /// Cmd/SUPER is not a product-wide newline chord (Apple Terminal only via CG).
+    /// Delivered SUPER+Enter (Kitty) is also a newline, not save — it is excluded
+    /// from is_mod_enter so multiline swap still uses only Shift/Alt.
     /// `/btw why` fences the ordering: mod-Enter beats the hijack in `save_edited_queued_row`.
     #[test]
     fn edit_mod_enter_inserts_newline_without_exiting() {
-        for mods in [KeyModifiers::SHIFT, KeyModifiers::ALT] {
+        for mods in [KeyModifiers::SHIFT, KeyModifiers::ALT, KeyModifiers::SUPER] {
             for text in ["line1", "/btw why"] {
                 let mut agent = enter_edit_local_row();
                 agent.prompt.set_text(text);

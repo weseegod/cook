@@ -1413,6 +1413,116 @@ pub(crate) fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> b
     poll_for(timeout, || cond().then_some(())).is_some()
 }
 
+/// Byte offset of the first `needle` in `haystack` at or after `from`; `None` past the end or when absent.
+pub(crate) fn raw_position_after(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
+    let tail = haystack.get(from..)?;
+    tail.windows(needle.len())
+        .position(|window| window == needle)
+        .map(|offset| from + offset)
+}
+
+/// Escape sequences never render as text, so a byte-level wait is the only way to observe them.
+pub(crate) fn wait_for_raw_bytes_after(
+    harness: &mut PtyHarness,
+    offset: usize,
+    needle: &[u8],
+    timeout: Duration,
+) -> Option<usize> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(position) = raw_position_after(harness.raw_output(), offset, needle) {
+            return Some(position);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        harness.update(Duration::from_millis(20));
+    }
+}
+
+/// WezTerm is classified and probe-allowlisted; the harness scrubs the runner's own terminal markers before applying this.
+const KITTY_CAPABLE_ENV: &[(&str, &str)] = &[("TERM_PROGRAM", "WezTerm")];
+
+/// crossterm's `supports_keyboard_enhancement` probe: a flags query followed by DA1.
+const KITTY_STARTUP_PROBE: &[u8] = b"\x1b[?u\x1b[c";
+
+/// kitty's answer, trailing `;` included.
+const KITTY_STARTUP_PROBE_REPLY: &[u8] = b"\x1b[?0u\x1b[?62;c";
+
+/// Disambiguate (1) + report event types (2).
+pub(crate) const KITTY_PUSH_FLAGS: &[u8] = b"\x1b[>3u";
+
+/// crossterm pops one stack entry explicitly, not the bare `CSI < u`.
+pub(crate) const KITTY_POP_FLAGS: &[u8] = b"\x1b[<1u";
+
+pub(crate) const DA1_QUERY: &[u8] = b"\x1b[c";
+
+pub(crate) const DA1_REPLY: &[u8] = b"\x1b[?62;c";
+
+/// The probe blocks startup for at most 2 s, so the reply is scripted as soon as the probe appears, not after the welcome screen.
+pub(crate) fn answer_kitty_startup_probe(harness: &mut PtyHarness) {
+    let probe_at = wait_for_raw_bytes_after(harness, 0, KITTY_STARTUP_PROBE, WELCOME_TIMEOUT)
+        .expect("pager never probed for kitty keyboard support");
+    harness
+        .inject_keys(KITTY_STARTUP_PROBE_REPLY)
+        .expect("inject kitty probe reply");
+    let pushed_at = wait_for_raw_bytes_after(harness, probe_at, KITTY_PUSH_FLAGS, WELCOME_TIMEOUT);
+    assert!(
+        pushed_at.is_some(),
+        "pager did not push kitty keyboard flags after a supporting probe reply"
+    );
+}
+
+/// Prints whatever the pager left in the tty input queue between two markers after it exits. `min 0 time 20` gives `cat`
+/// EOF after two quiet seconds, `-echo` stops the tty echoing the residue a second time, and `LEFTOVER-BEGIN` follows a
+/// successful `stty`, so its appearance means `cat` is about to read.
+#[cfg(unix)]
+pub(crate) const LEFTOVER_CAPTURE_SCRIPT: &str = concat!(
+    "command -v stty >/dev/null || exit 99; ",
+    "\"$0\" \"$@\"; rc=$?; ",
+    "stty -icanon -echo min 0 time 20 || exit 98; ",
+    "printf LEFTOVER-BEGIN; cat; ",
+    "printf \"LEFTOVER-END EXIT=%s\" \"$rc\"",
+);
+
+#[cfg(unix)]
+pub(crate) const LEFTOVER_BEGIN: &[u8] = b"LEFTOVER-BEGIN";
+
+/// Waited for whole: a PTY read can split one `printf`.
+#[cfg(unix)]
+pub(crate) const LEFTOVER_END_OK: &[u8] = b"LEFTOVER-END EXIT=0";
+
+/// Content-backed: the inherited-env spawn has no credentials on CI and stalls on the login screen.
+#[cfg(unix)]
+pub(crate) fn spawn_kitty_pager_with_leftover_capture(content: &ContentController) -> PtyHarness {
+    let binary = pager_binary().expect("resolve pager binary");
+    let pager = binary.to_str().expect("pager path is utf-8");
+    let mut harness = PtyHarness::spawn_with_content_env(
+        Path::new("/bin/sh"),
+        DEFAULT_ROWS,
+        DEFAULT_COLS,
+        content,
+        &["-c", LEFTOVER_CAPTURE_SCRIPT, pager],
+        KITTY_CAPABLE_ENV,
+    )
+    .expect("spawn pager under the leftover-capture shell");
+    answer_kitty_startup_probe(&mut harness);
+    harness
+        .wait_for_text(WELCOME_SCREEN_SENTINEL, WELCOME_TIMEOUT)
+        .expect("welcome text");
+    harness
+}
+
+/// The first Ctrl+C arms the quit confirmation, the second confirms. Returns the `raw_output()` length before the presses
+/// so callers scan only the teardown suffix.
+pub(crate) fn quit_with_double_ctrl_c(harness: &mut PtyHarness) -> usize {
+    let pre = harness.raw_output().len();
+    harness.inject_keys(keys::CTRL_C).expect("ctrl-c arm");
+    harness.update(Duration::from_millis(250));
+    harness.inject_keys(keys::CTRL_C).expect("ctrl-c confirm");
+    pre
+}
+
 /// Dump assistant/tool/user messages (skipping the huge system prompt) from every request body.
 /// Lets a failure message show tool args / tool results / user queries without printing megabytes of `{:#?}` bodies.
 #[cfg(unix)]

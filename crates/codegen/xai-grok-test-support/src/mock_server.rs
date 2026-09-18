@@ -616,17 +616,22 @@ impl MockInferenceServer {
             .route(
                 "/v1/privacy/coding-data-retention",
                 put({
-                    let log = state.log.clone();
+                    let state = state.clone();
                     move |headers: HeaderMap, Json(body): Json<Value>| {
-                        let log = log.clone();
+                        let state = state.clone();
                         async move {
-                            log.record("PUT", "/v1/privacy/coding-data-retention", &body, &headers);
+                            let path = "/v1/privacy/coding-data-retention";
+                            state.log.record("PUT", path, &body, &headers);
+                            // Lets a test refuse the write
+                            if let Some(s) = state.overrides.pop_scripted(path) {
+                                return s.into_response_paced(None, None).await;
+                            }
                             // Echo the received flag back like the real cli-chat-proxy does on success
                             let opt_out = body
                                 .get("codingDataRetentionOptOut")
                                 .cloned()
                                 .unwrap_or(Value::Bool(false));
-                            Json(json!({ "codingDataRetentionOptOut": opt_out }))
+                            Json(json!({ "codingDataRetentionOptOut": opt_out })).into_response()
                         }
                     }
                 }),

@@ -585,6 +585,20 @@ impl BlockViewerPane {
             }
         }
 
+        // The error and rowless payloads (e.g. a large-output note) have nowhere else to show
+        let (text, style) = match (&st.error, &st.content) {
+            (Some(error), _) => (Some(error), Style::default().fg(theme.accent_error)),
+            (None, content) if st.results.is_empty() => (content.as_ref(), dim),
+            _ => (None, dim),
+        };
+        if let Some(text) = text {
+            lines.push(Line::from(""));
+            lines.extend(
+                text.lines()
+                    .map(|line| Line::from(Span::styled(line.to_owned(), style))),
+            );
+        }
+
         Some(Self::for_static_content(
             entry_id,
             ViewerKind::IntegrationSearch,

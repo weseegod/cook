@@ -185,6 +185,14 @@ metrics! {
         attrs: [ "stuck_in" => scrub(stuck_in), "auth_mode" => plain(auth_mode) ],
         op: add(1),
     }
+    SessionCreateTimeout {
+        wire: "grok_code.session.create_timeout",
+        const: METRIC_SESSION_CREATE_TIMEOUT,
+        field: session_create_timeout: counter_u64("{timeout}"),
+        payload: { stuck_in: String },
+        attrs: [ "stuck_in" => scrub(stuck_in) ],
+        op: add(1),
+    }
     StartupPhaseDuration {
         wire: "grok_code.startup.phase_duration",
         const: METRIC_STARTUP_PHASE_DURATION,

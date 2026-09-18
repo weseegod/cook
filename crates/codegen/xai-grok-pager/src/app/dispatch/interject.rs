@@ -29,9 +29,29 @@ pub(super) fn dispatch_interject_on(
     text: String,
     images: Vec<crate::prompt_images::PastedImage>,
 ) -> Vec<Effect> {
+    dispatch_interject_on_inner(app, id, text, images, /* user_submit */ true)
+}
+
+/// Wait-start / Enter flush: same wire send, without submit side effects (voice stop, history, toast).
+pub(super) fn dispatch_interject_from_held_queue(
+    app: &mut AppView,
+    id: AgentId,
+    text: String,
+    images: Vec<crate::prompt_images::PastedImage>,
+) -> Vec<Effect> {
+    dispatch_interject_on_inner(app, id, text, images, /* user_submit */ false)
+}
+
+fn dispatch_interject_on_inner(
+    app: &mut AppView,
+    id: AgentId,
+    text: String,
+    images: Vec<crate::prompt_images::PastedImage>,
+    user_submit: bool,
+) -> Vec<Effect> {
     // Voice is app-wide and bound to the focused composer
     // A /btw answer on another session must not commit interim text or kill dictation on the pane the user is actually talking into
-    if matches!(app.active_view, ActiveView::Agent(active) if active == id) {
+    if user_submit && matches!(app.active_view, ActiveView::Agent(active) if active == id) {
         // Hard-reset only; `text` may not be from the composer
         let _ = voice_stop_on_submit(app);
     }
@@ -39,29 +59,39 @@ pub(super) fn dispatch_interject_on(
         return vec![];
     };
 
-    // Submitting an interjection retires any edit-contextual ephemeral tip, even when there is no active session
-    // Matches the prompt/bash/feedback/remember paths
-    agent.ephemeral_tip.clear_on_submit();
-    agent.release_hook_block_hold();
+    if user_submit {
+        agent.ephemeral_tip.clear_on_submit();
+        agent.release_hook_block_hold();
+    }
 
     let Some(session_id) = agent.session.session_id.clone() else {
         agent.show_toast(NO_SESSION_NOTICE);
         return vec![];
     };
 
-    agent.record_prompt_in_history(&text);
+    if user_submit {
+        agent.record_prompt_in_history(&text);
+    }
 
     // Push a standard user prompt block locally for instant feedback
     // Record its id so the broadcast echo (`x.ai/session/interjection`) is deduped instead of rendering a second copy on this pane
     let interjection_id = uuid::Uuid::new_v4().to_string();
     agent.self_interjection_ids.insert(interjection_id.clone());
-    agent
+    let entry_id = agent
         .scrollback
         .push_block(RenderBlock::interjection_prompt(&text));
+    agent
+        .interjection_painted_blocks
+        .insert(interjection_id.clone(), entry_id);
+    agent
+        .interjection_retry_images
+        .insert(interjection_id.clone(), images.clone());
 
     // The composer is NOT touched here: the producer that consumed composer text (the InterjectPrompt registry arm) clears it at the call site
     // Every other producer (Send now, edit-interject, plan review comments) carries non-composer text and must keep the user's draft/stash
-    agent.show_toast("Interjection sent");
+    if user_submit {
+        agent.show_toast("Interjection sent");
+    }
 
     // Image-bearing interjection: build text and image content blocks via the same helper as the queued-prompt drain path
     // The helper covers orphan-placeholder recovery, the allowlist, and the size cap. Text-only stays on the legacy wire.

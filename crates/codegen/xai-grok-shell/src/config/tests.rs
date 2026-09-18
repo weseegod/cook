@@ -4318,6 +4318,45 @@ fn concurrent_plugin_list_writers_lose_no_updates() {
         .unwrap();
     assert_eq!(enabled.len(), n, "a concurrent enable was lost:\n{content}");
 }
+/// Bind dest before load. A retarget inside `mutate` must refuse — not merge
+/// A's `[plugins]` onto B.
+#[cfg(unix)]
+#[test]
+fn update_config_toml_locked_refuses_retarget_between_read_and_write() {
+    let home = tempfile::tempdir().unwrap();
+    let a = home.path().join("a.toml");
+    let b = home.path().join("b.toml");
+    std::fs::write(&a, "[ui]\nfrom_a = true\n").unwrap();
+    std::fs::write(&b, "[ui]\nfrom_b = true\n").unwrap();
+    let link = home.path().join("config.toml");
+    std::os::unix::fs::symlink(&a, &link).unwrap();
+    let err = update_config_toml_locked(
+            home.path(),
+            |table| {
+                plugins_list_add(table, "enabled", "demo-plugin")?;
+                std::fs::remove_file(&link).unwrap();
+                std::os::unix::fs::symlink(&b, &link).unwrap();
+                Ok(true)
+            },
+        )
+        .expect_err("retarget between load and save must fail closed");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("changed") || msg.contains("follow destination"),
+        "expected retarget refusal, got {msg}"
+    );
+    let raw_a = std::fs::read_to_string(&a).unwrap();
+    let raw_b = std::fs::read_to_string(&b).unwrap();
+    assert!(
+        raw_a.contains("from_a = true") && !raw_a.contains("demo-plugin"),
+        "referent A must stay unmerged:\n{raw_a}"
+    );
+    assert!(
+        raw_b.contains("from_b = true") && !raw_b.contains("demo-plugin"),
+        "must not merge A's snapshot onto B:\n{raw_b}"
+    );
+    assert_eq!(b, std::fs::read_link(&link).unwrap());
+}
 /// Pins the blocking-pool hop behind the session `[plugins]` writers: LocalSet tasks keep running during a flock poll.
 #[test]
 fn plugin_config_writes_keep_the_caller_local_set_live() {

@@ -2336,6 +2336,46 @@ fn execute_block_keeps_full_command_sets_header_display_when_peeled() {
     );
 }
 #[test]
+fn read_text_content_becomes_numbered_lines_with_the_sent_range() {
+    const TEXT: &str = "fn main() {}\nfn run() {}\n";
+    let range = || Some(LineRange::new(10, 11));
+    let counts = serde_json::json!({ "totalLines": 40, "range": { "start": 10, "end": 11 } });
+    let read = |raw_output: Option<serde_json::Value>, content: Vec<acp::ToolCallContent>| {
+        let call = acp::ToolCall::new(
+            acp::ToolCallId::new(Arc::from("read-1")),
+            "src/main.rs".to_string(),
+        )
+        .kind(acp::ToolKind::Read)
+        .status(acp::ToolCallStatus::Completed)
+        .raw_input(Some(serde_json::json!({ "path": "src/main.rs" })))
+        .raw_output(raw_output)
+        .content(content)
+        .locations(vec![]);
+        match tool_call_to_block(&call, None, &SubagentLabelRegistry::default()) {
+            RenderBlock::ToolCall(ToolCallBlock::Read(block)) => {
+                (block.content, block.total_lines, block.line_range)
+            }
+            other => panic!("expected read block, got {other:?}"),
+        }
+    };
+    assert_eq!(
+        read(Some(counts.clone()), vec![TEXT.into()]),
+        (Some(TEXT.to_owned()), Some(40), range())
+    );
+    assert_eq!(
+        read(None, vec![TEXT.into()]),
+        (Some(TEXT.to_owned()), Some(2), None)
+    );
+    assert_eq!(
+        read(
+            Some(serde_json::json!({ "type": "Text", "text": "**File:** rust.md\n1 | # Rust\n" })),
+            vec![TEXT.into()],
+        ),
+        (None, None, None)
+    );
+    assert_eq!(read(Some(counts), vec![]), (None, Some(40), range()));
+}
+#[test]
 fn memory_v2_metadata_groups_ordinary_file_activity_without_losing_details() {
     let memory_meta = Some(
         serde_json::json!({ "memory_v2_activity": true })
@@ -4717,6 +4757,30 @@ fn call_mcp_tool_coerced_to_use_tool_renders_block() {
         panic!("expected UseTool block, got {block:?}");
     };
     assert_eq!(ut.tool_name, "grafana__search");
+}
+#[test]
+fn a_failed_tool_search_shows_its_output_text_as_the_error() {
+    let tc = acp::ToolCall::new(
+        acp::ToolCallId::new(Arc::from("mcp2")),
+        "Search tools slack",
+    )
+    .kind(acp::ToolKind::Other)
+    .status(acp::ToolCallStatus::Failed)
+    .content(vec![])
+    .raw_input(Some(
+        serde_json::json!({ "variant": "SearchTool", "query": "slack" }),
+    ))
+    .raw_output(Some(serde_json::json!({
+        "type": "SearchTool",
+        "result_count": 0,
+        "content": "no such server: slack"
+    })))
+    .locations(vec![]);
+    let block = tool_call_to_block(&tc, None, &SubagentLabelRegistry::default());
+    let RenderBlock::ToolCall(ToolCallBlock::IntegrationSearch(st)) = block else {
+        panic!("expected IntegrationSearch block, got {block:?}");
+    };
+    assert_eq!(st.error.as_deref(), Some("no such server: slack"));
 }
 #[test]
 fn directly_listed_mcp_tool_renders_like_a_use_tool_call() {

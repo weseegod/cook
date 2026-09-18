@@ -49,6 +49,8 @@ impl AgentView {
         }
         self.session.session_id = Some(session_id);
         self.session_starting_since = None;
+        self.session_new_phase = None;
+        self.pending_session_id = None;
     }
     /// The top-bar MCP chip shows real server counts only; a `0/0` report renders nothing
     pub(crate) fn mcp_chip_visible(&self) -> bool {
@@ -217,6 +219,8 @@ impl AgentView {
             turn_paused_duration: std::time::Duration::ZERO,
             turn_paused_wall: std::time::Duration::ZERO,
             self_interjection_ids: std::collections::HashSet::new(),
+            interjection_painted_blocks: std::collections::HashMap::new(),
+            interjection_retry_images: std::collections::HashMap::new(),
             last_active_at: Some(Instant::now()),
             current_branch: None,
             is_worktree: false,
@@ -369,6 +373,8 @@ impl AgentView {
             overlay_can_cycle: false,
             mcp_init_progress: None,
             session_starting_since: None,
+            session_new_phase: None,
+            pending_session_id: None,
             acp_synced_generation: 0,
             hovered_permission_item: None,
             last_permission_click: None,

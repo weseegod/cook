@@ -26,6 +26,22 @@ use xai_grok_shell::extensions::notification::{
 /// Shared text-selection range id for recap body lines (header is excluded).
 const RECAP_BODY_RANGE: u16 = 0;
 
+/// Which pager-local memory command a [`SessionEvent::MemoryCommandStarted`] marker belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemoryCommandKind {
+    Flush,
+    Dream,
+}
+
+impl MemoryCommandKind {
+    fn started_text(self) -> &'static str {
+        match self {
+            Self::Flush => "Flushing memory…",
+            Self::Dream => "Consolidating memory…",
+        }
+    }
+}
+
 /// A session-level event with structured data.
 /// Each variant carries the information needed to render a concise, informational message in the scrollback.
 /// These are non-interactive: unselectable, unfoldable, no accent.
@@ -122,6 +138,16 @@ pub enum SessionEvent {
     /// Manual `/compact` command completed.
     CompactCompleted {
         /// Wall-clock elapsed time for the command.
+        elapsed: Duration,
+    },
+    /// `/flush` or `/dream` started; the invocation marker that pairs each run with its outcome line.
+    /// Local scrollback block only, like [`SessionEvent::CompactStarted`].
+    MemoryCommandStarted { command: MemoryCommandKind },
+    /// `/flush` or `/dream` finished. `summary` comes from the shell's typed response.
+    MemoryCommandCompleted {
+        summary: String,
+        /// False when the run did not achieve what the user asked (failed, timed out, disabled).
+        succeeded: bool,
         elapsed: Duration,
     },
     /// Hook annotation, displayed inline after a tool call.
@@ -451,6 +477,21 @@ impl SessionEvent {
             SessionEvent::CompactCompleted { elapsed } => {
                 format!("Compaction completed in {}.", format_duration(*elapsed))
             }
+            SessionEvent::MemoryCommandStarted { command } => command.started_text().to_string(),
+            SessionEvent::MemoryCommandCompleted {
+                summary,
+                succeeded,
+                elapsed,
+            } => {
+                if *succeeded {
+                    format!(
+                        "{summary} ({})  \u{00b7}  /memory to view",
+                        format_duration(*elapsed)
+                    )
+                } else {
+                    summary.clone()
+                }
+            }
             SessionEvent::HookAnnotation { message } | SessionEvent::HookOutcome { message } => {
                 message.clone()
             }
@@ -515,6 +556,10 @@ impl SessionEvent {
                 | SessionEvent::RequestFailed { .. }
                 | SessionEvent::RetryFailed { .. }
                 | SessionEvent::TurnFailed { .. }
+                | SessionEvent::MemoryCommandCompleted {
+                    succeeded: false,
+                    ..
+                }
         )
     }
 

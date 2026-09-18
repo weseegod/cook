@@ -18,13 +18,16 @@ use crate::file_system::ContentSearchRequest;
 use crate::handle::WorkspaceHandle;
 use crate::worktree::{ApplyWorktreeRequest, CreateWorktreeRequest, RemoveWorktreeRequest};
 use async_trait::async_trait;
+use base64::Engine;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use xai_computer_hub_sdk::ToolHarness;
 use xai_grok_tools::types::output::ToolRunResult;
+use xai_grok_tools::types::resources::SessionFolder;
 use xai_grok_workspace_client::{WorkspaceClient, is_transport_fatal};
 pub use xai_grok_workspace_types::rpc::agents_md::DiscoverAgentsMdReq;
 pub use xai_grok_workspace_types::rpc::code_nav::{
@@ -35,7 +38,8 @@ pub use xai_grok_workspace_types::rpc::export_github::ExportGithubReq;
 pub use xai_grok_workspace_types::rpc::fs::{
     ClientFsListNode, ClientFsListReq, ClientFsListRes, ClientFsReadFileReq, ClientFsReadFileRes,
     ClientFsStatReq, ClientFsStatRes, GetFileEntry, GetFileResult, GetFilesReq, GetFilesRes,
-    PutFileEntry, PutFileResult, PutFilesReq, PutFilesRes,
+    PutFileEntry, PutFileResult, PutFilesReq, PutFilesRes, StoreSessionImageReq,
+    StoreSessionImageRes,
 };
 pub use xai_grok_workspace_types::rpc::git::{
     BinaryFileInfoData, CheckoutCommitResponse, CommitWithPatchData, DetectVcsKindReq,
@@ -1035,6 +1039,85 @@ impl WorkspaceOp for HookRegistryReq {
         _session_id: Option<&str>,
     ) -> WorkspaceResult<Self::Response> {
         hook_registry_to_wire(&ws.hook_registry())
+    }
+}
+#[async_trait]
+impl WorkspaceOp for StoreSessionImageReq {
+    async fn execute(
+        &self,
+        ws: &WorkspaceHandle,
+        session_id: Option<&str>,
+    ) -> WorkspaceResult<Self::Response> {
+        let session_id = session_id.ok_or_else(|| {
+            WorkspaceError::HubError("store_session_image requires a bound session".to_owned())
+        })?;
+        let session = ws
+            .session(session_id)
+            .ok_or_else(|| WorkspaceError::SessionNotFound(session_id.to_owned()))?;
+        if !matches!(self.extension.as_str(), "jpg" | "png" | "webp" | "gif") {
+            return Err(WorkspaceError::HubError(
+                "store_session_image extension must be jpg, png, webp, or gif".to_owned(),
+            ));
+        }
+        let folder = session
+            .toolset()
+            .resources
+            .lock()
+            .await
+            .require::<SessionFolder>()
+            .map_err(|e| WorkspaceError::HubError(format!("store_session_image: {e}")))?
+            .0
+            .clone();
+        if self.content_base64.len()
+            > xai_grok_workspace_types::rpc::fs::MAX_SESSION_IMAGE_BASE64_BYTES
+        {
+            return Err(WorkspaceError::HubError(format!(
+                "session image exceeds {} byte limit",
+                xai_grok_workspace_types::rpc::fs::MAX_SESSION_IMAGE_BYTES
+            )));
+        }
+        let content_base64 = self.content_base64.clone();
+        let extension = self.extension.clone();
+        tokio::task::spawn_blocking(move || {
+            let content = base64::engine::general_purpose::STANDARD
+                .decode(content_base64)
+                .map_err(|e| {
+                    WorkspaceError::HubError(format!("invalid session image base64: {e}"))
+                })?;
+            if content.len() > xai_grok_workspace_types::rpc::fs::MAX_SESSION_IMAGE_BYTES {
+                return Err(WorkspaceError::HubError(format!(
+                    "session image exceeds {} byte limit",
+                    xai_grok_workspace_types::rpc::fs::MAX_SESSION_IMAGE_BYTES
+                )));
+            }
+            let folder = dunce::canonicalize(&folder).map_err(|e| {
+                WorkspaceError::HubError(format!(
+                    "resolve session image folder {}: {e}",
+                    folder.display()
+                ))
+            })?;
+            let path = folder.join(format!("{}.{extension}", uuid::Uuid::new_v4()));
+            let file_path = path
+                .to_str()
+                .ok_or_else(|| {
+                    WorkspaceError::HubError("session image path is not UTF-8".to_owned())
+                })?
+                .to_owned();
+            let mut temp = tempfile::NamedTempFile::new_in(&folder).map_err(|e| {
+                WorkspaceError::HubError(format!("create session image temporary file: {e}"))
+            })?;
+            temp.write_all(&content)
+                .map_err(|e| WorkspaceError::HubError(format!("write session image: {e}")))?;
+            temp.as_file()
+                .sync_all()
+                .map_err(|e| WorkspaceError::HubError(format!("sync session image: {e}")))?;
+            temp.persist_noclobber(&path).map_err(|e| {
+                WorkspaceError::HubError(format!("persist session image {}: {e}", path.display()))
+            })?;
+            Ok(StoreSessionImageRes { file_path })
+        })
+        .await
+        .map_err(|e| WorkspaceError::JoinError(e.to_string()))?
     }
 }
 #[async_trait]

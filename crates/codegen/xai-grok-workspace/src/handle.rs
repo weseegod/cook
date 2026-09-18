@@ -2319,19 +2319,18 @@ impl WorkspaceHandle {
     ) -> Option<Arc<xai_codebase_graph::IndexManagerHandle>> {
         self.shared.codebase_indexes.lock().get_covering(path)
     }
-    pub fn ensure_codebase_indexes(&self, roots: &[std::path::PathBuf]) {
-        self.shared.codebase_indexes.lock().ensure_all(roots);
-    }
     fn spawn_codebase_index_event_forwarder(&self) -> tokio::task::JoinHandle<()> {
         let shared = self.shared.clone();
         let root_cwd = self.shared.root_cwd.clone();
         let index_root =
             crate::session::git::find_git_root_from_path(&root_cwd).unwrap_or(root_cwd.clone());
+        let watch_root = dunce::canonicalize(&root_cwd).unwrap_or(root_cwd);
         tokio::spawn(async move {
             let mut rx = shared.events.subscribe();
             loop {
                 match rx.recv().await {
                     Ok(xai_grok_workspace_types::WorkspaceEvent::FsChanged { paths, kind }) => {
+                        let paths: Vec<_> = paths.iter().map(|p| watch_root.join(p)).collect();
                         let events = {
                             let indexes = shared.codebase_indexes.lock();
                             crate::fs_notify::codebase_graph_events_for_batch(paths, kind, |path| {
@@ -3956,14 +3955,6 @@ impl WorkspaceHandle {
                 self.shared.events.clone(),
             ));
         }
-        {
-            let ws = self.clone();
-            tokio::spawn(async move {
-                if let Ok(roots) = crate::workspace_ops::materialized_git_roots(&ws).await {
-                    ws.ensure_codebase_indexes(&roots);
-                }
-            });
-        }
         if let Some(task) = self.spawn_tool_definitions_event_forwarder() {
             handle.set_tool_defs_forwarder_task(task);
         }
@@ -4243,8 +4234,8 @@ pub async fn connect_local_workspace(
     options: LocalWorkspaceConnectOptions,
 ) -> WorkspaceResult<WorkspaceHandle> {
     let time_to_ready_started = std::time::Instant::now();
-    let ws_handle = build_local_workspace(cwd, hub_url, auth, options).await?;
-    let connect_result = ws_handle.connect_hub().await;
+    let ws_handle = Box::pin(build_local_workspace(cwd, hub_url, auth, options)).await?;
+    let connect_result = Box::pin(ws_handle.connect_hub()).await;
     observe_startup_stage(
         STARTUP_STAGE_TIME_TO_READY,
         if connect_result.is_ok() {

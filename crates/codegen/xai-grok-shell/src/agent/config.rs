@@ -2334,13 +2334,17 @@ impl Config {
             self.grok_com_config.force_login_team_uuid.take(),
         );
     }
+    /// Whether product analytics may run. Every product analytics check calls this.
+    pub fn product_analytics_enabled(&self, auth: Option<&xai_grok_login::GrokAuth>) -> bool {
+        self.is_telemetry_enabled() && !auth.is_some_and(|auth| auth.is_zdr_team())
+    }
     pub(crate) fn is_telemetry_enabled(&self) -> bool {
         self.resolve_telemetry_mode().value.is_enabled()
     }
     pub fn is_trace_upload_enabled(&self) -> bool {
         self.resolve_trace_upload().value
     }
-    pub(crate) fn is_feedback_enabled(&self) -> bool {
+    pub fn is_feedback_enabled(&self) -> bool {
         self.is_feature_enabled(Feature::Feedback)
     }
     pub(crate) fn is_session_recap_enabled(&self) -> bool {

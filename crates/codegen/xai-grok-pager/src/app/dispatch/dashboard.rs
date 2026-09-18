@@ -27,10 +27,6 @@ use crate::app::cancel_latency::CancelOrigin;
 use agent_client_protocol as acp;
 use xai_grok_telemetry::events::CancellationScope;
 
-// ---------------------------------------------------------------------------
-// Agent Dashboard dispatchers
-// ---------------------------------------------------------------------------
-
 /// Keeps v1 config layout separate from v2 workspace layout.
 fn dashboard_state_for_mode(app: &mut AppView) -> crate::views::dashboard::DashboardState {
     use crate::views::dashboard::{DashboardState, load_persisted};

@@ -107,3 +107,12 @@ pub struct AgentConnect {
     pub embedded_fallback: bool,
     pub auth_mode: crate::startup::AuthMode,
 }
+
+/// A `session/new` that never reached `session created`. Maps to the create-timeout counter only.
+#[derive(Serialize)]
+pub struct SessionCreateFailed {
+    pub outcome: crate::startup::StartupOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck_phase: Option<String>,
+    pub elapsed_ms: u64,
+}

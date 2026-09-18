@@ -5,18 +5,21 @@
 //! File list shows all memory files grouped by source (Global, Workspace, Sessions) with session logs in reverse chronological order.
 //! Selecting a file loads its content into the preview pane.
 //!
-//! Layout collapses to single-pane (list only) on narrow terminals (under 80 cols).
+//! Layout collapses to single-pane (list only) on narrow terminals (under 64 cols); `Enter` then
+//! opens the selected note over the whole content area.
 //!
-//! `/` enters filter mode (type to search, Escape to exit).
+//! `/` enters filter mode (type to search names and note contents, Escape to exit).
+//! Dragging over the preview copies the selected text on release.
 //! `x` deletes with double-press confirmation: v2 topics and inbox observations via the shell's
 //! `x.ai/memory/forget` (tombstone + index + manifest update), legacy session logs by unlink.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crossterm::event::KeyModifiers;
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -31,15 +34,25 @@ use crate::render::SafeBuf;
 use crate::render::scrollbar::{ScrollbarClickResult, render_scrollbar, scrollbar_click_to_offset};
 use crate::scrollback::blocks::markdown_content::MarkdownContent;
 use crate::theme::Theme;
+use crate::views::drag_select::{
+    TextDrag, TextEndpoint, endpoint_at, endpoint_at_clamped, paint_text_drag, text_for_drag,
+};
 use crate::views::modal_window::{
     self, ModalContentArea, ModalSizing, ModalWindowConfig, ModalWindowState, Shortcut,
 };
-use xai_grok_shell::extensions::memory::{MEMORY_FORGET_MAX_FILE_BYTES, MemoryForgetResponse};
+use xai_grok_shell::extensions::memory::{
+    MEMORY_FORGET_MAX_FILE_BYTES, MemoryForgetResponse, MemoryListing, MemoryToggleResponse,
+};
 use xai_grok_shell::extensions::notification::MemoryDisabledReason;
 
-const SPLIT_MIN_WIDTH: u16 = 80;
+const SPLIT_MIN_WIDTH: u16 = 64;
 const LIST_WIDTH_RATIO: f64 = 0.40;
+/// Below this list width the size column is dropped so labels keep room (age only).
+const NARROW_LIST_WIDTH: u16 = 48;
 const MAX_PREVIEW_BYTES: u64 = 1_048_576;
+/// Content search reads run on the UI thread, so they are capped per note and in total.
+const MAX_SEARCH_BYTES_PER_NOTE: u64 = 262_144;
+const MAX_SEARCH_BYTES_TOTAL: u64 = 8 * 1_048_576;
 const NOTICE_MAX_WIDTH: u16 = 72;
 
 // Notices use bold leads rather than `#` headings: heading text takes the theme accent color.
@@ -66,34 +79,47 @@ fn disabled_state_markdown(reason: Option<MemoryDisabledReason>) -> &'static str
     match reason {
         None | Some(MemoryDisabledReason::SessionToggle) => {
             "\
-**Memory is off for this session.**
-
-- Press **t** to turn it back on.
-- `/memory on` does the same from the prompt.
+**Memory is off for this session.** Press **t** to turn it back on.
 
 While off, Grok isn't reading or saving notes; anything already remembered is kept on disk. \
 Memory carries conventions, decisions, and project facts between sessions so you don't have \
 to repeat yourself."
+        }
+        Some(MemoryDisabledReason::ConfigOptOut) => {
+            "\
+**Memory is off** (`[memory] enabled = false` in `config.toml`). Press **t** to turn it on for \
+this session.
+
+The toggle lasts for this session only; new sessions follow `config.toml`. Set `enabled = true` \
+there (or remove the line) to keep memory on. Anything already remembered is kept on disk."
+        }
+        Some(MemoryDisabledReason::ProcessDisabled) => {
+            "\
+**Memory is off for this process.** Start a new session without `--no-memory` or \
+`GROK_MEMORY=0` to use it.
+
+Memory was turned off when Grok Build started, so it can't be turned on here. Anything already \
+remembered is kept on disk."
         }
         Some(MemoryDisabledReason::RolloutRestricted) => {
             "\
 **Memory is unavailable in this session.** Start a new session to pick up your current settings.
 
 This session's memory settings were pinned when it started, and they disable memory, so it \
-can't be turned on here. `/memory status` shows the details."
+can't be turned on here. Press **s** for details."
         }
         Some(MemoryDisabledReason::NotConfigured) => {
             "\
-**Memory isn't configured.** `/memory status` shows the details.
+**Memory isn't configured.** Press **s** for details.
 
 No memory storage is set up for this session, so there is nothing to browse or turn on."
         }
         Some(MemoryDisabledReason::Unknown) => {
             "\
-**Memory is off for this session.** `/memory status` shows the details.
+**Memory is off for this session.** Press **s** for details.
 
-This session reports a reason this version of Grok Build doesn't recognize; run `/memory on` \
-from the prompt to try turning it back on."
+This session reports a reason this version of Grok Build doesn't recognize; press **t** to try \
+turning it back on."
         }
     }
 }
@@ -104,9 +130,9 @@ pub struct MemoryFileEntry {
     /// `"global"`, `"workspace"`, or `"session"`.
     pub source: String,
     pub label: String,
-    /// Pre-formatted `"size · modified"` string for the list row.
-    /// Empty for headers.
-    pub meta_display: String,
+    /// Formatted size and age for the list row's metadata column. Empty for headers.
+    pub size_text: String,
+    pub age_text: String,
     pub is_header: bool,
     /// Store-generated index, not a note (see `MemoryFileInfo::generated`).
     pub generated: bool,
@@ -114,6 +140,19 @@ pub struct MemoryFileEntry {
 }
 
 impl MemoryFileEntry {
+    /// Metadata column text; fixed-width fields keep the separator in one column across rows.
+    /// Narrow lists drop the size so labels keep room.
+    fn meta_text(&self, narrow: bool) -> String {
+        if self.is_header {
+            return String::new();
+        }
+        if narrow {
+            format!("{:>3}", self.age_text)
+        } else {
+            format!("{:>8} \u{00B7} {:>3}", self.size_text, self.age_text)
+        }
+    }
+
     /// What `x` may remove: v2 topics and inbox observations, or legacy session logs.
     /// Mirrors the store's own rule so the hint never advertises a delete the shell would refuse.
     pub fn is_deletable(&self) -> bool {
@@ -132,11 +171,13 @@ impl MemoryFileEntry {
     }
 }
 
-/// Status shown under the file list.
+/// Status shown under the file list. Transient messages (copy outcomes) carry a tick countdown
+/// like the agent-view toast; the rest stay until the next action replaces them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemoryStatusLine {
     pub text: String,
     pub is_error: bool,
+    pub ticks_remaining: Option<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,9 +186,44 @@ pub enum MemoryModalMode {
     /// Filter input is focused: all single-char keys go to the filter.
     /// Only Escape (exit filter) and Enter (no-op / stay) remain active.
     FilterFocused,
+    /// The preview has keyboard focus: arrows scroll the note; Esc/Enter return to the list.
+    /// When the split is hidden the preview covers the whole content area.
+    PreviewFocused,
     ConfirmingDelete {
         idx: usize,
     },
+}
+
+/// Left-button press on the preview before the movement threshold promotes a drag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PendingPress {
+    column: u16,
+    row: u16,
+    endpoint: TextEndpoint,
+}
+
+/// What the modal can read from a note on disk.
+enum NoteRead {
+    Text(String),
+    TooLarge,
+    Unreadable,
+}
+
+/// Bounded read: the file may grow between a size check and the read.
+fn read_note(path: &Path, limit: u64) -> NoteRead {
+    let mut bytes = Vec::new();
+    let read =
+        std::fs::File::open(path).and_then(|file| file.take(limit + 1).read_to_end(&mut bytes));
+    if read.is_err() {
+        return NoteRead::Unreadable;
+    }
+    if bytes.len() as u64 > limit {
+        return NoteRead::TooLarge;
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => NoteRead::Text(text),
+        Err(_) => NoteRead::Unreadable,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -167,30 +243,45 @@ pub struct MemoryModalState {
     /// Session capabilities from the shell; the empty-state copy only advertises what is on.
     capture_enabled: bool,
     dream_enabled: bool,
-    /// The owner holds `active_modal`, so key handlers request a close through this flag.
-    close_requested: bool,
     /// BLAKE3 hex of the previewed bytes, sent with a delete so the store only removes what the user saw.
     preview_hash: Option<String>,
     /// Delete awaiting the shell's answer; blocks a second `x` meanwhile.
     pending_delete: Option<PathBuf>,
+    /// Flags to restore if an in-flight `t` toggle fails; `Some` also blocks a second `t`.
+    pending_toggle: Option<(bool, Option<MemoryDisabledReason>)>,
     pub status: Option<MemoryStatusLine>,
     /// Whether the modal is rendered in fullscreen mode (persisted to config).
     pub fullscreen: bool,
     /// Cached filtered indices.
     /// Recomputed when `query` or `entries` change.
     filtered_cache: Vec<usize>,
+    /// Lower-cased note contents for the filter, read once per listing on the first non-empty query.
+    /// `None` marks notes that could not be read (or are over the preview cap).
+    content_cache: HashMap<PathBuf, Option<String>>,
+    /// Scroll the preview to the first query match on the next render (set by `load_preview`).
+    preview_jump_pending: bool,
     /// Cached total lines in the preview (for scrollbar rendering).
     preview_total_lines: usize,
+    /// Plain text of the wrapped preview lines as last rendered, for drag-select geometry and copy.
+    preview_plain_lines: Vec<String>,
+    /// Width `preview_plain_lines` was wrapped at; rebuilt when it changes.
+    preview_plain_width: u16,
+    pending_press: Option<PendingPress>,
+    text_drag: Option<TextDrag>,
+    /// Whether the last render showed list and preview side by side.
+    split_shown: bool,
     /// Hit-test rects for mouse interaction (set during render).
     list_area: Rect,
     preview_area: Rect,
+    /// Preview text cells (the preview area minus its scrollbar column).
+    preview_text_area: Rect,
     list_scrollbar_area: Option<Rect>,
     preview_scrollbar_area: Option<Rect>,
 }
 
 impl MemoryModalState {
     pub fn new(entries: Vec<MemoryFileEntry>) -> Self {
-        let filtered_cache = compute_filtered(&entries, "");
+        let filtered_cache = (0..entries.len()).collect();
         let mut state = Self {
             window: ModalWindowState::new(),
             entries,
@@ -204,15 +295,23 @@ impl MemoryModalState {
             disabled_reason: None,
             capture_enabled: true,
             dream_enabled: true,
-            close_requested: false,
             preview_hash: None,
             pending_delete: None,
+            pending_toggle: None,
             status: None,
             fullscreen: load_fullscreen_pref(),
             filtered_cache,
+            content_cache: HashMap::new(),
+            preview_jump_pending: false,
             preview_total_lines: 0,
+            preview_plain_lines: Vec::new(),
+            preview_plain_width: 0,
+            pending_press: None,
+            text_drag: None,
+            split_shown: true,
             list_area: Rect::default(),
             preview_area: Rect::default(),
+            preview_text_area: Rect::default(),
             list_scrollbar_area: None,
             preview_scrollbar_area: None,
         };
@@ -221,25 +320,92 @@ impl MemoryModalState {
         state
     }
 
-    pub fn with_enabled(mut self, enabled: bool, reason: Option<MemoryDisabledReason>) -> Self {
+    pub fn from_listing(listing: MemoryListing) -> Self {
+        let mut state = Self::new(Vec::new());
+        state.apply_listing(listing);
+        state
+    }
+
+    #[cfg(test)]
+    fn with_enabled(mut self, enabled: bool, reason: Option<MemoryDisabledReason>) -> Self {
         self.memory_enabled = enabled;
         self.disabled_reason = if enabled { None } else { reason };
         self
     }
 
-    pub fn with_capabilities(mut self, capture_enabled: bool, dream_enabled: bool) -> Self {
+    #[cfg(test)]
+    fn with_capabilities(mut self, capture_enabled: bool, dream_enabled: bool) -> Self {
         self.capture_enabled = capture_enabled;
         self.dream_enabled = dream_enabled;
         self
     }
 
-    /// Memory is off but `/memory on` can turn it back on in this session.
+    /// Replace the file list and flags with a fresh listing, keeping the window, filter, and fullscreen state.
+    pub fn apply_listing(&mut self, listing: MemoryListing) {
+        self.memory_enabled = listing.enabled;
+        self.disabled_reason = if listing.enabled {
+            None
+        } else {
+            listing.disabled_reason
+        };
+        self.capture_enabled = listing.capture_enabled;
+        self.dream_enabled = listing.dream_enabled;
+        self.entries = build_entries(listing.files);
+        self.pending_delete = None;
+        self.content_cache.clear();
+        // A confirm armed against the old list must not carry its index into the new one.
+        if matches!(self.mode, MemoryModalMode::ConfirmingDelete { .. }) {
+            self.mode = MemoryModalMode::Browse;
+        }
+        self.invalidate_filter();
+        self.selected = 0;
+        self.advance_past_headers();
+        self.clamp_selected();
+        self.load_preview();
+    }
+
+    /// Apply the shell's answer to a `t` toggle: resync from its listing, or revert the optimistic
+    /// flip and surface the failure.
+    pub fn apply_toggle_result(&mut self, result: Result<MemoryToggleResponse, String>) {
+        let previous = self.pending_toggle.take();
+        match result {
+            Ok(response) => {
+                // The reply's flags are authoritative: a refusal leaves memory where it was.
+                self.memory_enabled = response.enabled;
+                self.disabled_reason = response.disabled_reason.filter(|_| !response.enabled);
+                if let Some(listing) = response.listing {
+                    self.apply_listing(listing);
+                }
+                let requested = previous.map(|(was_enabled, _)| !was_enabled);
+                self.status = Some(MemoryStatusLine {
+                    text: response.message,
+                    is_error: requested.is_some_and(|r| r != response.enabled),
+                    ticks_remaining: None,
+                });
+            }
+            Err(message) => {
+                if let Some((enabled, reason)) = previous {
+                    self.memory_enabled = enabled;
+                    self.disabled_reason = reason;
+                }
+                self.status = Some(MemoryStatusLine {
+                    text: message,
+                    is_error: true,
+                    ticks_remaining: None,
+                });
+            }
+        }
+    }
+
+    /// Memory is off but `t` can turn it back on in this session.
     /// `None` (shell predates the field) is assumed toggleable; `Unknown` fails closed.
     pub fn can_enable(&self) -> bool {
         !self.memory_enabled
             && matches!(
                 self.disabled_reason,
-                None | Some(MemoryDisabledReason::SessionToggle)
+                None | Some(
+                    MemoryDisabledReason::SessionToggle | MemoryDisabledReason::ConfigOptOut
+                )
             )
     }
 
@@ -271,10 +437,6 @@ impl MemoryModalState {
     /// Deletion needs the preview hash as evidence; oversized or unreadable notes offer none.
     fn can_delete_selected(&self) -> bool {
         self.preview_hash.is_some() && self.selected_entry().is_some_and(|e| e.is_deletable())
-    }
-
-    pub fn take_close_request(&mut self) -> bool {
-        std::mem::take(&mut self.close_requested)
     }
 
     /// Apply the shell's answer to the delete request for `path`.
@@ -311,11 +473,13 @@ impl MemoryModalState {
                 MemoryStatusLine {
                     text: format!("Deleted {}.", label.unwrap_or_default()),
                     is_error: false,
+                    ticks_remaining: None,
                 }
             }
             Ok(MemoryForgetResponse::Rejected { message, .. }) | Err(message) => MemoryStatusLine {
                 text: message,
                 is_error: true,
+                ticks_remaining: None,
             },
         });
     }
@@ -348,7 +512,97 @@ impl MemoryModalState {
     }
 
     fn invalidate_filter(&mut self) {
-        self.filtered_cache = compute_filtered(&self.entries, self.query());
+        let terms = query_terms(self.query());
+        if !terms.is_empty() {
+            self.fill_content_cache();
+        }
+        self.filtered_cache = compute_filtered(&self.entries, &terms, &self.content_cache);
+    }
+
+    /// Read every listed note not yet cached. Runs on the first non-empty query; later keystrokes
+    /// only hit the cache. Notes past the total budget are cached as unreadable (name-only match).
+    fn fill_content_cache(&mut self) {
+        let mut budget = MAX_SEARCH_BYTES_TOTAL;
+        for entry in self.entries.iter().filter(|e| !e.is_header) {
+            self.content_cache
+                .entry(entry.path.clone())
+                .or_insert_with(|| {
+                    if budget == 0 {
+                        return None;
+                    }
+                    match read_note(&entry.path, MAX_SEARCH_BYTES_PER_NOTE.min(budget)) {
+                        NoteRead::Text(text) => {
+                            budget = budget.saturating_sub(text.len() as u64);
+                            Some(text.to_lowercase())
+                        }
+                        NoteRead::TooLarge | NoteRead::Unreadable => None,
+                    }
+                });
+        }
+    }
+
+    /// The filter is active but matches nothing.
+    fn filter_has_no_matches(&self) -> bool {
+        self.filtered_cache.is_empty() && !self.query().is_empty()
+    }
+
+    /// Show the outcome of an `Action::MemoryCopy` in the status line (the agent-view toast is
+    /// painted under the modal).
+    pub fn report_copy(&mut self, delivery: &crate::clipboard::CopyDelivery) {
+        self.status = Some(MemoryStatusLine {
+            text: delivery.toast_message().into_owned(),
+            is_error: !delivery.success(),
+            ticks_remaining: Some(delivery.toast_ticks()),
+        });
+    }
+
+    /// A status message with a countdown is showing (keeps the animation tick alive).
+    pub fn status_is_transient(&self) -> bool {
+        self.status
+            .as_ref()
+            .is_some_and(|s| s.ticks_remaining.is_some())
+    }
+
+    /// Advance a transient status message by one animation tick.
+    /// Returns `true` if it just expired (a redraw is needed to erase it).
+    pub fn tick_status(&mut self) -> bool {
+        let Some(ticks) = self
+            .status
+            .as_mut()
+            .and_then(|s| s.ticks_remaining.as_mut())
+        else {
+            return false;
+        };
+        if *ticks == 0 {
+            self.status = None;
+            return true;
+        }
+        *ticks -= 1;
+        false
+    }
+
+    fn clear_text_drag(&mut self) {
+        self.pending_press = None;
+        self.text_drag = None;
+    }
+
+    fn preview_endpoint_clamped(&self, column: u16, row: u16) -> Option<TextEndpoint> {
+        endpoint_at_clamped(
+            &self.preview_plain_lines,
+            self.preview_text_area,
+            self.preview_scroll,
+            column,
+            row,
+        )
+    }
+
+    fn scroll_preview_by(&mut self, delta: isize) {
+        let max = self
+            .preview_total_lines
+            .saturating_sub(self.preview_text_area.height as usize);
+        self.preview_scroll = self.preview_scroll.saturating_add_signed(delta).min(max);
+        // Content moves under a still pointer; drop an unfinished gesture.
+        self.clear_text_drag();
     }
 
     pub fn selected_entry(&self) -> Option<&MemoryFileEntry> {
@@ -486,65 +740,77 @@ impl MemoryModalState {
         self.preview_scroll = 0;
         self.preview_hash = None;
         self.status = None;
+        self.preview_plain_width = 0;
+        self.clear_text_drag();
+        self.preview_jump_pending = !self.query().is_empty();
         let path = self
             .selected_entry()
             .filter(|e| !e.is_header)
             .map(|e| e.path.clone());
-        self.preview_markdown = path.and_then(|path| {
-            // Bounded read: the file may grow between a size check and the read.
-            let mut bytes = Vec::new();
-            std::fs::File::open(&path)
-                .ok()?
-                .take(MAX_PREVIEW_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .ok()?;
-            if bytes.len() as u64 > MAX_PREVIEW_BYTES {
-                return Some(MarkdownContent::new("*(File too large to preview)*"));
+        self.preview_markdown = path.and_then(|path| match read_note(&path, MAX_PREVIEW_BYTES) {
+            NoteRead::Text(text) => {
+                self.preview_hash = Some(blake3::hash(text.as_bytes()).to_hex().to_string());
+                Some(MarkdownContent::new(text))
             }
-            let text = String::from_utf8(bytes).ok()?;
-            self.preview_hash = Some(blake3::hash(text.as_bytes()).to_hex().to_string());
-            Some(MarkdownContent::new(text))
+            NoteRead::TooLarge => Some(MarkdownContent::new("*(File too large to preview)*")),
+            NoteRead::Unreadable => None,
         });
     }
 }
 
-/// Compute filtered indices from entries and query.
+/// Lower-cased whitespace-separated filter terms; every term must match.
+fn query_terms(query: &str) -> Vec<String> {
+    query.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Line to scroll the preview to for `query`: the first line containing every term, else the first
+/// containing the longest term (a short common word alone would pin the preview to the top).
+fn first_match_line(lines: &[String], query: &str) -> Option<usize> {
+    let terms = query_terms(query);
+    let longest = terms.iter().max_by_key(|t| t.len())?;
+    let lowered: Vec<String> = lines.iter().map(|l| l.to_lowercase()).collect();
+    lowered
+        .iter()
+        .position(|line| terms.iter().all(|t| line.contains(t.as_str())))
+        .or_else(|| {
+            lowered
+                .iter()
+                .position(|line| line.contains(longest.as_str()))
+        })
+}
+
+/// Compute filtered indices from entries and query terms. An entry matches when every term occurs
+/// in its label, scope name, or (cached) note contents.
 /// Section headers are preserved only when at least one entry in the section matches.
-fn compute_filtered(entries: &[MemoryFileEntry], query: &str) -> Vec<usize> {
-    if query.is_empty() {
+fn compute_filtered(
+    entries: &[MemoryFileEntry],
+    terms: &[String],
+    contents: &HashMap<PathBuf, Option<String>>,
+) -> Vec<usize> {
+    if terms.is_empty() {
         return (0..entries.len()).collect();
     }
-    let needle = query.to_lowercase();
+    let matches = |entry: &MemoryFileEntry| {
+        let label = entry.label.to_lowercase();
+        let source = entry.source.to_lowercase();
+        let content = contents.get(&entry.path).and_then(Option::as_deref);
+        terms.iter().all(|term| {
+            label.contains(term.as_str())
+                || source.contains(term.as_str())
+                || content.is_some_and(|c| c.contains(term.as_str()))
+        })
+    };
     let mut result = Vec::new();
     let mut pending_header: Option<usize> = None;
-    let mut section_has_match = false;
     for (i, entry) in entries.iter().enumerate() {
         if entry.is_header {
-            // `pending_header` is `Some` here only when the previous section had zero matches (`.take()` clears it on first match)
-            // `section_has_match` is then always false; this guard is a defensive no-op
-            // Kept for safety
-            if let Some(h) = pending_header
-                && section_has_match
-            {
-                result.push(h);
-            }
             pending_header = Some(i);
-            section_has_match = false;
-        } else if entry.label.to_lowercase().contains(&needle)
-            || entry.source.to_lowercase().contains(&needle)
-        {
+        } else if matches(entry) {
             if let Some(h) = pending_header.take() {
                 result.push(h);
-                section_has_match = true;
             }
             result.push(i);
         }
-    }
-    // Same defensive no-op as the in-loop guard above.
-    if let Some(h) = pending_header
-        && section_has_match
-    {
-        result.push(h);
     }
     result
 }
@@ -562,10 +828,7 @@ pub fn build_entries(
     let mut session = Vec::new();
 
     for f in files {
-        let label = file_label(&f.path);
-        let size = crate::util::format_bytes(f.size_bytes);
-        let modified = format_modified(f.modified_epoch_secs, now_secs);
-        let meta_display = format!("{size} \u{00B7} {modified}");
+        let label = entry_label(&f);
         let bucket = match f.source.as_str() {
             "global" => &mut global,
             "workspace" => &mut workspace,
@@ -573,7 +836,8 @@ pub fn build_entries(
         };
         bucket.push(MemoryFileEntry {
             label,
-            meta_display,
+            size_text: crate::util::format_bytes(f.size_bytes),
+            age_text: format_modified(f.modified_epoch_secs, now_secs),
             path: f.path.into(),
             source: f.source,
             is_header: false,
@@ -591,7 +855,8 @@ pub fn build_entries(
             entries.push(MemoryFileEntry {
                 path: PathBuf::new(),
                 source: String::new(),
-                meta_display: String::new(),
+                size_text: String::new(),
+                age_text: String::new(),
                 label: label.to_string(),
                 is_header: true,
                 generated: false,
@@ -661,6 +926,7 @@ pub fn render_memory_modal(
         // No list or preview: clear the hit-test rects so stale mouse clicks do nothing.
         state.list_area = Rect::default();
         state.preview_area = Rect::default();
+        state.preview_text_area = Rect::default();
         state.list_scrollbar_area = None;
         state.preview_scrollbar_area = None;
         let markdown = if state.memory_enabled {
@@ -668,12 +934,33 @@ pub fn render_memory_modal(
         } else {
             disabled_state_markdown(state.disabled_reason).to_owned()
         };
-        render_notice(buf, content_area, &markdown, &theme);
+        let status_rows = render_status_line(buf, content_area, state, &theme);
+        let notice_area = Rect {
+            height: content_area.height.saturating_sub(status_rows),
+            ..content_area
+        };
+        render_notice(buf, notice_area, &markdown, &theme);
         return;
     }
 
-    let show_preview = content_area.width >= SPLIT_MIN_WIDTH;
-    let list_width = if show_preview {
+    let split = content_area.width >= SPLIT_MIN_WIDTH;
+    state.split_shown = split;
+    let preview_only = !split && state.mode == MemoryModalMode::PreviewFocused;
+
+    if preview_only {
+        state.list_area = Rect::default();
+        state.list_scrollbar_area = None;
+        let status_rows = render_status_line(buf, content_area, state, &theme);
+        let preview_area = Rect {
+            height: content_area.height.saturating_sub(status_rows),
+            ..content_area
+        };
+        state.preview_area = preview_area;
+        render_preview(buf, preview_area, state, &theme);
+        return;
+    }
+
+    let list_width = if split {
         (content_area.width as f64 * LIST_WIDTH_RATIO) as u16
     } else {
         content_area.width
@@ -689,7 +976,7 @@ pub fn render_memory_modal(
 
     render_file_list(buf, list_area, state, &theme);
 
-    if show_preview {
+    if split {
         let preview_x = content_area.x + list_width + 1;
         let preview_width = content_area.width.saturating_sub(list_width + 1);
         if preview_width > 2 {
@@ -712,10 +999,12 @@ pub fn render_memory_modal(
             render_preview(buf, preview_area, state, &theme);
         } else {
             state.preview_area = Rect::default();
+            state.preview_text_area = Rect::default();
             state.preview_scrollbar_area = None;
         }
     } else {
         state.preview_area = Rect::default();
+        state.preview_text_area = Rect::default();
         state.preview_scrollbar_area = None;
     }
 }
@@ -750,13 +1039,19 @@ fn render_status_line(
     let fg = if status.is_error {
         theme.accent_error
     } else {
-        theme.gray
+        theme.accent_user
     };
     let text = crate::render::line_utils::truncate_str(&status.text, area.width as usize);
     buf.set_span(
         area.x,
         area.y + area.height - 1,
-        &Span::styled(text.as_str(), Style::default().fg(fg).bg(theme.bg_base)),
+        &Span::styled(
+            text.as_str(),
+            Style::default()
+                .fg(fg)
+                .bg(theme.bg_base)
+                .add_modifier(Modifier::BOLD),
+        ),
         area.width,
     );
     1
@@ -840,6 +1135,20 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
         area.width
     };
 
+    if state.filter_has_no_matches() {
+        render_no_matches(buf, area, entries_start_y, state.query(), theme);
+        return;
+    }
+
+    // Labels truncate before the metadata column so long names cannot run into it.
+    let narrow = content_width < NARROW_LIST_WIDTH;
+    let meta_col_w = state
+        .entries
+        .iter()
+        .filter(|e| !e.is_header)
+        .map(|e| e.meta_text(narrow).width())
+        .max()
+        .unwrap_or(0);
     let filtered = state.filtered_indices();
     let end = filtered.len().min(state.scroll_offset + available_height);
     let visible = filtered.get(state.scroll_offset..end).unwrap_or(&[]);
@@ -879,10 +1188,11 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
             };
             buf.set_style(row_rect, Style::default().bg(bg));
 
-            let max_label_w = content_width.saturating_sub(2) as usize;
+            // 1 col left pad, 2 col gap before the metadata column, 1 col right pad.
+            let max_label_w = (content_width as usize).saturating_sub(meta_col_w + 4);
             let truncated_label: Cow<str> = if entry.label.width() > max_label_w {
-                let trunc = truncate_to_width(&entry.label, max_label_w.saturating_sub(3));
-                format!("{trunc}...").into()
+                let trunc = truncate_to_width(&entry.label, max_label_w.saturating_sub(1));
+                format!("{trunc}\u{2026}").into()
             } else {
                 Cow::Borrowed(&entry.label)
             };
@@ -906,15 +1216,11 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
                     hint_w,
                 );
             } else {
-                let meta_w = entry.meta_display.width() as u16;
+                let meta = entry.meta_text(narrow);
+                let meta_w = meta.width() as u16;
                 let meta_x = (area.x + content_width).saturating_sub(meta_w + 1);
                 if meta_x > area.x + 1 {
-                    buf.set_span(
-                        meta_x,
-                        y,
-                        &Span::styled(&entry.meta_display, meta_style),
-                        meta_w,
-                    );
+                    buf.set_span(meta_x, y, &Span::styled(meta.as_str(), meta_style), meta_w);
                 }
             }
 
@@ -936,17 +1242,42 @@ fn render_file_list(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, 
     );
 }
 
+/// Shown under the query row when the filter matches nothing.
+fn render_no_matches(buf: &mut Buffer, area: Rect, y: u16, query: &str, theme: &Theme) {
+    let width = area.width as usize;
+    let style = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
+    let lines = [
+        format!("No notes match \u{201C}{query}\u{201D}"),
+        "Backspace clears the filter".to_owned(),
+    ];
+    for (row, text) in lines.iter().enumerate() {
+        let y = y + row as u16;
+        if y >= area.y + area.height {
+            break;
+        }
+        let text = crate::render::line_utils::truncate_str(text, width);
+        buf.set_span(area.x, y, &Span::styled(text.as_str(), style), area.width);
+    }
+}
+
 fn render_preview(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, theme: &Theme) {
-    if state.preview_markdown.is_none() {
+    buf.set_style(area, Style::default().bg(theme.bg_base));
+    let Some(markdown) = state.preview_markdown.as_ref() else {
         state.preview_total_lines = 0;
         state.preview_scrollbar_area = None;
-        let msg = "No file selected";
-        let style = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
-        let cy = area.y + area.height / 2;
-        let cx = area.x + area.width.saturating_sub(msg.width() as u16) / 2;
-        buf.set_span(cx, cy, &Span::styled(msg, style), area.width);
+        state.preview_text_area = Rect::default();
+        state.preview_plain_lines.clear();
+        state.preview_plain_width = 0;
+        // With a filter that matches nothing the list already explains; an empty pane is clearer.
+        if !state.filter_has_no_matches() {
+            let msg = "No file selected";
+            let style = Style::default().fg(theme.gray_dim).bg(theme.bg_base);
+            let cy = area.y + area.height / 2;
+            let cx = area.x + area.width.saturating_sub(msg.width() as u16) / 2;
+            buf.set_span(cx, cy, &Span::styled(msg, style), area.width);
+        }
         return;
-    }
+    };
 
     // Reserve scrollbar column if needed (computed after first pass).
     // We do a two-pass approach: first compute total at full width to decide if scrollbar is needed, then re-compute at narrowed width if so
@@ -955,13 +1286,7 @@ fn render_preview(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, th
         return;
     }
 
-    buf.set_style(area, Style::default().bg(theme.bg_base));
-
-    let total_at_full = state
-        .preview_markdown
-        .as_ref()
-        .unwrap()
-        .with_wrapped_lines(full_width, |w| w.lines.len());
+    let total_at_full = markdown.with_wrapped_lines(full_width, |w| w.lines.len());
     let visible = area.height as usize;
 
     let (content_width, sb_area) = if total_at_full > visible && area.width > 4 {
@@ -976,33 +1301,56 @@ fn render_preview(buf: &mut Buffer, area: Rect, state: &mut MemoryModalState, th
         (full_width, None)
     };
 
-    let total = if sb_area.is_some() && content_width != full_width {
-        state
-            .preview_markdown
-            .as_ref()
-            .unwrap()
-            .with_wrapped_lines(content_width, |w| w.lines.len())
-    } else {
-        total_at_full
-    };
+    // Plain text of the wrapped lines drives drag-select and the jump to the first match.
+    if state.preview_plain_width != content_width as u16 {
+        state.preview_plain_lines = markdown.with_wrapped_lines(content_width, |wrapped| {
+            wrapped
+                .lines
+                .iter()
+                .map(|line| line.spans.iter().map(|s| s.content.as_ref()).collect())
+                .collect()
+        });
+        state.preview_plain_width = content_width as u16;
+        state.pending_press = None;
+        state.text_drag = None;
+    }
+    let total = state.preview_plain_lines.len();
+
+    if state.preview_jump_pending {
+        state.preview_jump_pending = false;
+        if let Some(line) = first_match_line(&state.preview_plain_lines, state.query.text()) {
+            state.preview_scroll = line;
+        }
+    }
 
     state.preview_total_lines = total;
     state.preview_scrollbar_area = sb_area;
+    state.preview_text_area = Rect {
+        width: content_width as u16,
+        ..area
+    };
     state.preview_scroll = state.preview_scroll.min(total.saturating_sub(visible));
     let scroll = state.preview_scroll;
 
-    state
-        .preview_markdown
-        .as_ref()
-        .unwrap()
-        .with_wrapped_lines(content_width, |wrapped| {
-            for (row, line_idx) in (scroll..total.min(scroll + visible)).enumerate() {
-                let y = area.y + row as u16;
-                if let Some(line) = wrapped.lines.get(line_idx) {
-                    buf.set_line_safe(area.x, y, line, content_width as u16);
-                }
+    markdown.with_wrapped_lines(content_width, |wrapped| {
+        for (row, line_idx) in (scroll..total.min(scroll + visible)).enumerate() {
+            let y = area.y + row as u16;
+            if let Some(line) = wrapped.lines.get(line_idx) {
+                buf.set_line_safe(area.x, y, line, content_width as u16);
             }
-        });
+        }
+    });
+
+    if let Some(drag) = state.text_drag {
+        paint_text_drag(
+            drag,
+            &state.preview_plain_lines,
+            state.preview_text_area,
+            scroll,
+            buf,
+            theme,
+        );
+    }
 
     render_scrollbar(
         buf,
@@ -1034,6 +1382,7 @@ pub fn handle_memory_key(state: &mut MemoryModalState, key: &KeyEvent) -> InputO
             state.status = Some(MemoryStatusLine {
                 text: format!("Deleting {}…", entry.label),
                 is_error: false,
+                ticks_remaining: None,
             });
             return InputOutcome::Action(Action::MemoryForget {
                 path: path.to_string_lossy().into_owned(),
@@ -1046,7 +1395,48 @@ pub fn handle_memory_key(state: &mut MemoryModalState, key: &KeyEvent) -> InputO
     match state.mode {
         MemoryModalMode::ConfirmingDelete { .. } => unreachable!("handled above"),
         MemoryModalMode::FilterFocused => handle_filter_focused(state, key),
+        MemoryModalMode::PreviewFocused => handle_preview_focused(state, key),
         MemoryModalMode::Browse => handle_browse(state, key),
+    }
+}
+
+/// Keys while the preview has focus: scroll the note; Esc or Enter return to the list.
+fn handle_preview_focused(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
+    if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        state.fullscreen = !state.fullscreen;
+        return InputOutcome::Action(Action::PersistMemoryFullscreen(state.fullscreen));
+    }
+    let page = state.preview_text_area.height.max(1) as isize;
+    match key.code {
+        KeyCode::Esc | KeyCode::Enter => {
+            state.mode = MemoryModalMode::Browse;
+            InputOutcome::Changed
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            state.scroll_preview_by(1);
+            InputOutcome::Changed
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            state.scroll_preview_by(-1);
+            InputOutcome::Changed
+        }
+        KeyCode::PageDown => {
+            state.scroll_preview_by(page);
+            InputOutcome::Changed
+        }
+        KeyCode::PageUp => {
+            state.scroll_preview_by(-page);
+            InputOutcome::Changed
+        }
+        KeyCode::Home => {
+            state.scroll_preview_by(isize::MIN);
+            InputOutcome::Changed
+        }
+        KeyCode::End => {
+            state.scroll_preview_by(isize::MAX);
+            InputOutcome::Changed
+        }
+        _ => InputOutcome::Unchanged,
     }
 }
 
@@ -1130,12 +1520,16 @@ pub fn handle_memory_mouse(
 
     let on_list = in_rect(state.list_area);
     let on_preview = in_rect(state.preview_area);
+    let on_preview_text = in_rect(state.preview_text_area);
     let on_list_sb = state.list_scrollbar_area.is_some_and(&in_rect);
     let on_preview_sb = state.preview_scrollbar_area.is_some_and(&in_rect);
 
     match kind {
-        MouseEventKind::Down(crossterm::event::MouseButton::Left)
-        | MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+        MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => {
+            if on_preview_text || state.text_drag.is_some() || state.pending_press.is_some() {
+                return handle_preview_drag(state, kind, column, row);
+            }
+            state.clear_text_drag();
             // Click/drag on list scrollbar: jump-scroll and select nearest entry
             if on_list_sb {
                 let sb = state.list_scrollbar_area.unwrap();
@@ -1182,10 +1576,7 @@ pub fn handle_memory_mouse(
                 return InputOutcome::Changed;
             }
             if on_preview || on_preview_sb {
-                let max = state
-                    .preview_total_lines
-                    .saturating_sub(state.preview_area.height as usize);
-                state.preview_scroll = state.preview_scroll.saturating_add(3).min(max);
+                state.scroll_preview_by(3);
                 return InputOutcome::Changed;
             }
             InputOutcome::Unchanged
@@ -1203,14 +1594,116 @@ pub fn handle_memory_mouse(
                 return InputOutcome::Changed;
             }
             if on_preview || on_preview_sb {
-                state.preview_scroll = state.preview_scroll.saturating_sub(3);
+                state.scroll_preview_by(-3);
                 return InputOutcome::Changed;
             }
             InputOutcome::Unchanged
         }
 
+        MouseEventKind::Up(MouseButton::Left) => finish_preview_drag(state, column, row),
+
+        MouseEventKind::Moved => {
+            // A bare Moved with an active drag is a lost Up: finish it so the band does not
+            // linger without copying (same rule as the usage modal).
+            if state.text_drag.is_some() {
+                return finish_preview_drag(state, column, row);
+            }
+            InputOutcome::Unchanged
+        }
+
+        MouseEventKind::Down(_) => {
+            // A non-left press ends a stuck drag.
+            if state.text_drag.take().is_some() || state.pending_press.take().is_some() {
+                InputOutcome::Changed
+            } else {
+                InputOutcome::Unchanged
+            }
+        }
+
         _ => InputOutcome::Unchanged,
     }
+}
+
+/// Left press / drag over the preview text. A press is held until a 1-cell move promotes it to a
+/// drag (same threshold as scrollback); the drag auto-scrolls when the pointer leaves the pane.
+fn handle_preview_drag(
+    state: &mut MemoryModalState,
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
+) -> InputOutcome {
+    let rect = state.preview_text_area;
+    if matches!(kind, MouseEventKind::Down(_)) {
+        let Some(endpoint) = endpoint_at(
+            &state.preview_plain_lines,
+            rect,
+            state.preview_scroll,
+            column,
+            row,
+        ) else {
+            return InputOutcome::Unchanged;
+        };
+        state.pending_press = Some(PendingPress {
+            column,
+            row,
+            endpoint,
+        });
+        state.text_drag = None;
+        return InputOutcome::Changed;
+    }
+    if let Some(pending) = state.pending_press {
+        if pending.column == column && pending.row == row {
+            return InputOutcome::Unchanged;
+        }
+        state.pending_press = None;
+        state.text_drag = Some(TextDrag {
+            anchor: pending.endpoint,
+            head: pending.endpoint,
+        });
+    }
+    if state.text_drag.is_none() {
+        return InputOutcome::Unchanged;
+    }
+    if rect.width == 0 || rect.height == 0 {
+        state.clear_text_drag();
+        return InputOutcome::Changed;
+    }
+    if row < rect.y {
+        state.preview_scroll = state.preview_scroll.saturating_sub(1);
+    } else if row >= rect.y.saturating_add(rect.height) {
+        let max = state
+            .preview_total_lines
+            .saturating_sub(rect.height as usize);
+        state.preview_scroll = state.preview_scroll.saturating_add(1).min(max);
+    }
+    let head = state.preview_endpoint_clamped(column, row);
+    if let (Some(head), Some(drag)) = (head, state.text_drag.as_mut()) {
+        drag.head = head;
+    }
+    InputOutcome::Changed
+}
+
+/// Mouse-up (or a lost Up) over the preview: a non-empty drag copies its text.
+fn finish_preview_drag(state: &mut MemoryModalState, column: u16, row: u16) -> InputOutcome {
+    if state.pending_press.take().is_some() {
+        return InputOutcome::Changed;
+    }
+    let Some(mut drag) = state.text_drag.take() else {
+        return InputOutcome::Unchanged;
+    };
+    if let Some(head) = state.preview_endpoint_clamped(column, row) {
+        drag.head = head;
+    }
+    if drag.is_non_empty()
+        && let Some(text) = text_for_drag(
+            drag,
+            &state.preview_plain_lines,
+            state.preview_text_area.width,
+        )
+    {
+        return InputOutcome::Action(Action::MemoryCopy { text });
+    }
+    InputOutcome::Changed
 }
 
 /// Keys while the filter input is focused: all chars go to the filter, only Escape exits filter mode.
@@ -1299,6 +1792,7 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
                 state.status = Some(MemoryStatusLine {
                     text: "Can't delete: this note couldn't be read for verification.".to_owned(),
                     is_error: true,
+                    ticks_remaining: None,
                 });
                 return InputOutcome::Changed;
             }
@@ -1312,6 +1806,7 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
                     entry.label
                 ),
                 is_error: false,
+                ticks_remaining: None,
             });
             state.mode = MemoryModalMode::ConfirmingDelete {
                 idx: state.selected,
@@ -1319,36 +1814,32 @@ fn handle_browse(state: &mut MemoryModalState, key: &KeyEvent) -> InputOutcome {
             InputOutcome::Changed
         }
         KeyCode::Char('y') if key.modifiers.is_empty() => {
-            if let Some(entry) = state.selected_entry()
-                && !entry.is_header
-            {
-                let _ = crate::clipboard::copy_text(&entry.path.to_string_lossy());
-                return InputOutcome::Changed;
+            let path = state
+                .selected_entry()
+                .filter(|e| !e.is_header)
+                .map(|e| e.path.to_string_lossy().into_owned());
+            match path {
+                Some(text) => InputOutcome::Action(Action::MemoryCopy { text }),
+                None => InputOutcome::Unchanged,
             }
-            InputOutcome::Unchanged
         }
-        KeyCode::Char('t') if key.modifiers.is_empty() => {
-            if state.memory_enabled {
-                // Optimistic; the next MemoryFiles notification re-syncs if the command fails
-                state.memory_enabled = false;
-                state.disabled_reason = Some(MemoryDisabledReason::SessionToggle);
-                return InputOutcome::Action(Action::SendSlashCommandPreservingDraft(
-                    "/memory off".to_owned(),
-                ));
-            }
-            if !state.can_enable() {
+        KeyCode::Enter => {
+            if state.preview_markdown.is_none() {
                 return InputOutcome::Unchanged;
             }
-            if state.entries.is_empty() {
-                // Opened while off: the shell sent no file list, so close instead of showing a stale empty list
-                state.close_requested = true;
-            } else {
-                state.memory_enabled = true;
-                state.disabled_reason = None;
+            state.mode = MemoryModalMode::PreviewFocused;
+            InputOutcome::Changed
+        }
+        KeyCode::Char('t') if key.modifiers.is_empty() => {
+            if state.pending_toggle.is_some() || !(state.memory_enabled || state.can_enable()) {
+                return InputOutcome::Unchanged;
             }
-            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(
-                "/memory on".to_owned(),
-            ))
+            // Optimistic flip; the reply's listing resyncs, or `apply_toggle_result` reverts.
+            state.pending_toggle = Some((state.memory_enabled, state.disabled_reason));
+            let enabled = !state.memory_enabled;
+            state.memory_enabled = enabled;
+            state.disabled_reason = (!enabled).then_some(MemoryDisabledReason::SessionToggle);
+            InputOutcome::Action(Action::MemoryToggle { enabled })
         }
         // `i` aliases `/` (vim-nav "press i to search").
         KeyCode::Char('/') | KeyCode::Char('i') if key.modifiers.is_empty() => {
@@ -1396,10 +1887,25 @@ fn build_shortcuts(state: &MemoryModalState) -> Vec<Shortcut<'static>> {
                 plain("Esc close"),
             ]
         }
+        MemoryModalMode::PreviewFocused => vec![
+            plain("\u{2191}/\u{2193} scroll"),
+            plain("drag to copy"),
+            plain(if state.split_shown {
+                "Esc list"
+            } else {
+                "Esc back"
+            }),
+            plain(fullscreen_label),
+        ],
         MemoryModalMode::Browse => {
             let mut shortcuts = vec![
                 plain("\u{2191}/\u{2193} nav"),
                 plain("/ search"),
+                plain(if state.split_shown {
+                    "Enter read"
+                } else {
+                    "Enter open"
+                }),
                 plain("y copy path"),
             ];
             if state.can_delete_selected() {
@@ -1455,27 +1961,60 @@ fn file_label(path: &str) -> String {
         .unwrap_or_else(|| path.to_string())
 }
 
+/// Title from the shell when it has one, else a readable form of a v2 inbox key
+/// (`<session>__t000038-000040__n001.md` → `observation, turns 38–40 (#2)`), else the filename.
+fn entry_label(f: &xai_grok_shell::extensions::notification::MemoryFileInfo) -> String {
+    if let Some(title) = f.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        return title.to_owned();
+    }
+    let name = file_label(&f.path);
+    observation_key_label(&name).unwrap_or(name)
+}
+
+fn observation_key_label(file_name: &str) -> Option<String> {
+    let stem = file_name.strip_suffix(".md")?;
+    let mut parts = stem.split("__");
+    let _session = parts.next()?;
+    let range = parts.next()?.strip_prefix('t')?;
+    let ordinal: usize = parts.next()?.strip_prefix('n')?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let (from, through) = range.split_once('-')?;
+    let (from, through): (u64, u64) = (from.parse().ok()?, through.parse().ok()?);
+    let turns = if from == through {
+        format!("turn {from}")
+    } else {
+        format!("turns {from}\u{2013}{through}")
+    };
+    Some(format!("observation, {turns} (#{})", ordinal + 1))
+}
+
+/// Relative age in at most 3 columns (`<1m`, `27m`, `5h`, `99d`, `52w`, `99y`); no suffix, the
+/// metadata column position says what it is.
 fn format_modified(epoch_secs: Option<u64>, now_secs: u64) -> String {
     let Some(modified) = epoch_secs else {
-        return "unknown".to_string();
+        return "\u{2014}".to_string();
     };
-    if now_secs <= modified {
-        return "just now".to_string();
-    }
-    let delta = now_secs - modified;
+    let delta = now_secs.saturating_sub(modified);
     if delta < 60 {
-        return "just now".to_string();
+        return "<1m".to_string();
     }
     if delta < 3600 {
-        let mins = delta / 60;
-        return format!("{mins}m ago");
+        return format!("{}m", delta / 60);
     }
     if delta < 86400 {
-        let hours = delta / 3600;
-        return format!("{hours}h ago");
+        return format!("{}h", delta / 3600);
     }
+    // Units step up so the result stays within 3 columns.
     let days = delta / 86400;
-    format!("{days}d ago")
+    if days < 100 {
+        return format!("{days}d");
+    }
+    if days < 365 {
+        return format!("{}w", days / 7);
+    }
+    format!("{}y", days / 365)
 }
 
 fn load_fullscreen_pref() -> bool {
@@ -1497,12 +2036,89 @@ mod tests {
     #[test]
     fn format_modified_relative() {
         let now = 1_700_000_000u64;
-        assert_eq!(format_modified(None, now), "unknown");
-        assert_eq!(format_modified(Some(now), now), "just now");
-        assert_eq!(format_modified(Some(now - 30), now), "just now");
-        assert_eq!(format_modified(Some(now - 120), now), "2m ago");
-        assert_eq!(format_modified(Some(now - 7200), now), "2h ago");
-        assert_eq!(format_modified(Some(now - 172800), now), "2d ago");
+        assert_eq!(format_modified(None, now), "\u{2014}");
+        assert_eq!(format_modified(Some(now + 5), now), "<1m");
+        assert_eq!(format_modified(Some(now - 30), now), "<1m");
+        assert_eq!(format_modified(Some(now - 120), now), "2m");
+        assert_eq!(format_modified(Some(now - 7200), now), "2h");
+        assert_eq!(format_modified(Some(now - 172800), now), "2d");
+        // Never wider than 3 columns, so the padded metadata column stays aligned.
+        for (secs, expected) in [
+            (99 * 86400, "99d"),
+            (100 * 86400, "14w"),
+            (364 * 86400, "52w"),
+            (365 * 86400, "1y"),
+            (40 * 365 * 86400, "40y"),
+        ] {
+            let text = format_modified(Some(now - secs), now);
+            assert_eq!(text, expected);
+            assert!(text.chars().count() <= 3, "{text}");
+        }
+    }
+
+    #[test]
+    fn observation_labels_prefer_title_then_readable_key() {
+        use xai_grok_shell::extensions::notification::MemoryFileInfo;
+        let info = |path: &str, title: Option<&str>| MemoryFileInfo {
+            path: path.into(),
+            source: "workspace".into(),
+            size_bytes: 1,
+            modified_epoch_secs: None,
+            generated: false,
+            title: title.map(str::to_owned),
+        };
+        let key =
+            "/s/observations/_inbox/01a0a22b-d97d-7d13-9332-d88f922274b4__t000038-000040__n001.md";
+        assert_eq!(
+            entry_label(&info(key, Some("memory-v2 /memory command"))),
+            "memory-v2 /memory command"
+        );
+        assert_eq!(
+            entry_label(&info(key, Some("  "))),
+            "observation, turns 38\u{2013}40 (#2)"
+        );
+        assert_eq!(
+            entry_label(&info(
+                "/s/observations/_inbox/x__t000007-000007__n000.md",
+                None
+            )),
+            "observation, turn 7 (#1)"
+        );
+        assert_eq!(entry_label(&info("/s/topics/anyrun.md", None)), "anyrun.md");
+    }
+
+    #[test]
+    fn long_labels_stop_short_of_the_metadata_column() {
+        use xai_grok_shell::extensions::notification::MemoryFileInfo;
+        let mut state = MemoryModalState::new(build_entries(vec![
+            MemoryFileInfo {
+                path: "/s/topics/a-very-long-topic-name-that-keeps-going-and-going-forever.md"
+                    .into(),
+                source: "workspace".into(),
+                size_bytes: 13_900,
+                modified_epoch_secs: None,
+                generated: false,
+                title: None,
+            },
+            MemoryFileInfo {
+                path: "/s/topics/short.md".into(),
+                source: "workspace".into(),
+                size_bytes: 254,
+                modified_epoch_secs: None,
+                generated: false,
+                title: None,
+            },
+        ]));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 50, 6));
+        let theme = Theme::current();
+        render_file_list(&mut buf, Rect::new(0, 0, 50, 6), &mut state, &theme);
+        let rows: Vec<String> = buffer_text(&buf).lines().map(str::to_owned).collect();
+        let long_row = rows.iter().find(|r| r.contains("a-very-long")).unwrap();
+        let short_row = rows.iter().find(|r| r.contains("short.md")).unwrap();
+        // Same separator column on both rows, and a gap before it on the truncated row.
+        let dot = |r: &str| r.chars().position(|c| c == '\u{00B7}').unwrap();
+        assert_eq!(dot(long_row), dot(short_row));
+        assert!(long_row.contains("\u{2026}  "), "{long_row:?}");
     }
 
     #[test]
@@ -1525,6 +2141,7 @@ mod tests {
                 size_bytes: 100,
                 modified_epoch_secs: Some(1_700_000_000),
                 generated: false,
+                title: None,
             },
             MemoryFileInfo {
                 path: "/workspace/MEMORY.md".into(),
@@ -1532,6 +2149,7 @@ mod tests {
                 size_bytes: 200,
                 modified_epoch_secs: Some(1_700_000_000),
                 generated: false,
+                title: None,
             },
             MemoryFileInfo {
                 path: "/sessions/log1.md".into(),
@@ -1539,6 +2157,7 @@ mod tests {
                 size_bytes: 50,
                 modified_epoch_secs: None,
                 generated: false,
+                title: None,
             },
         ];
 
@@ -1586,6 +2205,287 @@ mod tests {
         assert_eq!(indices, &[0, 1]);
     }
 
+    #[test]
+    fn filter_matches_note_contents_and_requires_all_terms() {
+        let (_dir, mut state) = v2_store_state();
+        let labels = |state: &MemoryModalState| {
+            state
+                .filtered_indices()
+                .iter()
+                .filter_map(|&i| state.entries.get(i))
+                .filter(|e| !e.is_header)
+                .map(|e| e.label.clone())
+                .collect::<Vec<_>>()
+        };
+        // "notes" occurs only in anyrun.md's body, not in any label.
+        state.set_query("NOTES");
+        state.invalidate_filter();
+        assert_eq!(labels(&state), ["anyrun.md"]);
+        // Every term must match, across label and content.
+        state.set_query("anyrun notes");
+        state.invalidate_filter();
+        assert_eq!(labels(&state), ["anyrun.md"]);
+        state.set_query("zulu notes");
+        state.invalidate_filter();
+        assert!(labels(&state).is_empty());
+        assert!(state.filter_has_no_matches());
+        state.set_query("");
+        state.invalidate_filter();
+        assert_eq!(labels(&state).len(), 4);
+    }
+
+    #[test]
+    fn no_match_filter_explains_itself_instead_of_no_file_selected() {
+        let (_dir, mut state) = v2_store_state();
+        state.set_query("xyzzy");
+        state.invalidate_filter();
+        state.clamp_selected();
+        let text = render_full(&mut state);
+        assert!(
+            text.contains("No notes match \u{201C}xyzzy\u{201D}"),
+            "{text}"
+        );
+        assert!(text.contains("Backspace clears the filter"), "{text}");
+        assert!(!text.contains("No file selected"), "{text}");
+    }
+
+    #[test]
+    fn copy_keys_emit_memory_copy_and_the_outcome_lands_in_the_status_line() {
+        let (dir, mut state) = v2_store_state();
+        select_label(&mut state, "anyrun.md");
+        let expected = dir
+            .path()
+            .join("workspace/topics/anyrun.md")
+            .to_string_lossy()
+            .into_owned();
+        match handle_memory_key(&mut state, &plain_key('y')) {
+            InputOutcome::Action(Action::MemoryCopy { text }) => assert_eq!(text, expected),
+            other => panic!("unexpected outcome {other:?}"),
+        }
+        state.report_copy(&crate::clipboard::CopyDelivery::File {
+            path: PathBuf::from("/tmp/last-copy.txt"),
+        });
+        let status = state.status.clone().expect("status line set");
+        assert!(
+            status.text.starts_with("Clipboard unreachable"),
+            "{status:?}"
+        );
+        assert!(!status.is_error);
+        assert!(render_full(&mut state).contains("Clipboard unreachable"));
+        // Copy messages expire like a toast; other status text does not tick.
+        let ticks = status.ticks_remaining.expect("copy message is transient");
+        for _ in 0..ticks {
+            assert!(!state.tick_status());
+        }
+        assert!(state.tick_status());
+        assert!(state.status.is_none());
+        state.status = Some(MemoryStatusLine {
+            text: "Deleting…".into(),
+            is_error: false,
+            ticks_remaining: None,
+        });
+        assert!(!state.tick_status());
+        assert!(state.status.is_some());
+    }
+
+    /// One topic with 60 numbered one-line paragraphs (rendered rows alternate text and blank);
+    /// paragraph 10 contains "the", paragraph 40 contains "the needle".
+    fn long_note_state() -> (tempfile::TempDir, MemoryModalState) {
+        use xai_grok_shell::extensions::notification::MemoryFileInfo;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("topics")).unwrap();
+        let body: String = (1..=60)
+            .map(|i| match i {
+                10 => "line 10 states the obvious\n\n".to_owned(),
+                40 => "line 40 has the needle\n\n".to_owned(),
+                _ => format!("line {i}\n\n"),
+            })
+            .collect();
+        let path = dir.path().join("topics/long.md");
+        std::fs::write(&path, &body).unwrap();
+        let state = MemoryModalState::new(build_entries(vec![MemoryFileInfo {
+            path: path.to_string_lossy().into_owned(),
+            source: "workspace".into(),
+            size_bytes: body.len() as u64,
+            modified_epoch_secs: None,
+            generated: false,
+            title: None,
+        }]));
+        (dir, state)
+    }
+
+    fn render_at(state: &mut MemoryModalState, width: u16, height: u16) -> String {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        render_memory_modal(&mut buf, area, state, false);
+        buffer_text(&buf)
+    }
+
+    #[test]
+    fn filter_scrolls_preview_to_first_match() {
+        let (_dir, mut state) = long_note_state();
+        let text = render_full(&mut state);
+        assert!(
+            text.contains("line 1\n") || text.contains("line 1 "),
+            "{text}"
+        );
+        assert!(!text.contains("needle"), "{text}");
+
+        // A common first term must not pin the jump to its first occurrence (line 10).
+        state.set_query("the needle");
+        state.invalidate_filter();
+        state.clamp_selected();
+        let text = render_full(&mut state);
+        assert!(text.contains("line 40 has the needle"), "{text}");
+        assert_eq!(state.preview_scroll, 78);
+    }
+
+    #[test]
+    fn enter_focuses_preview_for_keyboard_scrolling_and_esc_returns() {
+        let (_dir, mut state) = long_note_state();
+        render_full(&mut state);
+        assert!(matches!(
+            handle_memory_key(
+                &mut state,
+                &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            InputOutcome::Changed
+        ));
+        assert_eq!(state.mode, MemoryModalMode::PreviewFocused);
+        let before = state.selected;
+        handle_memory_key(
+            &mut state,
+            &KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        handle_memory_key(
+            &mut state,
+            &KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        );
+        assert_eq!(state.preview_scroll, 2);
+        assert_eq!(state.selected, before, "list selection is untouched");
+        handle_memory_key(&mut state, &KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        assert!(render_full(&mut state).contains("line 60"));
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert!(labels.contains(&"drag to copy"), "{labels:?}");
+        assert!(labels.contains(&"Esc list"), "{labels:?}");
+        handle_memory_key(&mut state, &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(state.mode, MemoryModalMode::Browse);
+    }
+
+    #[test]
+    fn narrow_modal_hides_preview_until_enter_opens_it_full_width() {
+        let (_dir, mut state) = long_note_state();
+        // 70 columns: the modal content is under SPLIT_MIN_WIDTH, so only the list shows.
+        let text = render_at(&mut state, 70, 30);
+        assert!(text.contains("long.md"), "{text}");
+        assert!(!text.contains("line 2"), "{text}");
+        assert!(!state.split_shown);
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert!(labels.contains(&"Enter open"), "{labels:?}");
+
+        handle_memory_key(
+            &mut state,
+            &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+        let text = render_at(&mut state, 70, 30);
+        assert!(text.contains("line 2"), "{text}");
+        assert!(!text.contains("long.md"), "{text}");
+        assert_eq!(state.list_area, Rect::default());
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert!(labels.contains(&"Esc back"), "{labels:?}");
+
+        handle_memory_key(&mut state, &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let text = render_at(&mut state, 70, 30);
+        assert!(text.contains("long.md"), "{text}");
+    }
+
+    #[test]
+    fn narrow_list_drops_the_size_column() {
+        use xai_grok_shell::extensions::notification::MemoryFileInfo;
+        let info = MemoryFileInfo {
+            path: "/s/topics/anyrun.md".into(),
+            source: "workspace".into(),
+            size_bytes: 13_900,
+            modified_epoch_secs: Some(0),
+            generated: false,
+            title: None,
+        };
+        let mut state = MemoryModalState::new(build_entries(vec![info.clone()]));
+        let theme = Theme::current();
+        let wide = Rect::new(0, 0, 60, 4);
+        let mut buf = Buffer::empty(wide);
+        render_file_list(&mut buf, wide, &mut state, &theme);
+        let text = buffer_text(&buf);
+        assert!(text.contains("13.6 KB \u{00B7}"), "{text}");
+
+        let mut state = MemoryModalState::new(build_entries(vec![info]));
+        let narrow = Rect::new(0, 0, 40, 4);
+        let mut buf = Buffer::empty(narrow);
+        render_file_list(&mut buf, narrow, &mut state, &theme);
+        let text = buffer_text(&buf);
+        assert!(!text.contains("KB"), "{text}");
+        assert!(!text.contains('\u{00B7}'), "{text}");
+        let row = text.lines().find(|l| l.contains("anyrun.md")).unwrap();
+        assert!(row.trim_end().ends_with('y'), "{row:?}");
+    }
+
+    #[test]
+    fn dragging_over_the_preview_copies_the_selected_text() {
+        let (_dir, mut state) = long_note_state();
+        render_full(&mut state);
+        let area = state.preview_text_area;
+        assert!(area.width > 10 && area.height > 3, "{area:?}");
+        // Press on "line 2" (row 2), drag past the end of "line 3" (row 4), release.
+        let down = MouseEventKind::Down(MouseButton::Left);
+        assert!(matches!(
+            handle_memory_mouse(&mut state, down, area.x, area.y + 2),
+            InputOutcome::Changed
+        ));
+        // A press without movement is not a drag.
+        assert!(matches!(
+            handle_memory_mouse(
+                &mut state,
+                MouseEventKind::Drag(MouseButton::Left),
+                area.x,
+                area.y + 2
+            ),
+            InputOutcome::Unchanged
+        ));
+        handle_memory_mouse(
+            &mut state,
+            MouseEventKind::Drag(MouseButton::Left),
+            area.x + 6,
+            area.y + 4,
+        );
+        assert!(state.text_drag.is_some());
+        match handle_memory_mouse(
+            &mut state,
+            MouseEventKind::Up(MouseButton::Left),
+            area.x + 6,
+            area.y + 4,
+        ) {
+            InputOutcome::Action(Action::MemoryCopy { text }) => {
+                assert_eq!(text, "line 2\n\nline 3")
+            }
+            other => panic!("unexpected outcome {other:?}"),
+        }
+        assert!(state.text_drag.is_none());
+
+        // A plain click on the preview copies nothing and does not move the list selection.
+        let before = state.selected;
+        handle_memory_mouse(&mut state, down, area.x, area.y);
+        assert!(matches!(
+            handle_memory_mouse(
+                &mut state,
+                MouseEventKind::Up(MouseButton::Left),
+                area.x,
+                area.y
+            ),
+            InputOutcome::Changed
+        ));
+        assert_eq!(state.selected, before);
+    }
+
     /// Generated index, one topic, one inbox observation, all on disk.
     fn v2_store_state() -> (tempfile::TempDir, MemoryModalState) {
         use xai_grok_shell::extensions::notification::MemoryFileInfo;
@@ -1614,6 +2514,7 @@ mod tests {
                     size_bytes: body.len() as u64,
                     modified_epoch_secs: None,
                     generated: *generated,
+                    title: None,
                 }
             })
             .collect();
@@ -1651,7 +2552,8 @@ mod tests {
             path: PathBuf::from("/legacy/MEMORY.md"),
             source: "global".into(),
             label: "MEMORY.md".into(),
-            meta_display: String::new(),
+            size_text: String::new(),
+            age_text: String::new(),
             is_header: false,
             generated: false,
             size_bytes: 0,
@@ -1836,6 +2738,7 @@ mod tests {
             size_bytes: 183,
             modified_epoch_secs: None,
             generated: true,
+            title: None,
         };
         let mut state = MemoryModalState::new(build_entries(vec![
             manifest("global"),
@@ -1869,6 +2772,7 @@ mod tests {
                 size_bytes: 900,
                 modified_epoch_secs: None,
                 generated: false,
+                title: None,
             },
         ]));
         assert!(with_topic.has_notes());
@@ -1884,6 +2788,7 @@ mod tests {
                 size_bytes: 2048,
                 modified_epoch_secs: None,
                 generated: false,
+                title: None,
             },
         ]));
         assert!(legacy.has_notes());
@@ -1896,9 +2801,41 @@ mod tests {
             .with_enabled(false, Some(MemoryDisabledReason::SessionToggle));
         let text = render_full(&mut state);
         assert!(text.contains("Memory is off for this session"), "{text}");
-        assert!(text.contains("/memory on"), "{text}");
+        assert!(text.contains("Press t to turn it back on"), "{text}");
         let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
         assert_eq!(labels, vec!["t turn on", "^F fullscreen", "Esc close"]);
+    }
+
+    #[test]
+    fn config_opt_out_state_offers_session_toggle_and_names_the_config() {
+        let mut state = MemoryModalState::new(Vec::new())
+            .with_enabled(false, Some(MemoryDisabledReason::ConfigOptOut));
+        let text = render_full(&mut state);
+        assert!(text.contains("[memory] enabled = false"), "{text}");
+        assert!(text.contains("this session only"), "{text}");
+        assert!(state.can_enable());
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert_eq!(labels, vec!["t turn on", "^F fullscreen", "Esc close"]);
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Action(Action::MemoryToggle { enabled: true })
+        ));
+    }
+
+    #[test]
+    fn process_disabled_state_offers_no_toggle() {
+        let mut state = MemoryModalState::new(Vec::new())
+            .with_enabled(false, Some(MemoryDisabledReason::ProcessDisabled));
+        let text = render_full(&mut state);
+        assert!(text.contains("Memory is off for this process"), "{text}");
+        assert!(text.contains("--no-memory"), "{text}");
+        assert!(!state.can_enable());
+        let labels: Vec<&str> = build_shortcuts(&state).iter().map(|s| s.label).collect();
+        assert_eq!(labels, vec!["^F fullscreen", "Esc close"]);
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Unchanged
+        ));
     }
 
     #[test]
@@ -1916,7 +2853,6 @@ mod tests {
             handle_memory_key(&mut state, &plain_key('t')),
             InputOutcome::Unchanged
         ));
-        assert!(!state.take_close_request());
 
         // A reason from a newer shell fails closed: no toggle offered.
         let unknown = MemoryModalState::new(Vec::new())
@@ -1925,16 +2861,79 @@ mod tests {
     }
 
     #[test]
-    fn t_from_disabled_empty_modal_sends_on_and_closes() {
+    fn t_from_disabled_modal_toggles_and_resyncs_from_reply() {
+        use xai_grok_shell::extensions::notification::MemoryFileInfo;
         let mut state = MemoryModalState::new(Vec::new())
             .with_enabled(false, Some(MemoryDisabledReason::SessionToggle));
-        let outcome = handle_memory_key(&mut state, &plain_key('t'));
         assert!(matches!(
-            outcome,
-            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(ref cmd)) if cmd == "/memory on"
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Action(Action::MemoryToggle { enabled: true })
         ));
-        assert!(state.take_close_request());
-        assert!(!state.take_close_request());
+        assert!(state.memory_enabled);
+
+        // The reply's listing replaces the empty list without closing the modal, and drops any
+        // delete confirmation armed against the old list.
+        state.mode = MemoryModalMode::ConfirmingDelete { idx: 0 };
+        state.apply_toggle_result(Ok(MemoryToggleResponse {
+            message: "Memory enabled for this session.".into(),
+            enabled: true,
+            disabled_reason: None,
+            listing: Some(MemoryListing {
+                files: vec![MemoryFileInfo {
+                    path: "/store/global/topics/rust.md".into(),
+                    source: "global".into(),
+                    size_bytes: 12,
+                    modified_epoch_secs: None,
+                    generated: false,
+                    title: None,
+                }],
+                enabled: true,
+                disabled_reason: None,
+                capture_enabled: true,
+                dream_enabled: true,
+            }),
+        }));
+        assert!(!state.shows_notice());
+        assert_eq!(state.mode, MemoryModalMode::Browse);
+        assert_eq!(
+            state.selected_entry().map(|e| e.label.as_str()),
+            Some("rust.md")
+        );
+        assert_eq!(
+            state.status.as_ref().map(|s| s.text.as_str()),
+            Some("Memory enabled for this session.")
+        );
+
+        // A refusal (Ok, state unchanged) with no listing still corrects the optimistic flip and
+        // renders as an error, since the result differs from what was requested.
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Action(Action::MemoryToggle { enabled: false })
+        ));
+        state.apply_toggle_result(Ok(MemoryToggleResponse {
+            message: "Memory is already enabled.".into(),
+            enabled: true,
+            disabled_reason: None,
+            listing: None,
+        }));
+        assert!(state.memory_enabled);
+        assert!(state.status.as_ref().is_some_and(|s| s.is_error));
+        assert!(!state.shows_notice());
+
+        // A second `t` is ignored while the first is in flight; a failure reverts the optimistic flip.
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Action(Action::MemoryToggle { enabled: false })
+        ));
+        assert!(!state.memory_enabled);
+        assert!(matches!(
+            handle_memory_key(&mut state, &plain_key('t')),
+            InputOutcome::Unchanged
+        ));
+        state.apply_toggle_result(Err("Couldn't change memory state.".into()));
+        assert!(state.memory_enabled);
+        assert!(state.status.as_ref().is_some_and(|s| s.is_error));
+        assert!(!state.shows_notice());
     }
 
     #[test]
@@ -1943,11 +2942,10 @@ mod tests {
         let off = handle_memory_key(&mut state, &plain_key('t'));
         assert!(matches!(
             off,
-            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(ref cmd)) if cmd == "/memory off"
+            InputOutcome::Action(Action::MemoryToggle { enabled: false })
         ));
         assert!(!state.memory_enabled);
         assert!(state.shows_notice());
-        assert!(!state.take_close_request());
 
         // The hidden list must not accept hotkeys: `x` on a session entry would otherwise arm delete.
         state.selected = 3;
@@ -1963,14 +2961,34 @@ mod tests {
             InputOutcome::Unchanged
         ));
 
+        // Off replies still list the files, so turning back on reveals them without a refetch.
+        state.apply_toggle_result(Ok(MemoryToggleResponse {
+            message: "Memory disabled for this session.".into(),
+            enabled: false,
+            disabled_reason: Some(MemoryDisabledReason::SessionToggle),
+            listing: Some(MemoryListing {
+                files: vec![xai_grok_shell::extensions::notification::MemoryFileInfo {
+                    path: "/store/global/topics/rust.md".into(),
+                    source: "global".into(),
+                    size_bytes: 12,
+                    modified_epoch_secs: None,
+                    generated: false,
+                    title: None,
+                }],
+                enabled: false,
+                disabled_reason: Some(MemoryDisabledReason::SessionToggle),
+                capture_enabled: true,
+                dream_enabled: true,
+            }),
+        }));
+        assert!(state.shows_notice());
         let on = handle_memory_key(&mut state, &plain_key('t'));
         assert!(matches!(
             on,
-            InputOutcome::Action(Action::SendSlashCommandPreservingDraft(ref cmd)) if cmd == "/memory on"
+            InputOutcome::Action(Action::MemoryToggle { enabled: true })
         ));
         assert!(state.memory_enabled);
         assert!(!state.shows_notice());
-        assert!(!state.take_close_request());
     }
 
     #[test]
@@ -2300,7 +3318,8 @@ mod tests {
             MemoryFileEntry {
                 path: PathBuf::new(),
                 source: String::new(),
-                meta_display: String::new(),
+                size_text: String::new(),
+                age_text: String::new(),
                 label: "Global".to_string(),
                 is_header: true,
                 generated: false,
@@ -2309,7 +3328,8 @@ mod tests {
             MemoryFileEntry {
                 path: PathBuf::from("/test/MEMORY.md"),
                 source: "global".into(),
-                meta_display: "1KB \u{00B7} 1d ago".into(),
+                size_text: "1KB".into(),
+                age_text: "1d".into(),
                 label: "MEMORY.md".to_string(),
                 is_header: false,
                 generated: false,
@@ -2318,7 +3338,8 @@ mod tests {
             MemoryFileEntry {
                 path: PathBuf::new(),
                 source: String::new(),
-                meta_display: String::new(),
+                size_text: String::new(),
+                age_text: String::new(),
                 label: "Sessions".to_string(),
                 is_header: true,
                 generated: false,
@@ -2327,7 +3348,8 @@ mod tests {
             MemoryFileEntry {
                 path: PathBuf::from("/test/session.md"),
                 source: "session".into(),
-                meta_display: "500B \u{00B7} 2d ago".into(),
+                size_text: "500B".into(),
+                age_text: "2d".into(),
                 label: "session-log.md".to_string(),
                 is_header: false,
                 generated: false,

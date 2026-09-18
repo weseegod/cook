@@ -1001,8 +1001,6 @@ fn send_feedback_preserves_composer_draft() {
     );
 }
 
-// -- Feedback modal (open route, submit, retry, arbitration) --
-
 /// Dispatch a full-TUI modal open and return the open generation's id.
 fn open_feedback_modal(
     app: &mut AppView,
@@ -2010,8 +2008,6 @@ fn mcp_elicitation_ingress_displaces_feedback_modal() {
     assert!(agent.elicitation_view.is_some(), "elicitation installed");
     assert!(last_system_text(&app, AgentId(0)).contains("Feedback closed"));
 }
-
-// -- Feedback modal trace step: strict POST -> upload sequencing --
 
 /// Confirm a trace choice through the production key layer, then dispatch the resulting submit.
 fn confirm_trace_choice(

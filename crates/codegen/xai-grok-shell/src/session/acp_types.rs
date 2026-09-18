@@ -587,6 +587,9 @@ pub struct FeedbackContext {
     pub context_tokens_used: u64,
     pub context_window_tokens: u64,
     pub session_cwd: String,
+    pub reasoning_effort: Option<crate::sampling::ReasoningEffort>,
+    pub model_id: Option<String>,
+    pub model_fingerprint: Option<String>,
 }
 
 // ── Startup hints ───────────────────────────────────────────────────────

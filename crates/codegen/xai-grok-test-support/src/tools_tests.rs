@@ -27,7 +27,7 @@ fn pick_uses_grok_build_name_else_none_when_unoffered() {
 }
 #[test]
 fn every_kind_with_a_grok_build_name_resolves_under_it() {
-    let cases: [(Tool, &str); 25] = [
+    let cases: [(Tool, &str); 27] = [
         (Tool::Shell, "run_terminal_command"),
         (Tool::Read, "read_file"),
         (Tool::Edit, "search_replace"),
@@ -35,6 +35,8 @@ fn every_kind_with_a_grok_build_name_resolves_under_it() {
         (Tool::Grep, "grep"),
         (Tool::Glob, "glob"),
         (Tool::List, "list_dir"),
+        (Tool::MemorySearch, "memory_search"),
+        (Tool::MemoryGet, "memory_get"),
         (Tool::Task, "spawn_subagent"),
         (Tool::Skill, "skill"),
         (Tool::SendMessage, "send_subagent_message"),

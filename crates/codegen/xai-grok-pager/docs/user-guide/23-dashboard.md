@@ -68,6 +68,9 @@ directory (`Ctrl+G` toggles). **Inactive** is roster-only sessions owned by
 other pager processes that this process has not loaded — background noise, so
 the section **starts collapsed** (expand with `→` / click).
 
+Pinned rows keep their manual order in both grouping modes. Agent activity
+and recent updates do not move them; `Shift+↑` / `Shift+↓` changes their order.
+
 To keep **Idle** scannable, only the most recent idle agents stay visible —
 the 8 freshest, plus any active within the last hour. The rest fold into a
 **"N more"** row at the bottom of the group; select it and press `Enter` /

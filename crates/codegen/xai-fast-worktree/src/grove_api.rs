@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 /// Status capability marking a daemon new enough to abort an in-flight create.
 pub const CAP_CANCEL_WORKTREE_CREATE: &str = "cancel_worktree_create";
+/// Status capability: this daemon forks a second attach from a Grove parent backing.
+pub const CAP_FORK_FROM_BACKING: &str = "fork_from_backing";
 /// Explicit Grove enablement for [`crate::WorktreeBuilder`].
 /// The library never reads pager config; callers resolve flags and pass the result.
 #[derive(Clone, Debug)]
@@ -102,20 +104,46 @@ pub struct NfsStatusView {
     pub transport: Option<String>,
 }
 impl NfsStatusView {
+    fn sole_mount(&self) -> Option<&serde_json::Value> {
+        let mounts = self.raw.as_ref()?.get("mounts")?.as_array()?;
+        let [mount] = mounts.as_slice() else {
+            return None;
+        };
+        Some(mount)
+    }
     /// True when status names exactly one local worktree mount.
     #[must_use]
     pub fn is_linked_local_view(&self) -> bool {
-        let Some(raw) = self.raw.as_ref() else {
-            return false;
-        };
-        let Some(mounts) = raw.get("mounts").and_then(|v| v.as_array()) else {
-            return false;
-        };
-        let [m] = mounts.as_slice() else {
-            return false;
-        };
-        m.get("kind").and_then(|v| v.as_str()) == Some("worktree")
-            && m.get("source_mode").and_then(|v| v.as_str()) == Some("local")
+        self.sole_mount().is_some_and(|m| {
+            m.get("kind").and_then(|v| v.as_str()) == Some("worktree")
+                && m.get("source_mode").and_then(|v| v.as_str()) == Some("local")
+        })
+    }
+    /// Exactly one mount this daemon will send to the fork arm. Older daemons omit the bit.
+    #[must_use]
+    pub fn is_forkable(&self) -> bool {
+        self.sole_mount()
+            .and_then(|m| m.get("forkable"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
+    }
+    /// Same predicate `run_grove_arm` uses to send CreateWorktree.
+    #[must_use]
+    pub fn can_fork(&self) -> bool {
+        self.has_capability(CAP_FORK_FROM_BACKING) && self.is_forkable()
+    }
+    /// Linked local view or cap+forkable. Facades issue one Status RPC and call this.
+    #[must_use]
+    pub fn keeps_grove_create(&self) -> bool {
+        self.is_linked_local_view() || self.can_fork()
+    }
+    #[must_use]
+    pub fn has_capability(&self, cap: &str) -> bool {
+        self.raw
+            .as_ref()
+            .and_then(|raw| raw.get("capabilities"))
+            .and_then(|c| c.as_array())
+            .is_some_and(|caps| caps.iter().any(|c| c.as_str() == Some(cap)))
     }
     /// Transport of the one registered mount, when status names exactly one.
     #[must_use]
@@ -123,11 +151,9 @@ impl NfsStatusView {
         if let Some(t) = self.transport.as_deref() {
             return Some(t);
         }
-        let mounts = self.raw.as_ref()?.get("mounts")?.as_array()?;
-        let [mount] = mounts.as_slice() else {
-            return None;
-        };
-        mount.get("nfs_transport").and_then(|v| v.as_str())
+        self.sole_mount()?
+            .get("nfs_transport")
+            .and_then(|v| v.as_str())
     }
 }
 #[derive(Debug, Clone)]
@@ -294,5 +320,72 @@ mod tests {
             ..v.clone()
         };
         assert_eq!(two.mount_transport(), None);
+    }
+    fn view(raw: serde_json::Value) -> NfsStatusView {
+        NfsStatusView {
+            hydration_percent: None,
+            raw: Some(raw),
+            port: None,
+            mount_id: None,
+            transport: None,
+        }
+    }
+    #[test]
+    fn is_forkable_requires_exactly_one_mount_with_the_bit() {
+        assert!(!view(serde_json::json!({"mounts":[{"kind":"store"}]})).is_forkable());
+        let store = view(serde_json::json!({
+            "mounts":[{"kind":"store","forkable":true}]
+        }));
+        assert!(store.is_forkable());
+        let linked = view(serde_json::json!({
+            "mounts":[{"kind":"worktree","source_mode":"local","forkable":true}]
+        }));
+        assert!(linked.is_forkable());
+        let bit_false = view(serde_json::json!({
+            "mounts":[{"kind":"worktree","forkable":false}]
+        }));
+        assert!(!bit_false.is_forkable());
+        let two = view(serde_json::json!({
+            "mounts":[
+                {"kind":"store","forkable":true},
+                {"kind":"worktree","forkable":true}
+            ]
+        }));
+        assert!(!two.is_forkable());
+        assert!(!view(serde_json::json!({"mounts":[]})).is_forkable());
+        assert!(
+            !NfsStatusView {
+                hydration_percent: None,
+                raw: None,
+                port: None,
+                mount_id: None,
+                transport: None,
+            }
+            .is_forkable()
+        );
+    }
+    #[test]
+    fn fork_source_mode_is_not_a_linked_local_view() {
+        let fork = view(serde_json::json!({
+            "mounts":[{"kind":"worktree","source_mode":"fork","forkable":true}]
+        }));
+        assert!(fork.is_forkable());
+        assert!(!fork.is_linked_local_view());
+    }
+    #[test]
+    fn keeps_grove_create_is_linked_or_can_fork() {
+        let linked = view(serde_json::json!({
+            "mounts":[{"kind":"worktree","source_mode":"local"}]
+        }));
+        assert!(linked.keeps_grove_create());
+        assert!(!linked.can_fork());
+        let fork = view(serde_json::json!({
+            "capabilities": [CAP_FORK_FROM_BACKING],
+            "mounts":[{"kind":"store","forkable":true}]
+        }));
+        assert!(fork.can_fork());
+        assert!(fork.keeps_grove_create());
+        assert!(!fork.is_linked_local_view());
+        assert!(!view(serde_json::json!({"mounts":[{"kind":"store"}]})).keeps_grove_create());
     }
 }

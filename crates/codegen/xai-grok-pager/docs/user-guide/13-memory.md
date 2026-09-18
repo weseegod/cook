@@ -15,80 +15,26 @@ Without memory, each Grok session starts fresh: the model knows nothing about pr
 
 Memory is experimental and disabled by default.
 
-### Memory v2 (opt in)
+### How memory is organized
 
-Memory v2 is an isolated observation-and-topic pipeline. Enable it only for new
-sessions:
+Memory has two scopes. Global memory holds facts that apply across all your
+projects; workspace memory holds facts about one repository. Clones and
+worktrees of the same repository share one workspace scope.
 
-```toml
-[memory_v2]
-enabled = true
-```
+Each scope keeps its knowledge as ordinary Markdown files. `topics/` holds
+curated notes, one file per subject, and is what Grok reads at the start of a
+session. New facts captured from a completed turn land as small observations
+that a later consolidation pass (`/dream`) folds into topics. A bounded generated
+index of both scopes is injected into the model's context once per session so
+it can decide which topics to open.
 
-It uses `~/.grok/memory-v2/global/` and
-`~/.grok/memory-v2/workspaces/<workspace-id>/`; it never reads, migrates, or
-falls back to legacy `~/.grok/memory/`. Each scope has generated `MEMORY.md`,
-`topics/`, immutable `observations/_inbox/`, `archive/`, `memory_state.sqlite`,
-and `index.sqlite`. `MEMORY.md` is a bounded generated pointer index whose
-entries are absolute paths (so the model never has to resolve a relative path
-against the scope root); edit
-ordinary Markdown files under `topics/` through the restricted memory file
-workflow instead of editing the manifest.
+Notes you recorded with earlier versions of Grok Build are carried over
+automatically the first time a workspace is opened after updating: each section
+of the earlier notes becomes a topic, and sections whose name already matches a
+topic are appended to it under a "From earlier sessions" heading. The earlier
+files are left in place unchanged.
 
-V2 captures successful completed turns asynchronously. `/flush` freezes the
-current requested cursor and waits for capture and indexing. Event-driven Dream
-claims a fixed inbox snapshot under a fenced lease, evaluates a no-tools model
-plan, atomically updates curated topics, then archives its claimed observations.
-Capture published during Dream remains pending for the next claim.
-
-Use `/memory status` for content-free local diagnostics: pinned controls,
-cursors, queue counts, pending age, Dream lease/snapshot, last outcomes, and
-archive/tombstone counts. The existing `/memory`, `/memory on`, and `/memory
-off` behavior is unchanged.
-
-`memory_v2.enabled` is the primary v2 switch. When it is true, v2 takes
-precedence over the legacy `[memory] enabled` setting. When it is false or
-absent, the legacy setting is resolved unchanged so existing memory users are
-not migrated unexpectedly. If neither setting enables memory, memory remains
-off. An explicit `[memory] enabled = false` in your TOML turns off both
-implementations, including a v2 rollout enabled remotely; only an explicit
-`[memory_v2] enabled = true` in the same TOML overrides it.
-
-Advanced rollout stages are pinned when a session starts:
-
-- `off`: no v2 reads, capture, Dream, or v2 file writes.
-- `record_only`: persist observations, but hide them from manifests/indexes and
-  never mutate curated topics.
-- `shadow`: additionally evaluate consolidation plans, without committing topic
-  changes.
-- `active`: full capture, manifest, index, and Dream behavior.
-
-Most users should only set `enabled = true`; it selects the full `active`
-behavior. The rollout and component switches exist for staged production
-validation and emergency rollback. A remote change affects only newly spawned
-sessions. A disabled v2 component fails closed; it never invokes legacy search,
-flush, Dream, or storage. Managed remote behavioral controls can only make
-local settings more restrictive: kill switches are any-deny-wins, rollout uses
-the less permissive stage, and retention uses the shorter duration.
-
-Capture lifecycle notifications (`queued`, `running`, `completed`, retries, and
-failures) are debug output and hidden from the UI by default. Telemetry and the
-dedicated memory debug log are still recorded. To display these messages while
-debugging, set `capture_status_enabled = true` under `[memory_v2]`. A successful
-capture then appears as a collapsed row; expand it to inspect each generated
-memory and open its committed observation file. These debug notifications are
-live-only and are not added to session replay history.
-
-Archived observation files and terminal capture-job metadata have bounded
-retention (`archived_retention_days` and `job_retention_days`). Explicit
-forgetting is currently exposed as a narrow library boundary: callers must
-provide one exact v2 Markdown path and the hash of bytes they deliberately
-read. The operation records a durable content-free tombstone and audit record
-before deletion. Broad requests, stale evidence, traversal, symlinks, protected
-files, unknown archives, and active/stale Dream leases are rejected. A future UI
-may wrap this API after it can preserve the same exact-evidence boundary.
-
-Memory-v2 product telemetry contains only fixed enums, booleans, counts, and
+Memory product telemetry contains only fixed enums, booleans, counts, and
 durations. It never includes prompts, statements, topic names, keywords,
 paths, model output, or free-form errors.
 
@@ -96,27 +42,19 @@ paths, model output, or free-form errors.
 
 ## Enabling Memory
 
-### Memory v2 (Recommended)
-
-```toml
-# ~/.grok/config.toml
-[memory_v2]
-enabled = true
-```
-
-### Legacy Environment Variable
-
-```bash
-export GROK_MEMORY=1
-cook
-```
-
-### Legacy Config (Persistent)
+### Config (Persistent)
 
 ```toml
 # ~/.cook/config.toml
 [memory]
 enabled = true
+```
+
+### Environment Variable
+
+```bash
+export GROK_MEMORY=1
+cook
 ```
 
 ### Force-Disable
@@ -129,34 +67,25 @@ export GROK_MEMORY=0
 
 ### Mid-Session Toggle
 
-Toggle memory on or off during a session without restarting:
+Toggle memory on or off during a session without restarting: open `/memory`
+and press `t`.
 
-```
-/memory on
-/memory off
-```
+The toggle is session-scoped -- it does not persist to `config.toml`, and it works in both directions: a session that started with `[memory] enabled = true` can turn memory off, and a session that started with `[memory] enabled = false` can turn it on. New sessions follow `config.toml` again. Toggling off removes access to memory tools and the memory instructions in the system prompt but keeps existing files on disk. Toggling on re-initializes memory storage, registers the memory tools, restores the memory instructions, and injects the memory index on the next turn. Turning memory on waits for any turn in progress to finish.
 
-The toggle is session-scoped -- it does not persist to `config.toml`. Toggling off removes access to memory tools but keeps existing files on disk. Toggling on re-initializes memory storage and registers the memory tools.
-
-You can also toggle from inside the `/memory` modal by pressing `t`.
+The toggle cannot override the process-wide force-disable (`--no-memory` or `GROK_MEMORY=0`); those hide `/memory` for the whole session.
 
 ### Priority Order
 
 1. A process-wide force-disable (`--no-memory` compatibility flag or
-   `GROK_MEMORY=0`) disables both implementations.
-2. An explicit `[memory] enabled = false` in effective TOML disables both
-   implementations, unless the same TOML also sets `[memory_v2] enabled = true`.
-   A remote v2 gate alone cannot override a local opt-out.
-3. `memory_v2.enabled` resolves from effective TOML, then the dedicated
-   `grok_build_memory_v2_enabled` managed setting. If true, v2 is selected
-   regardless of legacy `memory_enabled`.
-4. Otherwise, legacy enablement resolves through its existing compatibility
-   CLI, `GROK_MEMORY`, effective TOML, and managed-remote tiers.
-5. If neither gate is enabled, memory is disabled.
+   `GROK_MEMORY=0`) turns memory off.
+2. An explicit `[memory] enabled = false` in effective TOML turns memory off,
+   including anything enabled by managed remote settings. The `/memory` `t`
+   toggle can still turn it on for the current session.
+3. Otherwise memory is enabled by `GROK_MEMORY=1`, `[memory] enabled = true`,
+   or a managed remote setting.
 
-All managed v2 behavior comes from the dedicated
-`grok_build_memory_v2_settings` object. Memory v2 does not consume fields from
-the legacy `grok_build_settings` object.
+Staged-rollout and kill-switch controls for operators are documented in the
+internal hardening notes, not here.
 
 ---
 
@@ -277,15 +206,18 @@ The modal uses a split-pane layout: the file list on the left, a read-only conte
 | `↑`/`↓` or `j`/`k` | Move through the file list |
 | `PgUp`/`PgDn` | Jump 10 entries |
 | `/` | Filter the file list |
+| `Enter` | Read the selected note: the preview takes keyboard focus (arrows, `PgUp`/`PgDn`, `Home`/`End` scroll it) |
 | `y` | Copy the selected file's path to the clipboard |
-| `x` | Delete the selected session file (press `x` again to confirm) |
+| `x` | Delete the selected note (press `x` again to confirm) |
 | `t` | Toggle memory on or off |
 | `Ctrl+F` | Toggle fullscreen |
-| `Esc` | Close the modal, or exit filter mode |
+| `Esc` | Close the modal, or leave filter or preview focus |
 
-The preview pane is read-only. Scroll it with the mouse wheel or by dragging its scrollbar. You can delete only session files, not the global or workspace `MEMORY.md`.
+The filter matches note names and note contents; separate words all have to match. When you filter, the preview scrolls to the first match. If nothing matches, the list says so; `Backspace` clears the filter.
 
-When the memory modal's content area is under 80 columns, the modal hides the preview pane and shows the file list only.
+The preview pane is read-only. Scroll it with the mouse wheel, by dragging its scrollbar, or with the keyboard after `Enter`. Drag across the preview text to copy that text to the clipboard; a brief message under the file list confirms every copy. Generated `MEMORY.md` indexes cannot be deleted.
+
+When the memory modal's content area is under 64 columns, the modal shows the file list only and hides the size column; press `Enter` to read the selected note full-width and `Esc` to return to the list.
 
 You can also open `/memory` from the command palette.
 
@@ -299,7 +231,7 @@ When you save a note with `/remember`, Grok confirms in the scrollback:
 Memory saved to ~/.cook/memory/MEMORY.md
 ```
 
-Background saves — flush, dream, and session-end — run silently and do not post a scrollback message. Use `/memory` at any time to browse what Grok has stored.
+Background saves — automatic flush, automatic Dream, and session-end — run silently and do not post a scrollback message. `/flush` and `/dream` report their outcome in scrollback when you run them yourself. Use `/memory` at any time to browse what Grok has stored.
 
 ---
 
@@ -547,6 +479,6 @@ $EDITOR ~/.cook/memory/MEMORY.md
 ### Debug Logging
 
 ```bash
-RUST_LOG=debug GROK_LOG_FILE=/tmp/grok.log grok
-grep "memory" /tmp/grok.log
+RUST_LOG=debug GROK_LOG_FILE=/tmp/cook.log cook
+grep "memory" /tmp/cook.log
 ```

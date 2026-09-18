@@ -615,6 +615,8 @@ pub(crate) async fn run_shell_child(
         let subagent_id = request.id.clone();
         let creation_mode: xai_fast_worktree::CreationMode = ctx.worktree_type.into();
         let btrfs_delegate = crate::session::worktree::btrfs_delegate_from_env();
+        let (grove_enabled, grove_gate_source) =
+            crate::util::config::grove_worktree_gate(ctx.remote_settings.as_ref());
         let worktree_create_span = region!(
             "subagent_spawn.worktree_create",
             Parent::Explicit(spawn_prepare_span.span())
@@ -627,6 +629,11 @@ pub(crate) async fn run_shell_child(
                     .creation_mode(creation_mode)
                     .worktree_kind(xai_fast_worktree::WorktreeKind::Subagent)
                     .session_id(subagent_id);
+                if let Some(opts) =
+                    crate::util::config::grove_worktree_opts_if_enabled(grove_enabled)
+                {
+                    builder = builder.grove_worktree(opts);
+                }
                 if let Some(delegate) = btrfs_delegate {
                     builder = builder.btrfs_delegate(delegate);
                 }
@@ -642,6 +649,8 @@ pub(crate) async fn run_shell_child(
                     commit = %report.commit,
                     resolved_strategy = report.resolved_strategy,
                     skipped = %xai_fast_worktree::render_arm_skips(&report.skipped),
+                    grove_worktree = grove_enabled,
+                    grove_gate_source,
                     "Created isolated worktree for subagent"
                 );
                 Some(report.worktree_path)
@@ -650,7 +659,11 @@ pub(crate) async fn run_shell_child(
                 tracing::warn!(
                     subagent_id = %request.id,
                     error = %e,
-                    "Failed to create worktree, falling back to shared workspace"
+                    resolved_strategy = "none",
+                    skipped = "",
+                    grove_worktree = grove_enabled,
+                    grove_gate_source,
+                    "Failed to create worktree (grove gate {grove_gate_source}), falling back to shared workspace"
                 );
                 None
             }
@@ -658,7 +671,11 @@ pub(crate) async fn run_shell_child(
                 tracing::warn!(
                     subagent_id = %request.id,
                     error = %e,
-                    "Worktree creation task panicked, falling back to shared workspace"
+                    resolved_strategy = "none",
+                    skipped = "",
+                    grove_worktree = grove_enabled,
+                    grove_gate_source,
+                    "Worktree creation task panicked (grove gate {grove_gate_source}), falling back to shared workspace"
                 );
                 None
             }

@@ -18,6 +18,7 @@ use agent_client_protocol as acp;
 use xai_acp_lib::{AcpAgentTx, AcpClientMessageBox, AcpClientRx, acp_send};
 use xai_grok_shell::agent::auth_method::AuthMethodKind;
 use xai_grok_shell::agent::config::Config as AgentConfig;
+use xai_grok_shell::extensions::memory::MemoryFlushResponse;
 use xai_grok_shell::extensions::task::{CancelSubagentRequest, KillTaskRequest};
 use xai_grok_shell::sampling::error::{
     RATE_LIMITED_ERROR_CODE, error_detail_from_data, format_rate_limited_user_message,
@@ -38,11 +39,11 @@ use crate::app::worktree_session::{
 use crate::best_effort_stderr::eprint_line;
 use crate::client_identity::{HEADLESS_CLIENT_TYPE, PAGER_CLIENT_VERSION};
 use crate::headless::reducer::{
-    Lifecycle, McpServer, Reducer, SessionContext, StreamEvent, TurnEnd, map_session_update,
-    reducer_for,
+    Lifecycle, Reducer, SessionContext, StreamEvent, TurnEnd, map_session_update, reducer_for,
 };
 
 mod ext_protocol;
+mod mcp_init;
 mod prompt_ack;
 mod reducer;
 use ext_protocol::{ExtEvent, handle_ext_notification, reply_headless_ext_method};
@@ -422,27 +423,6 @@ fn stop_reason_wire(reason: acp::StopReason) -> String {
         }
     }
     .to_string()
-}
-
-/// Configured MCP servers for the `init` line; all report `"connected"` (status is not resolved here).
-fn mcp_server_names(cwd: &Path) -> Vec<McpServer> {
-    let servers =
-        cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
-    servers
-        .iter()
-        .filter_map(|s| {
-            let name = match s {
-                acp::McpServer::Http(h) => h.name.clone(),
-                acp::McpServer::Sse(h) => h.name.clone(),
-                acp::McpServer::Stdio(h) => h.name.clone(),
-                _ => return None,
-            };
-            Some(McpServer {
-                name,
-                status: "connected".to_string(),
-            })
-        })
-        .collect()
 }
 
 fn auto_respond_to_permissions(
@@ -1172,6 +1152,11 @@ pub async fn run_single_turn(
 
     // Seed the reducer's session context BEFORE applying model/effort so a later failure carries it.
     {
+        let mcp_servers = if options.output_format == OutputFormat::StreamingMessagesJson {
+            mcp_init::resolve_mcp_servers_for_init(&acp_tx, &session_id, &session_cwd).await
+        } else {
+            Vec::new()
+        };
         let model = options
             .model
             .clone()
@@ -1185,7 +1170,7 @@ pub async fn run_single_turn(
             model,
             cwd: session_cwd.to_string_lossy().to_string(),
             permission_mode,
-            mcp_servers: mcp_server_names(&session_cwd),
+            mcp_servers,
             include_partial_messages: options.include_partial_messages,
             api_key_auth: is_api_key_auth,
             context_window: session_models.get_context_window(),
@@ -1609,12 +1594,10 @@ async fn run_headless_memory_flush(
         &mut background_lifecycle,
     );
     let response = response.map_err(|e| anyhow::anyhow!("memory flush failed: {e}"))?;
-    let flushed = serde_json::from_str::<serde_json::Value>(response.0.get())
-        .ok()
-        .and_then(|v| v.get("flushed")?.as_bool())
-        .unwrap_or(false);
-    if !flushed {
-        anyhow::bail!("memory flush skipped (already in progress or not started)");
+    let response = serde_json::from_str::<MemoryFlushResponse>(response.0.get())
+        .map_err(|e| anyhow::anyhow!("memory flush returned an unreadable response: {e}"))?;
+    if !response.flushed {
+        anyhow::bail!("memory flush skipped: {}", response.summary());
     }
     Ok(())
 }

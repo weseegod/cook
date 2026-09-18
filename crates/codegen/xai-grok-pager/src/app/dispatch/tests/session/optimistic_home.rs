@@ -926,6 +926,7 @@ fn home_session_create_failure_clears_placeholder_keeps_draft_and_warns() {
         Action::TaskComplete(TaskResult::SessionFailed {
             agent_id: home,
             error: "No space left on device".into(),
+            timed_out: false,
         }),
         &mut app,
     );
@@ -973,6 +974,7 @@ fn send_after_home_session_create_failure_creates_and_sends() {
         Action::TaskComplete(TaskResult::SessionFailed {
             agent_id: home,
             error: "create failed".into(),
+            timed_out: false,
         }),
         &mut app,
     );
@@ -1406,7 +1408,7 @@ fn worktree_create_failure_restores_queued_prompt_to_welcome() {
         panic!("Always send must leave home");
     };
 
-    let _ = handle_worktree_session_failed(&mut app, id, "worktree add failed".into());
+    let _ = handle_worktree_session_failed(&mut app, id, "worktree add failed".into(), None, false);
     assert!(matches!(app.active_view, ActiveView::Welcome));
     assert_eq!(app.welcome_prompt.text(), "keep the worktree prompt");
     assert!(
@@ -1545,7 +1547,7 @@ fn create_fail_restores_all_queued_prompts_and_draft() {
         agent.prompt.set_text("third");
     }
 
-    let _ = handle_session_failed(&mut app, id, "disk full".into());
+    let _ = handle_session_failed(&mut app, id, "disk full".into(), false);
     assert!(matches!(app.active_view, ActiveView::Welcome));
     let restored = app.welcome_prompt.text();
     assert!(

@@ -932,6 +932,7 @@ fn render_narrow_mode_registers_row_rects() {
     let mut state = DashboardState::new();
     let row = DashboardRow {
         id: DashboardRowId::TopLevel(AgentId(1)),
+        session_id: None,
         label: "abcdefghij ".repeat(10),
         subtitle: None,
         state: RowState::Working,
@@ -1196,8 +1197,6 @@ fn render_no_match_paints_filter_hint() {
         "no-match hint should embed the filter value, got: {content:?}"
     );
 }
-
-// ── snap_offset_to_line_boundary unit tests ──────────────────────
 
 /// An offset already on a boundary is returned unchanged.
 #[test]
@@ -1532,6 +1531,7 @@ fn sanitized_rename_draft_is_safe_in_both_render_paths() {
     let id = DashboardRowId::TopLevel(AgentId(7));
     let row = DashboardRow {
         id: id.clone(),
+        session_id: None,
         label: "row label".to_string(),
         subtitle: None,
         state: RowState::Working,
@@ -1595,6 +1595,7 @@ fn render_rename_overlay_aligns_with_title_and_keeps_icon() {
     let id = DashboardRowId::TopLevel(AgentId(7));
     let row = DashboardRow {
         id: id.clone(),
+        session_id: None,
         label: "row label".to_string(),
         subtitle: None,
         state: RowState::Idle,
@@ -1834,6 +1835,7 @@ fn rename_hover_selection_and_delete_geometry_stay_consistent() {
     let id = DashboardRowId::TopLevel(AgentId(7));
     let row = DashboardRow {
         id: id.clone(),
+        session_id: None,
         label: "row label".to_string(),
         subtitle: None,
         state: RowState::Idle,
@@ -2565,6 +2567,53 @@ fn render_rows_emits_pinned_section_at_top() {
     );
 }
 
+#[test]
+fn pinned_rows_render_in_manual_order_after_activity_changes() {
+    for grouping in [Grouping::State, Grouping::Directory] {
+        for width in [30, 100] {
+            let mut first = header_test_row(2, RowState::Idle, "first pin");
+            first.pinned = true;
+            first.cwd_display = "/z".to_owned();
+            let mut second = header_test_row(1, RowState::Idle, "second pin");
+            second.pinned = true;
+            second.cwd_display = "/a".to_owned();
+            let reorder = vec![first.id.clone(), second.id.clone()];
+            let mut rows = vec![
+                first,
+                second,
+                header_test_row(3, RowState::Working, "unpinned"),
+            ];
+            let mut state = DashboardState::new();
+            state.grouping = grouping;
+            state.selected = reorder.first().cloned();
+            let area = Rect::new(0, 0, width, 30);
+
+            for activity in [RowState::Working, RowState::Idle] {
+                let row = rows
+                    .iter_mut()
+                    .find(|row| row.label == "second pin")
+                    .expect("second pin");
+                row.state = activity;
+                row.last_change_at += std::time::Duration::from_secs(60);
+                crate::views::dashboard::sort_rows(&mut rows, grouping, &reorder);
+                let mut buffer = Buffer::empty(area);
+                if width < MIN_DASHBOARD_WIDTH {
+                    render_narrow_rows(&mut buffer, area, &Theme::groknight(), &rows, &mut state);
+                } else {
+                    render_rows(&mut buffer, area, &Theme::groknight(), &rows, &mut state);
+                }
+
+                let text = buf_to_text(&buffer);
+                let first = text.find("first pin").expect("first pin rendered");
+                let second = text.find("second pin").expect("second pin rendered");
+                let unpinned = text.find("unpinned").expect("unpinned row rendered");
+                assert!(first < second && second < unpinned, "{text}");
+                assert_eq!(reorder.first(), state.selected.as_ref());
+            }
+        }
+    }
+}
+
 /// With grouping OFF (Directory) the "Pinned" text header is suppressed.
 /// A textless divider (a horizontal rule, no label) separates the pinned block from the rest; no state headers are emitted either.
 #[test]
@@ -2733,6 +2782,7 @@ fn render_row_two_line_layout_paints_title_and_secondary() {
     state.spinner_tick = 8; // Tick 8 selects dot_spinner_frames()[2], the `⸬` glyph.
     let row = DashboardRow {
         id: DashboardRowId::TopLevel(crate::app::agent::AgentId(1)),
+        session_id: None,
         label: "who are you?".to_string(),
         subtitle: None,
         state: RowState::Working,
@@ -2814,6 +2864,7 @@ fn render_row_selected_brightens_secondary_text() {
     let id = DashboardRowId::TopLevel(crate::app::agent::AgentId(7));
     let row = DashboardRow {
         id: id.clone(),
+        session_id: None,
         label: "investigate caching".to_string(),
         subtitle: None,
         state: RowState::Working,
@@ -2876,6 +2927,7 @@ fn render_row_needs_input_yellow_blink_no_badge_pending_prefix() {
     let theme = Theme::current();
     let make_row = || DashboardRow {
         id: DashboardRowId::TopLevel(crate::app::agent::AgentId(1)),
+        session_id: None,
         label: "ask me".to_string(),
         subtitle: None,
         state: RowState::NeedsInput,
@@ -2963,6 +3015,7 @@ fn render_row_new_session_fallback_label_is_two_tone() {
     let mut state = DashboardState::new();
     let row = DashboardRow {
         id: DashboardRowId::TopLevel(crate::app::agent::AgentId(1)),
+        session_id: None,
         label: "New session #abc12345".to_string(),
         subtitle: None,
         state: RowState::Idle,
@@ -3320,10 +3373,6 @@ fn render_dashboard_paints_full_area_background() {
         "render_dashboard must paint at least one cell with theme.bg_base",
     );
 }
-
-// ─────────────────────────────────────────────────────────────────
-// Location picker tests
-// ─────────────────────────────────────────────────────────────────
 
 /// The location picker modal paints its title and candidate rows and records the content hit areas for mouse handling.
 #[test]

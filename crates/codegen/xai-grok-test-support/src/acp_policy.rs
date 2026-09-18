@@ -37,6 +37,55 @@ pub enum QuestionDecision {
     HoldUntilCancel,
 }
 
+/// How the client answers one `x.ai/folder_trust/request`.
+/// The agent sends this prompt only to a client that advertised `x.ai/folderTrust.interactive`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustDecision {
+    /// Answer `trust`, granting folder trust for the workspace.
+    Grant,
+    /// Answer `reject`, leaving the workspace gated.
+    Deny,
+}
+
+/// How the client answers one `x.ai/mcp/elicit` reverse request (an MCP server's `elicitation/create`
+/// forwarded by the agent). `Accept` returns `fields` as the form content; `Decline` and `Cancel`
+/// return those outcomes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ElicitationDecision {
+    Accept { fields: BTreeMap<String, String> },
+    Decline,
+    Cancel,
+}
+
+impl ElicitationDecision {
+    /// The `McpElicitExtResponse` wire shape (`#[serde(tag = "outcome")]`, snake_case) the agent's
+    /// elicitation coordinator parses back into an `ElicitResult`.
+    pub(crate) fn reply(&self) -> Value {
+        match self {
+            ElicitationDecision::Accept { fields } => {
+                let content: serde_json::Map<String, Value> = fields
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                    .collect();
+                serde_json::json!({ "outcome": "accept", "content": content })
+            }
+            ElicitationDecision::Decline => serde_json::json!({ "outcome": "decline" }),
+            ElicitationDecision::Cancel => serde_json::json!({ "outcome": "cancel" }),
+        }
+    }
+}
+
+/// Whether the client advertises interactivity to the agent. The default, [`Interactivity::Headless`],
+/// advertises `nonInteractive: true`, so the agent auto-cancels reverse interactions such as MCP
+/// elicitation without prompting; every existing case keeps this behavior. [`Interactivity::Interactive`]
+/// opts in, advertising `nonInteractive: false` and scripting the one answer the client returns for an
+/// `x.ai/mcp/elicit` reverse request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Interactivity {
+    Headless,
+    Interactive { elicitation: ElicitationDecision },
+}
+
 /// One decision for every request of a kind, with exceptions for particular requests counted from 1 in arrival order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestPolicy<D> {
@@ -77,6 +126,10 @@ impl<D: Clone> RequestPolicy<D> {
 pub struct ClientPolicy {
     pub permissions: RequestPolicy<PermissionDecision>,
     pub questions: RequestPolicy<QuestionDecision>,
+    /// Absent leaves the client without the `x.ai/folderTrust.interactive` capability, so the agent
+    /// never sends a folder-trust prompt; `Some` advertises the capability and answers every prompt.
+    pub trust: Option<TrustDecision>,
+    pub interactivity: Interactivity,
 }
 
 impl Default for ClientPolicy {
@@ -84,6 +137,8 @@ impl Default for ClientPolicy {
         ClientPolicy {
             permissions: RequestPolicy::new(PermissionDecision::Allow),
             questions: RequestPolicy::new(QuestionDecision::Cancel),
+            trust: None,
+            interactivity: Interactivity::Headless,
         }
     }
 }
@@ -140,6 +195,18 @@ impl QuestionDecision {
                 session_id: request.session_id.clone(),
             },
         }
+    }
+}
+
+impl TrustDecision {
+    /// The `{ "outcome": _ }` payload the GUI client returns; only `trust` grants, every other value
+    /// (including `reject`) leaves the workspace gated.
+    pub(crate) fn reply(self) -> Reply<Value> {
+        let outcome = match self {
+            TrustDecision::Grant => "trust",
+            TrustDecision::Deny => "reject",
+        };
+        Reply::Now(serde_json::json!({ "outcome": outcome }))
     }
 }
 

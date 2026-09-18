@@ -331,6 +331,92 @@ pub(super) fn install_system_prompt(
         }
     }
 }
+/// A resumed head keeps its enriched prompt, but its `<memory>` section must match this
+/// process's memory state: a `/memory` toggle persists the section into the head, while
+/// enablement is re-resolved from config on every spawn. On a mismatch the fresh prompt replaces
+/// the head; an injected manifest block is kept only while memory is on. Returns whether it changed.
+pub(super) fn reconcile_resumed_memory_section(
+    conversation: &mut [ConversationItem],
+    system_prompt: &str,
+) -> bool {
+    let Some(ConversationItem::System(sys)) = conversation.first_mut() else {
+        return false;
+    };
+    let manifest_start = sys.content.find(xai_chat_state::MEMORY_CONTEXT_OPEN_TAG);
+    let head_prompt = manifest_start
+        .and_then(|start| sys.content.get(..start))
+        .unwrap_or(&sys.content);
+    let fresh_has_memory = has_memory_section(system_prompt);
+    if has_memory_section(head_prompt) == fresh_has_memory {
+        return false;
+    }
+    let manifest_block = manifest_start
+        .filter(|_| fresh_has_memory)
+        .and_then(|start| sys.content.get(start..))
+        .map(str::to_owned);
+    sys.content = match manifest_block {
+        Some(block) => std::sync::Arc::<str>::from(format!(
+            "{}\n\n{block}",
+            system_prompt.trim_end_matches('\n')
+        )),
+        None => std::sync::Arc::<str>::from(system_prompt),
+    };
+    true
+}
+/// The `<memory>` block rendered by `templates/prompt.md` when `memory_v2_enabled` is set.
+fn has_memory_section(prompt: &str) -> bool {
+    prompt.contains("\n<memory>\n")
+}
+#[cfg(test)]
+mod reconcile_resumed_memory_section_tests {
+    use super::reconcile_resumed_memory_section;
+    use xai_chat_state::MEMORY_CONTEXT_OPEN_TAG;
+    use xai_grok_sampling_types::conversation::ConversationItem;
+    const WITH_MEMORY: &str = "rules\n\n<memory>\nuse memory\n</memory>\n\nmore";
+    const WITHOUT_MEMORY: &str = "rules\n\nmore";
+    fn head(conv: &[ConversationItem]) -> &str {
+        match conv.first() {
+            Some(ConversationItem::System(s)) => s.content.as_ref(),
+            _ => panic!("first item is not System"),
+        }
+    }
+    #[test]
+    fn matching_heads_are_left_alone() {
+        let mut conv = vec![ConversationItem::system(format!(
+            "{WITH_MEMORY} (enriched)"
+        ))];
+        assert!(!reconcile_resumed_memory_section(&mut conv, WITH_MEMORY));
+        assert_eq!(head(&conv), format!("{WITH_MEMORY} (enriched)"));
+        let mut conv = vec![ConversationItem::system(WITHOUT_MEMORY)];
+        assert!(!reconcile_resumed_memory_section(&mut conv, WITHOUT_MEMORY));
+    }
+    #[test]
+    fn memory_now_off_drops_section_and_manifest() {
+        let manifest = format!("{MEMORY_CONTEXT_OPEN_TAG}\nindex\n</memory-context>");
+        let mut conv = vec![ConversationItem::system(format!(
+            "{WITH_MEMORY}\n\n{manifest}"
+        ))];
+        assert!(reconcile_resumed_memory_section(&mut conv, WITHOUT_MEMORY));
+        assert_eq!(head(&conv), WITHOUT_MEMORY);
+    }
+    #[test]
+    fn memory_now_on_adds_section_and_keeps_manifest() {
+        let manifest = format!("{MEMORY_CONTEXT_OPEN_TAG}\nindex\n</memory-context>");
+        let mut conv = vec![ConversationItem::system(format!(
+            "{WITHOUT_MEMORY}\n\n{manifest}"
+        ))];
+        assert!(reconcile_resumed_memory_section(&mut conv, WITH_MEMORY));
+        assert_eq!(head(&conv), format!("{WITH_MEMORY}\n\n{manifest}"));
+    }
+    #[test]
+    fn memory_word_inside_manifest_does_not_count_as_a_section() {
+        let manifest = format!("{MEMORY_CONTEXT_OPEN_TAG}\nnote says\n<memory>\n</memory-context>");
+        let mut conv = vec![ConversationItem::system(format!(
+            "{WITHOUT_MEMORY}\n\n{manifest}"
+        ))];
+        assert!(!reconcile_resumed_memory_section(&mut conv, WITHOUT_MEMORY));
+    }
+}
 #[cfg(test)]
 mod install_system_prompt_tests {
     use super::install_system_prompt;

@@ -699,17 +699,27 @@ async fn startup_fetch_delay_slows_models_and_settings_then_clears() {
 }
 
 #[tokio::test]
-async fn privacy_coding_data_retention_echoes_flag_and_logs() {
+async fn privacy_coding_data_retention_serves_scripted_denial_then_echoes_and_logs() {
     let server = MockInferenceServer::start().await.unwrap();
     let url = format!("{}/privacy/coding-data-retention", server.url());
+    server.enqueue_response(
+        "/v1/privacy/coding-data-retention",
+        ScriptedResponse::json(403, json!({ "error": "team policy" })),
+    );
+    let put = || {
+        reqwest::Client::new()
+            .put(&url)
+            .json(&json!({ "codingDataRetentionOptOut": true }))
+            .send()
+    };
 
-    let resp = reqwest::Client::new()
-        .put(&url)
-        .json(&json!({ "codingDataRetentionOptOut": true }))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(200, resp.status());
+    let resp = put().await.unwrap();
+    assert_eq!(403, resp.status());
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(json!({ "error": "team policy" }), body);
+
+    let resp = put().await.unwrap();
+    assert_eq!(200, resp.status(), "an empty queue falls back to the echo");
     let body: Value = resp.json().await.unwrap();
     assert_eq!(json!({ "codingDataRetentionOptOut": true }), body);
 
@@ -718,7 +728,7 @@ async fn privacy_coding_data_retention_echoes_flag_and_logs() {
         .iter()
         .filter(|e| e.method == "PUT" && e.path == "/v1/privacy/coding-data-retention")
         .collect();
-    assert_eq!(1, puts.len());
+    assert_eq!(2, puts.len(), "the refused write is logged too");
     assert_eq!(
         Some(json!({ "codingDataRetentionOptOut": true })),
         puts.first().unwrap().body

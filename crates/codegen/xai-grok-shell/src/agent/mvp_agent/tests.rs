@@ -5043,6 +5043,36 @@ fn new_session_registers_root_identity() {
     });
 }
 #[test]
+fn new_session_records_setup_phases_for_bisection() {
+    xai_grok_telemetry::unified_log::redirect_to_temp_for_tests();
+    run_local_for_bridge_test(|| async {
+        let agent = build_minimal_agent_for_tests();
+        let cwd = tempfile::tempdir().unwrap();
+        let mark = xai_grok_telemetry::unified_log::snapshot_log()
+            .unwrap_or_default()
+            .len();
+        let sid = new_root_session(&agent, cwd.path()).await;
+        agent.remove_session(&sid);
+        let log = xai_grok_telemetry::unified_log::snapshot_log().unwrap_or_default();
+        let appended = String::from_utf8_lossy(log.get(mark.min(log.len())..).unwrap_or(&[]));
+        for phase in [
+            "resolve_workspace",
+            "plugin_registry",
+            "mcp_merge",
+            "persistence_init",
+            "spawn_session_actor",
+            "git_discovery",
+        ] {
+            let needle = format!("\"phase\":\"{phase}\"");
+            assert!(
+                appended.contains(needle.as_str()),
+                "session/new must record {phase} in unified.jsonl; got:\n{appended}"
+            );
+        }
+        assert!(appended.contains("\"msg\":\"session created\""));
+    });
+}
+#[test]
 fn cold_load_stamps_identity_exactly_once() {
     run_local_for_bridge_test(|| async {
         let agent = build_minimal_agent_for_tests();
@@ -5920,7 +5950,10 @@ fn prompt_routes_only_non_send_now_through_human_delivery_handle() {
                             let _ = responds_to.send(Default::default());
                         }
                         SessionCommand::GetCurrentModel { responds_to } => {
-                            let _ = responds_to.send("test-model".to_owned());
+                            let _ = responds_to.send(crate::session::CurrentModel {
+                                id: "test-model".to_owned(),
+                                reasoning_effort: None,
+                            });
                         }
                         SessionCommand::Prompt {
                             prompt_blocks,

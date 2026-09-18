@@ -30,6 +30,12 @@ use crate::types::schema::GrokIntegerSchema;
 pub struct ReadFileParams {
     #[serde(default)]
     pub cursor_rules_on_read: bool,
+    /// Byte budget for the formatted text window. When the window exceeds it, only the leading whole
+    /// lines that fit are returned (at least one) plus a continuation marker naming the next offset.
+    /// `None` keeps the token cap ([`READ_FILE_MAX_TOKENS`]) as the only size limit. Skill markdown
+    /// returned whole (under the token cap) is exempt; windowed reads are budgeted.
+    #[serde(default)]
+    pub max_output_bytes: Option<usize>,
 }
 crate::register_resource!("grok_build", "ReadFile", ReadFileParams);
 /// Internal version discriminant for read_file. `read_file` has cross-cutting version divergence:
@@ -156,6 +162,55 @@ async fn cursor_rules_on_read_enabled(resources: &SharedResources) -> bool {
     let res = resources.lock().await;
     res.get::<Params<ReadFileParams>>()
         .is_some_and(|p| p.0.cursor_rules_on_read)
+}
+async fn max_output_bytes(resources: &SharedResources) -> Option<usize> {
+    let res = resources.lock().await;
+    res.get::<Params<ReadFileParams>>()
+        .and_then(|p| p.0.max_output_bytes)
+}
+/// Number of leading whole lines of `content` (formatted output, `\n`-joined) whose cumulative length
+/// fits in `budget` bytes. Always at least 1 so a window whose first line alone is over budget still
+/// makes progress instead of returning an empty body.
+fn lines_within_byte_budget(content: &str, budget: usize) -> usize {
+    let mut used = 0usize;
+    let mut kept = 0usize;
+    for line in content.split_inclusive('\n') {
+        used += line.len();
+        if used > budget && kept > 0 {
+            break;
+        }
+        kept += 1;
+    }
+    kept.max(1)
+}
+/// Cut the window to whole lines within `budget` and tell the model where to resume. Re-extracts so
+/// `raw_output` and `extracted_images` match the returned lines; the marker is appended to the
+/// formatted text only.
+fn apply_byte_budget(
+    extracted: ExtractedContent,
+    budget: usize,
+    file_content: &str,
+    offset: Option<i64>,
+    total_lines: usize,
+    offset_param: &str,
+) -> ExtractedContent {
+    if extracted.content.len() <= budget {
+        return extracted;
+    }
+    let full_len = extracted.content.len();
+    let kept = lines_within_byte_budget(&extracted.content, budget);
+    let start_line = resolve_read_start_line(file_content, offset);
+    let mut bounded = extract_file_content_lines(file_content, offset, Some(kept), total_lines);
+    let end_line = start_line + kept - 1;
+    let next_offset = start_line + kept;
+    let truncated_bytes = full_len.saturating_sub(bounded.content.len());
+    let marker = format!(
+        "\n... [{truncated_bytes} characters truncated; file has {total_lines} total lines; \
+         showing lines {start_line}-{end_line}; rerun with {offset_param}={next_offset}] ..."
+    );
+    bounded.content.push_str(&marker);
+    bounded.content_concise.push_str(&marker);
+    bounded
 }
 /// Harness-compatible negative offset resolution (1-indexed start line). Negatives use the reference `split('\n')` field count plus a phantom
 /// field when the file is non-empty and has no trailing `\n`. Extraction still uses `split_inclusive`, so a start that lands on the
@@ -523,7 +578,8 @@ pub(crate) async fn run_read_file(
     let skill_full = is_skill_markdown
         .then(|| extract_file_content_lines(&file_content, None, None, total_lines))
         .filter(|full| !exceeds_read_cap(&full.content));
-    let (extracted, stored_offset, stored_limit) = match skill_full {
+    let windowed = skill_full.is_none();
+    let (mut extracted, stored_offset, stored_limit) = match skill_full {
         Some(full) => (full, None, None),
         None => (
             extract_file_content_lines(
@@ -536,6 +592,16 @@ pub(crate) async fn run_read_file(
             input.limit,
         ),
     };
+    if windowed && let Some(budget) = max_output_bytes(&resources).await {
+        extracted = apply_byte_budget(
+            extracted,
+            budget,
+            &file_content,
+            input.offset,
+            total_lines,
+            invoking_param_names.resolve("offset"),
+        );
+    }
     if exceeds_read_cap(&extracted.content) {
         let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
         let (grep_name, execute_name);
@@ -776,6 +842,153 @@ mod tests {
         assert!(multibyte.len() >= cap_bytes + bytes_per_token);
         assert!(multibyte.chars().count() < cap_bytes);
         assert!(exceeds_read_cap(&multibyte));
+    }
+    #[test]
+    fn lines_within_byte_budget_keeps_whole_lines_that_fit() {
+        let content = "1→aaaa\nbbbb\ncccc";
+        assert_eq!(lines_within_byte_budget(content, 100), 3);
+        assert_eq!(lines_within_byte_budget(content, 18), 3);
+        assert_eq!(lines_within_byte_budget(content, 17), 2);
+        assert_eq!(lines_within_byte_budget(content, 14), 2);
+        assert_eq!(lines_within_byte_budget(content, 13), 1);
+    }
+    #[test]
+    fn lines_within_byte_budget_always_keeps_first_line() {
+        assert_eq!(
+            lines_within_byte_budget("1→a very long first line\nb", 3),
+            1
+        );
+        assert_eq!(lines_within_byte_budget("", 0), 1);
+    }
+    fn budget_resources(cwd: &std::path::Path, max_output_bytes: usize) -> Resources {
+        let mut resources = test_resources(cwd);
+        resources.insert(Params(ReadFileParams {
+            max_output_bytes: Some(max_output_bytes),
+            ..Default::default()
+        }));
+        resources
+    }
+    /// 200 lines of 10 visible chars each (~2.2 KB formatted): over the budgets used below, under the token cap.
+    fn budget_fixture() -> String {
+        (1..=200)
+            .map(|i| format!("line{i:06}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    #[tokio::test]
+    async fn max_output_bytes_truncates_to_whole_lines_with_marker() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
+        let shared = budget_resources(tmp.path(), 500).into_shared();
+        let input = ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let out = xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(shared), input)
+            .await
+            .unwrap();
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected FileContent, got {out:?}");
+        };
+        let (body, marker) = fc
+            .content
+            .rsplit_once('\n')
+            .expect("marker on its own line");
+        assert!(body.len() <= 500, "body {} bytes over budget", body.len());
+        assert!(
+            body.ends_with(|c: char| c.is_ascii_digit()),
+            "body: {body:?}"
+        );
+        let kept = body.lines().count();
+        assert!(kept > 0 && kept < 200, "kept {kept}");
+        assert!(marker.starts_with("... ["), "marker: {marker:?}");
+        assert!(
+            marker.ends_with(&format!(
+                " characters truncated; file has 200 total lines; showing lines 1-{kept}; \
+                 rerun with offset={}] ...",
+                kept + 1
+            )),
+            "marker: {marker:?}"
+        );
+        assert_eq!(fc.content_concise.as_deref(), Some(fc.content.as_str()));
+        assert_eq!(fc.raw_output.lines().count(), kept);
+        assert_eq!(fc.total_lines, 200);
+    }
+    #[tokio::test]
+    async fn max_output_bytes_marker_uses_requested_offset_and_renamed_param() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
+        let resources = budget_resources(tmp.path(), 100);
+        let mut ctx = test_ctx(resources.into_shared());
+        ctx.extensions
+            .insert(crate::types::resources::InvokingToolParamNames(
+                [("offset".to_string(), "start_line".to_string())].into(),
+            ));
+        let input = ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: Some(50),
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let out = xai_tool_runtime::Tool::run(&ReadFileTool, ctx, input)
+            .await
+            .unwrap();
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected FileContent, got {out:?}");
+        };
+        assert!(fc.content.starts_with("50→line000050\n"), "{}", fc.content);
+        let kept = fc.content.lines().count() - 1;
+        assert!(fc.content.contains(&format!(
+            "showing lines 50-{}; rerun with start_line={}] ...",
+            50 + kept - 1,
+            50 + kept
+        )));
+    }
+    #[tokio::test]
+    async fn max_output_bytes_is_a_no_op_when_window_fits() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("small.txt"), "a\nb\nc\n").unwrap();
+        let shared = budget_resources(tmp.path(), 5_000).into_shared();
+        let input = ReadFileInput {
+            path: "small.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let out = xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(shared), input)
+            .await
+            .unwrap();
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected FileContent, got {out:?}");
+        };
+        assert_eq!(fc.content, "1→a\nb\nc\n");
+        assert!(!fc.content.contains("truncated"));
+    }
+    #[tokio::test]
+    async fn max_output_bytes_exempts_skill_markdown() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("SKILL.md"), budget_fixture()).unwrap();
+        let shared = budget_resources(tmp.path(), 100).into_shared();
+        let input = ReadFileInput {
+            path: "SKILL.md".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let out = xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(shared), input)
+            .await
+            .unwrap();
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected FileContent, got {out:?}");
+        };
+        assert!(fc.content.contains("line000200"));
+        assert!(!fc.content.contains("truncated"));
     }
     /// Set up Resources with real filesystem for tests.
     fn test_resources(cwd: &std::path::Path) -> Resources {

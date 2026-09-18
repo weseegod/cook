@@ -16,6 +16,7 @@ fn test_feedback_jsonl_multi_line_roundtrip() {
         feedback_text: Some("could be better".into()),
         model_id: Some("grok-3-fast".into()),
         resolved_model_id: Some("grok-4.5".into()),
+        reasoning_effort: Some("high".into()),
         ..Default::default()
     };
     let entries = vec![

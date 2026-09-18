@@ -160,8 +160,6 @@ fn session_created_with_flag_but_modal_closed_clears_flag_no_fetches() {
     );
 }
 
-// ── /new dispatcher tests ─────────────────────────────────────────────
-
 #[test]
 fn dispatch_new_session_opens_question_modal_in_git_repo() {
     let mut app = new_session_test_app();
@@ -212,8 +210,6 @@ fn dispatch_new_session_skips_modal_in_non_git_repo() {
         "non-git path must not open the modal"
     );
 }
-
-// ── Session close (shared with dashboard) ─────────────────────────────
 
 #[test]
 fn drop_other_agents_in_minimal_unregisters_leftovers() {

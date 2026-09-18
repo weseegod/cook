@@ -4,6 +4,7 @@ mod cta_e2e;
 mod dashboard;
 mod jump;
 mod mid_text_btw;
+mod mid_text_goal;
 mod modes;
 mod notes;
 mod permissions;
@@ -64,8 +65,8 @@ use crate::app::actions::{
 use crate::app::agent::{AgentId, AgentSession, AgentState};
 use crate::app::agent_view::{ActivePane, AgentView, PromptMode};
 use crate::app::app_view::{
-    ActiveView, AppView, AuthMode, AuthState, TrustState, VoiceState, VoiceTarget,
-    WelcomeAnnouncementState,
+    ActiveView, AppView, AuthMode, AuthState, PendingCodingDataWrite, TrustState, VoiceState,
+    VoiceTarget, WelcomeAnnouncementState,
 };
 use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::{SessionEvent, ToolCallBlock};
@@ -185,7 +186,7 @@ fn test_app() -> AppView {
         privacy_notice_rollout: false,
         privacy_banner_reshow_days: None,
         privacy_banner_acked: None,
-        privacy_banner_opt_in_inflight: false,
+        coding_data_pending_write: None,
         coding_data_write_seq: 0,
         show_tips: None,
         auto_update: None,

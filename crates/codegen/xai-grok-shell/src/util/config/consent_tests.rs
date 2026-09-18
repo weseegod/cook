@@ -46,8 +46,24 @@ async fn set_consent_answer_is_monotonic_per_account() {
     let _guard = xai_grok_test_support::env::EnvGuard::set("GROK_HOME", home.path());
 
     let answers = || {
-        let root = crate::config::load_from_disk().expect("read config");
-        super::super::load_config_from_toml(&root).consent.answers
+        // Persist writes live `$GROK_HOME`. Read that dest; `load_from_disk` must
+        // match it (a OnceLock miss used to look like a stale replay lowered the record).
+        let path = super::super::user_config_path();
+        let (dest, _) = super::super::read_follow_bound(&path).expect("bind persist dest");
+        let persist_root =
+            crate::config::load_config_file(dest.as_path()).expect("read persist dest");
+        let persist = super::super::load_config_from_toml(&persist_root)
+            .consent
+            .answers;
+        let disk_root = crate::config::load_from_disk().expect("read config");
+        let disk = super::super::load_config_from_toml(&disk_root)
+            .consent
+            .answers;
+        assert_eq!(
+            disk, persist,
+            "load_from_disk must see the consent persist wrote"
+        );
+        persist
     };
 
     set_consent_answer(Some("a@example.com".into()), "tos".into(), 3, false)

@@ -51,8 +51,11 @@ async fn file_write_is_broadcast_as_fs_changed() {
         xai_fsnotify::shared(root.path().to_path_buf(), FsConfig::default()).expect("watcher init");
     let fs_rx = source.subscribe();
     let (events_tx, mut events_rx) = broadcast::channel(16);
+    // The watcher reports paths under the canonical directory; the producer strips against that
+    // (macOS temp dirs live behind a `/var` → `/private/var` symlink).
+    let watch_root = dunce::canonicalize(root.path()).expect("canonical root");
     let forwarder = tokio::spawn(async move {
-        forward_fs_changes(fs_rx, &events_tx).await;
+        forward_fs_changes(fs_rx, &events_tx, &watch_root).await;
     });
 
     let file = root.path().join("touched.txt");
@@ -65,10 +68,7 @@ async fn file_write_is_broadcast_as_fs_changed() {
     let WorkspaceEvent::FsChanged { paths, kind } = event else {
         panic!("unexpected event: {event:?}");
     };
-    assert_eq!(
-        vec![dunce::canonicalize(&file).expect("canonical file")],
-        paths
-    );
+    assert_eq!(vec![PathBuf::from("touched.txt")], paths);
     assert!(
         matches!(
             kind,
@@ -87,14 +87,17 @@ async fn a_batch_past_the_frame_bound_is_split_in_order() {
     let (fs_tx, fs_rx) = broadcast::channel(4);
     let (events_tx, mut events_rx) = broadcast::channel(16);
     let forwarder = tokio::spawn(async move {
-        forward_fs_changes(fs_rx, &events_tx).await;
+        forward_fs_changes(fs_rx, &events_tx, Path::new("/r")).await;
     });
-    let paths: Vec<PathBuf> = (0..FS_CHANGED_PATHS_PER_FRAME + 1)
+    let absolute: Vec<PathBuf> = (0..FS_CHANGED_PATHS_PER_FRAME + 1)
         .map(|i| PathBuf::from(format!("/r/{i}.rs")))
+        .collect();
+    let relative: Vec<PathBuf> = (0..FS_CHANGED_PATHS_PER_FRAME + 1)
+        .map(|i| PathBuf::from(format!("{i}.rs")))
         .collect();
     fs_tx
         .send(FsEvent::FilesChanged {
-            paths: paths.clone(),
+            paths: absolute,
             kind: FsEventKind::Created,
         })
         .expect("forwarder subscribed");
@@ -110,7 +113,11 @@ async fn a_batch_past_the_frame_bound_is_split_in_order() {
         vec![FS_CHANGED_PATHS_PER_FRAME, 1],
         frames.iter().map(Vec::len).collect::<Vec<_>>()
     );
-    assert_eq!(paths, frames.concat(), "every path once, in watcher order");
+    assert_eq!(
+        relative,
+        frames.concat(),
+        "every path once, in watcher order, root-relative"
+    );
 }
 
 /// One watcher batch is one `FsChanged`: a checkout touching a thousand files is one frame per
@@ -120,12 +127,11 @@ async fn a_settle_window_of_paths_is_one_fs_changed_frame() {
     let (fs_tx, fs_rx) = broadcast::channel(4);
     let (events_tx, mut events_rx) = broadcast::channel(16);
     let forwarder = tokio::spawn(async move {
-        forward_fs_changes(fs_rx, &events_tx).await;
+        forward_fs_changes(fs_rx, &events_tx, Path::new("/r")).await;
     });
-    let paths = vec![PathBuf::from("/r/a.rs"), PathBuf::from("/r/b.rs")];
     fs_tx
         .send(FsEvent::FilesChanged {
-            paths: paths.clone(),
+            paths: vec![PathBuf::from("/r/a.rs"), PathBuf::from("/r/b.rs")],
             kind: FsEventKind::Modified,
         })
         .expect("forwarder subscribed");
@@ -136,7 +142,7 @@ async fn a_settle_window_of_paths_is_one_fs_changed_frame() {
 
     assert_eq!(
         Ok(WorkspaceEvent::FsChanged {
-            paths,
+            paths: vec![PathBuf::from("a.rs"), PathBuf::from("b.rs")],
             kind: xai_grok_workspace_types::FsEventKind::Modified,
         }),
         events_rx.try_recv()
@@ -145,6 +151,134 @@ async fn a_settle_window_of_paths_is_one_fs_changed_frame() {
         Err(broadcast::error::TryRecvError::Closed),
         events_rx.try_recv(),
         "nothing else was sent for the batch"
+    );
+}
+
+/// Paths are emitted relative to the watch root and off-root paths are dropped; a batch left
+/// empty sends no frame. A rename across the root boundary becomes the half inside it (`Removed`
+/// when the file left, `Created` when it arrived) rather than an ambiguous lone-path `Renamed`.
+/// Reverting the strip/drop in `forward_fs_changes` fails this.
+#[tokio::test]
+async fn off_root_paths_are_dropped_and_on_root_paths_are_emitted_relative() {
+    use xai_grok_workspace_types::FsEventKind as WireKind;
+    let (fs_tx, fs_rx) = broadcast::channel(16);
+    let (events_tx, mut events_rx) = broadcast::channel(16);
+    let forwarder = tokio::spawn(async move {
+        forward_fs_changes(fs_rx, &events_tx, Path::new("/watch")).await;
+    });
+    let batches = [
+        (
+            vec![
+                "/watch/inside.rs",
+                "/elsewhere/outside.rs",
+                "/watch/nested/file.rs",
+            ],
+            FsEventKind::Modified,
+        ),
+        (
+            vec!["/watch/left.rs", "/elsewhere/left.rs"],
+            FsEventKind::Renamed,
+        ),
+        (
+            vec!["/elsewhere/arrived.rs", "/watch/arrived.rs"],
+            FsEventKind::Renamed,
+        ),
+        (vec!["/watch/old.rs", "/watch/new.rs"], FsEventKind::Renamed),
+        (vec!["/watch/lone.rs"], FsEventKind::Renamed),
+        (vec!["/elsewhere/only-off-root.rs"], FsEventKind::Created),
+        (
+            vec!["/elsewhere/a.rs", "/elsewhere/b.rs"],
+            FsEventKind::Renamed,
+        ),
+    ];
+    for (paths, kind) in batches {
+        fs_tx
+            .send(FsEvent::FilesChanged {
+                paths: paths.into_iter().map(PathBuf::from).collect(),
+                kind,
+            })
+            .expect("forwarder subscribed");
+    }
+    drop(fs_tx);
+    forwarder.await.expect("forwarder exits");
+
+    let mut frames = Vec::new();
+    while let Ok(WorkspaceEvent::FsChanged { paths, kind }) = events_rx.try_recv() {
+        frames.push((paths, kind));
+    }
+    let relative = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    assert_eq!(
+        vec![
+            (
+                relative(&["inside.rs", "nested/file.rs"]),
+                WireKind::Modified
+            ),
+            (relative(&["left.rs"]), WireKind::Removed),
+            (relative(&["arrived.rs"]), WireKind::Created),
+            (relative(&["old.rs", "new.rs"]), WireKind::Renamed),
+            (relative(&["lone.rs"]), WireKind::Renamed),
+        ],
+        frames,
+        "root-relative; off-root dropped; boundary renames become Removed / Created"
+    );
+}
+
+/// The watcher reports paths under the real directory even when the root was given through a
+/// symlink, and a removed file cannot be canonicalized after the fact. The producer strips against
+/// the canonical root it resolved once up front, so a `Removed` under such a root still arrives.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_removal_under_a_symlinked_root_is_emitted_relative() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (real, link) = (dir.path().join("real"), dir.path().join("link"));
+    std::fs::create_dir(&real).expect("mkdir");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let (events_tx, mut events_rx) = broadcast::channel(16);
+    let _producer = spawn_fs_change_producer(link.clone(), events_tx);
+    // The producer arms its watcher on its own task; it holds the shared watcher once armed.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let probe = link.clone();
+        let holders = tokio::task::spawn_blocking(move || {
+            xai_fsnotify::shared(probe, FsConfig::default()).map(|probe| Arc::strong_count(&probe))
+        })
+        .await
+        .expect("probe join")
+        .expect("probe watcher");
+        if holders == 2 {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "producer never armed its watcher"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    async fn next(
+        events_rx: &mut broadcast::Receiver<WorkspaceEvent>,
+    ) -> (Vec<PathBuf>, xai_grok_workspace_types::FsEventKind) {
+        match tokio::time::timeout(Duration::from_secs(10), events_rx.recv())
+            .await
+            .expect("FsChanged within timeout")
+            .expect("events channel open")
+        {
+            WorkspaceEvent::FsChanged { paths, kind } => (paths, kind),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    let file = link.join("gone.txt");
+    std::fs::write(&file, b"x").expect("write");
+    let (paths, kind) = next(&mut events_rx).await;
+    assert_eq!(vec![PathBuf::from("gone.txt")], paths, "written: {kind:?}");
+
+    std::fs::remove_file(&file).expect("remove");
+    assert_eq!(
+        (
+            vec![PathBuf::from("gone.txt")],
+            xai_grok_workspace_types::FsEventKind::Removed
+        ),
+        next(&mut events_rx).await
     );
 }
 

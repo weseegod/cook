@@ -321,28 +321,28 @@ fn resolve_model_authored_skill_requires_exact_child_catalog_name_and_loader() {
     assert_eq!(skill.name, "local:compact");
     assert_eq!(skill.args, "keep history");
 
-    let flush_skill = vec![make_skill("flush", true)];
-    let memory_off = CommandAvailability::default();
-    let advertised = available_commands(&flush_skill, memory_off, &[]);
-    assert!(advertised.iter().any(|command| command.name == "flush"));
+    let goal_skill = vec![make_skill("goal", true)];
+    let goal_off = CommandAvailability::default();
+    let advertised = available_commands(&goal_skill, goal_off, &[]);
+    assert!(advertised.iter().any(|command| command.name == "goal"));
     assert!(
         super::resolve_model_authored_skill(
-            vec![text_block("/flush")],
-            "flush",
+            vec![text_block("/goal")],
+            "goal",
             "",
-            &flush_skill,
-            memory_off,
+            &goal_skill,
+            goal_off,
             true,
         )
         .is_err()
     );
     assert!(
         super::resolve_model_authored_skill(
-            vec![text_block("/local:flush")],
-            "local:flush",
+            vec![text_block("/local:goal")],
+            "local:goal",
             "",
-            &flush_skill,
-            memory_off,
+            &goal_skill,
+            goal_off,
             true,
         )
         .is_ok()
@@ -1242,7 +1242,7 @@ fn inspect_reserved_names_exclude_gated_shell_builtins() {
     assert!(super::is_reserved_slash_name("compact"));
     assert!(super::is_reserved_slash_name("hooks-add"));
     assert!(super::is_reserved_slash_name("HOOKS-ADD"));
-    assert!(!super::is_reserved_slash_name("flush"));
+    assert!(!super::is_reserved_slash_name("goal"));
     assert!(!super::is_reserved_slash_name("deploy"));
 }
 
@@ -1478,40 +1478,15 @@ fn flush_hidden_when_memory_gate_off_visible_when_on() {
 // ── /memory ─────────────────────────────────────────────────────
 
 #[test]
-fn memory_bare_resolves_to_browse() {
-    assert!(matches!(
-        resolve_builtin("memory", ""),
-        Some(BuiltinAction::MemoryBrowse)
-    ));
-    // Any unrecognized arg still falls through to the legacy browser.
-    assert!(matches!(
-        resolve_builtin("memory", "unknown"),
-        Some(BuiltinAction::MemoryBrowse)
-    ));
-    assert!(matches!(
-        resolve_builtin("memory", "status"),
-        Some(BuiltinAction::MemoryStatus)
-    ));
-}
-
-#[test]
-fn memory_on_off_resolves_to_toggle() {
-    for (arg, expected) in [
-        ("on", true),
-        ("enable", true),
-        ("ON", true),
-        ("Enable", true),
-        ("off", false),
-        ("disable", false),
-        ("OFF", false),
-        ("Disable", false),
-    ] {
+fn memory_resolves_to_browse_regardless_of_args() {
+    // Toggle and status live inside the modal now; stray args must not become anything else.
+    for arg in ["", "on", "off", "status", "unknown"] {
         assert!(
             matches!(
                 resolve_builtin("memory", arg),
-                Some(BuiltinAction::MemoryToggle { enabled }) if enabled == expected
+                Some(BuiltinAction::MemoryBrowse)
             ),
-            "expected toggle({expected}) for {arg:?}",
+            "{arg:?}"
         );
     }
 }
@@ -1529,22 +1504,6 @@ fn mem_alias_resolves_to_memory_browse() {
     assert!(matches!(
         outcome,
         SlashCommandOutcome::Builtin(BuiltinAction::MemoryBrowse)
-    ));
-}
-
-#[test]
-fn mem_alias_resolves_toggle_with_args() {
-    let outcome = resolve(
-        vec![text_block("/mem off")],
-        &[],
-        all_gated(),
-        SkillSlashRewrite::default(),
-        &[],
-    )
-    .unwrap_err();
-    assert!(matches!(
-        outcome,
-        SlashCommandOutcome::Builtin(BuiltinAction::MemoryToggle { enabled: false })
     ));
 }
 

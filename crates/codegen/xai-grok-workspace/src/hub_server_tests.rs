@@ -1537,6 +1537,231 @@ fn test_sha256(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(data))
 }
+async fn session_image_handler() -> (WorkspaceRpcHandler, tempfile::TempDir) {
+    use xai_grok_tools::types::resources::SessionFolder;
+    let handle = make_handle();
+    let folder = tempfile::tempdir().unwrap();
+    handle
+        .session("main")
+        .unwrap()
+        .toolset()
+        .resources
+        .lock()
+        .await
+        .insert(SessionFolder(folder.path().to_path_buf()));
+    (WorkspaceRpcHandler::new(handle), folder)
+}
+fn directory_entries(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut entries = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect::<Vec<_>>();
+    entries.sort();
+    entries
+}
+#[tokio::test]
+async fn dispatch_store_session_image_preserves_binary_in_bound_folder() {
+    use base64::Engine;
+    use xai_grok_workspace_types::rpc::fs::{StoreSessionImageReq, StoreSessionImageRes};
+    let (handler, folder) = session_image_handler().await;
+    let root = handler.workspace.root_cwd().unwrap();
+    std::fs::write(root.join("keep.txt"), b"untouched").unwrap();
+    let before = directory_entries(&root);
+    let bytes = b"\x89PNG\r\n\x1a\n\0\xff\x80binary";
+    let mut paths = Vec::new();
+    for extension in ["png", "jpg", "webp", "gif"] {
+        let request = StoreSessionImageReq {
+            content_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            extension: extension.to_owned(),
+        };
+        let params = serde_json::to_value(&request).unwrap();
+        let round_trip: StoreSessionImageReq = serde_json::from_value(params.clone()).unwrap();
+        assert_eq!(params, serde_json::to_value(round_trip).unwrap());
+        let value = handler
+            .dispatch(StoreSessionImageReq::METHOD, params, Some("main"))
+            .await
+            .unwrap();
+        let response: StoreSessionImageRes = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(value, serde_json::to_value(&response).unwrap());
+        let path = std::path::PathBuf::from(response.file_path);
+        assert!(path.is_absolute());
+        assert_eq!(
+            Some(folder.path().canonicalize().unwrap().as_path()),
+            path.parent()
+        );
+        assert_eq!(Some(std::ffi::OsStr::new(extension)), path.extension());
+        uuid::Uuid::parse_str(path.file_stem().unwrap().to_str().unwrap()).unwrap();
+        assert_eq!(bytes.as_slice(), std::fs::read(&path).unwrap());
+        paths.push(path);
+    }
+    paths.sort();
+    paths.dedup();
+    assert_eq!(4, paths.len());
+    assert_eq!(
+        paths,
+        directory_entries(&folder.path().canonicalize().unwrap())
+    );
+    assert_eq!(before, directory_entries(&root));
+    assert_eq!(
+        b"untouched",
+        std::fs::read(root.join("keep.txt")).unwrap().as_slice()
+    );
+}
+#[tokio::test]
+async fn dispatch_store_session_image_requires_bound_session() {
+    let (handler, folder) = session_image_handler().await;
+    let root = handler.workspace.root_cwd().unwrap();
+    let before = directory_entries(&root);
+    for (bound_session, expected) in [
+        (
+            None,
+            "hub error: store_session_image requires a bound session",
+        ),
+        (Some("not-bound"), "session not found: not-bound"),
+    ] {
+        let error = handler
+            .dispatch(
+                "workspace.store_session_image",
+                serde_json::json!({
+                    "content_base64": "AA==",
+                    "extension": "png",
+                    "session_id": "main"
+                }),
+                bound_session,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(expected, error.to_string());
+    }
+    assert!(directory_entries(folder.path()).is_empty());
+    assert_eq!(before, directory_entries(&root));
+}
+#[tokio::test]
+async fn dispatch_store_session_image_rejects_invalid_input_without_writing() {
+    let (handler, folder) = session_image_handler().await;
+    let root = handler.workspace.root_cwd().unwrap();
+    let before = directory_entries(&root);
+    for extension in ["", "../png", "png/../../escape", ".jpg", "svg", "PNG"] {
+        let error = handler
+            .dispatch(
+                "workspace.store_session_image",
+                serde_json::json!({"content_base64": "AA==", "extension": extension}),
+                Some("main"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            "hub error: store_session_image extension must be jpg, png, webp, or gif",
+            error.to_string()
+        );
+    }
+    let error = handler
+        .dispatch(
+            "workspace.store_session_image",
+            serde_json::json!({"content_base64": "!!!!", "extension": "png"}),
+            Some("main"),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        "hub error: invalid session image base64: Invalid symbol 33, offset 0.",
+        error.to_string()
+    );
+    assert!(directory_entries(folder.path()).is_empty());
+    assert_eq!(before, directory_entries(&root));
+}
+#[tokio::test]
+async fn dispatch_store_session_image_enforces_size_limit_without_writing() {
+    use base64::Engine;
+    use xai_grok_workspace_types::rpc::fs::{
+        MAX_SESSION_IMAGE_BASE64_BYTES, MAX_SESSION_IMAGE_BYTES,
+    };
+    let (handler, folder) = session_image_handler().await;
+    let root = handler.workspace.root_cwd().unwrap();
+    let before = directory_entries(&root);
+    for content_base64 in [
+        "!".repeat(MAX_SESSION_IMAGE_BASE64_BYTES + 1),
+        base64::engine::general_purpose::STANDARD.encode(vec![0; MAX_SESSION_IMAGE_BYTES + 1]),
+    ] {
+        let error = handler
+            .dispatch(
+                "workspace.store_session_image",
+                serde_json::json!({"content_base64": content_base64, "extension": "png"}),
+                Some("main"),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            format!("hub error: session image exceeds {MAX_SESSION_IMAGE_BYTES} byte limit"),
+            error.to_string()
+        );
+        assert!(directory_entries(folder.path()).is_empty());
+        assert_eq!(before, directory_entries(&root));
+    }
+}
+#[tokio::test]
+async fn dispatch_store_session_image_accepts_exact_size_limit() {
+    use base64::Engine;
+    use xai_grok_workspace_types::rpc::fs::{MAX_SESSION_IMAGE_BYTES, StoreSessionImageRes};
+    let (handler, folder) = session_image_handler().await;
+    let bytes = vec![0xff; MAX_SESSION_IMAGE_BYTES];
+    let value = handler
+        .dispatch(
+            "workspace.store_session_image",
+            serde_json::json!({
+                "content_base64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+                "extension": "png",
+            }),
+            Some("main"),
+        )
+        .await
+        .unwrap();
+    let response: StoreSessionImageRes = serde_json::from_value(value).unwrap();
+    let path = std::path::PathBuf::from(response.file_path);
+    assert_eq!(bytes, std::fs::read(&path).unwrap());
+    assert_eq!(vec![path], directory_entries(folder.path()));
+}
+#[tokio::test]
+async fn dispatch_store_session_image_reports_write_failure() {
+    use xai_grok_tools::types::resources::SessionFolder;
+    let (handler, folder) = session_image_handler().await;
+    let root = handler.workspace.root_cwd().unwrap();
+    let before = directory_entries(&root);
+    let not_a_directory = folder.path().join("file");
+    std::fs::write(&not_a_directory, b"preserve").unwrap();
+    handler
+        .workspace
+        .session("main")
+        .unwrap()
+        .toolset()
+        .resources
+        .lock()
+        .await
+        .insert(SessionFolder(not_a_directory.clone()));
+    let error = handler
+        .dispatch(
+            "workspace.store_session_image",
+            serde_json::json!({"content_base64": "AA==", "extension": "png"}),
+            Some("main"),
+        )
+        .await
+        .unwrap_err();
+    match error {
+        WorkspaceError::HubError(message) => {
+            assert!(
+                message.starts_with("create session image temporary file:"),
+                "{message}"
+            );
+        }
+        other => panic!("expected image write failure, got {other:?}"),
+    }
+    assert_eq!(
+        b"preserve",
+        std::fs::read(&not_a_directory).unwrap().as_slice()
+    );
+    assert_eq!(vec![not_a_directory], directory_entries(folder.path()));
+    assert_eq!(before, directory_entries(&root));
+}
 #[tokio::test]
 async fn dispatch_put_files_writes_and_returns_hash() {
     let handle = make_handle();
@@ -2548,6 +2773,7 @@ async fn dispatch_knows_every_typed_method() {
         <GitMetadataReq as WorkspaceRpc>::METHOD,
         <PutFilesReq as WorkspaceRpc>::METHOD,
         <GetFilesReq as WorkspaceRpc>::METHOD,
+        <StoreSessionImageReq as WorkspaceRpc>::METHOD,
         <FsListReq as WorkspaceRpc>::METHOD,
         <FsExistsReq as WorkspaceRpc>::METHOD,
         <FsReadFileReq as WorkspaceRpc>::METHOD,

@@ -1059,6 +1059,20 @@ pub fn map_agent_connect(ev: &events::AgentConnect) -> Option<ExternalRecord> {
     Some(rec)
 }
 
+/// `SessionCreateFailed` maps to the session-create timeout counter (no external log event).
+pub fn map_session_create_failed(ev: &events::SessionCreateFailed) -> Option<ExternalRecord> {
+    if ev.outcome != crate::startup::StartupOutcome::Timeout {
+        return None;
+    }
+    let stuck = ev
+        .stuck_phase
+        .clone()
+        .unwrap_or_else(|| "unknown".to_owned());
+    Some(
+        ExternalRecord::default().metric(MetricIncrement::SessionCreateTimeout { stuck_in: stuck }),
+    )
+}
+
 pub fn map_startup_sub_timers(ev: &events::StartupSubTimers) -> Option<ExternalRecord> {
     if ev.timings.is_empty() {
         return None;

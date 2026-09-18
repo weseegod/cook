@@ -525,6 +525,11 @@ impl PtyHarness {
         self.screen.full_text()
     }
 
+    /// Native select→copy (WRAPLINE-joined, pads trimmed). Prefer over [`Self::full_text`] for clipboard-shaped asserts.
+    pub fn native_copy_text(&self) -> String {
+        self.screen.native_copy_text()
+    }
+
     /// Whether scrollback plus visible screen contains `text`.
     pub fn contains_full_text(&self, text: &str) -> bool {
         self.screen.full_contains(text)

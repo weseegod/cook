@@ -122,10 +122,6 @@ fn session_header_always_shortens_deep_cwd() {
         !row.contains("/deep/alpha"),
         "middle components must not stay full, row = {row:?}"
     );
-    assert!(
-        !row.contains("(worktree of"),
-        "no leftover main-repo suffix, row = {row:?}"
-    );
 }
 /// Frame 5: a plain session shows `path … [Dashboard]` on one row with no title and no switcher, the path in `text_secondary`.
 /// `[Dashboard]` opens the dashboard on click.

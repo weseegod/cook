@@ -1,6 +1,6 @@
 [package]
 name = "xai-grok-pager"
-version = "1.0.32"
+version = "1.0.35"
 edition.workspace = true
 license = "Apache-2.0"
 authors = ["xAI"]
@@ -59,6 +59,7 @@ portable-pty = "0.9"
 
 # Utilities
 anyhow = { workspace = true }
+thiserror = { workspace = true }
 shlex = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 clap_complete = { workspace = true }
@@ -103,7 +104,7 @@ xai-grok-active-sessions = { workspace = true }
 xai-grok-config = { workspace = true }
 xai-grok-feedback = { workspace = true }
 xai-grok-sampling-types = { path = "../xai-grok-sampling-types", optional = true }
-xai-tool-types = { workspace = true, optional = true }
+xai-tool-types = { workspace = true }
 xai-dirs = { workspace = true }
 xai-grok-dashboard-store = { workspace = true }
 # Voice dictation. `audio` (mic capture) is enabled on every target. On
@@ -145,7 +146,7 @@ base64 = { workspace = true }
 image = { workspace = true, features = ["png", "jpeg", "tiff", "gif", "webp"] }
 
 # ID generation
-uuid = { workspace = true, features = ["v4"] }
+uuid = { workspace = true, features = ["v4", "v7"] }
 
 # Path computation (plan file, etc.)
 shellexpand = "3.1"
@@ -195,6 +196,7 @@ xai-grok-gboom = { path = "../xai-grok-gboom", features = ["test-support"] }
 xai-grok-login = { workspace = true, features = ["test-support"] }
 xai-grok-shell = { workspace = true, features = ["test-support"] }
 pretty_assertions = { workspace = true }
+wiremock = { workspace = true }
 insta = { workspace = true }
 criterion = { workspace = true }
 tempfile = { workspace = true }

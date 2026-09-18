@@ -57,6 +57,31 @@ pub struct PutFilesRes {
     pub results: Vec<PutFileResult>,
 }
 
+/// Leaves room for base64 expansion and RPC metadata within the hub's default 8 MiB frame limit.
+pub const MAX_SESSION_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+pub const MAX_SESSION_IMAGE_BASE64_BYTES: usize = MAX_SESSION_IMAGE_BYTES.div_ceil(3) * 4;
+
+/// Store a generated image in the bound session's own folder, never in the workspace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreSessionImageReq {
+    /// Standard base64-encoded image bytes.
+    pub content_base64: String,
+    /// Filename extension: jpg, png, webp, or gif.
+    pub extension: String,
+}
+
+impl WorkspaceRpc for StoreSessionImageReq {
+    const METHOD: &'static str = "workspace.store_session_image";
+    const ACTIVITY: RpcActivityClass = RpcActivityClass::Mutation;
+    type Response = StoreSessionImageRes;
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreSessionImageRes {
+    /// Absolute host path, returned only after the complete image has been stored.
+    pub file_path: String,
+}
+
 /// A single file to read, with optional cache validation and byte-range support.
 /// Ranges are bytes but `content` is a UTF-8 `String`; a split codepoint errors rather than emitting invalid text.
 #[derive(Debug, Clone, Serialize, Deserialize)]

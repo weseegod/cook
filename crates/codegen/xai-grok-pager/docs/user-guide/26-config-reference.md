@@ -444,7 +444,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.cook/con
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
 | `paths.extra_rule_dirs` | `string[]` | `yes` | `user` | More rule directories (absolute or `~/…`; each contains `*.md`), loaded after the home rules. |
-| `paths.extra_skill_dirs` | `string[]` | `yes` | `user` | More skill directories (each contains `<skill>/SKILL.md`). Written by `/import-claude`; not yet consulted by skill discovery. |
+| `paths.extra_skill_dirs` | `string[]` | `yes` | `user` | Records `/import-claude` skill directories that skill injection ignores in favor of `[skills] paths`. |
 
 ### `permission`
 

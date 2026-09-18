@@ -13,7 +13,7 @@ use crate::session::helpers::CompactionStateContext;
 use crate::session::helpers::compaction_context::CompactionInputs;
 use crate::session::helpers::compaction_context::to_system_reminder;
 use crate::session::helpers::session_compact::{
-    COMPACT_FAILED_PREFIX, CompactOutput, CompactionOutcome, build_two_pass_compaction_prompt,
+    COMPACT_FAILED_PREFIX, CompactOutput, CompactionOutcome, build_compaction_prompt,
     generate_session_compact, is_context_length_error,
 };
 use crate::session::persistence::PersistenceMsg;
@@ -279,7 +279,7 @@ impl SessionActor {
             .iter()
             .map(xai_chat_state::estimate_item_tokens)
             .sum::<u64>();
-        let prompt = build_two_pass_compaction_prompt(None);
+        let prompt = build_compaction_prompt(None, false);
         let pass1_history = build_two_pass_pass1_history(&prefix_prepared, &prompt);
         let started = std::time::Instant::now();
         let out = self.two_pass_sample(pass1_history).await;
@@ -374,7 +374,7 @@ impl SessionActor {
         }
         let prepared_tail =
             prepare_conversation_for_verbatim_summarization(tail.to_vec(), strips_reasoning);
-        let prompt = build_two_pass_compaction_prompt(user_context);
+        let prompt = build_compaction_prompt(user_context, false);
         let pass2_history =
             build_two_pass_pass2_history(prefix, &prepared_tail, &cache.note1, &prompt);
         let started = std::time::Instant::now();
@@ -991,6 +991,7 @@ impl SessionActor {
                 is_subagent: self.startup_hints.is_subagent,
             },
         );
+        let user_context = self.merge_goal_compaction_user_context(user_context);
         let compact_source = trigger_str;
         self.dispatch_hook(
             xai_grok_hooks::event::HookEventName::PreCompact,
@@ -1374,8 +1375,14 @@ impl SessionActor {
         let (discovered_agents_md, all_skills_for_compaction, _agent_edited_paths, state_context) =
             if use_short_prompt {
                 let empty_edited: std::collections::BTreeSet<String> = Default::default();
-                let ctx =
-                    CompactionStateContext::build(&conversation, CompactionInputs::default()).await;
+                let ctx = CompactionStateContext::build(
+                    &conversation,
+                    CompactionInputs {
+                        goal_objective: self.goal_objective_for_compaction(),
+                        ..Default::default()
+                    },
+                )
+                .await;
                 (Vec::<std::path::PathBuf>::new(), vec![], empty_edited, ctx)
             } else {
                 let agents_md: Vec<std::path::PathBuf> = self
@@ -1569,6 +1576,7 @@ impl SessionActor {
                             scheduled_loops,
                             workflows,
                             workflow_tool_name,
+                            goal_objective: self.goal_objective_for_compaction(),
                             ..Default::default()
                         },
                     )
@@ -1916,9 +1924,10 @@ impl SessionActor {
             )
             .await
         };
-        let new_len = compacted_history.len();
         self.chat_state_handle
             .replace_conversation_for_compaction(compacted_history);
+        self.reseed_active_goal_after_compaction().await;
+        let new_len = self.chat_state_handle.get_conversation_len().await;
         if self.startup_hints.inherited_prefix_len.is_some() {
             let post_replace_tokens = self.chat_state_handle.get_total_tokens().await;
             if xai_token_estimation::exceeds_threshold(

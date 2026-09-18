@@ -97,6 +97,8 @@ pub(crate) struct ScriptEntry {
     pub(crate) reply: String,
     pub(crate) at_request: Option<usize>,
     pub(crate) stall: Option<Duration>,
+    /// A reasoning stream served before the reply, so the client sees a thought first.
+    pub(crate) reasoning: Option<String>,
     /// In the order the case declared them; each answers until its count is spent.
     pub(crate) failures: Vec<Failure>,
 }
@@ -193,6 +195,7 @@ struct PendingTurn {
     calls: Vec<MockToolCall>,
     at_request: Option<usize>,
     stall: Option<Duration>,
+    reasoning: Option<String>,
     failures: Vec<Failure>,
 }
 
@@ -201,6 +204,7 @@ impl PendingTurn {
         !self.calls.is_empty()
             || self.at_request.is_some()
             || self.stall.is_some()
+            || self.reasoning.is_some()
             || !self.failures.is_empty()
     }
 
@@ -210,6 +214,7 @@ impl PendingTurn {
             reply,
             at_request: self.at_request,
             stall: self.stall,
+            reasoning: self.reasoning,
             failures: self.failures,
         }
     }
@@ -264,6 +269,12 @@ impl Conversation {
         self
     }
 
+    /// Stream `reasoning` ahead of this turn's reply, so the client receives a thought before the answer.
+    pub fn reasoning(mut self, reasoning: impl Into<String>) -> Self {
+        self.pending.reasoning = Some(reasoning.into());
+        self
+    }
+
     pub fn refuse(mut self, failure: StatusFailure) -> Self {
         self.pending.failures.push(Failure::Status(failure));
         self
@@ -293,6 +304,19 @@ impl Conversation {
     /// Close the connection with no body on the next `count` requests, before the response head.
     pub fn drop_connection(mut self, count: usize) -> Self {
         self.pending.failures.push(Failure::Dropped { count });
+        self
+    }
+
+    /// Answer the next `count` requests with a body the client's stream decoder cannot parse.
+    pub fn malformed_body(mut self, count: usize) -> Self {
+        self.pending.failures.push(Failure::MalformedBody { count });
+        self
+    }
+
+    /// Open the stream on the next `count` requests then never send a chunk, so the client's
+    /// inference idle timeout fires.
+    pub fn hang(mut self, count: usize) -> Self {
+        self.pending.failures.push(Failure::Hang { count });
         self
     }
 

@@ -539,6 +539,17 @@ pub struct ScreenModeRelaunch {
     /// Active session to reopen via `--resume`.
     pub session_id: String,
 }
+/// The coding-data write in flight. Its reply owns the banner ack; it holds the rollback a failure reverts to.
+/// `opted_in` is independent of `coding_data_retention_opt_out`, which is optimistic and which auth-meta refreshes rewrite mid-flight.
+/// `rollback_to_opted_in` starts from that mirror when idle and is inherited when this write replaces a pending one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingCodingDataWrite {
+    /// The choice the write carries.
+    pub opted_in: bool,
+    /// What a failure reverts to: the click-time mirror (possibly the unconfirmed fail-safe default), overwritten by an auth-meta refresh or a superseded write's success.
+    /// Replies are not ordered by server commit, so a late older success can still overwrite a newer value here.
+    pub rollback_to_opted_in: bool,
+}
 /// Root view component: owns all application state.
 pub struct AppView {
     /// Taken by whichever path reaches a usable session (or interactive idle) first.
@@ -1011,10 +1022,9 @@ pub struct AppView {
     pub privacy_banner_reshow_days: Option<u64>,
     /// Local `[privacy].privacy_banner_acked` (RFC 3339 UTC).
     pub privacy_banner_acked: Option<String>,
-    /// In-flight opt-in write whose ack waits on ACP success.
-    pub privacy_banner_opt_in_inflight: bool,
+    pub coding_data_pending_write: Option<PendingCodingDataWrite>,
     /// Newest `SetCodingDataSharing` write. Bumped per dispatch and echoed on the `TaskResult`.
-    /// An older write's late reply (whose `rollback_to_opted_in` was captured before the newer one) thus cannot clobber the current value.
+    /// Only the newest result directly sets the mirror; an older success may update the pending rollback, which does not establish commit order.
     pub coding_data_write_seq: u64,
     /// Persisted `[cli].show_tips` mirror. `None` means no override (default `true`).
     pub show_tips: Option<bool>,
@@ -1194,6 +1204,10 @@ impl AppView {
             None
         }
     }
+    /// Choice carried by the coding-data write in flight, if any.
+    pub fn coding_data_pending_opted_in(&self) -> Option<bool> {
+        self.coding_data_pending_write.map(|w| w.opted_in)
+    }
     /// Welcome privacy banner visibility gates.
     pub fn privacy_banner_should_show(&self) -> bool {
         return false;
@@ -1204,6 +1218,9 @@ impl AppView {
             return false;
         }
         if self.is_zdr || self.is_team_non_admin() {
+            return false;
+        }
+        if self.coding_data_pending_write.is_some() {
             return false;
         }
         if !self.coding_data_retention_opt_out {
@@ -1264,6 +1281,9 @@ impl AppView {
         self.team_name = meta.team_name.clone();
         self.is_zdr = meta.is_zdr;
         self.team_role = meta.team_role.clone();
+        if let Some(pending) = self.coding_data_pending_write.as_mut() {
+            pending.rollback_to_opted_in = !meta.coding_data_retention_opt_out;
+        }
         self.coding_data_retention_opt_out = meta.coding_data_retention_opt_out;
         self.shell_feedback_trace_offer = meta.feedback_trace_offer;
         self.gate = meta.gate.clone();
@@ -1525,7 +1545,7 @@ impl AppView {
             privacy_notice_rollout: false,
             privacy_banner_reshow_days: None,
             privacy_banner_acked: None,
-            privacy_banner_opt_in_inflight: false,
+            coding_data_pending_write: None,
             coding_data_write_seq: 0,
             show_tips: None,
             auto_update: None,
@@ -2687,6 +2707,7 @@ impl AppView {
                 }
             }
             ActiveView::AgentDashboard => {
+                self.close_dashboard_send_echo_window(key_event);
                 if let Some(outcome) = self.voice_esc_outcome(key_event) {
                     return outcome;
                 }
@@ -2905,6 +2926,15 @@ impl AppView {
             return outcome;
         }
         self.handle_unconsumed_input(ev, key_event, UnconsumedInputScope::All)
+    }
+    /// Any key other than Enter closes the dashboard's send echo window.
+    fn close_dashboard_send_echo_window(&mut self, key_event: Option<&crossterm::event::KeyEvent>) {
+        if let Some(key) = key_event
+            && key.code != KeyCode::Enter
+            && let Some(d) = self.dashboard.as_mut()
+        {
+            d.last_send_at = None;
+        }
     }
     fn handle_unconsumed_input(
         &mut self,
@@ -5392,6 +5422,7 @@ impl AppView {
                 );
             }
             needs_redraw |= agent.tick_extensions_result_notice();
+            needs_redraw |= agent.tick_memory_modal_status();
             needs_redraw |= agent.tick_ephemeral_tip();
             needs_redraw |= agent.tick_mode_banner();
             needs_redraw |= agent.tick_selection_highlight();
@@ -5660,6 +5691,7 @@ impl AppView {
                         .extensions_modal
                         .as_ref()
                         .is_some_and(|m| m.result_notice.is_some() || m.needs_spinner_tick())
+                    || agent.memory_modal_status_needs_tick()
                     || agent.ephemeral_tip_needs_tick()
                     || agent.mode_switch_banner.is_some()
                     || agent.has_drag_autoscroll()

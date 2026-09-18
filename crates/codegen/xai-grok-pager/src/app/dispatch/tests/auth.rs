@@ -190,8 +190,6 @@ fn cta_mcps_loaded_later_needs_auth_opens_handoff() {
     );
 }
 
-// ── agent-bound kinds (bash) ─────────
-
 /// A bash command typed while a turn is running goes straight to the server: an Effect and an optimistic echo, no local queue entry.
 #[test]
 fn bash_while_running_is_server_authoritative() {

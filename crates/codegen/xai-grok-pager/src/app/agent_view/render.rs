@@ -484,7 +484,7 @@ impl AgentView {
             self.queue.mutation(),
             selected_is_user_prompt,
             selected_is_agent_message,
-            crate::terminal::terminal_context().shift_enter_unavailable(),
+            crate::terminal::terminal_context().prefer_alt_enter_newline(),
             self.scrollback_search.as_ref(),
         );
         if (self.queue.is_visible() || !self.visible_queue_is_empty())

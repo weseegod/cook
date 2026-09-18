@@ -777,7 +777,7 @@ async fn handle_add_source(url: &str) -> xai_hooks_plugins_types::ActionOutcome 
     // Run the write under the config write guard (SAVE_LOCK + init flock), off the reactor; an
     // unguarded add is exactly the read-modify-write race the guard prevents.
     let config_path = xai_grok_config::grok_home().join("config.toml");
-    let _save_guard = match crate::util::config::lock_config_writes().await {
+    let save_guard = match crate::util::config::lock_config_writes().await {
         Ok(guard) => guard,
         Err(e) => {
             return ActionOutcome {
@@ -790,10 +790,9 @@ async fn handle_add_source(url: &str) -> xai_hooks_plugins_types::ActionOutcome 
     };
     let write = {
         let name = name.clone();
-        tokio::task::spawn_blocking(move || {
-            add_marketplace_source(&config_path, &name, &input, is_official)
-        })
-        .await
+        save_guard
+            .run_blocking(move || add_marketplace_source(&config_path, &name, &input, is_official))
+            .await
     };
     match write {
         Ok(Ok(())) => {}
@@ -829,7 +828,7 @@ async fn handle_remove_source(source_url_or_path: &str) -> xai_hooks_plugins_typ
     let src = source_url_or_path.to_string();
     // Guard (SAVE_LOCK + init flock) held across the whole blocking read-modify-write so a
     // concurrent auto-register can't re-add the source mid-removal.
-    let _save_guard = match crate::util::config::lock_config_writes().await {
+    let save_guard = match crate::util::config::lock_config_writes().await {
         Ok(guard) => guard,
         Err(e) => {
             return xai_hooks_plugins_types::ActionOutcome {
@@ -840,7 +839,10 @@ async fn handle_remove_source(source_url_or_path: &str) -> xai_hooks_plugins_typ
             };
         }
     };
-    match tokio::task::spawn_blocking(move || remove_source_locked(&src)).await {
+    match save_guard
+        .run_blocking(move || remove_source_locked(&src))
+        .await
+    {
         Ok(outcome) => outcome,
         Err(e) => xai_hooks_plugins_types::ActionOutcome {
             status: xai_hooks_plugins_types::OutcomeStatus::InternalError,

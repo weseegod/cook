@@ -91,8 +91,8 @@ pub struct WorkspaceBindConfig {
     pub viewer_ctx: Option<xai_tool_runtime::WorkspaceViewerContext>,
     /// Initial auto-approve (YOLO) state. `None` on legacy payloads fails closed (false).
     pub yolo_mode: Option<bool>,
-    /// The hub-set attended-execution ceiling; absent or malformed falls back to
-    /// [`ToolApprovalPolicy::GrantsAllowed`], never to unattended.
+    /// The hub-set attended-execution ceiling; omitted → [`ToolApprovalPolicy::GrantsAllowed`],
+    /// present-but-unparseable → [`ToolApprovalPolicy::AlwaysPrompt`].
     pub tool_approval_policy: ToolApprovalPolicy,
     /// Plane-configured toolset in the gRPC wire shape. An empty list is treated as unset (proto3 repeated default).
     pub tools: Option<Vec<xai_grok_tools_api::ToolConfigEntry>>,
@@ -151,7 +151,17 @@ impl WorkspaceBindConfig {
                 .and_then(|v| parse_field("tool_config", v)),
             viewer_ctx: wire.viewer_ctx,
             yolo_mode: wire.yolo_mode,
-            tool_approval_policy: wire.tool_approval_policy.unwrap_or_default(),
+            tool_approval_policy: match wire.tool_approval_policy {
+                Some(Ok(policy)) => policy,
+                Some(Err(raw)) => {
+                    tracing::warn!(
+                        tool_approval_policy = %raw,
+                        "session.bind metadata: unreadable tool_approval_policy; applying always_prompt"
+                    );
+                    ToolApprovalPolicy::AlwaysPrompt
+                }
+                None => ToolApprovalPolicy::GrantsAllowed,
+            },
             tools: Some(wire.tools).filter(|tools| !tools.is_empty()),
             manifest_version: wire.manifest_version,
             manifest_hash: wire.manifest_hash,
@@ -355,7 +365,7 @@ mod bind_config_tests {
         );
         for metadata in [
             serde_json::json!({"preset": "explore"}),
-            serde_json::json!({"tool_approval_policy": "unattended"}),
+            serde_json::json!({"tool_approval_policy": null}),
         ] {
             assert_eq!(
                 ToolApprovalPolicy::GrantsAllowed,
@@ -363,6 +373,37 @@ mod bind_config_tests {
                 "{metadata}"
             );
         }
+        assert_eq!(
+            ToolApprovalPolicy::UnattendedAllowed,
+            WorkspaceBindConfig::from_metadata(&serde_json::json!({
+                "tool_approval_policy": "unattended_allowed",
+            }))
+            .tool_approval_policy,
+        );
+    }
+    /// A ceiling the hub stamped but this binary cannot read (a newer wire token, a typo,
+    /// the wrong JSON type) is the strict arm, never the omitted-field compat default.
+    #[test]
+    fn workspace_bind_config_malformed_tool_approval_policy_is_always_prompt() {
+        for metadata in [
+            serde_json::json!({"tool_approval_policy": "unattended"}),
+            serde_json::json!({"tool_approval_policy": "not_a_policy"}),
+            serde_json::json!({"tool_approval_policy": "GrantsAllowed"}),
+            serde_json::json!({"tool_approval_policy": true}),
+            serde_json::json!({"tool_approval_policy": 1}),
+            serde_json::json!({"preset": "explore", "tool_approval_policy": ["grants_allowed"]}),
+        ] {
+            let cfg = WorkspaceBindConfig::from_metadata(&metadata);
+            assert_eq!(
+                ToolApprovalPolicy::AlwaysPrompt,
+                cfg.tool_approval_policy,
+                "{metadata}"
+            );
+        }
+        let cfg = WorkspaceBindConfig::from_metadata(
+            &serde_json::json!({"preset": "explore", "tool_approval_policy": "unattended"}),
+        );
+        assert_eq!(Some("explore"), cfg.preset.as_deref());
     }
     #[test]
     fn workspace_bind_config_extracts_system_notifications_flag() {

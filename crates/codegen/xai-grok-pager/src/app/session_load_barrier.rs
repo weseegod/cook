@@ -348,6 +348,8 @@ mod tests {
         TaskResult::WorktreeSessionFailed {
             agent_id: AgentId(9),
             error: "nope".into(),
+            orphaned_worktree_root: None,
+            timed_out: false,
         }
     }
 

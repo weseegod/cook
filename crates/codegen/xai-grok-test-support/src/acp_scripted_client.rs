@@ -10,8 +10,17 @@ use serde_json::Value;
 
 use crate::acp_ask_user_question::{ASK_USER_QUESTION_METHOD, AskUserQuestionRequest};
 use crate::acp_hold_registry::HoldRegistry;
-use crate::acp_policy::{ClientPolicy, PermissionDecision, QuestionDecision, Reply, RequestPolicy};
+use crate::acp_policy::{
+    ClientPolicy, Interactivity, PermissionDecision, QuestionDecision, Reply, RequestPolicy,
+    TrustDecision,
+};
 use crate::acp_transcript::{Transcript, TranscriptEntry};
+
+/// The reverse-request method an agent sends to prompt a capable client for a folder-trust decision.
+const FOLDER_TRUST_REQUEST_METHOD: &str = "x.ai/folder_trust/request";
+
+/// The reverse method an MCP server's `elicitation/create` reaches the client through.
+const MCP_ELICIT_METHOD: &str = "x.ai/mcp/elicit";
 
 /// A policy for one kind of request plus the count of arrivals so far, numbered from 1 to match
 /// `RequestPolicy::with_nth`.
@@ -45,6 +54,8 @@ pub(crate) struct ScriptedClient {
 struct ClientState {
     permissions: NumberedPolicy<PermissionDecision>,
     questions: NumberedPolicy<QuestionDecision>,
+    trust: Option<TrustDecision>,
+    interactivity: Interactivity,
     transcript: Transcript,
     holds: HoldRegistry,
 }
@@ -55,6 +66,8 @@ impl ScriptedClient {
             state: Arc::new(ClientState {
                 permissions: NumberedPolicy::new(policy.permissions),
                 questions: NumberedPolicy::new(policy.questions),
+                trust: policy.trust,
+                interactivity: policy.interactivity,
                 transcript: Transcript::default(),
                 holds: HoldRegistry::default(),
             }),
@@ -67,6 +80,16 @@ impl ScriptedClient {
 
     pub(crate) fn holds(&self) -> &HoldRegistry {
         &self.state.holds
+    }
+
+    /// Whether this client advertises `x.ai/folderTrust.interactive`, the capability the agent
+    /// requires before it sends a folder-trust prompt.
+    pub(crate) fn advertises_interactive_trust(&self) -> bool {
+        self.state.trust.is_some()
+    }
+
+    pub(crate) fn interactivity(&self) -> &Interactivity {
+        &self.state.interactivity
     }
 }
 
@@ -121,6 +144,14 @@ impl acp::Client for ScriptedClient {
                 let question = AskUserQuestionRequest::deserialize(&params)?;
                 self.state.questions.next_decision().reply(&question)
             }
+            FOLDER_TRUST_REQUEST_METHOD => match self.state.trust {
+                Some(decision) => decision.reply(),
+                None => Reply::Now(Value::Null),
+            },
+            MCP_ELICIT_METHOD => match &self.state.interactivity {
+                Interactivity::Interactive { elicitation } => Reply::Now(elicitation.reply()),
+                Interactivity::Headless => Reply::Now(Value::Null),
+            },
             _ => Reply::Now(Value::Null),
         };
         let reply = self

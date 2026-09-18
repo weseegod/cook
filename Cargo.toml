@@ -265,7 +265,7 @@ smallvec = "1"
 strip-ansi-escapes = "0.2.1"
 strum = { version = "0.27", features = ["derive"] }
 supports-color = "3.0"
-syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+syntect = { version = "5.3", default-features = false, features = ["default-onig"] }
 tar = "0.4"
 tempfile = "3"
 terminput = "0.3"
@@ -294,7 +294,7 @@ tracing-opentelemetry = "0.33"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "smallvec", "tracing-log", "std", "ansi"] }
 ts-rs = "12.0"
 tui-scrollbar = "0.2"
-two-face = { version = "0.4", default-features = false, features = ["syntect-fancy"] }
+two-face = { version = "0.4", default-features = false, features = ["syntect-onig"] }
 unicode-bidi = "0.3"
 unicode-bidi-mirroring = "0.4"
 unicode-normalization = "0.1"

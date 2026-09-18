@@ -179,7 +179,7 @@ pub(crate) fn test_app() -> AppView {
         privacy_notice_rollout: false,
         privacy_banner_reshow_days: None,
         privacy_banner_acked: None,
-        privacy_banner_opt_in_inflight: false,
+        coding_data_pending_write: None,
         coding_data_write_seq: 0,
         show_tips: None,
         auto_update: None,
@@ -1747,6 +1747,39 @@ fn needs_animation_gates_extensions_modal_loading_spinner() {
     assert!(
         app.needs_animation(),
         "tab-wide pending overlay spinner must keep ticks alive"
+    );
+}
+#[test]
+fn needs_animation_gates_memory_modal_copy_message() {
+    use crate::views::memory_modal::MemoryModalState;
+    use crate::views::modal::ActiveModal;
+    let mut app = test_app_with_agent();
+    let id = super::super::agent::AgentId(0);
+    let agent = app.agents.get_mut(&id).unwrap();
+    agent.active_modal = Some(ActiveModal::MemoryBrowser {
+        state: Box::new(MemoryModalState::new(Vec::new())),
+    });
+    assert!(
+        !app.needs_animation(),
+        "an idle memory modal must not request ticks"
+    );
+    let Some(ActiveModal::MemoryBrowser { state }) =
+        app.agents.get_mut(&id).unwrap().active_modal.as_mut()
+    else {
+        panic!("memory modal open");
+    };
+    state.report_copy(&crate::clipboard::CopyDelivery::File {
+        path: std::path::PathBuf::from("/tmp/last-copy.txt"),
+    });
+    assert!(
+        app.needs_animation(),
+        "copy message countdown must keep ticks alive"
+    );
+    let cleared = (0..=120).any(|_| app.tick());
+    assert!(cleared, "tick must expire the copy message");
+    assert!(
+        !app.needs_animation(),
+        "expired copy message must stop requesting ticks"
     );
 }
 #[test]

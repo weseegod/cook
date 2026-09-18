@@ -237,6 +237,7 @@ impl MvpAgent {
         let cwd = AbsPathBuf::new(cwd.to_path_buf())
             .map_err(|e| acp::Error::invalid_params().data(e.to_string()))?;
         let remote_settings = self.cfg.borrow().remote_settings.clone();
+        self.report_setup_phase(SessionSetupPhase::FolderTrust);
         let (_allowed, trust_scan) =
             folder_trust::gather_and_record(cwd.as_path(), remote_settings.as_ref(), false);
         let (initial_client_mcp_servers, mcp_servers) = self
@@ -281,8 +282,110 @@ impl MvpAgent {
         })
     }
 }
+/// A blocking step in `new_session_inner`, recorded on entry so a timeout can name the stuck step.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr, strum::EnumMessage, strum::EnumString,
+)]
+#[strum(serialize_all = "snake_case")]
+pub enum SessionSetupPhase {
+    #[strum(message = "signing you in")]
+    Auth,
+    #[strum(message = "preparing your workspace")]
+    ResolveWorkspace,
+    #[strum(message = "checking whether this folder is trusted")]
+    FolderTrust,
+    #[strum(message = "loading your plugins")]
+    PluginRegistry,
+    #[strum(message = "setting up your tools")]
+    McpMerge,
+    #[cfg(all(feature = "local-workspace", unix))]
+    #[strum(message = "starting your workspace")]
+    LocalWorkspace,
+    #[strum(message = "opening your history")]
+    PersistenceInit,
+    #[strum(message = "starting the agent")]
+    SpawnSessionActor,
+    #[cfg(feature = "local-workspace")]
+    #[strum(message = "waiting for your workspace")]
+    WorkspaceHandshake,
+    #[strum(message = "switching to your model")]
+    ModelSwitch,
+    #[strum(message = "switching you to an available model")]
+    ModelNotAllowed,
+    #[strum(message = "scanning your repository")]
+    GitDiscovery,
+    #[strum(message = "finishing up")]
+    FinalizeResponse,
+    #[strum(message = "applying your tool settings")]
+    ToolOverrides,
+    #[strum(message = "getting your session ready")]
+    ResponseReady,
+}
+/// Wire method for the setup-progress notification, mirroring `x.ai/mcp/init_progress`.
+const SESSION_SETUP_METHOD: &str = "x.ai/session/setup";
+/// Context for the session op currently reporting setup phases.
+struct SessionSetupContext {
+    /// Wire label for the payload's `method`; `session/new` today.
+    method: &'static str,
+    /// Best-known session id for routing: `_meta.sessionId`, then the minted id.
+    session_id: Option<String>,
+}
+tokio::task_local! {
+    /// Present only while `new_session_inner` runs, so `report_setup_phase` stays silent on the
+    /// load/resume paths. Task-local, not thread-local: each request is its own `spawn_local` task.
+    static SESSION_SETUP_CONTEXT: std::cell::RefCell<SessionSetupContext>;
+}
 impl MvpAgent {
+    /// Log a `new_session_inner` step and push it to the client; a no-op off the `session/new` path.
+    pub(super) fn report_setup_phase(&self, phase: SessionSetupPhase) {
+        let Ok((method, session_id)) = SESSION_SETUP_CONTEXT.try_with(|ctx| {
+            let ctx = ctx.borrow();
+            (ctx.method, ctx.session_id.clone())
+        }) else {
+            return;
+        };
+        let name = <&'static str>::from(&phase);
+        let ctx = serde_json::json!({
+            "method": method,
+            "phase": name,
+            "sessionId": session_id.as_deref(),
+        });
+        if let Ok(params) = serde_json::value::to_raw_value(&ctx) {
+            let _ = self
+                .gateway
+                .forward_fire_and_forget(acp::ExtNotification::new(
+                    SESSION_SETUP_METHOD,
+                    params.into(),
+                ));
+        }
+        xai_grok_telemetry::unified_log::info(
+            "session.setup.phase",
+            session_id.as_deref(),
+            Some(ctx),
+        );
+    }
+    /// Scopes `SESSION_SETUP_CONTEXT` to this create so only `session/new` reports phases.
     pub(super) async fn new_session_inner(
+        &self,
+        arguments: acp::NewSessionRequest,
+    ) -> Result<acp::NewSessionResponse, acp::Error> {
+        let client_session_id = arguments
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("sessionId"))
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
+        SESSION_SETUP_CONTEXT
+            .scope(
+                std::cell::RefCell::new(SessionSetupContext {
+                    method: "session/new",
+                    session_id: client_session_id,
+                }),
+                self.new_session_inner_impl(arguments),
+            )
+            .await
+    }
+    async fn new_session_inner_impl(
         &self,
         arguments: acp::NewSessionRequest,
     ) -> Result<acp::NewSessionResponse, acp::Error> {
@@ -292,8 +395,10 @@ impl MvpAgent {
         let init = self.initialize_request.get().ok_or_else(|| {
             acp::Error::invalid_params().data("initialize must be called before new_session")
         })?;
+        self.report_setup_phase(SessionSetupPhase::Auth);
         self.seed_client_config_auth_if_available();
         self.spawn_settings_reapply();
+        self.report_setup_phase(SessionSetupPhase::ResolveWorkspace);
         let SessionWorkspace {
             cwd,
             remote_settings,
@@ -320,6 +425,8 @@ impl MvpAgent {
             .as_ref()
             .and_then(|m| m.get("modelId").and_then(|v| v.as_str()))
             .filter(|s| !s.is_empty());
+        #[cfg(all(feature = "local-workspace", unix))]
+        self.report_setup_phase(SessionSetupPhase::LocalWorkspace);
         #[cfg(all(feature = "local-workspace", unix))]
         let pending_local_workspace = self
             .start_own_local_workspace_if_needed(&mut session_meta_for_stamp, cwd.as_path())
@@ -363,6 +470,8 @@ impl MvpAgent {
             }
             None => acp::SessionId::new(uuid::Uuid::now_v7().to_string()),
         };
+        SESSION_SETUP_CONTEXT
+            .with(|ctx| ctx.borrow_mut().session_id = Some(session_id.0.to_string()));
         reject_direct_hub_cloud_meta(arguments.meta.as_ref())?;
         let mut prefetch =
             crate::session::session_create_prefetch::SessionCreatePrefetch::launch_from_meta(
@@ -508,6 +617,7 @@ impl MvpAgent {
                 .unwrap_or_else(|| self.models_manager.current_model_id()),
         };
         let session_model_id = model_id.clone();
+        self.report_setup_phase(SessionSetupPhase::PersistenceInit);
         let (persistence, root_identity) = if is_chat_kind {
             (crate::session::persistence::PersistenceHandle::noop(), None)
         } else {
@@ -540,6 +650,7 @@ impl MvpAgent {
             fs_read: client_fs_read,
             fs_write: client_fs_write,
         } = self.resolve_client_caps(arguments.meta.as_ref(), init);
+        self.report_setup_phase(SessionSetupPhase::SpawnSessionActor);
         let spawn_res = {
             let mut timer = crate::instrumentation_timer!("session.spawn_session_actor");
             timer.with_field("session_id", session_id.0.as_ref());
@@ -657,6 +768,7 @@ impl MvpAgent {
             });
         }
         if let Some(model_id) = resolved_custom_model {
+            self.report_setup_phase(SessionSetupPhase::ModelSwitch);
             let switch_effort = match effort_route {
                 NewSessionEffort::Switch(effort) => Some(effort),
                 NewSessionEffort::Spawn(_) | NewSessionEffort::None => None,
@@ -690,6 +802,7 @@ impl MvpAgent {
             origin_client.clone(),
         );
         if let Some(requested) = disallowed_custom {
+            self.report_setup_phase(SessionSetupPhase::ModelNotAllowed);
             let current = self.models_manager.current_model_id();
             let reason = format!(
                 "\"{requested}\": {}. This session is using \"{}\".",
@@ -705,6 +818,7 @@ impl MvpAgent {
             .await;
         }
         let indexed_roots = self.indexed_roots_for(cwd.as_path());
+        self.report_setup_phase(SessionSetupPhase::GitDiscovery);
         let git_discovery_timer =
             crate::instrumentation_timer!("session.new_session.git_discovery");
         let (git_root, is_git_repo, discovery_failed) =
@@ -744,6 +858,7 @@ impl MvpAgent {
             Some(session_id.0.as_ref()),
             Some(serde_json::json!({"cwd": cwd.as_str()})),
         );
+        self.report_setup_phase(SessionSetupPhase::FinalizeResponse);
         let models = if is_chat_kind {
             chat_new_session_model_state(
                 self.chat_modes.model_state().await,
@@ -752,6 +867,7 @@ impl MvpAgent {
         } else {
             self.model_state(Some(&session_id))
         };
+        self.report_setup_phase(SessionSetupPhase::ToolOverrides);
         let echo_timer = crate::instrumentation_timer!("session.new_session.tool_overrides_echo");
         let applied_tool_overrides = match self.session_handle_waiting_for_load(&session_id).await {
             Some(handle) if resolved_custom_model.is_none() => {
@@ -796,6 +912,7 @@ impl MvpAgent {
             false,
         );
         let config_options = self.acp_config_options(Some(&session_id), &models);
+        self.report_setup_phase(SessionSetupPhase::ResponseReady);
         Ok(acp::NewSessionResponse::new(session_id)
             .models(Some(models))
             .config_options(Some(config_options))

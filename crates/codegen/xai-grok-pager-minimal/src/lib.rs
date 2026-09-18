@@ -1,7 +1,7 @@
 //! Minimal (scrollback-native) render mode: `grok --minimal`.
 //!
 //! In this mode finalized conversation blocks are printed once into the terminal's *native* scrollback.
-//! The printing goes through `xai_ratatui_inline::Terminal::insert_before` and reuses `EntryRenderer`.
+//! The printing goes through `xai_ratatui_inline::Terminal::insert_before_rows` and reuses `EntryRenderer`.
 //! A small pinned live region holds the running-turn status, the prompt, and a minimal status line.
 //! The interactive `ScrollbackPane` (scroll, fold, selection, mouse) is not used; the terminal owns history.
 //!

@@ -401,8 +401,6 @@ fn show_undo_tip_no_op_when_flag_off() {
     assert!(!agent_ref(&app, id).ephemeral_tip.is_active());
 }
 
-// ── Small-screen tip (`show_small_screen_tip` + its one-shot trigger) ──
-
 /// `show_small_screen_tip` on a drawable agent shows the tip and increments the per-session seen count in memory.
 /// Nothing is persisted; the fn returns nothing, so it cannot raise effects.
 #[test]
@@ -640,8 +638,6 @@ fn small_screen_trigger_suppressed_when_user_compact_on() {
     assert!(!agent_ref(&app, id).ephemeral_tip.is_active());
     assert!(app.tip_seen_counts.is_empty(), "no count burned");
 }
-
-// ── SSH wrap tip (`show_ssh_wrap_tip` + its one-shot trigger) ──
 
 /// `show_ssh_wrap_tip` on a drawable agent shows the tip and increments the per-session seen count in memory.
 /// Nothing is persisted; the fn returns nothing, so it cannot raise effects.
@@ -2726,8 +2722,6 @@ fn bash_before_the_session_binds_is_queued_and_recorded() {
     );
 }
 
-// ── Reconnect-pending dispatch guards ─────────────────────────────
-
 #[test]
 fn send_prompt_blocked_during_reconnect() {
     let mut app = test_app_with_agent();
@@ -4082,8 +4076,6 @@ fn prompt_before_the_session_binds_is_queued() {
     );
 }
 
-// ── Screen-mode slash gate tests ────────────────────────────────────
-
 /// Returns true if any system block in agent 0's scrollback contains `needle`.
 /// Avoids `last_system_text`'s "last block must be System" panic for the allowed-command control (which may leave no system block).
 fn scrollback_has_system_text(app: &AppView, id: AgentId, needle: &str) -> bool {
@@ -4171,8 +4163,6 @@ fn minimal_mode_allows_mode_agnostic_slash_command() {
     );
 }
 
-// ── /queue (ShowQueue) dispatch tests ───────────────────────────────
-
 #[test]
 fn show_queue_empty_commits_empty_message() {
     let mut app = test_app_with_agent();
@@ -4208,8 +4198,6 @@ fn show_queue_no_active_agent_is_noop() {
     let effects = dispatch(Action::ShowQueue, &mut app);
     assert!(effects.is_empty(), "ShowQueue without an agent is a no-op");
 }
-
-// ── Send-now cancel marker suppression (PromptResponse rail) ────────
 
 /// Count of "Turn cancelled by user …" marker blocks in the agent's scrollback.
 fn count_cancelled_markers(app: &AppView, id: AgentId) -> usize {

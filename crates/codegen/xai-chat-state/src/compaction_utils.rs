@@ -629,17 +629,22 @@ pub struct CompactionInputs {
     pub scheduled_loops: Vec<ScheduledLoopSummary>,
     pub workflows: Vec<WorkflowRunSummary>,
     pub workflow_tool_name: Option<String>,
+    /// When set, used as `last_user_query` so compact cannot revive a stale pre-goal prompt.
+    pub goal_objective: Option<String>,
 }
 impl CompactionStateContext {
     /// Build the state context from current session state.
-    /// Uses a typed compaction boundary for the retained tail while keeping the last-query field human-only.
+    /// Uses a typed compaction boundary; `last_user_query` prefers `inputs.goal_objective` when set.
     pub async fn build(conversation: &[ConversationItem], inputs: CompactionInputs) -> Self {
         Self {
             cwd_generation: inputs.cwd_generation,
             destination_project_instructions: inputs.destination_project_instructions,
             agent_message_anchor: extract_latest_agent_message(conversation),
             recent_messages: extract_messages_since_last_compaction_anchor(conversation),
-            last_user_query: extract_last_real_user_query(conversation),
+            last_user_query: inputs
+                .goal_objective
+                .filter(|objective| !objective.trim().is_empty())
+                .or_else(|| extract_last_real_user_query(conversation)),
             agent_edited_paths: inputs.agent_edited_paths.into_iter().collect(),
             running_tasks: inputs.running_tasks,
             running_subagents: inputs.running_subagents,

@@ -1625,7 +1625,7 @@ fn update_config_toml_locked(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = grok_home.join("config.toml");
     let _flock = crate::util::config::acquire_init_lock(grok_home)?;
-    let content = crate::util::config::read_to_string_or_empty(&config_path)?;
+    let (dest, content) = crate::util::config::read_follow_bound(&config_path)?;
     let mut config: toml::Value = if content.is_empty() {
         toml::Value::Table(toml::map::Map::new())
     } else {
@@ -1637,7 +1637,11 @@ fn update_config_toml_locked(
     if !mutate(table)? {
         return Ok(());
     }
-    crate::util::config::atomic_write_string(&config_path, &toml::to_string_pretty(&config)?)?;
+    crate::util::config::atomic_write_follow_bound(
+        &config_path,
+        &dest,
+        &toml::to_string_pretty(&config)?,
+    )?;
     Ok(())
 }
 /// Append `value` to the `[plugins].<list>` string array (created if missing)

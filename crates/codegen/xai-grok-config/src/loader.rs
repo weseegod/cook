@@ -6,6 +6,7 @@ use std::path::Path;
 
 use crate::paths::{system_config_dir, user_grok_home};
 use crate::version_overrides::{self, apply_version_overrides};
+use xai_dirs::resolve_grok_home;
 
 /// Read and parse a TOML file WITHOUT `$VAR` expansion (empty table if absent).
 /// Shared core of [`load_toml_file`] and the hook-layer read.
@@ -82,7 +83,10 @@ pub fn load_config_file(path: &Path) -> std::io::Result<toml::Value> {
 }
 
 pub fn load_from_disk() -> std::io::Result<toml::Value> {
-    load_user_config_layer(user_grok_home().as_deref(), USER_CONFIG_FILENAME)
+    // Live `$GROK_HOME`: `user_grok_home()` / `grok_home()` are OnceLock and miss
+    // EnvGuard/tests (same reason user `config.toml` persist resolves live). A
+    // stale cache would read a different file than the last settings write.
+    load_user_config_layer(resolve_grok_home().as_deref(), USER_CONFIG_FILENAME)
 }
 
 /// User config filename (`$GROK_HOME/config.toml`), shared by the loaders here.

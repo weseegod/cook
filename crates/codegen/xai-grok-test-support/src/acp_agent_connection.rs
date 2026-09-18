@@ -15,7 +15,7 @@ use tokio_util::sync::{CancellationToken, DropGuard};
 use tokio_util::task::AbortOnDropHandle;
 use xai_acp_lib::LineBufferedRead;
 
-use crate::acp_policy::ClientPolicy;
+use crate::acp_policy::{ClientPolicy, Interactivity};
 use crate::acp_scripted_client::ScriptedClient;
 use crate::process::TestProcess;
 use crate::scaled;
@@ -35,6 +35,15 @@ fn select_auth_method(methods: &[acp::AuthMethod]) -> Option<acp::AuthMethodId> 
             .map(|method| method.id().clone())
     };
     by_id(API_KEY_AUTH_METHOD).or_else(|| by_id(CACHED_TOKEN_AUTH_METHOD))
+}
+
+/// The `client_capabilities.meta` that advertises `x.ai/folderTrust.interactive`, so the agent knows
+/// this client can answer an interactive folder-trust prompt.
+fn interactive_trust_capability() -> serde_json::Map<String, serde_json::Value> {
+    serde_json::json!({ "x.ai/folderTrust": { "interactive": true } })
+        .as_object()
+        .cloned()
+        .expect("object literal is a JSON object")
 }
 
 /// Built inside a `tokio::task::LocalSet`: the connection is not `Send`, so its tasks are spawned locally.
@@ -87,22 +96,28 @@ impl AgentConnection {
         &self.handler
     }
 
-    /// `initialize` as a non interactive test client, then `authenticate` with the `xai.api_key` method in
-    /// headless mode. An agent that offers no such method is an error naming the methods it offered.
+    /// `initialize` as a test client, then `authenticate` with the `xai.api_key` method in headless
+    /// mode. The client advertises `nonInteractive` per its [`Interactivity`]: `Headless` (the default)
+    /// stays non-interactive; `Interactive` opts in so the agent forwards reverse interactions such as
+    /// MCP elicitation instead of auto-cancelling them. An agent that offers no non-interactive auth
+    /// method is an error naming the methods it offered.
     pub(crate) async fn initialize_and_authenticate(&self) -> acp::Result<acp::InitializeResponse> {
+        let mut capabilities = acp::ClientCapabilities::new()
+            .fs(acp::FileSystemCapabilities::new())
+            .terminal(false);
+        if self.handler.advertises_interactive_trust() {
+            capabilities = capabilities.meta(interactive_trust_capability());
+        }
+        let non_interactive = matches!(self.handler.interactivity(), Interactivity::Headless);
         let response = self
             .conn
             .initialize(
                 acp::InitializeRequest::new(acp::ProtocolVersion::V1)
-                    .client_capabilities(
-                        acp::ClientCapabilities::new()
-                            .fs(acp::FileSystemCapabilities::new())
-                            .terminal(false),
-                    )
+                    .client_capabilities(capabilities)
                     .meta(
                         serde_json::json!({
                             "startupHints": {
-                                "nonInteractive": true,
+                                "nonInteractive": non_interactive,
                                 "skipGitStatus": true,
                                 "skipProjectLayout": true
                             },

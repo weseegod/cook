@@ -82,10 +82,11 @@ pub use metrics::{
     record_grove_wt_dispose,
 };
 pub use nfs::{
-    CAP_CANCEL_WORKTREE_CREATE, CleanArtifactsReply, DetachReply, GroveHardFail, NfsAdopted,
-    NfsCreateDecision, NfsStatusView, NfsWorktreeClient, NfsWorktreeOpts, SalvageReply,
-    daemon_capability_class, dest_is_known_unmounted, dest_is_mountpoint, dest_is_nfs_mount,
-    grove_hard_fail, source_is_linked_local_view,
+    CAP_CANCEL_WORKTREE_CREATE, CAP_FORK_FROM_BACKING, CleanArtifactsReply, DetachReply,
+    GroveHardFail, NfsAdopted, NfsCreateDecision, NfsStatusView, NfsWorktreeClient,
+    NfsWorktreeOpts, SalvageReply, daemon_capability_class, dest_is_known_unmounted,
+    dest_is_mountpoint, dest_is_nfs_mount, grove_hard_fail, source_is_linked_local_view,
+    source_keeps_grove_create,
 };
 pub fn local_salvage(
     _dest: &std::path::Path,

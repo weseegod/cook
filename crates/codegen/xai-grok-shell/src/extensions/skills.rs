@@ -184,8 +184,9 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
         .ok()
         .and_then(|repo| repo.workdir().map(|p| p.to_path_buf()));
 
-    // Once the user has imported, stop scanning hardcoded .claude/skills/ paths
-    // Equivalent locations should be opted in via [paths] extra_skill_dirs in config.toml (written by /import-claude)
+    // After /import-claude, do not list hardcoded .claude/skills/ paths.
+    // Import writes those dirs to [paths] extra_skill_dirs for the source UI.
+    // list_skills_with_plugins still does not read extra_skill_dirs.
     let imported = crate::claude_import::is_claude_import_marked();
     let local_dir_names: &[&str] = if imported {
         &[".grok", ".agents"]
@@ -237,8 +238,8 @@ fn discover_auto_sources(cwd: &str, skills: &[SkillInfo]) -> Vec<(String, usize)
         }
     }
 
-    // [paths] extra_skill_dirs from config.toml supplement the built-in scan locations
-    // They are used standalone and as the migration target after /import-claude disables the runtime .claude/skills/ scan
+    // [paths] extra_skill_dirs appear as source folders after /import-claude.
+    // Discovery does not load them. Extra injection dirs belong in [skills] paths.
     for dir in extra_skill_dirs_from_config() {
         let path = crate::util::expand_home(&dir);
         if path.is_dir()

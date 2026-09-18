@@ -104,6 +104,11 @@ impl CommandTrigger {
     }
 }
 
+/// Pager builtins that shadow a shell builtin of the same name and stay hidden until the shell's
+/// catalog advertises it. Any backend advertising one must implement the matching `x.ai/memory/*`
+/// extension method.
+const SHELL_GATED_COMMANDS: &[&str] = &["memory", "flush", "dream"];
+
 /// Owns the command objects and provides lookup by name/alias.
 /// Supports dynamic mutation via `set_acp_commands()` for runtime ACP command catalog updates.
 pub struct CommandRegistry {
@@ -145,6 +150,8 @@ impl CommandRegistry {
         hidden.insert("voice".to_string());
         // `/auto` is fail-closed: hidden until `set_auto_mode_available(true)`.
         hidden.insert("auto".to_string());
+        // Memory commands follow the shell's own gate: shown once the ACP catalog advertises them.
+        hidden.extend(SHELL_GATED_COMMANDS.iter().map(|name| name.to_string()));
         // `/share` starts menu-hidden (still dispatchable) until `set_share_visible(true)`
         // Menu-only so a typed `/share` can show a client disable message rather than PassThrough
         let mut menu_hidden = HashSet::new();
@@ -415,6 +422,14 @@ impl CommandRegistry {
             .collect();
         saved_workflows.sort_by(|a, b| a.name.cmp(&b.name));
         self.saved_workflows = saved_workflows;
+
+        for name in SHELL_GATED_COMMANDS {
+            if commands.iter().any(|c| c.name.eq_ignore_ascii_case(name)) {
+                self.hidden.remove(*name);
+            } else {
+                self.hidden.insert(name.to_string());
+            }
+        }
 
         // Remove old ACP-sourced commands.
         let mut i = 0;
@@ -901,6 +916,33 @@ mod tests {
             "Flush memory".to_string(),
         )]);
         assert!(registry.get("flush").is_none());
+    }
+
+    #[test]
+    fn memory_commands_follow_shell_catalog() {
+        for name in SHELL_GATED_COMMANDS {
+            let builtin: Arc<dyn SlashCommand> = Arc::new(DummyCommand { name, aliases: &[] });
+            let mut registry = CommandRegistry::new(vec![builtin]);
+            assert!(
+                registry.get(name).is_none(),
+                "/{name} is hidden until the shell advertises it"
+            );
+
+            registry.set_acp_commands(&[agent_client_protocol::AvailableCommand::new(
+                name.to_string(),
+                String::new(),
+            )]);
+            let cmd = registry
+                .get(name)
+                .unwrap_or_else(|| panic!("/{name} shown once the shell advertises it"));
+            assert!(
+                registry.is_builtin(cmd.name()),
+                "the pager builtin shadows the shell entry"
+            );
+
+            registry.set_acp_commands(&[]);
+            assert!(registry.get(name).is_none());
+        }
     }
 
     #[test]

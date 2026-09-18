@@ -19,6 +19,8 @@ pub(crate) const NEW_SESSION_LABEL: &str = "New session";
 #[derive(Debug, Clone)]
 pub struct DashboardRow {
     pub id: DashboardRowId,
+    /// Unlike the row id, this stays the same when a saved session is loaded.
+    pub session_id: Option<String>,
     /// Display label (e.g. `"implementer · fix login bug"`).
     pub label: String,
     /// Right-of-label subtitle painted after a ` · ` separator in dim text (e.g. `"xai my-branch-2 worktree"`).
@@ -254,6 +256,7 @@ fn workspace_member_row(
         id: DashboardRowId::Workspace {
             session_id: session_id.to_owned(),
         },
+        session_id: Some(session_id.to_owned()),
         label,
         subtitle: None,
         state: RowState::Idle,
@@ -335,6 +338,7 @@ fn build_local_rows(
                     parent: *id,
                     child_session_id: format!("__more_{}", id.0),
                 },
+                session_id: None,
                 label: format!("\u{2026} {} more", total - keep),
                 subtitle: None,
                 state: RowState::Idle,
@@ -432,6 +436,7 @@ fn append_roster_rows(
         let is_pinned = pinned.contains(&id);
         rows.push(DashboardRow {
             id,
+            session_id: Some(entry.session_id.clone()),
             label,
             subtitle: None,
             state,
@@ -580,6 +585,7 @@ fn top_level_row(id: AgentId, agent: &AgentView, pinned: bool, home: Option<&str
     let cwd_display = super::state::compact_cwd(&agent.session.cwd, home);
     DashboardRow {
         id: DashboardRowId::TopLevel(id),
+        session_id: agent.session.session_id.as_ref().map(|id| id.0.to_string()),
         label,
         subtitle,
         state,
@@ -656,6 +662,7 @@ fn subagent_row(
             parent,
             child_session_id: info.child_session_id.to_string(),
         },
+        session_id: Some(info.child_session_id.to_string()),
         label,
         subtitle,
         state,
@@ -815,9 +822,8 @@ pub fn apply_filter(rows: &mut Vec<DashboardRow>, filter: &Filter, _home: Option
         }
     });
 }
-/// Sort rows in place. `reorder` overrides (Shift+↑/↓) float a row to its declared index INSIDE its
-/// group only, never across groups. In `State` grouping that means within the same state, so the
-/// group can't be split into `Idle → Working → Idle`.
+/// Pinned rows keep manual order across activity and grouping changes.
+/// Unpinned rows reorder only within their state or directory group.
 pub fn sort_rows(
     rows: &mut [DashboardRow],
     grouping: super::state::Grouping,
@@ -831,10 +837,11 @@ pub fn sort_rows(
 }
 fn sort_within_groups(rows: &mut [DashboardRow], reorder: &[DashboardRowId]) {
     let clusters = build_clusters(rows);
-    let mut indexed: Vec<(usize, usize, ClusterKey)> = clusters
+    let snapshot = rows.to_vec();
+    let mut indexed: Vec<(usize, usize, ClusterKey<'_>)> = clusters
         .iter()
         .filter_map(|(start, end)| {
-            let parent = rows.get(*start)?;
+            let parent = snapshot.get(*start)?;
             Some((
                 *start,
                 *end,
@@ -843,13 +850,13 @@ fn sort_within_groups(rows: &mut [DashboardRow], reorder: &[DashboardRowId]) {
                     state: parent.state.group_priority(),
                     last_change_at: parent.last_change_at,
                     reorder_idx: reorder.iter().position(|r| *r == parent.id),
+                    session_id: parent.session_id.as_deref(),
                     id: parent.id.clone(),
                 },
             ))
         })
         .collect();
-    indexed.sort_by(|a, b| sort_cluster_key(&a.2, &b.2, true));
-    let snapshot: Vec<DashboardRow> = rows.to_vec();
+    indexed.sort_by(|(_, _, left), (_, _, right)| sort_cluster_key(left, right, true));
     let mut write = 0usize;
     for (start, end, _) in &indexed {
         for src in snapshot.iter().take(*end).skip(*start) {
@@ -862,25 +869,30 @@ fn sort_within_groups(rows: &mut [DashboardRow], reorder: &[DashboardRowId]) {
 }
 fn sort_within_directory_groups(rows: &mut [DashboardRow], reorder: &[DashboardRowId]) {
     let clusters = build_clusters(rows);
-    let mut indexed: Vec<(usize, usize, (String, ClusterKey))> = clusters
+    let snapshot = rows.to_vec();
+    let mut indexed: Vec<(usize, usize, (String, ClusterKey<'_>))> = clusters
         .iter()
         .filter_map(|(start, end)| {
-            let parent = rows.get(*start)?;
+            let parent = snapshot.get(*start)?;
             let key = ClusterKey {
                 pinned: parent.pinned,
                 state: parent.state.group_priority(),
                 last_change_at: parent.last_change_at,
                 reorder_idx: reorder.iter().position(|r| *r == parent.id),
+                session_id: parent.session_id.as_deref(),
                 id: parent.id.clone(),
             };
             Some((*start, *end, (parent.cwd_display.clone(), key)))
         })
         .collect();
-    indexed.sort_by(|a, b| match a.2.0.cmp(&b.2.0) {
-        std::cmp::Ordering::Equal => sort_cluster_key(&a.2.1, &b.2.1, false),
-        other => other,
+    indexed.sort_by(|(_, _, (left_cwd, left)), (_, _, (right_cwd, right))| {
+        if left.pinned || right.pinned {
+            return sort_cluster_key(left, right, false);
+        }
+        left_cwd
+            .cmp(right_cwd)
+            .then_with(|| sort_cluster_key(left, right, false))
     });
-    let snapshot: Vec<DashboardRow> = rows.to_vec();
     let mut write = 0usize;
     for (start, end, _) in &indexed {
         for src in snapshot.iter().take(*end).skip(*start) {
@@ -892,33 +904,38 @@ fn sort_within_directory_groups(rows: &mut [DashboardRow], reorder: &[DashboardR
     }
 }
 #[derive(Debug, Clone)]
-struct ClusterKey {
+struct ClusterKey<'a> {
     pinned: bool,
     state: u8,
     last_change_at: SystemTime,
     reorder_idx: Option<usize>,
+    session_id: Option<&'a str>,
     /// Final tiebreak: when every other field is equal, fall back to the parent row's id so the order is deterministic across rebuilds.
     /// This avoids relying on `sort_by`'s stable-on-equal pass-through.
     id: DashboardRowId,
 }
-/// Compare two cluster sort keys. State grouping (`true`): state is the grouping primitive and the
-/// primary sort key, so a reorder may only float a row within its state group.
+/// `state_before_reorder` restricts manual ordering of unpinned rows to the same state.
 fn sort_cluster_key(
-    a: &ClusterKey,
-    b: &ClusterKey,
+    a: &ClusterKey<'_>,
+    b: &ClusterKey<'_>,
     state_before_reorder: bool,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     if a.pinned != b.pinned {
         return b.pinned.cmp(&a.pinned);
     }
-    let by_reorder = |a: &ClusterKey, b: &ClusterKey| match (a.reorder_idx, b.reorder_idx) {
+    let by_reorder = |a: &ClusterKey<'_>, b: &ClusterKey<'_>| match (a.reorder_idx, b.reorder_idx) {
         (Some(x), Some(y)) => x.cmp(&y),
         (Some(_), None) => Ordering::Less,
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     };
-    let by_state = |a: &ClusterKey, b: &ClusterKey| b.state.cmp(&a.state);
+    if a.pinned {
+        return by_reorder(a, b)
+            .then_with(|| a.session_id.cmp(&b.session_id))
+            .then_with(|| a.id.cmp(&b.id));
+    }
+    let by_state = |a: &ClusterKey<'_>, b: &ClusterKey<'_>| b.state.cmp(&a.state);
     if state_before_reorder {
         if a.state != b.state {
             return by_state(a, b);
@@ -1309,6 +1326,7 @@ mod tests {
                     child_session_id: label.to_string(),
                 }
             },
+            session_id: None,
             label: label.to_string(),
             subtitle: None,
             state,
@@ -1329,6 +1347,7 @@ mod tests {
     fn make_row_with_id(id: DashboardRowId, indent: u8, state: RowState) -> DashboardRow {
         DashboardRow {
             id,
+            session_id: None,
             label: "row".to_string(),
             subtitle: None,
             state,
@@ -1555,24 +1574,167 @@ mod tests {
             .collect();
         assert_eq!(idle_order, vec![i1, i2], "reorder must order within Idle");
     }
-    /// Sort: when both rows are pinned, ordering falls back to the secondary key (state).
     #[test]
-    fn sort_two_pinned_rows_order_by_state() {
-        let mut rows = vec![
-            DashboardRow {
-                pinned: true,
-                state: RowState::Idle,
-                ..make_row_with_id(DashboardRowId::TopLevel(AgentId(1)), 0, RowState::Idle)
-            },
-            DashboardRow {
-                pinned: true,
-                state: RowState::Working,
-                ..make_row_with_id(DashboardRowId::TopLevel(AgentId(2)), 0, RowState::Working)
-            },
+    fn pinned_manual_order_survives_activity_changes() {
+        for grouping in [
+            super::super::state::Grouping::State,
+            super::super::state::Grouping::Directory,
+        ] {
+            let first = DashboardRowId::TopLevel(AgentId(2));
+            let second = DashboardRowId::TopLevel(AgentId(1));
+            let reorder = vec![first.clone(), second.clone()];
+            let mut rows = vec![
+                DashboardRow {
+                    pinned: true,
+                    cwd_display: "/z".to_owned(),
+                    last_change_at: UNIX_EPOCH,
+                    ..make_row_with_id(first, 0, RowState::Idle)
+                },
+                DashboardRow {
+                    pinned: true,
+                    cwd_display: "/a".to_owned(),
+                    last_change_at: UNIX_EPOCH,
+                    ..make_row_with_id(second, 0, RowState::Idle)
+                },
+            ];
+            for state in [
+                RowState::Idle,
+                RowState::Working,
+                RowState::NeedsInput,
+                RowState::Idle,
+            ] {
+                let row = rows.last_mut().expect("second pinned row");
+                row.state = state;
+                row.last_change_at += Duration::from_secs(60);
+                sort_rows(&mut rows, grouping, &reorder);
+                assert_eq!(
+                    reorder,
+                    rows.iter().map(|row| row.id.clone()).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+    #[test]
+    fn unranked_pins_use_session_id_then_row_id() {
+        let cases = [
+            (None, None, [1, 2]),
+            (None, Some("a"), [1, 2]),
+            (Some("a"), None, [2, 1]),
+            (Some("b"), Some("a"), [2, 1]),
         ];
-        sort_rows(&mut rows, super::super::state::Grouping::State, &[]);
-        assert!(nth(&rows, 0).pinned);
-        assert_eq!(nth(&rows, 0).state, RowState::Working);
+        for grouping in [
+            super::super::state::Grouping::State,
+            super::super::state::Grouping::Directory,
+        ] {
+            for (first_session, second_session, expected) in cases {
+                let mut rows = [(2, second_session), (1, first_session)]
+                    .into_iter()
+                    .map(|(id, session_id)| DashboardRow {
+                        pinned: true,
+                        session_id: session_id.map(str::to_owned),
+                        last_change_at: UNIX_EPOCH,
+                        ..make_row_with_id(DashboardRowId::TopLevel(AgentId(id)), 0, RowState::Idle)
+                    })
+                    .collect::<Vec<_>>();
+                sort_rows(&mut rows, grouping, &[]);
+                assert_eq!(
+                    expected
+                        .map(|id| DashboardRowId::TopLevel(AgentId(id)))
+                        .as_slice(),
+                    rows.into_iter()
+                        .map(|row| row.id)
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    "{grouping:?}: {first_session:?}, {second_session:?}",
+                );
+            }
+        }
+    }
+    #[test]
+    fn pinned_session_order_survives_roster_activity_changes() {
+        let mut local = crate::app::agent_view::test_fixtures::make_agent();
+        local.session.session_id = Some(acp::SessionId::new("z-local"));
+        local.display_name = Some("Local".to_owned());
+        let agents = IndexMap::from([(AgentId(1), local)]);
+        let roster_id = DashboardRowId::Roster {
+            session_id: "a-roster".to_owned(),
+        };
+        let local_id = DashboardRowId::TopLevel(AgentId(1));
+        let pinned = std::collections::BTreeSet::from([local_id.clone(), roster_id.clone()]);
+        let mut roster = roster_entry("a-roster", 1_000);
+        for grouping in [
+            super::super::state::Grouping::State,
+            super::super::state::Grouping::Directory,
+        ] {
+            for activity in [RosterActivity::Working, RosterActivity::Dormant] {
+                roster.activity = activity;
+                roster.last_change_unix_ms += 1_000;
+                let rows = build_rows_with_roster(
+                    &agents,
+                    &pinned,
+                    &[],
+                    grouping,
+                    &Filter::None,
+                    None,
+                    std::slice::from_ref(&roster),
+                );
+                assert_eq!(
+                    vec![roster_id.clone(), local_id.clone()],
+                    rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
+                );
+            }
+        }
+    }
+    #[test]
+    fn pinned_workspace_order_survives_session_loading() {
+        for grouping in [
+            xai_grok_dashboard_store::Grouping::State,
+            xai_grok_dashboard_store::Grouping::Directory,
+        ] {
+            for manual_order in [false, true] {
+                let mut a = workspace_member("a", "A", None);
+                let mut z = workspace_member("z", "Z", None);
+                a.pin_rank = Some(1024);
+                z.pin_rank = Some(1024);
+                a.cwd = Some("/z".to_owned());
+                z.cwd = Some("/a".to_owned());
+                if manual_order {
+                    a.order_rank = Some(2048);
+                    z.order_rank = Some(1024);
+                }
+                let mut snapshot = workspace_snapshot(vec![a, z]);
+                snapshot.grouping = grouping.clone();
+                let expected = if manual_order {
+                    vec!["z", "a"]
+                } else {
+                    vec!["a", "z"]
+                };
+                let mut agents = IndexMap::new();
+                for loaded in [false, true, false] {
+                    if loaded {
+                        let mut agent = crate::app::agent_view::test_fixtures::make_agent();
+                        agent.session.session_id = Some(acp::SessionId::new("z"));
+                        agent.session.cwd = PathBuf::from("/a");
+                        agent.session.enqueue_prompt("work".to_owned());
+                        agents.insert(AgentId(1), agent);
+                    } else {
+                        agents.clear();
+                    }
+                    let rows = workspace_rows(&agents, &snapshot);
+                    assert_eq!(
+                        expected,
+                        rows.iter()
+                            .map(|row| row.session_id.as_deref().expect("saved session"))
+                            .collect::<Vec<_>>(),
+                    );
+                    assert_eq!(
+                        loaded,
+                        rows.iter()
+                            .any(|row| matches!(row.id, DashboardRowId::TopLevel(_)))
+                    );
+                }
+            }
+        }
     }
     /// Filter: agent prefix with empty needle keeps everything (treated as `Filter::None` upstream by `Filter::from_value`).
     #[test]

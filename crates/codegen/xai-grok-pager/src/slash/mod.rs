@@ -201,6 +201,7 @@ fn inline_ghost_from_selected_command(
     query: &str,
     token_range: Range<usize>,
     row: &SuggestionRow,
+    highlight: bool,
 ) -> Option<InlineGhost> {
     let full_name = row.command_name();
     if query.is_empty() || !command_prefix_matches_smart(full_name, query) {
@@ -218,19 +219,20 @@ fn inline_ghost_from_selected_command(
         text,
         token_range,
         full_name: full_name.to_string(),
+        highlight,
     })
 }
 
-fn sync_inline_ghost_to_selection(inner: &mut SlashSnapshot) {
+fn sync_inline_ghost_to_selection(inner: &mut SlashSnapshot, highlight: impl Fn(&str) -> bool) {
     if !inner.cursor_in_command || inner.command_recognized {
         return;
     }
     let Some(range) = inner.command_range.clone() else {
         return;
     };
-    inner.inline_ghost = inner
-        .selection()
-        .and_then(|row| inline_ghost_from_selected_command(&inner.query, range, row));
+    inner.inline_ghost = inner.selection().and_then(|row| {
+        inline_ghost_from_selected_command(&inner.query, range, row, highlight(row.command_name()))
+    });
 }
 
 /// Immutable snapshot of the slash completion state.
@@ -277,6 +279,8 @@ pub struct InlineGhost {
     pub token_range: Range<usize>,
     /// The full command name to insert on Tab accept (without `/`).
     pub full_name: String,
+    /// Teal the typed prefix. False for mid-text completions that would not run or mention.
+    pub highlight: bool,
 }
 
 impl SlashSnapshot {
@@ -655,7 +659,7 @@ impl SlashController {
         // recognized-token highlights now.
         let inline = self.compute_inline_slash(text, models);
         snapshot.recognized_tokens = inline.recognized_tokens;
-        sync_inline_ghost_to_selection(&mut snapshot);
+        sync_inline_ghost_to_selection(&mut snapshot, |_| true);
 
         slash.replace(snapshot);
     }
@@ -730,9 +734,11 @@ impl SlashController {
         // Same membership rule as every other composer state (and the submit-time capture)
         // The highlight thus can't flicker with cursor position or diverge from the echo's ranges
         snapshot.recognized_tokens = self.recognized_token_ranges(text, models);
+        snapshot.command_recognized = snapshot.recognized_tokens.contains(&token.range);
 
         // Same invariant as leading `/` and arrow nav: ghost completes selected row only.
-        sync_inline_ghost_to_selection(&mut snapshot);
+        // Teal only when the selected completion actually runs or mentions mid-text.
+        sync_inline_ghost_to_selection(&mut snapshot, |name| self.suggestion_works_mid_text(name));
 
         slash.replace(snapshot);
     }
@@ -852,7 +858,10 @@ impl SlashController {
             let current = inner.selected.min(len - 1) as isize;
             let next = (current + delta).rem_euclid(len as isize) as usize;
             inner.selected = next;
-            sync_inline_ghost_to_selection(inner);
+            let leading = inner.command_range.as_ref().is_some_and(|r| r.start == 0);
+            sync_inline_ghost_to_selection(inner, |name| {
+                leading || self.suggestion_works_mid_text(name)
+            });
         });
     }
 
@@ -867,7 +876,10 @@ impl SlashController {
             let current = inner.selected.min(len - 1) as isize;
             let next = (current + delta).clamp(0, len as isize - 1) as usize;
             inner.selected = next;
-            sync_inline_ghost_to_selection(inner);
+            let leading = inner.command_range.as_ref().is_some_and(|r| r.start == 0);
+            sync_inline_ghost_to_selection(inner, |name| {
+                leading || self.suggestion_works_mid_text(name)
+            });
         });
     }
 
@@ -918,12 +930,19 @@ impl SlashController {
         tokens
             .into_iter()
             .filter(|token| {
-                self.registry
-                    .get(&token.name)
-                    .is_some_and(|cmd| command_offered(cmd.as_ref(), &ctx, hide_session))
+                self.registry.get(&token.name).is_some_and(|cmd| {
+                    command_offered(cmd.as_ref(), &ctx, hide_session)
+                        && mid_text_hoist::token_is_armed_inline(text, token, cmd.as_ref())
+                })
             })
             .map(|token| token.range)
             .collect()
+    }
+
+    fn suggestion_works_mid_text(&self, name: &str) -> bool {
+        self.registry
+            .get(name)
+            .is_some_and(|cmd| mid_text_hoist::command_works_mid_text(cmd.as_ref()))
     }
 
     /// Compute inline slash state for text that doesn't start with `/`.
@@ -2445,14 +2464,14 @@ mod tests {
         };
         // Without smart-case, starts_with("p") fails on "Privacy" and the ghost disappears
         // The dropdown would still highlight the row via CaseMatching::Smart
-        let ghost = inline_ghost_from_selected_command("p", 1..2, &row).expect(
+        let ghost = inline_ghost_from_selected_command("p", 1..2, &row, true).expect(
             "lowercase query must ghost-complete a title-case command (dropdown can select it)",
         );
         assert_eq!(ghost.full_name, "Privacy");
         assert_eq!(ghost.text, "rivacy");
 
         // Mixed-case query that is not an exact prefix must not ghost.
-        assert!(inline_ghost_from_selected_command("PR", 1..3, &row).is_none());
+        assert!(inline_ghost_from_selected_command("PR", 1..3, &row, true).is_none());
     }
 
     /// Minimal command used to build a hermetic registry where several names tie at the same fuzzy score.
@@ -3065,14 +3084,14 @@ mod tests {
         let state = SlashState::default();
         let models = ModelState::default();
 
-        ctrl.refresh(&state, "do /model now", 9, &models);
+        ctrl.refresh(&state, "do /btw now", 7, &models);
         let snapshot = state.snapshot();
         assert!(
             snapshot.inline_ghost.is_none(),
             "fully recognized command should not show ghost"
         );
         assert_eq!(snapshot.recognized_tokens.len(), 1);
-        assert_eq!(snapshot.recognized_tokens.first(), Some(&(3..9)));
+        assert_eq!(snapshot.recognized_tokens.first(), Some(&(3..7)));
     }
 
     #[test]
@@ -3113,9 +3132,9 @@ mod tests {
         let state = SlashState::default();
         let models = ModelState::default();
 
-        ctrl.refresh(&state, "run /exit and /model please", 0, &models);
+        ctrl.refresh(&state, "run /btw and /model please", 0, &models);
         let snapshot = state.snapshot();
-        assert_eq!(snapshot.recognized_tokens.len(), 2);
+        assert_eq!(snapshot.recognized_tokens, vec![4..8]);
     }
 
     #[test]
@@ -3125,32 +3144,34 @@ mod tests {
         let state = SlashState::default();
         let models = ModelState::default();
 
-        let text = "run /exit and /model please but not /zzzzz nor foo/bar";
+        let text = "run /btw please but not /zzzzz nor foo/bar";
         ctrl.refresh(&state, text, text.len(), &models);
         let composer = state.snapshot().recognized_tokens;
 
         let helper = ctrl.recognized_token_ranges(text, &models);
         assert_eq!(helper, composer);
-        assert_eq!(helper, vec![4..9, 14..20]);
+        assert_eq!(helper, vec![4..8]);
     }
 
     #[test]
     fn recognized_token_ranges_parity_in_mid_text_state_with_session_scope_hidden() {
         // Dashboard-style surface (session-scoped commands suppressed), cursor in a mid-text token's args
-        // The mid-text refresh path must apply the same membership rule as the helper
-        // /compact (session-scoped) is excluded on this surface; /theme (pager-global) is highlighted
+        // /compact is session-scoped; /btw is session-scoped and hoist-armed — both stay unhighlighted here
         let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
         ctrl.set_hide_session_scoped(true);
         let state = SlashState::default();
         let models = ModelState::default();
 
-        let text = "do /compact then /theme now";
+        let text = "do /compact then /btw now";
         ctrl.refresh(&state, text, text.len(), &models);
         let composer = state.snapshot().recognized_tokens;
 
         let helper = ctrl.recognized_token_ranges(text, &models);
         assert_eq!(helper, composer);
-        assert_eq!(helper, vec![17..23]);
+        assert!(
+            helper.is_empty(),
+            "session-scoped /btw must not highlight on the session-less surface"
+        );
 
         // Cursor inside the suppressed /compact token: the under-cursor teal source (command_recognized) must agree with the ranges
         // No teal flicker while the cursor sits in a not-offered command
@@ -3161,6 +3182,140 @@ mod tests {
             "/compact must not be recognized mid-text on the session-less surface"
         );
         assert_eq!(snap.recognized_tokens, helper);
+    }
+
+    #[test]
+    fn recognized_token_ranges_mid_text_only_armed_tokens() {
+        let ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        let models = ModelState::default();
+        let text = "do /compact then /btw now";
+        assert_eq!(
+            ctrl.recognized_token_ranges(text, &models),
+            vec![17..21],
+            "unarmed builtins stay plain; /btw hoists so it stays teal"
+        );
+    }
+
+    #[test]
+    fn mid_text_highlights_only_commands_that_work_mid_text() {
+        let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        ctrl.registry_mut().set_acp_commands(&[
+            acp::AvailableCommand::new("goal", "Set a goal"),
+            acp::AvailableCommand::new("flush", "Flush logs"),
+            acp::AvailableCommand::new("pr-workflow", "PR workflow skill").meta(
+                serde_json::json!({
+                    "path": "/tmp/skills/pr-workflow/SKILL.md",
+                    "scope": "local",
+                })
+                .as_object()
+                .cloned(),
+            ),
+            acp::AvailableCommand::new("acme-login", "Plugin skill").meta(
+                serde_json::json!({
+                    "path": "/plugins/acme/skills/login/SKILL.md",
+                    "scope": "plugin",
+                    "pluginName": "acme",
+                })
+                .as_object()
+                .cloned(),
+            ),
+            acp::AvailableCommand::new("saved-wf", "Workflow: demo").meta(
+                serde_json::json!({ "workflowSource": "user" })
+                    .as_object()
+                    .cloned(),
+            ),
+        ]);
+        let models = ModelState::default();
+
+        for cmd in commands::builtin_commands() {
+            let names = std::iter::once(cmd.name()).chain(cmd.aliases().iter().copied());
+            for name in names {
+                let text = format!("please /{name} now");
+                let ranges = ctrl.recognized_token_ranges(&text, &models);
+                if cmd.can_hoist_from_mid_text() || cmd.is_skill() {
+                    assert_eq!(ranges.len(), 1, "/{name} works mid-text and must highlight");
+                } else {
+                    assert!(
+                        ranges.is_empty(),
+                        "/{name} does not work mid-text and must stay plain"
+                    );
+                }
+            }
+        }
+
+        assert!(
+            ctrl.recognized_token_ranges("please /goal now", &models)
+                .is_empty(),
+            "ACP /goal is not a skill"
+        );
+        assert!(
+            ctrl.recognized_token_ranges("please /flush now", &models)
+                .is_empty(),
+            "ACP shell command is not a skill"
+        );
+        assert!(
+            ctrl.recognized_token_ranges("please /saved-wf now", &models)
+                .is_empty(),
+            "workflow definitions do not run mid-text"
+        );
+        assert_eq!(
+            ctrl.recognized_token_ranges("please /pr-workflow now", &models)
+                .len(),
+            1,
+            "local skill mention stays teal"
+        );
+        assert_eq!(
+            ctrl.recognized_token_ranges("please /acme-login now", &models)
+                .len(),
+            1,
+            "plugin skill mention stays teal"
+        );
+        assert!(
+            ctrl.recognized_token_ranges("please /plugins now", &models)
+                .is_empty()
+                && ctrl
+                    .recognized_token_ranges("please /plugin now", &models)
+                    .is_empty()
+                && ctrl
+                    .recognized_token_ranges("please /skills now", &models)
+                    .is_empty(),
+            "pager /plugins and /skills open the modal; they are not mentions"
+        );
+    }
+
+    #[test]
+    fn unarmed_mid_text_dropdown_does_not_mark_recognized() {
+        let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        let state = SlashState::default();
+        let models = ModelState::default();
+        let text = "please /compact";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let snap = state.snapshot();
+        assert!(
+            snap.open,
+            "arg/command completion may still open for unarmed tokens"
+        );
+        assert!(!snap.command_recognized);
+        assert!(snap.recognized_tokens.is_empty());
+        assert!(
+            snap.inline_ghost
+                .as_ref()
+                .is_none_or(|ghost| !ghost.highlight),
+            "unarmed mid-text /compact must not teal"
+        );
+    }
+
+    #[test]
+    fn armed_mid_text_partial_btw_ghost_highlights() {
+        let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        let state = SlashState::default();
+        let models = ModelState::default();
+        let text = "please /bt";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let snap = state.snapshot();
+        let ghost = snap.inline_ghost.as_ref().expect("ghost for /bt → /btw");
+        assert_eq!(ghost.full_name, "btw");
+        assert!(ghost.highlight, "hoist completion must teal mid-text");
     }
 
     #[test]

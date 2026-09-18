@@ -173,6 +173,14 @@ impl PersistedRowId {
 /// Also reused by the dashboard-overlay stop for its double-press close confirm.
 pub const CONFIRM_WINDOW: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long after a send an empty Enter still counts as an echo of that send.
+/// One second covers the default key auto-repeat delay on macOS (375 ms), Windows (500 ms), and GNOME (500 ms).
+const SEND_ECHO_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+pub(crate) fn send_echo_window_open(since_send: std::time::Duration) -> bool {
+    since_send < SEND_ECHO_WINDOW
+}
+
 /// Coarse state used for the dashboard grouping.
 ///
 /// See [`super::row::classify_top_level`] / [`super::row::classify_subagent`] for the mapping rules.
@@ -442,6 +450,9 @@ pub struct DashboardState {
     pub(crate) deferred_dispatch_send: Option<DeferredDispatchSend>,
     /// A peek-reply send deferred the same way; per-surface slots so stashing one surface can never overwrite the other's pending send.
     pub(crate) deferred_peek_send: Option<DeferredPeekSend>,
+    /// When the dispatch input last sent its text.
+    /// `AppView` clears it on any key other than Enter.
+    pub(crate) last_send_at: Option<Instant>,
     /// Peek panel state (Space toggles).
     pub peek: Option<PeekPanelState>,
     /// Session-scoped guest viewport for the live-tail peek (capture once on select; sticky while the same row is peeked; restore on leave).
@@ -1198,6 +1209,7 @@ impl DashboardState {
             paste_probe_in_flight: 0,
             deferred_dispatch_send: None,
             deferred_peek_send: None,
+            last_send_at: None,
             peek: None,
             peek_viewport: None,
             peek_reply,
@@ -2698,7 +2710,6 @@ impl DashboardState {
                     .as_ref()
                     .is_some_and(|p| p.reject_option == selected);
             match (key.code, selected) {
-                // ── No option selected → navigate agents / open ──
                 (KeyCode::Up, None) => {
                     return Some(InputOutcome::Action(Action::DashboardSelectPrev));
                 }
@@ -2723,7 +2734,6 @@ impl DashboardState {
                             .unwrap_or(InputOutcome::Unchanged),
                     );
                 }
-                // ── Option selected → move within options (spill at edges) ──
                 (KeyCode::Up, Some(0)) => {
                     return Some(InputOutcome::Action(Action::DashboardSelectPrev));
                 }
@@ -2838,8 +2848,9 @@ impl DashboardState {
             {
                 return Some(InputOutcome::Changed);
             }
-            let enter_is_newline =
-                focused && compose_enter_is_newline(self.multiline_mode, mod_enter);
+            let enter_is_newline = focused
+                && (compose_enter_is_newline(self.multiline_mode, mod_enter)
+                    || crate::input::is_delivered_super_enter(key));
             if !enter_is_newline {
                 let Some(row) = self.peek.as_ref().map(|p| p.row.clone()) else {
                     return Some(InputOutcome::Unchanged);
@@ -2918,7 +2929,7 @@ impl DashboardState {
     /// Resolve the dispatch input's send action for the given `attach` flag. A `/command` always routes
     /// to the slash dispatcher (there's no session to "open"), so `attach` only affects the
     /// plain-dispatch path.
-    fn dispatch_send_action(&self, attach: bool) -> InputOutcome {
+    fn dispatch_send_action(&mut self, attach: bool) -> InputOutcome {
         let text = self.dispatch.text().to_string();
         let trimmed = text.trim();
         if trimmed.is_empty() {
@@ -2931,6 +2942,7 @@ impl DashboardState {
                 .focused_action_click()
                 .map_or(InputOutcome::Unchanged, InputOutcome::Action);
         }
+        self.last_send_at = Some(Instant::now());
         if trimmed.starts_with('/') {
             return InputOutcome::Action(Action::DashboardDispatchSlash { text });
         }
@@ -2961,6 +2973,74 @@ impl DashboardState {
                 self.delete_confirm = None;
                 None
             }
+        }
+    }
+
+    /// Whether an empty Enter now is an echo of the last send.
+    /// Key auto-repeat in older terminals, a bouncing key switch, and a double tap all produce this echo.
+    fn empty_enter_echoes_send(&self) -> bool {
+        self.dispatch.text().trim().is_empty()
+            && self
+                .last_send_at
+                .is_some_and(|sent| send_echo_window_open(sent.elapsed()))
+    }
+
+    /// Enter with the list focused attaches the selected row or acts on the focused right-hand item.
+    fn handle_list_focused_enter(&mut self) -> InputOutcome {
+        if self.empty_enter_echoes_send() {
+            return InputOutcome::Unchanged;
+        }
+        if let Some(id) = self.selected.clone() {
+            return InputOutcome::Action(Action::DashboardAttach(id));
+        }
+        // Enter on a right-hand item acts like a click on it, draft or no draft
+        // Only `+ New Agent` sends a typed draft
+        if self.focused_new_agent_sends_draft() {
+            return self.dispatch_send_action(false);
+        }
+        if let Some(action) = self.focused_action_click() {
+            return InputOutcome::Action(action);
+        }
+        InputOutcome::Unchanged
+    }
+
+    /// Enter while the dispatch input is active confirms the search, expands a chip, or sends.
+    /// Returns `None` when the prompt widget should insert Enter as a newline.
+    fn handle_dispatch_enter(
+        &mut self,
+        key: &KeyEvent,
+        slash_accepted_send: bool,
+    ) -> Option<InputOutcome> {
+        let mod_enter = crate::input::is_mod_enter(key);
+        if self.search_mode {
+            // Enter confirms the filter
+            // The cleared query puts the dispatch input back on the ❯ prompt
+            self.search_mode = false;
+            self.dispatch.set_text("");
+            return Some(InputOutcome::Changed);
+        }
+        // An accepted no-arg slash command always sends
+        // PromptWidget inserts a newline for a delivered SUPER+Enter (Kitty)
+        let enter_is_newline = !slash_accepted_send
+            && (compose_enter_is_newline(self.multiline_mode, mod_enter)
+                || crate::input::is_delivered_super_enter(key));
+        // Only a real bare Enter expands paste and file chips
+        // Apple Terminal rescue makes `is_mod_enter` true for a bare Enter that must send or insert a newline
+        if !mod_enter
+            && matches!(
+                self.dispatch.try_element_interaction(key),
+                Some(crate::views::prompt_widget::ElementInteraction::Inlined)
+            )
+        {
+            self.dispatch.refresh_slash(&self.models);
+            return Some(InputOutcome::Changed);
+        }
+        if enter_is_newline {
+            None
+        } else if self.empty_enter_echoes_send() {
+            Some(InputOutcome::Unchanged)
+        } else {
+            Some(self.dispatch_send_action(false))
         }
     }
 
@@ -3280,46 +3360,11 @@ impl DashboardState {
         }
 
         if matches!(key.code, KeyCode::Enter) {
-            // Overview focused: attach / create (or send when the button is focused and a draft exists)
             if self.list_focused && key.modifiers.is_empty() {
-                if let Some(id) = self.selected.clone() {
-                    return InputOutcome::Action(Action::DashboardAttach(id));
-                }
-                // Enter on a right-hand item acts like a click on it, draft or no draft; only `+ New Agent` sends a typed draft
-                if self.focused_new_agent_sends_draft() {
-                    return self.dispatch_send_action(false);
-                }
-                if let Some(action) = self.focused_action_click() {
-                    return InputOutcome::Action(action);
-                }
-                return InputOutcome::Unchanged;
+                return self.handle_list_focused_enter();
             }
-            let mod_enter = crate::input::is_mod_enter(key);
-            if self.search_mode {
-                // Confirm filter; clear query so dispatch returns to ❯.
-                self.search_mode = false;
-                self.dispatch.set_text("");
-                return InputOutcome::Changed;
-            }
-            // slash_accepted_send: no-arg slash accept must submit, not newline.
-            let enter_is_newline =
-                !slash_accepted_send && compose_enter_is_newline(self.multiline_mode, mod_enter);
-            // Expand paste/file chips only for real bare Enter
-            // Apple Terminal rescue yields bare Enter while is_mod_enter is true; that
-            // must send/newline, not expand (peek already gates the same way)
-            if !mod_enter
-                && matches!(
-                    self.dispatch.try_element_interaction(key),
-                    Some(crate::views::prompt_widget::ElementInteraction::Inlined)
-                )
-            {
-                self.dispatch.refresh_slash(&self.models);
-                return InputOutcome::Changed;
-            }
-            if enter_is_newline {
-                // fall through for newline
-            } else {
-                return self.dispatch_send_action(false);
+            if let Some(outcome) = self.handle_dispatch_enter(key, slash_accepted_send) {
+                return outcome;
             }
         }
 
@@ -4270,10 +4315,6 @@ fn rename_edit_outcome(outcome: LineEditOutcome) -> InputOutcome {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Filter parser
-// ---------------------------------------------------------------------------
-
 /// Parse a filter expression from the dispatch input. Unknown values fall back to substring.
 pub fn parse_filter(text: &str) -> FilterValue {
     let trimmed = text.trim();
@@ -4328,10 +4369,6 @@ pub fn parse_row_state_token(s: &str) -> Option<RowState> {
         _ => None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Persistence I/O
-// ---------------------------------------------------------------------------
 
 /// Read the persisted `[dashboard].enabled` flag (defaults to `true`).
 ///
@@ -4510,10 +4547,6 @@ fn parse_persist_key_list(item: &toml_edit::Item) -> Vec<PersistedRowId> {
         })
         .collect()
 }
-
-// ---------------------------------------------------------------------------
-// Helper: relative path display
-// ---------------------------------------------------------------------------
 
 /// Compact a `Path` for display against `$HOME`, returning a `String`. Used by the row renderer and
 /// the filter substring search to keep cwd matching consistent. When `cwd == home`, `strip_prefix`

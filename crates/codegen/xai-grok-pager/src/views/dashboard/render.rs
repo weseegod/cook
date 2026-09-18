@@ -2948,10 +2948,10 @@ fn render_footer(
     // "Send + open" is `Ctrl+S`; `Shift+Enter` inserts a newline instead
     // It is hardcoded in the dispatch / peek key handlers, not a registry action, so the chip is built directly
     let send_open = key!('s', CONTROL);
-    // Multiline: bare Enter inserts a newline; Shift+Enter (or Alt+Enter when the terminal can't distinguish Shift+Enter) sends
+    // Multiline: bare Enter inserts a newline; Shift+Enter (or Alt+Enter over SSH / when Shift+Enter collapses) sends
     // This matches the agent prompt keybar
     let send_key = if state.multiline_mode {
-        if crate::terminal::terminal_context().shift_enter_unavailable() {
+        if crate::terminal::terminal_context().prefer_alt_enter_newline() {
             key!(Enter, ALT)
         } else {
             key!(Enter, SHIFT)
@@ -3206,10 +3206,6 @@ pub(crate) fn cached_home() -> Option<&'static str> {
 }
 
 static HOME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
-
-// ---------------------------------------------------------------------------
-// Popup overlay (banner-style)
-// ---------------------------------------------------------------------------
 
 /// Only a dynamic top inset is reserved for the dashboard banner.
 pub fn popup_rect(view: Rect) -> Rect {

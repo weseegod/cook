@@ -119,7 +119,16 @@ impl ClusterClient {
     /// The event loop's `process_effects`, minus terminal/auth-handle wiring (that fn is event_loop-private; this mirrors its body).
     fn process_effects(&mut self, effs: Vec<super::actions::Effect>) {
         let flags = super::event_loop::session_flags_for_effects(&mut self.app, &effs);
-        for eff in effs {
+        let mut effs = effs.into_iter().peekable();
+        while let Some(eff) = effs.next() {
+            let Some(eff) = effects::take_coalesced_interjects(
+                eff,
+                &mut effs,
+                &mut self.tasks,
+                &self.app.acp_tx,
+            ) else {
+                continue;
+            };
             let (_quit, _meta) = effects::execute(
                 eff,
                 &mut self.tasks,

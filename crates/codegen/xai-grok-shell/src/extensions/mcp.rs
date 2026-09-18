@@ -65,6 +65,9 @@ fn default_true() -> bool {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct McpListResponse {
     pub servers: Vec<McpServerEntry>,
+    /// Session-scoped: true when `is_initialized` is set. A missing client is then a failed handshake.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_mcp_resolved: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -212,6 +215,8 @@ pub struct McpStatusSnapshot {
     pub configs: Vec<acp::McpServer>,
     pub clients: Vec<McpClientStatus>,
     pub auth_required: std::collections::HashSet<String>,
+    /// Mirrors `McpState::is_initialized`. A missing client then means handshake failed.
+    pub is_resolved: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -605,7 +610,7 @@ pub(crate) async fn build_mcp_status(
     let (
         configs,
         clients,
-        _is_initializing,
+        is_initialized,
         initializing_servers,
         mcp_tool_meta,
         mcp_tool_icons,
@@ -620,7 +625,7 @@ pub(crate) async fn build_mcp_status(
                 .all_clients()
                 .map(|(_, c)| c.clone())
                 .collect::<Vec<_>>(),
-            state.is_initializing(),
+            state.is_initialized(),
             state.handshaking_servers_cloned(),
             state.mcp_tool_meta.clone(),
             state.mcp_tool_icons.clone(),
@@ -737,6 +742,7 @@ pub(crate) async fn build_mcp_status(
         configs,
         clients: client_statuses,
         auth_required,
+        is_resolved: is_initialized,
     }
 }
 
@@ -1090,6 +1096,9 @@ async fn handle_list(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         }
     }
 
+    let session_mcp_resolved = session_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.is_resolved);
     // Carry the verdict for policy-dropped servers so the pager can say "blocked by policy"
     // instead of a generic "unavailable"; computed only with a session snapshot.
     let blocked_reasons: HashMap<String, String> = match (&session_snapshot, &definition_index) {
@@ -1224,7 +1233,10 @@ async fn handle_list(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
             }
         }
     }
-    to_ext_response(Ok(McpListResponse { servers }))
+    to_ext_response(Ok(McpListResponse {
+        servers,
+        session_mcp_resolved,
+    }))
 }
 
 // ── mcp/call handler ────────────────────────────────────────────────
@@ -2843,6 +2855,7 @@ mod tests {
                     }),
                 },
             ],
+            session_mcp_resolved: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // [0] local HTTP

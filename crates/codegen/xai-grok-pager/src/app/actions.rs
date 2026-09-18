@@ -582,7 +582,7 @@ pub enum Action {
     },
     /// Privacy banner `[Opt in]` (ack only after ACP success).
     PrivacyBannerOptIn,
-    /// Privacy banner `[Opt out]` (ack now, then record the decline).
+    /// Privacy banner `[Opt out]` (always writes the decline; ack only after ACP success).
     PrivacyBannerOptOut,
     /// Open the command palette (`/help`).
     /// The keybinding path (Ctrl+P) opens it directly in `handle_agent_action`; this lets a slash command reach the same modal through dispatch.
@@ -769,6 +769,14 @@ pub enum Action {
     DoctorFixCancelled(DoctorFixTarget),
     /// Persist the memory modal fullscreen preference to config.toml.
     PersistMemoryFullscreen(bool),
+    /// Turn memory on or off for the active session (`t` in the `/memory` modal).
+    MemoryToggle {
+        enabled: bool,
+    },
+    /// Copy text from the `/memory` modal; the outcome is shown in the modal's status line.
+    MemoryCopy {
+        text: String,
+    },
     /// Delete one note from the `/memory` modal; the shell verifies the hash before removing.
     MemoryForget {
         path: String,
@@ -1422,9 +1430,10 @@ pub enum Effect {
         model_id: Option<acp::ModelId>,
         /// Per-create permission mode for a fresh worktree session. Ignored when resuming an existing session.
         permission_mode_override: Option<PermissionModeKind>,
-        /// Client-chosen session ID (`--session-id` with `--worktree`) used as the worktree/session id and `meta.sessionId` on fresh create.
-        /// Ignored when `load_session_id` is set (resume path owns the id).
+        /// Explicit `--session-id`: names the worktree checkout and is the `meta.sessionId` on create.
         preferred_session_id: Option<String>,
+        /// Pager-minted `meta.sessionId` for a fresh worktree create without an explicit id, so its setup phases route; not the checkout name.
+        minted_session_id: Option<String>,
         /// One-shot `/chat` or sticky `--chat`: stamp `_meta` kind=chat on fresh create (resume uses `LoadSession.chat_kind` instead).
         chat_kind: bool,
     },
@@ -1793,12 +1802,33 @@ pub enum Effect {
         agent_id: AgentId,
         session_id: acp::SessionId,
     },
+    /// Fetch the `/memory` modal contents (x.ai/memory/list).
+    FetchMemoryList {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+    },
+    /// Turn memory on or off (x.ai/memory/toggle).
+    MemoryToggle {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+        enabled: bool,
+    },
     /// Delete one memory note from the `/memory` modal (x.ai/memory/forget).
     MemoryForget {
         agent_id: AgentId,
         session_id: acp::SessionId,
         path: String,
         expected_content_hash: String,
+    },
+    /// Run `/flush` (x.ai/memory/flush) as a tracked agent command.
+    MemoryFlush {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
+    },
+    /// Run `/dream` (x.ai/memory/dream) as a tracked agent command.
+    MemoryDream {
+        agent_id: AgentId,
+        session_id: acp::SessionId,
     },
     /// Execute a hooks management action via ACP.
     HooksAction {
@@ -2059,11 +2089,8 @@ pub enum Effect {
     SetCodingDataSharing {
         agent_id: AgentId,
         opted_in: bool,
-        /// Pre-toggle value to revert to on failure.
-        rollback_to_opted_in: bool,
         /// Write generation, echoed back on the `TaskResult`.
-        /// Writes to this endpoint are concurrent, so a result that isn't the newest must not touch state.
-        /// Its `rollback_to_opted_in` was captured against a world that has since moved on.
+        /// Writes to this endpoint are concurrent, so only the newest result sets the mirror; an older success only updates the pending write's rollback.
         seq: u64,
     },
     /// Rename the current session.
@@ -2353,6 +2380,8 @@ pub enum TaskResult {
     SessionFailed {
         agent_id: AgentId,
         error: String,
+        /// The create RPC hit its bounded timeout, rather than failing early for another reason.
+        timed_out: bool,
     },
     /// Worktree session was created successfully (worktree and ACP session).
     WorktreeSessionCreated {
@@ -2385,6 +2414,10 @@ pub enum TaskResult {
     WorktreeSessionFailed {
         agent_id: AgentId,
         error: String,
+        /// The orphaned worktree still on disk, so the handler can re-append the `grok worktree rm` hint; `None` if none was created.
+        orphaned_worktree_root: Option<std::path::PathBuf>,
+        /// The create RPC hit its bounded timeout, rather than failing early for another reason.
+        timed_out: bool,
     },
     /// Session was loaded (resumed) successfully.
     SessionLoaded {
@@ -2692,11 +2725,31 @@ pub enum TaskResult {
         agent_id: AgentId,
         result: Result<xai_hooks_plugins_types::PluginsListResponse, String>,
     },
+    /// Memory listing fetched for the `/memory` modal.
+    MemoryListLoaded {
+        agent_id: AgentId,
+        result: Result<xai_grok_shell::extensions::memory::MemoryListing, String>,
+    },
+    /// Shell answered a memory on/off request.
+    MemoryToggleResult {
+        agent_id: AgentId,
+        result: Result<xai_grok_shell::extensions::memory::MemoryToggleResponse, String>,
+    },
     /// Shell answered a `/memory` modal delete request.
     MemoryForgetResult {
         agent_id: AgentId,
         path: String,
         result: Result<xai_grok_shell::extensions::memory::MemoryForgetResponse, String>,
+    },
+    /// `/flush` finished.
+    MemoryFlushComplete {
+        agent_id: AgentId,
+        result: Result<xai_grok_shell::extensions::memory::MemoryFlushResponse, String>,
+    },
+    /// `/dream` finished.
+    MemoryDreamComplete {
+        agent_id: AgentId,
+        result: Result<xai_grok_shell::extensions::memory::MemoryDreamResponse, String>,
     },
     /// Hooks action completed.
     HooksActionResult {
@@ -2809,7 +2862,6 @@ pub enum TaskResult {
     CodingDataSharingFailed {
         agent_id: AgentId,
         error: String,
-        rollback_to_opted_in: bool,
         seq: u64,
     },
     /// Session rename completed successfully.
@@ -2989,8 +3041,11 @@ pub enum TaskResult {
     InterjectFailed {
         agent_id: AgentId,
         error: String,
-        text: String,
-        blocks: Option<Vec<agent_client_protocol::ContentBlock>>,
+        remaining: Vec<(
+            String,
+            String,
+            Option<Vec<agent_client_protocol::ContentBlock>>,
+        )>,
     },
     /// Available commands refreshed from the shell.
     AvailableCommandsRefreshed {

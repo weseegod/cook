@@ -183,25 +183,7 @@ pub enum ListDirOutput {
     /// Generic / unclassified error
     Error(String),
 }
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GrepLineMatch {
-    pub line_number: usize,
-    pub content: String,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GrepFileMatch {
-    pub path: String,
-    pub matches: Vec<GrepLineMatch>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct GrepSearchOutput {
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    pub exit_code: i32,
-    pub match_count: usize,
-    #[serde(default)]
-    pub file_matches: Vec<GrepFileMatch>,
-}
+pub use xai_tool_types::{GrepFileMatch, GrepLineMatch, GrepSearchOutput};
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct FileContent {
     /// content here is the model friendly output which will always be present since even
@@ -468,18 +450,7 @@ pub struct BackgroundTaskStarted {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pid: Option<u32>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
-pub struct WebSearchOutput {
-    pub query: String,
-    pub content: String,
-    pub citations: Vec<String>,
-    pub allowed_domains: Option<Vec<String>>,
-    /// When set, `to_prompt_format()` returns this text directly instead of
-    /// wrapping `content` with the default header. Used by the compat adapter
-    /// to produce the exact `Title: / Content: / ---` schema.
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub pre_formatted: Option<String>,
-}
+pub use xai_tool_types::WebSearchOutput;
 #[derive(Debug, Clone)]
 pub struct WebFetchSourceArtifact {
     /// Session artifact containing the complete converted response.
@@ -1284,7 +1255,6 @@ impl xai_tool_runtime::ToolOutput for BashOutput {
         })
     }
 }
-impl xai_tool_runtime::ToolOutput for GrepSearchOutput {}
 impl xai_tool_runtime::ToolOutput for ReadFileOutput {}
 impl xai_tool_runtime::ToolOutput for ListDirOutput {}
 impl xai_tool_runtime::ToolOutput for SearchReplaceOutput {
@@ -1298,7 +1268,6 @@ impl xai_tool_runtime::ToolOutput for SearchReplaceOutput {
     }
 }
 impl xai_tool_runtime::ToolOutput for TodoWriteOutput {}
-impl xai_tool_runtime::ToolOutput for WebSearchOutput {}
 impl xai_tool_runtime::ToolOutput for WebFetchOutput {}
 impl xai_tool_runtime::ToolOutput for SkillOutput {}
 impl xai_tool_runtime::ToolOutput for ApplyPatchOutput {}

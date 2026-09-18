@@ -1116,7 +1116,6 @@ impl SessionActor {
                 xai_grok_telemetry::session_ctx::log_event_dual(self.telemetry_enabled, ev);
             }
             self.maybe_inject_mcp_reminder().await;
-            self.maybe_inject_mcp_connecting_reminder().await;
             self.maybe_inject_date_rollover_reminder().await;
             self.inject_plan_mode_reminders().await;
             self.inject_fork_reminder().await;
@@ -2622,6 +2621,8 @@ impl SessionActor {
         let tool_prep_start = std::time::Instant::now();
         let (tool_definitions, mcp_wait_ms) = self.prepare_tool_definitions_timed().await;
         let total_prep_ms = tool_prep_start.elapsed().as_millis() as u64;
+        self.maybe_inject_mcp_connecting_reminder().await;
+        self.maybe_inject_mcp_reminder().await;
         if let Some(ref mut pt) = prompt_timing {
             pt.record_tool_prep(mcp_wait_ms, total_prep_ms);
         }

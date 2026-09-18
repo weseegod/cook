@@ -16,6 +16,10 @@ use serde_json::Value;
 pub(crate) type BoxWait = Pin<Box<dyn Future<Output = ()> + Send>>;
 pub(crate) type TerminalWait = Box<dyn FnOnce() -> BoxWait + Send>;
 
+/// An SSE comment the hang body flushes so the response head reaches the client, then the stream
+/// produces no chunk; a comment carries no event, so the client's idle timer runs from here.
+const HANG_OPENING_FRAME: &[u8] = b": grok-mock stream open\n\n";
+
 /// One SSE event as data: optional `event:` name plus the `data:` payload.
 #[derive(Debug, Clone)]
 pub struct SseEvent {
@@ -48,6 +52,9 @@ pub enum ScriptedBody {
     /// The connection closes before the response head reaches the client: the body stream fails on
     /// its first poll, so hyper tears the connection down without flushing the head it queued.
     Dropped,
+    /// The head reaches the client, then the body stalls forever with no chunk, so the client's
+    /// inference idle timeout fires.
+    Hang,
 }
 
 /// A scripted reply; see `inference_override` for where it sits in the tier order.
@@ -92,6 +99,16 @@ impl ScriptedResponse {
         }
     }
 
+    /// A 200 stream whose head reaches the client, then never yields a chunk, so the client's
+    /// inference idle timeout fires.
+    pub fn hang() -> Self {
+        Self {
+            status: 200,
+            headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
+            body: ScriptedBody::Hang,
+        }
+    }
+
     pub(crate) fn is_sse(&self) -> bool {
         matches!(self.body, ScriptedBody::Sse(_))
     }
@@ -132,6 +149,23 @@ impl ScriptedResponse {
                 Response::new(Body::from_stream(stream::once(async {
                     Err::<Bytes, _>(std::io::Error::other("the mock dropped the connection"))
                 })))
+            }
+            ScriptedBody::Hang => {
+                if let Some(wait) = before_terminal {
+                    wait().await;
+                }
+                let body = stream::unfold(false, |flushed| async move {
+                    if flushed {
+                        std::future::pending::<()>().await;
+                        None
+                    } else {
+                        Some((
+                            Ok::<Bytes, std::io::Error>(Bytes::from_static(HANG_OPENING_FRAME)),
+                            true,
+                        ))
+                    }
+                });
+                Response::new(Body::from_stream(body))
             }
             ScriptedBody::Sse(events) => {
                 let last_index = events.len().checked_sub(1);

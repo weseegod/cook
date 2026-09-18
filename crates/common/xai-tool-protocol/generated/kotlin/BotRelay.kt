@@ -127,6 +127,17 @@ data class BotTranscriptOffboxResult(
     @EncodeDefault(EncodeDefault.Mode.NEVER) val nextCursor: String? = null,
 )
 
+/**
+ * Fields the hub merges into every transcript entry it decodes from the
+ * durable store — `getAgentTranscriptTail` / window / thread reads and
+ * `transcript` events alike — next to the box's own fields. Entries the box
+ * answers directly carry none of them.
+ */
+@Serializable
+data class BotTranscriptEntryStamp(
+    val entryVersion: Long,
+)
+
 typealias BotUsageParams = BotEmptyParams
 
 /**

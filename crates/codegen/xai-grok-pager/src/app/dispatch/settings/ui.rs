@@ -352,12 +352,24 @@ pub(in crate::app::dispatch) fn dispatch_confirm_reset_setting(
                 return vec![];
             };
             let default_value = crate::settings::default_value_for(meta);
+            let Some(action) = action_for_reset(key, &default_value) else {
+                tracing::error!(
+                    target: "settings",
+                    key,
+                    ?default_value,
+                    "reset has no action_for_reset arm — registry/dispatch skew",
+                );
+                return vec![];
+            };
 
             // Gate idempotent reset: a value already at its default only shows a toast
+            // Not for the coding-data setter, which owns that decision: its local "opt-out" may be the unconfirmed fail-safe, so it writes anyway
             let pager_snapshot = build_pager_snapshot(app);
             let current_value =
                 crate::settings::current_value_for(key, &app.current_ui, &pager_snapshot);
-            if current_value.as_ref() == Some(&default_value) {
+            if current_value.as_ref() == Some(&default_value)
+                && !matches!(action, Action::SetCodingDataSharing { .. })
+            {
                 tracing::debug!(
                     target: "settings",
                     key,
@@ -370,15 +382,6 @@ pub(in crate::app::dispatch) fn dispatch_confirm_reset_setting(
                 return vec![];
             }
 
-            let Some(action) = action_for_reset(key, &default_value) else {
-                tracing::error!(
-                    target: "settings",
-                    key,
-                    ?default_value,
-                    "reset has no action_for_reset arm — registry/dispatch skew",
-                );
-                return vec![];
-            };
             tracing::info!(
                 target: "settings",
                 key,

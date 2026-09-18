@@ -131,6 +131,10 @@ async fn create_test_actor(
             configured_mode: None,
             v2_config: Default::default(),
             configured_storage: None,
+            process_disabled: false,
+            config_opt_out: false,
+            v2_legacy_carryover: false,
+            prompt_sync_pending: std::sync::atomic::AtomicBool::new(false),
             flush_config: crate::config::MemoryFlushConfig::default(),
             is_flushing: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             capture_worker: std::cell::RefCell::new(None),
@@ -555,6 +559,10 @@ async fn create_test_actor_with_memory(
                 .as_ref()
                 .map_or_else(Default::default, |mc| mc.v2),
             configured_storage: None,
+            process_disabled: false,
+            config_opt_out: false,
+            v2_legacy_carryover: false,
+            prompt_sync_pending: std::sync::atomic::AtomicBool::new(false),
             flush_config: memory_config
                 .as_ref()
                 .map_or_else(Default::default, |mc| mc.flush.clone()),

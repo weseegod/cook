@@ -440,10 +440,9 @@ pub(super) fn emit_cancel_turn(
     let rewind_if_no_output = rewind_prompt_id.is_some();
     let target_prompt_id = if agent.session.state.is_compact_running()
         || matches!(
-            agent.session.state,
-            crate::app::agent::AgentState::CommandCancelling {
-                command: crate::app::agent::AgentCommand::Compact,
-            }
+            &agent.session.state,
+            crate::app::agent::AgentState::CommandCancelling { command }
+                if command.is_compact()
         ) {
         agent.session.current_prompt_id.clone()
     } else {

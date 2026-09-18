@@ -124,6 +124,13 @@ fn is_interruptible_wait_tool(tool_name: &str, args: &serde_json::Value) -> bool
         _ => false,
     }
 }
+fn should_flush_held_queue_before_wait(
+    has_interruptible_wait: bool,
+    steer: bool,
+    goal_loop_active: bool,
+) -> bool {
+    has_interruptible_wait && steer && !goal_loop_active
+}
 use crate::tools::tool_context::BlockingWaitGuard;
 /// Clears `awaiting_plan_approval` (and re-persists) when the [`SessionActor::request_plan_approval`] await resolves or is dropped.
 /// Resolve means a decision came back; drop means the model turn was cancelled, so a cancelled in-session approval can never strand the bit `true`.
@@ -750,6 +757,15 @@ impl SessionActor {
         let workflow_smoke_check_permits = Arc::new(tokio::sync::Semaphore::new(
             workflow_write_smoke_check::MAX_CONCURRENT_CHECKS,
         ));
+        if should_flush_held_queue_before_wait(
+            approved.iter().any(|prepared| {
+                is_interruptible_wait_tool(&prepared.tool_name, &prepared.parsed_args)
+            }),
+            crate::util::config::follow_up_steer_enabled().await,
+            self.goal_loop_active(),
+        ) {
+            self.promote_queued_as_interjections().await;
+        }
         let pending_interjections = self.pending_interjections.clone();
         let (parent_interject, running_turn) = {
             let state = self.state.lock().await;
@@ -3695,7 +3711,10 @@ mod plan_approval_helper_tests {
 }
 #[cfg(test)]
 mod wait_interrupt_tests {
-    use super::{BlockingWaitGuard, WaitInterruptCause, is_interruptible_wait_tool};
+    use super::{
+        BlockingWaitGuard, WaitInterruptCause, is_interruptible_wait_tool,
+        should_flush_held_queue_before_wait,
+    };
     #[test]
     fn interrupted_wait_result_does_not_consume_the_waited_task() {
         let result = super::interrupted_wait_tool_result(
@@ -3706,6 +3725,19 @@ mod wait_interrupt_tests {
             xai_grok_tools::reminders::task_completion::consumed_completion_ids(&result.output)
                 .is_empty()
         );
+    }
+    #[test]
+    fn wait_start_flush_skips_queue_mode_and_active_goals() {
+        assert!(should_flush_held_queue_before_wait(true, true, false));
+        assert!(
+            !should_flush_held_queue_before_wait(true, false, false),
+            "queue mode must keep follow-ups held across a wait"
+        );
+        assert!(
+            !should_flush_held_queue_before_wait(true, true, true),
+            "an active goal wait is not sendable; promoting would abort it immediately"
+        );
+        assert!(!should_flush_held_queue_before_wait(false, true, false));
     }
     #[test]
     fn interruptible_wait_tool_only_when_timeout_positive() {

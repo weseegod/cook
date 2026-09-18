@@ -864,7 +864,6 @@ pub(crate) async fn spawn_session_actor(
             configured_memory_storage = None;
         }
     }
-    let mut v2_init_failure: Option<(&'static str, String)> = None;
     let memory_initial_injection_config = memory_config
         .as_ref()
         .filter(|mc| mc.mode.is_legacy())
@@ -878,13 +877,30 @@ pub(crate) async fn spawn_session_actor(
     let mut memory_backend_params_for_session: Option<crate::session::memory::MemoryBackendParams> =
         None;
     let mut memory_search_counter: Option<std::sync::Arc<std::sync::atomic::AtomicU64>> = None;
-    if let Some(storage) = memory_storage_for_session.clone()
-        && let Err(error) =
-            crate::session::memory_state::initialize_memory_storage(storage.clone()).await
-    {
+    let memory_v2_legacy_carryover = memory_config
+        .as_ref()
+        .is_some_and(|mc| mc.root_dir_override.is_none() && mc.v2.can_run_maintenance());
+    let mut memory_v2_access = None;
+    if let Some(storage) = memory_storage_for_session.clone() {
         if storage.mode().is_v2() {
-            v2_init_failure = Some(("storage initialization", error.to_string()));
-        } else {
+            match memory_control::initialize_v2_memory(&storage, memory_v2_legacy_carryover).await {
+                Ok(access) => memory_v2_access = Some(access),
+                Err(failure) => {
+                    tracing::warn!(
+                        target: xai_grok_telemetry::memory_log::TARGET,
+                        stage = failure.stage,
+                        error = %failure.error,
+                        "MEMORY_INIT: memory-v2 {} failed; memory is disabled for this session. \
+                         Restart to retry, or start with `--no-memory` / `GROK_MEMORY=0` to skip memory.",
+                        failure.stage,
+                    );
+                    memory_storage_for_session = None;
+                    configured_memory_storage = None;
+                }
+            }
+        } else if let Err(error) =
+            crate::session::memory_state::initialize_memory_storage(storage.clone()).await
+        {
             tracing::warn!(
                 target: xai_grok_telemetry::memory_log::TARGET,
                 error = %error,
@@ -892,62 +908,6 @@ pub(crate) async fn spawn_session_actor(
                 "MEMORY_INIT: storage initialization failed"
             );
         }
-    }
-    if v2_init_failure.is_none()
-        && let Some(storage) = memory_storage_for_session
-            .as_ref()
-            .filter(|storage| storage.mode().is_v2())
-    {
-        let clock = xai_grok_memory::system_v2_clock();
-        for (scope_dir, scope) in [
-            (storage.global_dir(), xai_grok_memory::V2MemoryScope::Global),
-            (
-                storage.workspace_dir(),
-                xai_grok_memory::V2MemoryScope::Workspace,
-            ),
-        ] {
-            if let Err(error) = xai_grok_memory::V2MaintenanceStore::open_with_clock(
-                scope_dir,
-                scope,
-                storage.global_dir(),
-                storage.workspace_dir(),
-                clock.clone(),
-            ) {
-                v2_init_failure = Some(("tombstone reconciliation", error.to_string()));
-                break;
-            }
-        }
-    }
-    let mut memory_v2_access = None;
-    if v2_init_failure.is_none()
-        && let Some(storage) = memory_storage_for_session
-            .as_ref()
-            .filter(|storage| storage.mode().is_v2())
-    {
-        match crate::session::memory::V2MemoryAccessPolicy::new(
-            storage.global_dir(),
-            storage.workspace_dir(),
-        ) {
-            Ok(policy) => {
-                memory_v2_access = Some(xai_grok_tools::types::memory_v2::MemoryV2AccessResource(
-                    std::sync::Arc::new(policy),
-                ));
-            }
-            Err(error) => {
-                v2_init_failure = Some(("file access policy initialization", error.to_string()));
-            }
-        }
-    }
-    if let Some((stage, error)) = v2_init_failure {
-        tracing::warn!(
-            target: xai_grok_telemetry::memory_log::TARGET,
-            stage,
-            error = %error,
-            "MEMORY_INIT: memory-v2 {stage} failed; memory is disabled for this session. \
-             Restart to retry, or start with `--no-memory` / `GROK_MEMORY=0` to skip memory."
-        );
-        memory_storage_for_session = None;
-        configured_memory_storage = None;
     }
     let memory_backend_for_spec: Option<
         std::sync::Arc<dyn xai_grok_tools::types::memory_backend::MemoryBackend>,
@@ -1187,7 +1147,7 @@ pub(crate) async fn spawn_session_actor(
             }
         }),
         memory_backend: memory_backend_for_spec,
-        memory_v2_access,
+        memory_v2_access: crate::session::agent_rebuild::MemoryV2AccessSlot::new(memory_v2_access),
         memory_v2_exposed: memory_v2_exposed(memory_config.as_ref()),
         web_search_config: web_search_config.clone(),
         web_search_domains,
@@ -1387,6 +1347,14 @@ pub(crate) async fn spawn_session_actor(
         startup_hints.preserve_inherited_system,
         &system_prompt,
     );
+    if !is_subagent_spawn && reconcile_resumed_memory_section(&mut conversation, &system_prompt) {
+        tracing::info!(
+            target: xai_grok_telemetry::memory_log::TARGET,
+            memory_enabled = memory_storage_for_session.is_some(),
+            "MEMORY_INIT: resumed system prompt's memory section did not match this session's \
+             memory state; replaced with the fresh prompt"
+        );
+    }
     if !startup_hints.preserve_inherited_system
         && !conversation_has_project_instructions(&conversation)
         && let Some(agents_md_reminder) = agent.agents_md_user_reminder()
@@ -1907,6 +1875,14 @@ pub(crate) async fn spawn_session_actor(
                 storage.mode().is_v2()
                     || memory_config.as_ref().is_some_and(|config| config.enabled)
             }),
+            process_disabled: memory_config
+                .as_ref()
+                .is_some_and(|config| config.force_disabled),
+            config_opt_out: memory_config
+                .as_ref()
+                .is_some_and(|config| !config.enabled && !config.force_disabled),
+            v2_legacy_carryover: memory_v2_legacy_carryover,
+            prompt_sync_pending: std::sync::atomic::AtomicBool::new(false),
             flush_config: memory_config.as_ref().map_or_else(
                 || crate::config::MemoryFlushConfig {
                     enabled: false,
@@ -3001,15 +2977,15 @@ fn select_memory_storage(
     let Some((storage, config)) = storage.zip(memory_config) else {
         return MemoryStorageSelection::DisabledByConfig;
     };
+    if storage.mode().is_v2() && storage.is_ephemeral() {
+        return MemoryStorageSelection::UnavailableForEphemeralWorkspace;
+    }
     let enabled = config.enabled
         && (storage.mode().is_legacy()
             || (config.v2.rollout != crate::config::MemoryV2Rollout::Off
                 && config.v2.file_writes_enabled));
     if !enabled {
         return MemoryStorageSelection::DisabledByConfig;
-    }
-    if storage.mode().is_v2() && storage.is_ephemeral() {
-        return MemoryStorageSelection::UnavailableForEphemeralWorkspace;
     }
     MemoryStorageSelection::Enabled
 }
@@ -3136,6 +3112,12 @@ mod memory_storage_select_tests {
         assert!(v2_temp.is_ephemeral());
         assert_eq!(
             select_memory_storage(Some(&v2_temp), Some(&config(MemoryMode::V2))),
+            MemoryStorageSelection::UnavailableForEphemeralWorkspace
+        );
+        let mut disabled_v2 = config(MemoryMode::V2);
+        disabled_v2.enabled = false;
+        assert_eq!(
+            select_memory_storage(Some(&v2_temp), Some(&disabled_v2)),
             MemoryStorageSelection::UnavailableForEphemeralWorkspace
         );
         let legacy_temp = MemoryStorage::new_for_mode(&temp_cwd, None, MemoryMode::Legacy);

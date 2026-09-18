@@ -653,7 +653,6 @@ pub struct PromptWidget {
     /// False while a turn is running, in bash/remember input modes, or while editing a queued prompt.
     pub(crate) prompt_suggestion_active: bool,
 
-    // -- Image paste state ---------------------------------------------------
     /// Images attached to the current prompt.
     pub images: Vec<PastedImage>,
     /// Images removed during undo that can be restored on redo.
@@ -805,8 +804,6 @@ impl PromptWidget {
         self.suggestions.clear_ghost();
     }
 
-    // -- Predicted-next-prompt suggestion (tab autocomplete) -----------------
-
     /// The prompt-suggestion ghost to render for the current text, if the per-frame gate is open and no other completion UI owns the row.
     /// Requires the cursor at end-of-text so the ghost visually continues the typed text.
     pub fn prompt_suggestion_ghost(&self) -> Option<&str> {
@@ -854,8 +851,6 @@ impl PromptWidget {
     pub fn try_progressive_match(&mut self, new_text: &str) -> bool {
         self.suggestions.try_progressive_match(new_text)
     }
-
-    // -- Completion dropdown ------------------------------------------------
 
     /// Whether the completion dropdown is currently open.
     pub fn completion_dropdown_open(&self) -> bool {
@@ -1164,8 +1159,6 @@ impl PromptWidget {
         self.update_file_search_context();
     }
 
-    // -- Slash command state sync -------------------------------------------
-
     pub fn set_slash_current_title(&mut self, title: Option<String>) {
         self.slash_controller.set_current_title(title);
     }
@@ -1424,8 +1417,6 @@ impl PromptWidget {
         }
     }
 
-    // -- Slash preview -------------------------------------------------------
-
     /// Trigger live preview for the currently selected slash arg suggestion. Called after
     /// `slash_move_selection` when the dropdown is in the args phase of a command that supports
     /// preview. On the first call, captures the current state so it can be reverted on cancel.
@@ -1482,8 +1473,6 @@ impl PromptWidget {
     pub fn slash_commit_preview(&mut self) {
         self.slash_preview_original = None;
     }
-
-    // -- File search --------------------------------------------------------
 
     /// Poll the file search daemon for new results. Returns `true` if changed.
     pub fn poll_file_search(&mut self) -> bool {
@@ -1732,7 +1721,6 @@ impl PromptWidget {
         // Reset flight recorder delta (overwritten if key reaches textarea).
         self.last_input_delta = crate::input_log::LastInputDelta::default();
 
-        // ── File search key handling (when dropdown is visible) ─────────
         if self.file_search.is_visible() {
             match self.handle_file_search_key(key) {
                 FileSearchKeyResult::Handled => return PromptEvent::Edited,
@@ -1773,7 +1761,6 @@ impl PromptWidget {
             return PromptEvent::Ignored;
         }
 
-        // ── Ctrl-L / : on element opens the line viewer ─────────────────
         // Ctrl-L when the cursor is on or adjacent to a file ref element, or ':' typed right at an element boundary, opens the viewer
         if key!('l', CONTROL).matches(key)
             && let Some((path, initial_range)) = self.file_ref_element_at_cursor()
@@ -1797,10 +1784,10 @@ impl PromptWidget {
         }
         // Not at an element boundary: fall through to type ':' normally
 
-        // ── Normal key handling ─────────────────────────────────────────
-
-        // Newline: Shift/Alt+Enter, or Apple Terminal bare Enter with a newline modifier held (CoreGraphics rescue inside is_mod_enter)
-        if crate::input::is_mod_enter(key) {
+        // Newline: Shift/Alt+Enter, Apple Terminal CoreGraphics rescue (inside is_mod_enter),
+        // or a delivered SUPER+Enter (Kitty). SUPER is excluded from is_mod_enter (fullscreen
+        // on many terminals) and from bare-Enter send; insert here instead of textarea fallthrough.
+        if crate::input::is_mod_enter(key) || crate::input::is_delivered_super_enter(key) {
             self.insert_replacing_selection("\n");
             return PromptEvent::Edited;
         }
@@ -1929,34 +1916,27 @@ impl PromptWidget {
         }
     }
 
-    // ── File search key dispatch ────────────────────────────────────────
-
     /// Handle navigation/selection keys when the file search dropdown is visible.
     fn handle_file_search_key(&mut self, key: &KeyEvent) -> FileSearchKeyResult {
         if key!(Up).matches(key)
             || key!('p', CONTROL).matches(key)
             || key!('k', CONTROL).matches(key)
         {
-            // Navigation: up.
             self.file_search.move_selection(-1);
             FileSearchKeyResult::Handled
         } else if key!(Down).matches(key)
             || key!('n', CONTROL).matches(key)
             || key!('j', CONTROL).matches(key)
         {
-            // Navigation: down.
             self.file_search.move_selection(1);
             FileSearchKeyResult::Handled
         } else if key!(PageUp).matches(key) || key!('u', CONTROL).matches(key) {
-            // Page up.
             self.file_search.page_move(-1, 8);
             FileSearchKeyResult::Handled
         } else if key!(PageDown).matches(key) || key!('d', CONTROL).matches(key) {
-            // Page down.
             self.file_search.page_move(1, 8);
             FileSearchKeyResult::Handled
         } else if key!(Tab).matches(key) || key!(Enter).matches(key) {
-            // Accept.
             if file_search_has_selection(&self.file_search) {
                 FileSearchKeyResult::Accepted
             } else {
@@ -1983,10 +1963,8 @@ impl PromptWidget {
                 FileSearchKeyResult::PassThrough
             }
         } else if key!(Esc).matches(key) {
-            // Dismiss.
             FileSearchKeyResult::Dismissed
         } else {
-            // Everything else: pass through to normal handling.
             FileSearchKeyResult::PassThrough
         }
     }
@@ -2330,8 +2308,6 @@ impl PromptWidget {
         self.update_file_search_context();
         PromptEvent::Edited
     }
-
-    // ── Image chip support ──────────────────────────────────────────
 
     /// Maximum number of image chips allowed in a single prompt (v1).
     pub const IMAGE_CAP: usize = 10;
@@ -3108,9 +3084,16 @@ impl PromptWidget {
                 theme.accent_skill
             };
 
-            // Teal coloring: recolor the command name cells (not args) when the command is recognized or has visible autocomplete suggestions
+            let text = self.textarea.text();
+            let leading_invocation = snap.command_range.as_ref().is_some_and(|range| {
+                text.get(..range.start)
+                    .is_some_and(|before| before.trim().is_empty())
+            });
+
+            // Leading `/` teals on dropdown or a recognized name. Mid-text teals only when
+            // the token actually runs (hoist) or is a skill/plugin mention.
             if snap.active
-                && (snap.open || snap.command_recognized)
+                && (snap.command_recognized || (leading_invocation && snap.open))
                 && let Some(cmd_range) = &snap.command_range
             {
                 paint_slash_token_highlight(
@@ -3123,8 +3106,9 @@ impl PromptWidget {
                 );
             }
 
-            // Teal for the partial mid-text token under the cursor while typing.
-            if let Some(ref ghost) = snap.inline_ghost {
+            if let Some(ref ghost) = snap.inline_ghost
+                && ghost.highlight
+            {
                 paint_slash_token_highlight(
                     &self.textarea,
                     self.textarea_state,
@@ -3574,8 +3558,6 @@ fn parse_line_range(s: &str) -> Option<std::ops::Range<usize>> {
         if line > 0 { Some(line..line + 1) } else { None }
     }
 }
-
-// ── Element display helpers ────────────────────────────────────────────
 
 /// Build the styled display `Line` for a file reference element. Renders as: `@foo/bar.rs` or
 /// `@foo/bar.rs:10-12`. Style: `@` and `:` in gray, path in theme.path, numbers in text_primary.

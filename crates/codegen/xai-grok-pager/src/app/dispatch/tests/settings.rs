@@ -1124,6 +1124,43 @@ fn dispatch_confirm_reset_setting_reset_on_already_default_is_no_op_with_toast()
         "expected 'already at default' toast, got: {toast_text:?}",
     );
 }
+/// Browse `d` then `y` on the coding-data row writes even when the local value already reads as the default "opt-out":
+/// that value may be the unconfirmed fail-safe, so "already at default" must not drop a confirmed decline.
+#[test]
+fn reset_via_keys_writes_consent_decline_even_when_already_default() {
+    use crate::app::app_view::InputOutcome;
+    use crate::views::modal::ActiveModal;
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+    let mut app = test_app_with_agent();
+    app.coding_data_retention_opt_out = true;
+    let _ = dispatch(Action::OpenSettings, &mut app);
+    {
+        let agent = app.agents.get_mut(&AgentId(0)).expect("agent must exist");
+        let Some(ActiveModal::Settings { state }) = agent.active_modal.as_mut() else {
+            panic!("settings modal must be open");
+        };
+        assert!(state.focus_key("coding_data_sharing"));
+    }
+    let press = |c| Event::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    let InputOutcome::Action(open) = app.handle_input(&press('d')) else {
+        panic!("`d` on the coding-data row must open the reset confirm");
+    };
+    let _ = dispatch(open, &mut app);
+    let InputOutcome::Action(confirm) = app.handle_input(&press('y')) else {
+        panic!("`y` must confirm the reset");
+    };
+    let effects = dispatch(confirm, &mut app);
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::SetCodingDataSharing {
+                opted_in: false,
+                ..
+            }]
+        ),
+        "an already-default consent reset must still reach the server: {effects:?}",
+    );
+}
 /// `refresh_open_settings_modals` walks into `ResetSettingsConfirm.settings_state`.
 /// A `set_X` (or rollback) running while the confirm dialog is open thus keeps the boxed snapshot fresh.
 /// Without the walk, Cancel would restore a stale snapshot.

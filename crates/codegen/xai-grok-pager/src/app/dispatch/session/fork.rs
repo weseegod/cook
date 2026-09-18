@@ -222,6 +222,7 @@ pub(in crate::app::dispatch) fn dispatch_fork_resolved(
             model_id: None,
             permission_mode_override: None,
             preferred_session_id: None,
+            minted_session_id: None,
             chat_kind: parent_chat_kind,
         }]
     } else {

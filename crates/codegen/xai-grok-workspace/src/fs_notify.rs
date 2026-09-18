@@ -46,16 +46,22 @@ pub(crate) fn spawn_fs_change_producer(
     events_tx: broadcast::Sender<WorkspaceEvent>,
 ) -> AbortOnDropHandle<()> {
     AbortOnDropHandle::new(tokio::spawn(async move {
-        // OS-watcher init walks the tree and blocks until every watch is armed.
+        // OS-watcher init walks the tree and blocks until every watch is armed. The watcher
+        // reports paths under the canonical root (`shared` canonicalizes what it watches), so
+        // that, not `root` as given, is what the paths are made relative to.
         let init_root = root.clone();
-        let source = match tokio::task::spawn_blocking(move || {
-            xai_fsnotify::shared(init_root, FsConfig::default())
+        let init = tokio::task::spawn_blocking(move || {
+            let source = xai_fsnotify::shared(init_root.clone(), FsConfig::default())?;
+            Ok::<_, xai_fsnotify::FsNotifyError>((
+                source,
+                dunce::canonicalize(&init_root).unwrap_or(init_root),
+            ))
         })
         .await
         .map_err(|join| join.to_string())
-        .and_then(|init| init.map_err(|e| e.to_string()))
-        {
-            Ok(source) => source,
+        .and_then(|init| init.map_err(|e| e.to_string()));
+        let (source, watch_root) = match init {
+            Ok(init) => init,
             Err(error) => {
                 tracing::warn!(
                     root = %root.display(),
@@ -66,21 +72,23 @@ pub(crate) fn spawn_fs_change_producer(
             }
         };
         // `source` outlives the loop: dropping the last `Arc` tears down the shared OS watcher.
-        forward_fs_changes(source.subscribe(), &events_tx).await;
+        forward_fs_changes(source.subscribe(), &events_tx, &watch_root).await;
     }))
 }
 
 /// Re-broadcast each `FilesChanged` batch as one `FsChanged` until the source closes. The
 /// watcher's settle window is the coalescing unit: a checkout is one frame, not one per file,
-/// split only past [`FS_CHANGED_PATHS_PER_FRAME`].
+/// split only past [`FS_CHANGED_PATHS_PER_FRAME`]. Paths are confined to `root` first
+/// ([`confine_to_root`]); a batch with nothing left inside it sends no frame.
 async fn forward_fs_changes(
     mut rx: broadcast::Receiver<FsEvent>,
     events_tx: &broadcast::Sender<WorkspaceEvent>,
+    root: &Path,
 ) {
     loop {
         match rx.recv().await {
-            Ok(FsEvent::FilesChanged { mut paths, kind }) => {
-                let kind = to_workspace_event_kind(kind);
+            Ok(FsEvent::FilesChanged { paths, kind }) => {
+                let (mut paths, kind) = confine_to_root(paths, to_workspace_event_kind(kind), root);
                 while !paths.is_empty() {
                     let rest = paths.split_off(paths.len().min(FS_CHANGED_PATHS_PER_FRAME));
                     let _ = events_tx.send(WorkspaceEvent::FsChanged { paths, kind });
@@ -99,6 +107,43 @@ async fn forward_fs_changes(
             Err(broadcast::error::RecvError::Closed) => break,
         }
     }
+}
+
+/// Make `paths` relative to `root` and drop the ones outside it. A rename across the root boundary
+/// is reported as the half inside: `Removed` for a file that left the root, `Created` for one that
+/// arrived, since a lone-path `Renamed` would not say which. A rename the watcher saw by one path
+/// stays a `Renamed` when that path is inside.
+fn confine_to_root(
+    paths: Vec<PathBuf>,
+    kind: xai_grok_workspace_types::FsEventKind,
+    root: &Path,
+) -> (Vec<PathBuf>, xai_grok_workspace_types::FsEventKind) {
+    let relative = |path: &PathBuf| {
+        path.strip_prefix(root)
+            .ok()
+            .filter(|rel| !rel.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+    };
+    let confined = match (kind, paths.as_slice()) {
+        (xai_grok_workspace_types::FsEventKind::Renamed, [from, to]) => {
+            match (relative(from), relative(to)) {
+                (Some(from), Some(to)) => (vec![from, to], kind),
+                (Some(from), None) => (vec![from], xai_grok_workspace_types::FsEventKind::Removed),
+                (None, Some(to)) => (vec![to], xai_grok_workspace_types::FsEventKind::Created),
+                (None, None) => (Vec::new(), kind),
+            }
+        }
+        _ => (paths.iter().filter_map(relative).collect(), kind),
+    };
+    let dropped = paths.len() - confined.0.len();
+    if dropped > 0 {
+        tracing::debug!(
+            dropped,
+            root = %root.display(),
+            "fs change producer: dropped paths outside the watch root"
+        );
+    }
+    confined
 }
 
 const GIT_DIFF_REBUILD_THRESHOLD: usize = 500;

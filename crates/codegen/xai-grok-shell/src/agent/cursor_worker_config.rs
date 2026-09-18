@@ -19,8 +19,8 @@ pub struct CursorWorkerConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_agents: Option<u32>,
     /// Also register the any-repo door, which clones whatever repository a claimed agent brings.
-    /// `None` is the legacy omit: any-repo is planned only as a follow-on when a bound door
-    /// is planned. `Some(true)` also plans it alone. `Some(false)` never plans it.
+    /// Opt-in: only `Some(true)` plans it, alone or beside the bound door. `None` and
+    /// `Some(false)` never plan it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub any_repo: Option<bool>,
     /// Hub base URL for the worker session; derived from the leader's hub URL when `None`.

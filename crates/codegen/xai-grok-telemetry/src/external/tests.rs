@@ -396,6 +396,24 @@ fn session_new_increments_session_count_only() {
 }
 
 #[test]
+fn session_create_timeout_emits_the_timeout_counter() {
+    let stream = build(gates_off());
+    emit_event_into(
+        &stream,
+        &events::SessionCreateFailed {
+            outcome: crate::startup::StartupOutcome::Timeout,
+            stuck_phase: Some("plugin_registry".into()),
+            elapsed_ms: 180_000,
+        },
+    );
+    assert!(exported_events(&stream).is_empty(), "metric-only mapping");
+    assert_eq!(
+        vec!["grok_code.session.create_timeout".to_owned()],
+        exported_metric_names(&stream)
+    );
+}
+
+#[test]
 fn agent_connect_timeout_emits_phase_histogram_and_timeout_counter() {
     let stream = build(gates_off());
     let mut phase_durations_ms = std::collections::BTreeMap::new();

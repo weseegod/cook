@@ -746,7 +746,6 @@ impl CompactionsRemaining {
     PartialEq,
     Eq,
     serde::Serialize,
-    serde::Deserialize,
     strum::AsRefStr,
     strum::IntoStaticStr,
 )]
@@ -819,6 +818,16 @@ impl std::str::FromStr for ReasoningEffort {
                 "invalid reasoning effort: {s:?} (expected one of: none, minimal, low, medium, high, xhigh, max)"
             )),
         }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ReasoningEffort {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = String::deserialize(deserializer)?;
+        raw.parse().map_err(serde::de::Error::custom)
     }
 }
 

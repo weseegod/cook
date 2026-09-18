@@ -14,6 +14,7 @@ use super::commands::{
 use super::handle::SessionHandle;
 use super::notifications::NotificationSender;
 use crate::agent::update_chunk_merge::{BufferingSettings, ReplayBuffer};
+use crate::extensions::memory::{MemoryDreamDisposition, MemoryDreamResponse};
 use crate::extensions::notification::SessionUpdate as XaiSessionUpdate;
 use crate::extensions::notification::{
     HookAnnotationKind, RetryState, SessionNotification as XaiSessionNotification,
@@ -212,10 +213,12 @@ use memory_dream::*;
 mod goal_support;
 #[path = "acp_session_impl/memory_capture.rs"]
 mod memory_capture;
+#[path = "acp_session_impl/memory_carryover.rs"]
+mod memory_carryover;
+#[path = "acp_session_impl/memory_control.rs"]
+mod memory_control;
 #[path = "acp_session_impl/memory_forget.rs"]
 mod memory_forget;
-#[path = "acp_session_impl/memory_status.rs"]
-mod memory_status;
 #[path = "acp_session_impl/v2_memory_dream.rs"]
 mod v2_memory_dream;
 pub(crate) use goal_support::*;
@@ -331,6 +334,12 @@ pub(super) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE: &str =
     include_str!("templates/goal_continuation_directive.md");
 pub(super) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY: &str =
     include_str!("templates/goal_continuation_directive_legacy.md");
+/// Compact can run mid-turn (`run_compact_only` / CompactAndResubmit); those
+/// callers must not inherit TurnEnd drain, `rounds_since_verify++`, or budget stop.
+enum GoalContinuationPurpose {
+    TurnEnd,
+    Compaction,
+}
 /// Built continuation directive plus the optional premature-stop pattern that the caller emits when it actually continues.
 /// Produced by [`SessionActor::prepare_goal_continuation`].
 struct GoalContinuationPlan {
@@ -1275,8 +1284,9 @@ impl SessionActor {
         slash_commands::CommandAvailability {
             feedback: self.feedback_manager.is_enabled(),
             memory: self.memory.is_enabled() && can_read_memory,
-            memory_configured: self.memory.backend_params.is_some()
-                || self.memory.configured_storage.is_some(),
+            memory_configured: !self.memory.process_disabled
+                && (self.memory.backend_params.is_some()
+                    || self.memory.configured_storage.is_some()),
             scheduler: tool_names.iter().any(|n| {
                 n == xai_grok_tools::implementations::grok_build::SCHEDULER_CREATE_TOOL_NAME
             }),
@@ -2251,6 +2261,9 @@ mod managed_gateway_tool_tests {
         assert!(!names.contains("slack__search"));
     }
 }
+#[cfg(test)]
+#[path = "acp_session_tests/goal/goal_compaction_reseed_tests.rs"]
+mod goal_compaction_reseed_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/goal/goal_planner_e2e_tests.rs"]
 mod goal_planner_e2e_tests;

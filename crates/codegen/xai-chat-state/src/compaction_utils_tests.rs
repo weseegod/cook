@@ -899,6 +899,51 @@ async fn test_compaction_state_context_build() {
     assert_eq!(at(&ctx.running_tasks, 0).command, "cargo test");
 }
 #[tokio::test]
+async fn build_prefers_goal_objective_over_stale_pre_goal_query() {
+    let conversation = vec![
+        ConversationItem::user(
+            "<user_query>\nplease review the PR for config-json-go\n</user_query>",
+        ),
+        ConversationItem::assistant("I'll start the code review."),
+        ConversationItem::system_reminder(
+            "A goal has been set: ssh to device-001 and test the genbw meter. Start now.",
+        ),
+    ];
+    let ctx = CompactionStateContext::build(
+        &conversation,
+        CompactionInputs {
+            goal_objective: Some(
+                "ssh to device-001 and test that genbw meter does NOT produce aggregate data"
+                    .into(),
+            ),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        ctx.last_user_query.as_deref(),
+        Some("ssh to device-001 and test that genbw meter does NOT produce aggregate data"),
+        "active goal must seed last_user_query, not the stale pre-goal human prompt"
+    );
+    let compacted = ctx.for_compaction();
+    assert_eq!(compacted.last_user_query, ctx.last_user_query);
+}
+#[tokio::test]
+async fn build_ignores_empty_goal_objective() {
+    let conversation = vec![ConversationItem::user(
+        "<user_query>\nplease review the PR\n</user_query>",
+    )];
+    let ctx = CompactionStateContext::build(
+        &conversation,
+        CompactionInputs {
+            goal_objective: Some("   ".into()),
+            ..Default::default()
+        },
+    )
+    .await;
+    assert_eq!(ctx.last_user_query.as_deref(), Some("please review the PR"));
+}
+#[tokio::test]
 async fn build_stores_running_subagents() {
     let conversation = vec![
         ConversationItem::user("<user_query>\ntask\n</user_query>"),

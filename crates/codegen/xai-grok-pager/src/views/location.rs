@@ -28,7 +28,7 @@ pub(crate) struct LocationParts {
     /// The checked-out branch, `detached` for a detached HEAD, `None` outside a git repo.
     pub branch: Option<String>,
     pub is_worktree: bool,
-    /// The abbreviated, middle-shortened cwd. Linked worktrees use [`worktree_badge`], not a path suffix.
+    /// The abbreviated, middle-shortened cwd.
     pub cwd_display: String,
 }
 
@@ -57,51 +57,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_cwd_plain_repo() {
-        let display = crate::util::display_location_path(Path::new("/work/xai"));
-        assert_eq!(display, "/work/xai");
-        assert!(!display.contains("(worktree of"));
-    }
-
-    /// `worktree_label` is unused; the badge stands in.
-    #[test]
-    fn format_cwd_worktree_omits_main_repo_suffix() {
-        let info = git_info::CwdGitInfo {
-            branch: Some("main".into()),
-            is_worktree: true,
-            main_repo: Some("~/xai".into()),
-            worktree_label: Some("session-1".into()),
-        };
-        let parts = location_parts_from(Path::new("/work/wt/session-1"), Some(info));
-        assert!(parts.is_worktree);
-        assert_eq!(parts.cwd_display, "/w/wt/session-1");
-        assert!(!parts.cwd_display.contains("(worktree of"));
-    }
-
-    #[test]
-    fn format_cwd_display_shows_subdir_not_repo_root() {
-        assert_eq!(
-            crate::util::display_location_path(Path::new("/work/xai/frontend/apps")),
-            "/w/x/frontend/apps",
-        );
-    }
-
-    /// A worktree subdirectory still shows the real subdirectory path with no main-repo suffix.
-    #[test]
-    fn format_cwd_worktree_subdir_omits_main_repo_suffix() {
-        let info = git_info::CwdGitInfo {
-            branch: Some("kevin/x".into()),
-            is_worktree: true,
-            main_repo: Some("~/xai".into()),
-            worktree_label: Some("location-picker".into()),
-        };
-        let parts = location_parts_from(Path::new("/work/wt/location-picker/frontend"), Some(info));
-        assert!(parts.is_worktree);
-        assert_eq!(parts.cwd_display, "/w/w/location-picker/frontend");
-        assert!(!parts.cwd_display.contains("(worktree of"));
-    }
-
-    #[test]
     fn location_parts_from_maps_each_probe_outcome() {
         let cwd = Path::new("/work/wt/feature");
         let probe = |branch: Option<&str>, is_worktree: bool| git_info::CwdGitInfo {
@@ -115,13 +70,11 @@ mod tests {
         assert_eq!(named.branch.as_deref(), Some("main"));
         assert!(!named.is_worktree);
         assert_eq!(named.cwd_display, "/w/wt/feature");
-        assert!(!named.cwd_display.contains("(worktree of"));
 
         let detached = location_parts_from(cwd, Some(probe(Some(""), true)));
         assert_eq!(detached.branch.as_deref(), Some("detached"));
         assert!(detached.is_worktree);
         assert_eq!(detached.cwd_display, "/w/wt/feature");
-        assert!(!detached.cwd_display.contains("(worktree of"));
 
         let no_head = location_parts_from(cwd, Some(probe(None, false)));
         assert_eq!(no_head.branch, None);

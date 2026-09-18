@@ -226,12 +226,29 @@ pub fn gate_grove_worktree(
     )
 }
 
-pub fn grove_worktree_enabled(remote: Option<&RemoteSettings>) -> bool {
+/// Same gate as session create, with no client request slot (subagent spawn,
+/// rehydrate). Does not emit `WORKTREE_REQUEST_SHELL`.
+pub fn grove_worktree_gate(remote: Option<&RemoteSettings>) -> (bool, &'static str) {
     let root: TomlValue = match crate::config::load_effective_config() {
         Ok(r) => r,
         Err(_) => TomlValue::Table(toml::map::Map::new()),
     };
-    gate_grove_worktree(None, &root, remote).0
+    gate_grove_worktree(None, &root, remote)
+}
+
+pub fn grove_worktree_enabled(remote: Option<&RemoteSettings>) -> bool {
+    grove_worktree_gate(remote).0
+}
+
+/// Same `NfsWorktreeOpts` as session create (`enabled_grove_opts` in xai-grok-workspace).
+/// `None` leaves the Grove arm off (`WorktreeBuilder` default).
+pub(crate) fn grove_worktree_opts_if_enabled(
+    enabled: bool,
+) -> Option<xai_fast_worktree::NfsWorktreeOpts> {
+    enabled.then(|| xai_fast_worktree::NfsWorktreeOpts {
+        enabled: true,
+        ..xai_fast_worktree::NfsWorktreeOpts::default()
+    })
 }
 
 pub(crate) fn restore_code_from_toml(root: &TomlValue) -> Option<bool> {
@@ -558,6 +575,38 @@ worktree_type = "invalid"
             gate_grove_worktree_layers(Some(false), None, None, &local_grove, Some(&remote_kill)),
             (false, "request"),
             "the kill switch must not claim a request that asked for copy"
+        );
+    }
+
+    #[test]
+    fn inherited_subagent_grove_opts_follow_gate_layers() {
+        let local_grove: TomlValue = toml::from_str("[cli]\ngrove_worktree = true").unwrap();
+        let empty: TomlValue = toml::from_str("[cli]\nauto_update = true").unwrap();
+        let remote_kill = RemoteSettings {
+            grove_worktree: Some(false),
+            ..RemoteSettings::default()
+        };
+
+        let (on, src) = gate_grove_worktree_layers(None, None, None, &local_grove, None);
+        assert_eq!((on, src), (true, "local"));
+        assert!(
+            grove_worktree_opts_if_enabled(on).is_some_and(|opts| opts.enabled),
+            "inherited local gate must attach enabled Grove opts"
+        );
+
+        let (off, src) = gate_grove_worktree_layers(None, None, None, &empty, None);
+        assert_eq!((off, src), (false, "default"));
+        assert!(
+            grove_worktree_opts_if_enabled(off).is_none(),
+            "default-off must not attach Grove opts"
+        );
+
+        let (killed, src) =
+            gate_grove_worktree_layers(None, Some(true), None, &empty, Some(&remote_kill));
+        assert_eq!((killed, src), (false, "remote_kill"));
+        assert!(
+            grove_worktree_opts_if_enabled(killed).is_none(),
+            "remote kill must not attach Grove opts"
         );
     }
 

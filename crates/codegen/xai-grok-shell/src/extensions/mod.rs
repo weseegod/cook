@@ -11,7 +11,7 @@ pub mod consent;
 pub mod content;
 pub mod debug;
 pub mod feedback;
-pub(crate) mod feedback_drafts;
+pub mod feedback_drafts;
 pub(crate) mod feedback_trace;
 pub mod fs;
 pub mod git;

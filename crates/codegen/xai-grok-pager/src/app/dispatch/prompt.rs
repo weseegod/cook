@@ -22,7 +22,7 @@ use crate::app::app_view::{ActiveView, AppView};
 use crate::app::cancel_latency::TurnEnd;
 use crate::notifications::{NotificationEvent, NotificationEventKind};
 use crate::scrollback::block::RenderBlock;
-use crate::scrollback::blocks::SessionEvent;
+use crate::scrollback::blocks::{MemoryCommandKind, SessionEvent};
 use crate::slash::command::DoctorRequest;
 use agent_client_protocol as acp;
 use xai_grok_telemetry::session_ctx::log_event;
@@ -708,6 +708,7 @@ pub(super) fn dispatch_send_prompt_submission(
     let voice_stt_language_from_app = app.voice_config.language.clone();
     let login_method_id_from_app = app.login_method_id.as_ref().map(|id| id.0.to_string());
     let leader_mode = app.leader_mode;
+    let screen_mode_is_minimal = app.screen_mode.is_minimal();
     let Some(agent) = app.agents.get_mut(&id) else {
         return prelude;
     };
@@ -727,14 +728,31 @@ pub(super) fn dispatch_send_prompt_submission(
         || agent.prompt.submitted_text_without_image_chips(&text),
         |submission| submission.text_without_image_chips(),
     );
-    // The raw text decides command-ness, like the slash branch below; a stripped ` /btw q` hoists.
-    let hoisted = if literal || text.trim().starts_with('/') {
-        None
-    } else {
+    // Raw text decides command-ness so a chip-stripped ` /btw q` still hoists.
+    // `/goal` is checked on that typed line first; `/btw` hoist would bury it.
+    let is_plain_submission = !literal && !text.trim().starts_with('/');
+    if is_plain_submission
+        && crate::slash::mid_text_hoist::contains_goal_command_token(
+            &slash_input,
+            agent.prompt.slash_controller.registry(),
+        )
+    {
+        if screen_mode_is_minimal {
+            agent.scrollback.push_block(RenderBlock::system(
+                crate::slash::mid_text_hoist::MID_TEXT_GOAL_NOTICE.to_owned(),
+            ));
+        } else {
+            agent.show_toast(crate::slash::mid_text_hoist::MID_TEXT_GOAL_NOTICE);
+        }
+        return prelude;
+    }
+    let hoisted = if is_plain_submission {
         crate::slash::mid_text_hoist::hoist_mid_text_command(
             &slash_input,
             agent.prompt.slash_controller.registry(),
         )
+    } else {
+        None
     };
 
     // Recorded before the registry runs, because most command outcomes return on their own path.
@@ -1066,7 +1084,7 @@ pub(super) fn dispatch_send_prompt_submission(
         effects.extend(dispatch(Action::Quit, app));
         return effects;
     } else {
-        // ── Server-authoritative immediate send (plain prompt only) ──
+        // Server-authoritative immediate send (plain prompt only)
         // The agent appends it to its authoritative `pending_inputs` (turn starts never overlap) and drives the drain via `x.ai/queue/changed`
         // So the chips are cleared ONLY when the suggestion actually sends or enqueues
         agent.release_hook_block_hold();
@@ -1241,7 +1259,7 @@ pub(super) fn dispatch_send_bash_command(app: &mut AppView, command: String) -> 
         crate::app::agent_view::PromptInputMode::Bash,
     ));
 
-    // ── Server-authoritative immediate send for bash while running ──
+    // Server-authoritative immediate send for bash while running
     // A bash command typed while a turn is RUNNING is sent to the agent immediately (it's already a `session/prompt` with bash meta)
     // It is echoed into the shared queue with `kind="bash"`
     let bash_immediate = immediate_server_send_eligible(agent, leader_mode);
@@ -1818,6 +1836,57 @@ pub(super) fn handle_prompt_response(
         return effects;
     }
     vec![]
+}
+
+/// `/flush` or `/dream` finished: close the command state and post its outcome line.
+pub(super) fn handle_memory_command_complete(
+    app: &mut AppView,
+    agent_id: AgentId,
+    kind: MemoryCommandKind,
+    result: Result<(String, bool), String>,
+) -> Vec<Effect> {
+    let Some(agent) = app.agents.get_mut(&agent_id) else {
+        return vec![];
+    };
+    let command = match kind {
+        MemoryCommandKind::Flush => AgentCommand::MemoryFlush,
+        MemoryCommandKind::Dream => AgentCommand::MemoryDream,
+    };
+    if agent.session.state.command_in_flight() != Some(&command) {
+        tracing::debug!(
+            ?command,
+            "Ignoring memory command result (not in its command state)"
+        );
+        return vec![];
+    }
+    let elapsed = agent.turn_elapsed().unwrap_or_default();
+    agent.session.finish_command();
+
+    let (summary, succeeded) = match result {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            tracing::error!(agent = ?agent_id, ?command, %error, "Memory command failed");
+            (error, false)
+        }
+    };
+    agent.scrollback.push_block(RenderBlock::session_event(
+        SessionEvent::MemoryCommandCompleted {
+            summary,
+            succeeded,
+            elapsed,
+        },
+    ));
+
+    agent.mark_turn_finished(TurnEnd::Completed);
+    agent.activity_started_at = None;
+    agent.last_activity = None;
+
+    if app.reconnect_pending {
+        return vec![];
+    }
+    let drain = maybe_drain_queue(agent);
+    note_peek_page_flip(app, agent_id, drain.page_flip_entry);
+    drain.effects
 }
 
 pub(super) fn handle_compact_complete(

@@ -44,6 +44,7 @@ async fn permission_requests_are_numbered_in_arrival_order_across_the_client() {
         permissions: RequestPolicy::new(PermissionDecision::Allow)
             .with_nth(2, PermissionDecision::Deny),
         questions: RequestPolicy::new(QuestionDecision::Cancel),
+        ..ClientPolicy::default()
     });
 
     let mut outcomes = Vec::new();

@@ -502,6 +502,7 @@ impl MvpAgent {
         client_servers: Vec<acp::McpServer>,
         cwd: &std::path::Path,
     ) -> (Vec<acp::McpServer>, Vec<acp::McpServer>) {
+        self.report_setup_phase(super::session_setup::SessionSetupPhase::PluginRegistry);
         self.ensure_plugin_registry();
         let compat = self.cfg.borrow().compat_resolved;
         let admitted = crate::session::managed_mcp::admit_client_mcp_servers(
@@ -509,6 +510,7 @@ impl MvpAgent {
             cwd,
             &compat,
         );
+        self.report_setup_phase(super::session_setup::SessionSetupPhase::McpMerge);
         let merged = crate::session::managed_mcp::merge_managed_mcp_servers(
             admitted.clone(),
             cwd,
@@ -731,8 +733,9 @@ impl MvpAgent {
     }
     /// Telemetry enabled and not ZDR. Same gate as session `telemetry_enabled`.
     pub(crate) fn product_analytics_enabled(&self) -> bool {
-        self.cfg.borrow().is_telemetry_enabled()
-            && !self.auth_manager.current_or_expired().is_some_and(|a| a.is_zdr_team())
+        self.cfg
+            .borrow()
+            .product_analytics_enabled(self.auth_manager.current_or_expired().as_ref())
     }
     /// Re-sync the `Send` mirror of `cfg.is_trace_upload_enabled()` that the per-session collection gates read.
     /// `cfg` is `!Send`; the gates run on the tokio pool.

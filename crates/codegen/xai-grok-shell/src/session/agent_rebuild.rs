@@ -62,6 +62,27 @@ pub(crate) struct ResolvedToolParamsJson {
     /// `[toolset.ask_user_question]` timeout policy for the ask tool.
     pub ask_user_question: Option<serde_json::Map<String, serde_json::Value>>,
 }
+/// The live memory-v2 file-access policy shared by spawn, the `/memory` toggle, and rebuilds.
+/// The lock never escapes: readers get a clone, writers replace the value.
+pub(crate) struct MemoryV2AccessSlot(
+    parking_lot::Mutex<Option<xai_grok_tools::types::memory_v2::MemoryV2AccessResource>>,
+);
+impl MemoryV2AccessSlot {
+    pub(crate) fn new(
+        access: Option<xai_grok_tools::types::memory_v2::MemoryV2AccessResource>,
+    ) -> Self {
+        Self(parking_lot::Mutex::new(access))
+    }
+    pub(crate) fn get(&self) -> Option<xai_grok_tools::types::memory_v2::MemoryV2AccessResource> {
+        self.0.lock().clone()
+    }
+    pub(crate) fn set(
+        &self,
+        access: Option<xai_grok_tools::types::memory_v2::MemoryV2AccessResource>,
+    ) {
+        *self.0.lock() = access;
+    }
+}
 /// Cached recipe for building a session-scoped [`Agent`].
 /// See module docs for the invariant: this is the only construction site for `Agent` in the shell crate.
 /// Cloning is intentionally not derived; the spec lives behind an [`Arc`] and is shared by cloning that `Arc`.
@@ -79,7 +100,9 @@ pub(crate) struct AgentRebuildSpec {
     pub memory_global_path: Option<String>,
     pub memory_workspace_path: Option<String>,
     pub memory_backend: Option<Arc<dyn MemoryBackend>>,
-    pub memory_v2_access: Option<xai_grok_tools::types::memory_v2::MemoryV2AccessResource>,
+    /// Live v2 file-access policy. `None` while v2 memory is off; the `/memory` toggle
+    /// replaces it so a later zero-turn rebuild renders the same prompt as a fresh spawn.
+    pub memory_v2_access: MemoryV2AccessSlot,
     pub memory_v2_exposed: bool,
     pub web_search_config: WebSearchConfig,
     /// `[toolset.web_search]` domain policy, resolved once at spawn.
@@ -278,7 +301,7 @@ impl AgentRebuildSpec {
         .with_reminder_policy(reminder_policy.clone())
         .with_memory_enabled(*memory_enabled)
         .with_memory_paths(memory_global_path.clone(), memory_workspace_path.clone())
-        .with_memory_v2_access(memory_v2_access.clone(), *memory_v2_exposed)
+        .with_memory_v2_access(memory_v2_access.get(), *memory_v2_exposed)
         .with_is_non_interactive(*is_non_interactive)
         .with_system_prompt_label(system_prompt_label)
         .with_session_env(session_env.clone())
@@ -462,7 +485,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         memory_global_path: None,
         memory_workspace_path: None,
         memory_backend: None,
-        memory_v2_access: None,
+        memory_v2_access: MemoryV2AccessSlot::new(None),
         memory_v2_exposed: false,
         web_search_config: WebSearchConfig::default(),
         web_search_domains: None,

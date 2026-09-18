@@ -672,7 +672,7 @@ pub fn current_value_for(
     }
 }
 
-/// Consent chooser: no docs tip, and no `d` reset (hint or key).
+/// Consent chooser: no docs tip, and no `d` reset inside the chooser (hint or key).
 pub fn is_consent_chooser(key: &str) -> bool {
     key == "coding_data_sharing"
 }

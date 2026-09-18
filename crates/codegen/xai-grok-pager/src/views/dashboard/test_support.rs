@@ -24,6 +24,7 @@ pub(super) fn header_test_row(id: u32, state: RowState, label: &str) -> Dashboar
     use crate::app::agent::AgentId;
     DashboardRow {
         id: DashboardRowId::TopLevel(AgentId(id as usize)),
+        session_id: None,
         label: label.to_string(),
         subtitle: None,
         state,

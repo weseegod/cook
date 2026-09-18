@@ -672,6 +672,28 @@ pub(crate) fn dedupe_servers_last_wins(servers: &mut Vec<agent_client_protocol::
     }
 }
 
+/// Compose a host-owned built-in `entry` into `servers`: same-named entries are dropped so none
+/// can take its first-party posture, and it goes first so [`cap_servers`] keeps it.
+pub fn compose_built_in(
+    servers: Vec<agent_client_protocol::McpServer>,
+    entry: agent_client_protocol::McpServer,
+) -> Vec<agent_client_protocol::McpServer> {
+    let name = xai_grok_mcp::servers::mcp_server_name(&entry);
+    let (same_name, mut composed): (Vec<_>, Vec<_>) = servers
+        .into_iter()
+        .partition(|server| xai_grok_mcp::servers::mcp_server_name(server) == name);
+    let impersonating = same_name.iter().filter(|server| **server != entry).count();
+    if impersonating > 0 {
+        tracing::warn!(
+            dropped = impersonating,
+            server = name,
+            "dropping MCP servers that use a reserved built-in server name"
+        );
+    }
+    composed.insert(0, entry);
+    composed
+}
+
 /// Cap a server-config list at [`crate::config::BindMcpConfig::MAX_SERVERS`], keeping the first entries in config order.
 /// Shared by BOTH config chokepoints — `BindMcpConfig::new` (machine-owned) and `start_session_mcp_servers` (client-driven `workspace.configure_mcp`) — so every entry ends up costing bounded resources (process, connection, discovery work) no matter which path configured it.
 pub(crate) fn cap_servers(servers: &mut Vec<agent_client_protocol::McpServer>) {
@@ -1251,6 +1273,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compose_built_in_reserves_the_name_and_leads_the_list() {
+        let composed = compose_built_in(
+            vec![
+                stdio("other", "/other"),
+                stdio("built_in", "/impersonator"),
+                stdio("built_in", "/impersonator-2"),
+            ],
+            stdio("built_in", "/host"),
+        );
+        assert_eq!(
+            composed,
+            vec![stdio("built_in", "/host"), stdio("other", "/other")]
+        );
+    }
+
+    /// A host re-feeding its own composed list (hot reload) must not warn about itself.
+    #[test]
+    fn compose_built_in_warns_only_for_a_differing_same_named_entry() {
+        let host = stdio("built_in", "/host");
+        let ((), re_fed) = crate::capturing_warn_logs(|| {
+            let composed =
+                compose_built_in(vec![host.clone(), stdio("other", "/other")], host.clone());
+            assert_eq!(2, composed.len());
+        });
+        assert!(!re_fed.contains("reserved"), "own entry re-fed: {re_fed}");
+        let ((), impersonated) = crate::capturing_warn_logs(|| {
+            compose_built_in(vec![stdio("built_in", "/impersonator")], host.clone());
+        });
+        assert!(
+            impersonated.contains("reserved") && impersonated.contains("dropped=1"),
+            "impersonator: {impersonated}"
+        );
+    }
+
     /// The shared dedupe both config chokepoints run — `BindMcpConfig::new` AND the client-driven
     /// `start_session_mcp_servers` list before `connect_servers`: one slot per name, LAST definition wins
     /// at its position, so a duplicate can never start two clients and drop the first bridge handle without shutdown.
@@ -1287,6 +1344,12 @@ mod tests {
             ],
             "one slot per name, the LAST definition kept at its position"
         );
+    }
+
+    fn stdio(name: &str, command: &str) -> agent_client_protocol::McpServer {
+        agent_client_protocol::McpServer::Stdio(agent_client_protocol::McpServerStdio::new(
+            name, command,
+        ))
     }
 
     fn names(values: &[&str]) -> Vec<String> {

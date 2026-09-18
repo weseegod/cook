@@ -63,13 +63,15 @@ pub(crate) fn new_worktree_id(preferred_session_id: Option<&str>) -> String {
     })
 }
 
-/// User-facing failure text, already sanitized (and hinted, for resume).
+/// User-facing failure text, already sanitized and (for resume) hinted, carried to the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WorktreeRpcError(pub String);
+pub(crate) struct WorktreeRpcError {
+    pub message: String,
+}
 
 impl std::fmt::Display for WorktreeRpcError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -209,9 +211,9 @@ pub(crate) fn parse_resume_response(
 }
 
 fn create_failure(detail: &str) -> WorktreeRpcError {
-    WorktreeRpcError(sanitize_user_error(&format!(
-        "couldn't create worktree: {detail}"
-    )))
+    WorktreeRpcError {
+        message: sanitize_user_error(&format!("couldn't create worktree: {detail}")),
+    }
 }
 
 /// Create a worktree from `source_cwd`. Unbounded send: hydrating a large checkout can outlast
@@ -246,11 +248,8 @@ pub(crate) async fn resume_session_into_worktree(
     local_miss: Option<&str>,
 ) -> Result<ResumedWorktree, WorktreeRpcError> {
     // Sanitize before appending the hint; the sanitizer collapses disk-full chains whole.
-    let fail = |detail: &str| {
-        WorktreeRpcError(worktree_resume_failure_message(
-            local_miss,
-            &sanitize_user_error(detail),
-        ))
+    let fail = |detail: &str| WorktreeRpcError {
+        message: worktree_resume_failure_message(local_miss, &sanitize_user_error(detail)),
     };
     let params = resume_worktree_params(source_cwd, spec, session_id, restore_code);
     let req = acp::ExtRequest::new(

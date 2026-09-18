@@ -96,7 +96,10 @@ mod tools;
 pub mod uds_proxy;
 mod watched;
 pub use acp_client::{GrokStdioClient, SpawnOptions};
-pub use acp_policy::{ClientPolicy, PermissionDecision, QuestionDecision, RequestPolicy};
+pub use acp_policy::{
+    ClientPolicy, ElicitationDecision, Interactivity, PermissionDecision, QuestionDecision,
+    RequestPolicy, TrustDecision,
+};
 pub use acp_test_client::AcpTestClient;
 pub use acp_transcript::TranscriptEntry;
 pub use conversation::ReadConversation;

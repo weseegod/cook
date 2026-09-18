@@ -756,27 +756,30 @@ impl HubConnection {
             };
             attempt += 1;
             let cred = config.credential.current();
-            let attempt_result = match tokio::time::timeout(attempt_budget, async {
-                let ws = hedged_open_socket(
-                    &config.url,
-                    &cred,
-                    config.kind,
-                    config.alpha_test_key.as_deref(),
-                    config.allow_insecure_ws,
-                    hedge_after.filter(|delay| *delay < attempt_budget),
-                )
-                .await?;
-                let (sink, stream) = ws.split();
-                run_handshake(
-                    sink,
-                    stream,
-                    config.kind,
-                    config.server_id.clone(),
-                    config.server_description.clone(),
-                    config.server_metadata.clone(),
-                )
-                .await
-            })
+            let attempt_result = match tokio::time::timeout(
+                attempt_budget,
+                Box::pin(async {
+                    let ws = hedged_open_socket(
+                        &config.url,
+                        &cred,
+                        config.kind,
+                        config.alpha_test_key.as_deref(),
+                        config.allow_insecure_ws,
+                        hedge_after.filter(|delay| *delay < attempt_budget),
+                    )
+                    .await?;
+                    let (sink, stream) = ws.split();
+                    run_handshake(
+                        sink,
+                        stream,
+                        config.kind,
+                        config.server_id.clone(),
+                        config.server_description.clone(),
+                        config.server_metadata.clone(),
+                    )
+                    .await
+                }),
+            )
             .await
             {
                 Ok(result) => result,
@@ -1324,7 +1327,7 @@ async fn open_socket(
     }
     let _ = alpha_test_key;
     xai_tracing::http_client::attach_trace_to_http_request(headers);
-    let (ws, _resp) = connect_async(request)
+    let (ws, _resp) = Box::pin(connect_async(request))
         .await
         .map_err(ClientError::from_handshake_error)?;
     Ok(ws)

@@ -408,7 +408,9 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::SendSlashCommandPreservingDraft(text) => {
             dispatch_send_prompt_inner(app, text, false, false, false)
         }
-        Action::Interject { text, images } => dispatch_interject(app, text, images),
+        Action::Interject { text, images } => {
+            super::queue::with_held_queue_flush(app, |app| dispatch_interject(app, text, images))
+        }
         Action::ExecutePlan {
             plan_file_content,
             plan_file_uri,
@@ -1381,14 +1383,35 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
                 && let Some(agent) = app.agents.get(&id)
                 && let Some(session_id) = agent.session.session_id.clone()
             {
-                return vec![Effect::SendPrompt {
+                return vec![Effect::FetchMemoryList {
                     agent_id: id,
                     session_id,
-                    text: "/memory".to_string(),
-                    prompt_id: uuid::Uuid::new_v4().to_string(),
-                    skill_token_ranges: Vec::new(),
                 }];
             }
+            vec![]
+        }
+        Action::MemoryToggle { enabled } => {
+            if let ActiveView::Agent(id) = app.active_view
+                && let Some(agent) = app.agents.get(&id)
+                && let Some(session_id) = agent.session.session_id.clone()
+            {
+                return vec![Effect::MemoryToggle {
+                    agent_id: id,
+                    session_id,
+                    enabled,
+                }];
+            }
+            vec![]
+        }
+        Action::MemoryCopy { text } => {
+            let delivery = crate::clipboard::copy_text_or_file(&text);
+            with_active_agent(app, |agent| {
+                if let Some(crate::views::modal::ActiveModal::MemoryBrowser { state }) =
+                    agent.active_modal.as_mut()
+                {
+                    state.report_copy(&delivery);
+                }
+            });
             vec![]
         }
         Action::OpenGboom => dispatch_open_gboom(app),

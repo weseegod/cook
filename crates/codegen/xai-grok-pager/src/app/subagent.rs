@@ -454,7 +454,12 @@ fn replay_inherited_updates(
                     .handle_update(update, &meta, &mut child_view.scrollback);
             }
             ReplayedUpdate::Xai(update) => {
+                // Same window as `session/load`: historical xAI events must not start live commands
+                // (family-switch compact) or defer compact outcomes to a turn that never comes.
+                let was_loading = child_view.session.loading_replay;
+                child_view.session.loading_replay = true;
                 crate::app::acp_handler::apply_child_view_session_event(child_view, &update, false);
+                child_view.session.loading_replay = was_loading;
             }
         }
     });

@@ -3,8 +3,6 @@
 use super::*;
 use xai_grok_shell::sampling::error::is_free_usage_exhausted_error;
 
-// ── Credit-limit upsell / max-tier tests ───────────────────────────
-
 /// Open the non-max-tier Q&A upsell modal. Panics if the modal was not created.
 fn open_upsell_qa(app: &mut AppView, mode: CreditLimitUpsellMode) {
     let agent = app.agents.get_mut(&AgentId(0)).unwrap();
@@ -723,8 +721,6 @@ fn upsell_max_tier_idempotent_when_question_view_already_open() {
     );
 }
 
-// ── ShowUsage / session usage ───────────────────────────────────────
-
 fn is_session_usage_fetch(effects: &[Effect]) -> bool {
     matches!(
         effects,
@@ -928,8 +924,6 @@ fn session_usage_failed_drops_stale_session() {
     assert!(fail_session_usage(&mut app, "old-session", "boom").is_empty());
     assert_eq!(agent_scrollback_len(&app), before);
 }
-
-// ── BillingFetched dispatch tests ───────────────────────────────────
 
 #[test]
 fn billing_fetched_updates_app_credit_balance() {
@@ -1202,8 +1196,6 @@ fn app_billing_error_keeps_cached_balance() {
     assert_eq!(app.credit_balance.as_ref().map(|b| b.usage_pct), Some(77.0));
 }
 
-// ── BillingError dispatch tests ─────────────────────────────────────
-
 #[test]
 fn billing_error_silent_does_not_push_scrollback() {
     let mut app = test_app_with_agent();
@@ -1243,8 +1235,6 @@ fn billing_error_non_silent_pushes_error_message() {
         "non-silent billing error should push an error message"
     );
 }
-
-// ── Free-usage paywall tests ────────────────────────────────────────
 
 #[test]
 fn free_usage_error_detected_by_embedded_code() {
@@ -1407,8 +1397,6 @@ fn free_usage_translate_local_submit_maps_options() {
     }
 }
 
-// ── Restricted-command upsell tests ─────────────────────────────────
-
 /// Submitting a tier-restricted command opens the three-option SuperGrok upsell and neither runs the command nor leaks the text to the model.
 #[test]
 fn restricted_command_submit_opens_three_option_upsell() {
@@ -1535,8 +1523,6 @@ fn unknown_non_restricted_command_still_passes_through() {
         "no upsell for genuinely unknown commands"
     );
 }
-
-// ── Browser-unavailable URL fallback ────────────────────────────────
 
 /// `Action::OpenUrl` for a billing CTA must push a scrollback system message that includes the full URL when the OS browser opener cannot run.
 /// The opener failure is simulated via a broken `GROK_TEST_OPEN_URL_FILE` path.

@@ -234,6 +234,43 @@ mod grove_fuse_tests {
             WorktreeType::Git
         );
     }
+
+    #[test]
+    fn grove_fuse_forkable_preserve_keeps_linked_not_git() {
+        let src = Path::new("/tmp/src");
+        assert_eq!(
+            resolve_grove_fuse_creation_type_for(
+                WorktreeType::Linked,
+                true,
+                &WorkingTreeMode::PreserveWorkingTree,
+                src,
+                "s",
+            )
+            .resolved,
+            WorktreeType::Linked
+        );
+        let t = resolve_grove_fuse_creation_type_for(
+            WorktreeType::Standalone,
+            true,
+            &WorkingTreeMode::PreserveWorkingTree,
+            src,
+            "s",
+        );
+        assert_eq!(t.resolved, WorktreeType::Standalone);
+        assert_eq!(t.reason, None);
+        let git = resolve_grove_fuse_creation_type_for(
+            WorktreeType::Git,
+            true,
+            &WorkingTreeMode::PreserveWorkingTree,
+            src,
+            "s",
+        );
+        assert_eq!(
+            git.resolved,
+            WorktreeType::Git,
+            "GitCheckout still never enters the Grove arm"
+        );
+    }
 }
 
 fn enabled_grove_opts() -> xai_fast_worktree::NfsWorktreeOpts {
@@ -262,8 +299,7 @@ impl CreationTypeRewrite {
 }
 
 /// Keep GitCheckout for ordinary grove FUSE sources.
-/// Linked local-codebase views (confirmed by `source_is_linked_local_view`) stay Linked so CreateWorktree runs.
-/// Preserve on a confirmed linked view must not become Git (clean checkout); later layers decline it.
+/// Linked local-codebase views and forkable Grove parents stay Linked/Standalone so CreateWorktree runs.
 fn resolve_grove_fuse_creation_type(
     source: &Path,
     requested: WorktreeType,
@@ -274,24 +310,30 @@ fn resolve_grove_fuse_creation_type(
     if !is_grove_fuse_mount(source) {
         return CreationTypeRewrite::kept(requested);
     }
-    let linked = grove_enabled
-        && xai_fast_worktree::source_is_linked_local_view(&enabled_grove_opts(), source);
-    resolve_grove_fuse_creation_type_for(requested, linked, working_tree, source, session_id)
+    let keep_requested = grove_enabled
+        && xai_fast_worktree::source_keeps_grove_create(&enabled_grove_opts(), source);
+    resolve_grove_fuse_creation_type_for(
+        requested,
+        keep_requested,
+        working_tree,
+        source,
+        session_id,
+    )
 }
 
 fn resolve_grove_fuse_creation_type_for(
     requested: WorktreeType,
-    linked_confirmed: bool,
+    keep_requested: bool,
     _working_tree: &WorkingTreeMode,
     source: &Path,
     session_id: &str,
 ) -> CreationTypeRewrite {
-    if linked_confirmed {
+    if keep_requested {
         tracing::info!(
             target: WORKTREE_LOG,
             session_id,
             source = %source.display(),
-            "grove linked local-codebase view: using CreateWorktree"
+            "grove source: using CreateWorktree"
         );
         return CreationTypeRewrite::kept(requested);
     }
@@ -1134,16 +1176,29 @@ pub async fn create_worktree_streaming_in<N: WorktreeNotificationSender>(
     // Determine worktree type; Standalone mode requires the source's .git to be a directory
     // A linked worktree has a `.git` *file* pointing to the main repo; a real repo has a `.git` *directory*.
     let requested_type = req.worktree_type.unwrap_or(WorktreeType::Linked);
-    // The rewrite decides before dispatch, so the arms never run and never
-    // record a skip. Keep both halves: what the caller asked for, and why the
-    // source's own layout overrode it — otherwise the report explains nothing.
-    let rewrite = resolve_grove_fuse_creation_type(
-        Path::new(&req.source_path),
-        requested_type,
-        grove_enabled,
-        &working_tree_mode,
-        session_id.as_str(),
-    );
+    // Status RPC must not run on the async runtime. The rewrite decides
+    // before dispatch, so the arms never run and never record a skip.
+    let source_for_rewrite = req.source_path.clone();
+    let sid_for_rewrite = session_id.clone();
+    let rewrite = match blocking_copy_on_write(move || {
+        resolve_grove_fuse_creation_type(
+            Path::new(&source_for_rewrite),
+            requested_type,
+            grove_enabled,
+            &working_tree_mode,
+            sid_for_rewrite.as_str(),
+        )
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return WorktreeStatus::Error {
+                session_id,
+                message: format!("Worktree creation failed: {e}"),
+            };
+        }
+    };
     let effective_type = rewrite.resolved;
     let git_dir_is_directory = std::path::Path::new(&req.source_path).join(".git").is_dir();
     let creation_mode = if effective_type == WorktreeType::Standalone {

@@ -415,3 +415,19 @@ fn selected_plain_text_visual_includes_preamble() {
     pane.prepare_for_test(area());
     assert_eq!(pane.selected_plain_text(), "header\nhello");
 }
+
+#[test]
+fn a_failed_tool_search_viewer_shows_the_error() {
+    let block = crate::scrollback::blocks::IntegrationSearchToolCallBlock::new("slack")
+        .with_error("no such server");
+    let entry = ScrollbackEntry::new(RenderBlock::ToolCall(ToolCallBlock::IntegrationSearch(
+        block,
+    )));
+    let pane = BlockViewerPane::for_integration_search(entry.id, &entry).expect("search viewer");
+    let text: Vec<&str> = pane
+        .items
+        .iter()
+        .map(|item| item.plain_text.as_str())
+        .collect();
+    assert_eq!(text, ["0 results", "", "no such server"]);
+}

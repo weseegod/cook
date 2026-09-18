@@ -75,8 +75,9 @@ pub const COMMAND_REJECTED_ATTACHMENT_TOO_LARGE: &str = "attachment_too_large";
 pub const COMMAND_REJECTED_ATTACHMENT_NOT_READY: &str = "attachment_not_ready";
 
 /// `reason` on `command_rejected` when the live box gateway refused a well-formed command with its own sentence.
-/// The refusal is an HTTP 4xx carrying a JSON `error` body: `detail.upstream_message`
-/// carries that sentence, and a `failureCode` lands in `detail.upstream` as
+/// The refusal is an HTTP 4xx carrying a JSON `error` body, or a 5xx whose `error`
+/// names a missing or malformed agent id: `detail.upstream_message` carries that
+/// sentence, and a `failureCode` lands in `detail.upstream` as
 /// `code=<failureCode>`. Nothing was accepted.
 pub const COMMAND_REJECTED_BOX_REFUSED: &str = "box_refused";
 
@@ -336,6 +337,24 @@ pub struct BotTranscriptOffboxResult {
     pub entries: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
+}
+
+// ── transcript entries ───────────────────────────────────────────────────
+
+/// Fields the hub merges into every transcript entry it decodes from the
+/// durable store — `getAgentTranscriptTail` / window / thread reads and
+/// `transcript` events alike — next to the box's own fields. Entries the box
+/// answers directly carry none of them.
+#[typeshare]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BotTranscriptEntryStamp {
+    /// Grows with every write to the entry, so of two copies with the same id
+    /// the higher `entry_version` is the newer one. Taken from the store's
+    /// per-agent write sequence, so versions are not contiguous per entry and
+    /// only compare between copies of the same entry.
+    #[typeshare(serialized_as = "I54")]
+    pub entry_version: u64,
 }
 
 // ── bot.usage ────────────────────────────────────────────────────────────

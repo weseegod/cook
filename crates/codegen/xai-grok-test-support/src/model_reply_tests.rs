@@ -77,6 +77,34 @@ fn each_endpoint_renders_the_reply_in_its_own_format() {
 }
 
 #[test]
+fn reasoning_reply_streams_the_thought_in_each_format() {
+    let cases: [(InferenceEndpoint, &str, &str); 3] = [
+        (
+            InferenceEndpoint::ChatCompletions,
+            "/0/choices/0/delta/reasoning_content",
+            "THINK",
+        ),
+        (
+            InferenceEndpoint::Responses,
+            "/3/response/output/0/summary/0/text",
+            "THINK",
+        ),
+        (InferenceEndpoint::Messages, "/2/delta/thinking", "THINK"),
+    ];
+    for (endpoint, pointer, expected) in cases {
+        let reply = ModelReply::ReasoningReply {
+            reasoning: "THINK".to_owned(),
+            text: "REPLY".to_owned(),
+        };
+        let found = Value::Array(sse_frames(reply, endpoint))
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        assert_eq!(Some(expected.to_owned()), found, "{endpoint:?} {pointer}");
+    }
+}
+
+#[test]
 fn refusal_without_a_body_serves_the_default_error_json() {
     let response = ModelReply::Refusal(StatusFailure::new(500))
         .into_response(InferenceEndpoint::ChatCompletions, "m");

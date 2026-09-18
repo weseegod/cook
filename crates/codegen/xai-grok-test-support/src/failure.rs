@@ -15,6 +15,9 @@ pub const CUT_REPLY: &str = "MOCK-CUT-PART-ONE";
 pub const LOOPING_REPLY: &str = "MOCK-LOOP MOCK-LOOP MOCK-LOOP MOCK-LOOP";
 /// The header a client sends to opt into the inference API's loop detector.
 pub const DOOM_LOOP_CHECK_HEADER: &str = "x-grok-doom-loop-check";
+/// A single SSE data frame whose payload is not valid JSON, so the client's stream decoder fails to
+/// deserialize a chunk and surfaces a serialization error.
+pub(crate) const MALFORMED_SSE_BODY: &str = "data: {grok-mock malformed chunk\n\n";
 /// The detector report a looping reply carries: the tightest tail repetition on the thinking channel.
 pub const DOOM_LOOP_TRIGGER: &str = "tail_repetition:2@thinking";
 
@@ -146,6 +149,14 @@ pub(crate) enum Failure {
     Dropped {
         count: usize,
     },
+    /// A body the client's stream decoder cannot parse.
+    MalformedBody {
+        count: usize,
+    },
+    /// The stream opened then never sent a chunk, so the client's inference idle timeout fired.
+    Hang {
+        count: usize,
+    },
 }
 
 impl Failure {
@@ -153,9 +164,11 @@ impl Failure {
         match self {
             Failure::Status(failure) => failure.count,
             Failure::StreamError(stream_error) => stream_error.count,
-            Failure::Cut { count } | Failure::DoomLoop { count } | Failure::Dropped { count } => {
-                *count
-            }
+            Failure::Cut { count }
+            | Failure::DoomLoop { count }
+            | Failure::Dropped { count }
+            | Failure::MalformedBody { count }
+            | Failure::Hang { count } => *count,
         }
     }
 
@@ -166,6 +179,8 @@ impl Failure {
             Failure::Cut { .. } => ObservedFailure::Cut,
             Failure::DoomLoop { .. } => ObservedFailure::DoomLoop,
             Failure::Dropped { .. } => ObservedFailure::Dropped,
+            Failure::MalformedBody { .. } => ObservedFailure::Malformed,
+            Failure::Hang { .. } => ObservedFailure::Hung,
         }
     }
 }
@@ -185,4 +200,8 @@ pub enum ObservedFailure {
     StreamError,
     /// Answered with the entry's first tool call again, or with the looping reply.
     DoomLoop,
+    /// Answered with a body the client's stream decoder cannot parse.
+    Malformed,
+    /// Opened the stream then never sent a chunk, so the client's idle timeout fired.
+    Hung,
 }

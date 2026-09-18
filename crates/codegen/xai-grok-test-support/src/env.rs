@@ -108,46 +108,40 @@ fn target_dir() -> PathBuf {
         .unwrap_or_else(|| workspace_root().join("target"))
 }
 
-fn local_grok_binary_path() -> PathBuf {
-    target_dir()
+/// Resolve a workspace binary: the prebuilt `target/debug/<bin>`, else `cargo build -p <package>
+/// --bin <bin>` with stdin closed, `pager_env()` applied, and the child detached from the TTY.
+pub fn ensure_cargo_bin(package: &str, bin: &str) -> PathBuf {
+    let binary = target_dir()
         .join("debug")
-        .join(format!("xai-grok-pager{}", std::env::consts::EXE_SUFFIX))
-}
-
-fn ensure_local_grok_binary(binary: &Path) {
+        .join(format!("{bin}{}", std::env::consts::EXE_SUFFIX));
     if binary.exists() {
-        return;
+        return binary;
     }
 
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut cmd = Command::new(&cargo);
     cmd.current_dir(workspace_root())
-        .args([
-            "build",
-            "-p",
-            "xai-grok-pager-bin",
-            "--bin",
-            "xai-grok-pager",
-        ])
+        .args(["build", "-p", package, "--bin", bin])
         .stdin(std::process::Stdio::null())
         .envs(xai_tty_utils::pager_env());
     xai_tty_utils::detach_std_command(&mut cmd);
     let output = cmd
         .output()
-        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build xai-grok-pager: {e}"));
+        .unwrap_or_else(|e| panic!("failed to spawn {cargo} to build {bin}: {e}"));
 
     assert!(
         output.status.success(),
-        "failed to build xai-grok-pager for lifecycle tests (exit {:?})\nstdout:\n{}\nstderr:\n{}",
+        "failed to build {bin} (exit {:?})\nstdout:\n{}\nstderr:\n{}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
     assert!(
         binary.exists(),
-        "xai-grok-pager build completed but binary missing at {}",
+        "{bin} build completed but binary missing at {}",
         binary.display()
     );
+    binary
 }
 
 /// Resolve grok binary: `GROK_BINARY` env (CI) or a locally built `xai-grok-pager` binary.
@@ -167,9 +161,7 @@ pub fn grok_binary() -> PathBuf {
         }
     }
 
-    let binary = local_grok_binary_path();
-    ensure_local_grok_binary(&binary);
-    binary
+    ensure_cargo_bin("xai-grok-pager-bin", "xai-grok-pager")
 }
 
 pub fn git_workdir() -> TestSandbox {

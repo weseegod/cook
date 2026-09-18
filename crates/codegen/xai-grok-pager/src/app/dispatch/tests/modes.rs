@@ -197,8 +197,6 @@ fn accept_word_select_tip_no_op_when_tip_not_showing() {
     );
 }
 
-// ── /plan slash command tests ─────────────────────────────────────
-
 #[test]
 fn slash_plan_no_args_not_in_plan_enters_plan_mode() {
     let mut app = test_app_with_agent();
