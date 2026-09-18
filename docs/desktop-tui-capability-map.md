@@ -49,11 +49,11 @@ Harvested 2026-09-18 from git `705f3572`. A string is in this map only if it app
 | TUI initialize caps | `crates/codegen/xai-grok-pager/src/acp/mod.rs` `client_capabilities_meta` |
 | TUI slash registry | `crates/codegen/xai-grok-pager/src/slash/commands/mod.rs` `builtin_commands` |
 | Agent slash builtins | `crates/codegen/xai-grok-shell/src/session/slash_commands.rs` `BUILTIN_COMMANDS` |
-| Desktop reverse | `frontend/apps/thanh-desktop/src/acp/client.ts` `handleMessage`; `src-tauri/src/acp_host.rs` `handle_host_request` |
-| Desktop forward | `frontend/apps/thanh-desktop/src/acp/{xai,extensions,providers,client,host}.ts` |
-| Desktop transcript | `frontend/apps/thanh-desktop/src/state/session.ts` `reduceNotifications` / `reduceTranscript` |
+| Desktop reverse | `frontend/apps/let-cook/src/acp/client.ts` `handleMessage`; `src-tauri/src/acp_host.rs` `handle_host_request` |
+| Desktop forward | `frontend/apps/let-cook/src/acp/{xai,extensions,providers,client,host}.ts` |
+| Desktop transcript | `frontend/apps/let-cook/src/state/session.ts` `reduceNotifications` / `reduceTranscript` |
 | Tools | `crates/codegen/xai-grok-tools/src/types/tool.rs` `ToolKind`; pager `scrollback/blocks/tool/*`; Desktop `ui/chat/tool-card.tsx` |
-| User-facing names | `~/.thanh/docs/user-guide/` (`04-slash-commands`, `07-mcp-servers`, `08-skills`, `09-plugins`, `10-hooks`, `13-memory`, `16-subagents`, `19-plan-mode`, `20-background-tasks`, `21-terminal-support`, `23-dashboard`) |
+| User-facing names | `~/.cook/docs/user-guide/` (`04-slash-commands`, `07-mcp-servers`, `08-skills`, `09-plugins`, `10-hooks`, `13-memory`, `16-subagents`, `19-plan-mode`, `20-background-tasks`, `21-terminal-support`, `23-dashboard`) |
 
 Related, do not merge:
 
@@ -71,7 +71,7 @@ Related, do not merge:
 | Field | TUI | Desktop | Status | Must |
 |---|---|---|---|---|
 | `protocolVersion` | ACP v1 (`acp/mod.rs` `initialize`) | `PROTOCOL_VERSION` (`client.ts` `initialize`) | `ok` | protocol |
-| `clientInfo` | pager `clientType` / `clientVersion` in request `_meta` | `{ name, title: "Thanh Desktop", version }` | `ok` | protocol |
+| `clientInfo` | pager `clientType` / `clientVersion` in request `_meta` | `{ name, title: "Let Cook", version }` | `ok` | protocol |
 | `_meta.clientIdentifier` | pager default `PAGER_CLIENT_TYPE`; optional `--client-identifier` | `grok-desktop` (`CLIENT_META`) | `ok` | protocol |
 | `_meta.clientType` | pager product string | `grok_desktop` | `ok` | protocol |
 | `_meta.mcpApps` | not set by pager | `false` | `ok` — honest; SDK MCP stays off until R-sdk (see H-mcp) | protocol |
@@ -142,7 +142,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-mode | `session/set_mode` | C→A | `/plan` | `xai.ts` `setMode` (`plan` / `default`) | `ok` | protocol |
 | ACP-upd | `session/update` | A→C notif | `acp_handler` + `tracker.rs` | `client.ts` `handleMessages` → `session.ts` | `partial` (several tags dropped; §4) | protocol |
 | ACP-perm | `session/request_permission` | A→C | `handle_permission_request` | `client.ts` parks `pendingPermission` | `ok` | protocol |
-| ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (cwd + `~/.thanh/sessions`; ignores line/limit) | `ok` | protocol |
+| ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (cwd + `~/.cook/sessions`; ignores line/limit) | `ok` | protocol |
 | ACP-fs-w | `fs/write_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `write_text_file` (same sandbox; **plan.md allow-path**) | `ok` | protocol |
 | ACP-t-c | `terminal/create` | A→C | not advertised by default; unhandled if it arrives | not advertised (`terminal: false`); no host stub | `ok` | protocol |
 | ACP-t-o | `terminal/output` | A→C | — | not advertised | `ok` | protocol |
@@ -150,7 +150,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-t-r | `terminal/release` | A→C | — | not advertised | `ok` | protocol |
 | ACP-t-k | `terminal/kill` | A→C | — | not advertised | `ok` | protocol |
 
-Plan-mode `plan.md` is written through ACP-fs-w into `$THANH_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.thanh/sessions`). That allow-path is load-bearing.
+Plan-mode `plan.md` is written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`). That allow-path is load-bearing.
 
 ---
 
@@ -536,7 +536,7 @@ Three sources, one table. Desktop `CLIENT_COMMANDS` are the only client handlers
 
 ### 9.1 Desktop `CLIENT_COMMANDS`
 
-`frontend/apps/thanh-desktop/src/ui/chat/slash-commands.ts`
+`frontend/apps/let-cook/src/ui/chat/slash-commands.ts`
 
 | Id | Command | Aliases | Status | Must |
 |---|---|---|---|---|

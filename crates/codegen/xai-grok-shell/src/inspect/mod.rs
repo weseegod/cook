@@ -1718,7 +1718,7 @@ fn print_human(r: &InspectReport, out: &mut impl Write) -> std::io::Result<()> {
     if r.mcp_servers.is_empty() {
         writeln!(out)?;
         writeln!(out, "  MCP Servers (0)")?;
-        writeln!(out, "  {TREE} (none) \u{2014} see `thanh mcp add --help`")?;
+        writeln!(out, "  {TREE} (none) \u{2014} see `cook mcp add --help`")?;
     } else {
         print_columns(
             out,

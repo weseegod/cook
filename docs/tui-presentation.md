@@ -2,10 +2,10 @@
 
 Source of truth for **how the current Thanh TUI looks and behaves**. This is a presentation map of `xai-grok-pager`, not a Desktop spec and not an agent-runtime spec.
 
-Desktop is a separate ACP client (`frontend/apps/thanh-desktop/`). Architecture: [`desktop-app.md`](desktop-app.md) §7 (forbidden chrome + pointer here). This catalog is what the TUI actually paints — Desktop copies it and does not invent chrome.
+Desktop is a separate ACP client (`frontend/apps/let-cook/`). Architecture: [`desktop-app.md`](desktop-app.md) §7 (forbidden chrome + pointer here). This catalog is what the TUI actually paints — Desktop copies it and does not invent chrome.
 
 **Runtime map:** [`ARCHITECTURE.md`](../ARCHITECTURE.md).  
-**User-facing TUI docs:** `~/.thanh/docs/user-guide/` (shortcuts, status line, dashboard, plan mode, …).
+**User-facing TUI docs:** `~/.cook/docs/user-guide/` (shortcuts, status line, dashboard, plan mode, …).
 
 ---
 
@@ -44,7 +44,7 @@ The product runs four modes against one agent. This document covers only the **i
 | Draw primitives | `xai-grok-pager-render` | theme, glyphs, `format_duration` |
 | Markdown | `xai-grok-markdown` | streaming markdown + checkpoints |
 
-The TUI is an ACP **client**. Sampling, tools, and session storage live in `xai-grok-shell` / `xai-grok-tools` / `~/.thanh`. This catalog is presentation only.
+The TUI is an ACP **client**. Sampling, tools, and session storage live in `xai-grok-shell` / `xai-grok-tools` / `~/.cook`. This catalog is presentation only.
 
 Elm-style loop (ARCHITECTURE §5.4):
 

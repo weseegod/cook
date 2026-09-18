@@ -1305,9 +1305,9 @@ pub(crate) fn wait_for_exit_status(
     }
 }
 
-// ── thanh wrap e2e ───────────────────────────────────────────────────────
+// ── cook wrap e2e ───────────────────────────────────────────────────────
 
-/// `thanh wrap` run budget. Same contention math as the requirements-version
+/// `cook wrap` run budget. Same contention math as the requirements-version
 /// test: the child's cold exec of the huge debug binary can land its first
 /// write well past 30s under the parallel pty_e2e suite.
 #[cfg(unix)]
@@ -1316,7 +1316,7 @@ pub(crate) const WRAP_TIMEOUT: Duration = Duration::from_secs(120);
 #[cfg(unix)]
 const WRAP_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Run `thanh wrap <wrap_args...>` to completion inside a PTY with an isolated
+/// Run `cook wrap <wrap_args...>` to completion inside a PTY with an isolated
 /// `GROK_HOME`, returning the exit code (`None` only while still running at
 /// [`WRAP_TIMEOUT`]) and everything the wrap PTY emitted. `extra_env` is where
 /// tests pin `SHELL`; wrap needs no mock content — it dispatches in `main`
@@ -1345,7 +1345,7 @@ pub(crate) fn run_wrap_driving(
 
     let mut harness =
         PtyHarness::new_inherited_env(&binary, DEFAULT_ROWS, DEFAULT_COLS, &args, &env, None)
-            .expect("spawn thanh wrap");
+            .expect("spawn cook wrap");
 
     drive(&mut harness);
 
@@ -1355,13 +1355,13 @@ pub(crate) fn run_wrap_driving(
             Some(code)
         }
         Ok(PtyExitPoll::Running) => {
-            harness.quit().expect("kill thanh wrap after timeout");
+            harness.quit().expect("kill cook wrap after timeout");
             None
         }
         Ok(PtyExitPoll::PendingStatus) => {
-            panic!("thanh wrap exited but portable status remained unavailable for {WRAP_TIMEOUT:?}")
+            panic!("cook wrap exited but portable status remained unavailable for {WRAP_TIMEOUT:?}")
         }
-        Err(error) => panic!("poll thanh wrap exit: {error:#}"),
+        Err(error) => panic!("poll cook wrap exit: {error:#}"),
     };
 
     let raw = String::from_utf8_lossy(harness.raw_output()).into_owned();
@@ -1370,7 +1370,7 @@ pub(crate) fn run_wrap_driving(
 
 /// Write an executable fake `$SHELL` that prints each argv element on its own
 /// `ARG:`-prefixed line and exits 0, so tests can assert the exact argv
-/// `thanh wrap` hands to the user's shell without depending on any real
+/// `cook wrap` hands to the user's shell without depending on any real
 /// shell's rc files or alias state. Keep the returned tempdir alive for the
 /// duration of the run.
 #[cfg(unix)]

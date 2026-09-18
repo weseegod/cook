@@ -19,7 +19,7 @@ Do not check out old files wholesale.
 
 | # | User-visible | Root cause on current `main` |
 |---|--------------|------------------------------|
-| A | `~/.thanh/config.toml` ignored (BYOK models missing) | `xai-dirs` `grok_home_in` joins `".grok"` |
+| A | `~/.cook/config.toml` ignored (BYOK models missing) | `xai-dirs` `grok_home_in` joins `".grok"` |
 | B | `g` run as goal does nothing useful | Pager still sends `"approved_as_goal"`; shell maps unknown → `Cancelled` (request changes). `GoalPlanSource` / `setup_goal(..., plan_source)` dropped. **Shell tests currently do not compile.** |
 | C | `/model` after a plan is covered | Draw order: slash dropdown, then `line_viewer` paints over it. `active_modal` returns before the plan, so Ctrl+M hides the plan instead of stacking. |
 | D | Privacy banner, `/privacy`, `/usage` limits, announcements still in the TUI | grok.com product chrome not re-hidden after the sync |
@@ -53,7 +53,7 @@ No other features. No dual-home. No deleting whole crates.
 
 ---
 
-## A. BYOK home = `~/.thanh`
+## A. BYOK home = `~/.cook`
 
 **File:** `crates/codegen/xai-dirs/src/lib.rs`
 
@@ -68,21 +68,21 @@ Change only the directory name:
 
 | Location | After |
 |----------|--------|
-| `grok_home_in` | `.join(".thanh")` |
+| `grok_home_in` | `.join(".cook")` |
 | `GrokHomeSource::HomeDefault` doc | `` `<home>/.thanh` `` |
 | crate / `default_grok_home` docs | restore the fork paragraph: isolated from official grok's `~/.grok` |
-| test `empty_env_falls_through_to_os_home` | `.join(".thanh")` |
+| test `empty_env_falls_through_to_os_home` | `.join(".cook")` |
 | test `default_grok_home_has_no_verbatim_prefix` | `assert!(home.ends_with(".thanh"))` |
 
 **Also:** `crates/codegen/xai-dirs/Cargo.toml` description: `<home>/.thanh`.
 
-`xai-fast-worktree/src/db/mod.rs` already comments `.thanh` and already calls
+`xai-fast-worktree/src/db/mod.rs` already comments `.cook` and already calls
 `xai_dirs::resolve_grok_home()`. No change there once `xai-dirs` is fixed.
 
 **Do not** mass-replace project `.grok/` (workspace config, agents, hooks,
 `lsp.json`). Those are not the user home.
 
-**Do not** read both `~/.grok` and `~/.thanh`.
+**Do not** read both `~/.grok` and `~/.cook`.
 
 ### Tests (A)
 
@@ -93,7 +93,7 @@ cargo test -p xai-dirs --lib
 Must pass: `default_grok_home_has_no_verbatim_prefix`,
 `empty_env_falls_through_to_os_home`, `env_wins_over_os_home`.
 
-Manual: `thanh models` lists `[model.*]` from `~/.thanh/config.toml`.
+Manual: `cook models` lists `[model.*]` from `~/.cook/config.toml`.
 
 ---
 
@@ -471,7 +471,7 @@ Full `./build.sh` only after the targeted tests pass.
 
 - Re-merging upstream
 - Version bump / `scripts/publish_release.sh`
-- Dual-home (`~/.grok` + `~/.thanh`)
+- Dual-home (`~/.grok` + `~/.cook`)
 - Deleting `xai-grok-telemetry` / `privacy_banner.rs` / `usage_modal.rs`
 - Redesigning plan-approval UI
 - Project-level `.grok/` paths

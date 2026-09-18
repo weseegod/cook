@@ -310,7 +310,7 @@ const PRESETS: &[ProviderPreset] = &[
         base_url: Some("https://api.x.ai/v1"),
         api_backend: "chat_completions",
         env_key: Some("XAI_API_KEY"),
-        help: "Create a key at console.x.ai, or run `thanh login` for session auth",
+        help: "Create a key at console.x.ai, or run `cook login` for session auth",
         discover: true,
         extra_headers: &[],
         models: &[

@@ -175,7 +175,7 @@ fn print_serve_startup_info(bind_addr: SocketAddr, secret: &str) {
     );
     eprintln!();
 }
-/// Entrypoint tag for `thanh -p`; keys the quiet stderr default in `init_tracing_simple`.
+/// Entrypoint tag for `cook -p`; keys the quiet stderr default in `init_tracing_simple`.
 const HEADLESS_ENTRYPOINT: &str = "headless";
 /// Initialize simple tracing for non-TUI agent modes.
 fn init_tracing_simple(app_entrypoint: &'static str) {
@@ -224,7 +224,7 @@ fn init_tracing_simple(app_entrypoint: &'static str) {
         ),
     );
 }
-/// `thanh setup`: rendering + exit codes only; fetch logic lives in `xai_grok_shell::managed_config`.
+/// `cook setup`: rendering + exit codes only; fetch logic lives in `xai_grok_shell::managed_config`.
 /// `json` prints the served configuration instead of installing it.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn run_setup_command(json: bool) {
@@ -232,7 +232,7 @@ async fn run_setup_command(json: bool) {
     if !managed_config::has_principal() {
         eprintln!("No deployment key or team sign-in found.");
         eprintln!();
-        eprintln!("To install managed configuration, sign in with a team using `thanh login`,");
+        eprintln!("To install managed configuration, sign in with a team using `cook login`,");
         eprintln!("or set a deployment key:");
         eprintln!();
         if cfg!(unix) {
@@ -240,9 +240,9 @@ async fn run_setup_command(json: bool) {
         } else {
             eprintln!("  $env:GROK_DEPLOYMENT_KEY=\"<your-key>\"");
         }
-        eprintln!("  thanh setup");
+        eprintln!("  cook setup");
         eprintln!();
-        eprintln!("Or add the key to ~/.thanh/config.toml:");
+        eprintln!("Or add the key to ~/.cook/config.toml:");
         eprintln!();
         eprintln!("  [endpoints]");
         eprintln!("  deployment_key = \"<your-key>\"");
@@ -280,7 +280,7 @@ async fn run_setup_command(json: bool) {
         }
         SetupOutcome::Skipped => {
             eprintln!(
-                "Managed configuration was not applied this run (another process held the apply lock, or the credential changed during the fetch). Run `thanh setup` again."
+                "Managed configuration was not applied this run (another process held the apply lock, or the credential changed during the fetch). Run `cook setup` again."
             );
         }
         SetupOutcome::Staged => {
@@ -453,12 +453,12 @@ fn ensure_control_caps(reg: &LeaderRegistration) -> Result<&LeaderCapabilities> 
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Leader does not advertise capabilities (legacy version)"))
 }
-/// Env override for the `thanh workspace` gate: any truthy value enables the
+/// Env override for the `cook workspace` gate: any truthy value enables the
 /// command locally, a falsy one disables it — bypassing the remote settings flag.
 const WORKSPACE_COMMAND_ENV: &str = "GROK_WORKSPACE_COMMAND";
 /// One leader door's CLI identity, shared by `connect_leader_control` and `spawn_and_connect_leader`.
 struct LeaderDoorCli {
-    /// The command name as the user types it (`thanh workspace`); `<name> start` is its start command.
+    /// The command name as the user types it (`cook workspace`); `<name> start` is its start command.
     name: &'static str,
     /// IPC client type the leader records for connections from this command.
     client_type: &'static str,
@@ -466,11 +466,11 @@ struct LeaderDoorCli {
     leader_mode_reason: &'static str,
 }
 const WORKSPACE_DOOR: LeaderDoorCli = LeaderDoorCli {
-    name: "thanh workspace",
+    name: "cook workspace",
     client_type: "grok-workspace-cli",
     leader_mode_reason: "the workspace is shared via the leader",
 };
-/// Resolution of the `thanh workspace` gate.
+/// Resolution of the `cook workspace` gate.
 /// `Unknown` is kept separate from `Disabled` so we don't tell the user the flag is off when the settings were never read.
 /// Both fail closed, but `Unknown` earns an honest message.
 #[derive(Debug, PartialEq, Eq)]
@@ -548,7 +548,7 @@ async fn run_workspace_mgmt(args: WorkspaceMgmtArgs) -> Result<()> {
     ) && let Some(profile) = xai_grok_sandbox::requested_confinement_profile()
     {
         anyhow::bail!(
-            "`thanh workspace` start/restart/resume is unavailable under sandbox profile '{profile}': \
+            "`cook workspace` start/restart/resume is unavailable under sandbox profile '{profile}': \
              those commands (re)activate shared-leader workspace exposure that this session cannot \
              prove is confined by that profile. Disable the profile at the source that selected it \
              (CLI, env, config, or a managed requirement)."
@@ -565,14 +565,14 @@ async fn run_workspace_mgmt(args: WorkspaceMgmtArgs) -> Result<()> {
         WorkspaceGate::Enabled => {}
         WorkspaceGate::Disabled => {
             anyhow::bail!(
-                "`thanh workspace` is not enabled for this account \
+                "`cook workspace` is not enabled for this account \
              (gated by a server-side feature flag that is currently off)."
             )
         }
         WorkspaceGate::Unknown => {
             anyhow::bail!(
-                "Could not load your settings for `thanh workspace`. Check your \
-             network connection (run `thanh login` if you are signed out), then \
+                "Could not load your settings for `cook workspace`. Check your \
+             network connection (run `cook login` if you are signed out), then \
              try again."
             )
         }
@@ -640,7 +640,7 @@ async fn connect_leader_control(
     .map_err(|e| {
         anyhow::anyhow!(
             "no running leader for this environment ({e}). \
-             Start a thanh session, or run `{} start`.",
+             Start a cook session, or run `{} start`.",
             door.name
         )
     })
@@ -671,7 +671,7 @@ async fn spawn_and_connect_leader(
     if !use_leader {
         anyhow::bail!(
             "`{}` requires leader mode ({}).\n\
-             Enable it with `[cli] use_leader = true` in ~/.thanh/config.toml, or pass --leader.",
+             Enable it with `[cli] use_leader = true` in ~/.cook/config.toml, or pass --leader.",
             door.name,
             door.leader_mode_reason
         );
@@ -681,7 +681,7 @@ async fn spawn_and_connect_leader(
         agent_config.login_device_flow,
         agent_config.endpoints.proxy_url(),
         false,
-        Some("No cached credentials found. Run `thanh login` first."),
+        Some("No cached credentials found. Run `cook login` first."),
     )
     .await?;
     let env_urls = LeaderEnvUrls::from(&agent_config.grok_com_config);
@@ -1184,7 +1184,7 @@ async fn forward_stdio_line_to_leader(
 }
 /// Emitted by both leader guards (server mode and leader-connect) so the two sites
 /// can't drift.
-const PLUGIN_DIR_LEADER_WARNING: &str = "thanh: --plugin-dir is ignored in leader mode; run with --no-leader to \
+const PLUGIN_DIR_LEADER_WARNING: &str = "cook: --plugin-dir is ignored in leader mode; run with --no-leader to \
      load per-process plugins";
 /// Run the `agent` subcommand, dispatching to the appropriate mode.
 #[tracing::instrument(level = "debug", skip_all)]
@@ -1235,7 +1235,7 @@ async fn run_agent_command(
     let is_leader = matches!(agent_args.mode, Some(AgentCmd::Leader(_)));
     if !is_stdio && !is_leader {
         eprintln!(
-            "thanh (fork) - v{}",
+            "cook (fork) - v{}",
             xai_grok_version::display_version_with_commit(
                 env!("VERSION_WITH_COMMIT"),
                 xai_grok_update::channel_label(),
@@ -1283,7 +1283,7 @@ async fn run_agent_command(
         None,
     );
     if let Some(warning) = launch_yolo.blocked_warning {
-        eprintln!("thanh: {warning}");
+        eprintln!("cook: {warning}");
     }
     agent_config.default_yolo_mode = launch_yolo.yolo;
     agent_config.default_auto_mode = xai_grok_shell::util::config::effective_auto_for_launch(
@@ -1689,12 +1689,12 @@ fn raise_fd_limit() {
 fn raise_fd_limit() {}
 /// Single audit point for the `Command::Dashboard` soft-subcommand.
 /// Sets `GROK_OPEN_DASHBOARD_AT_STARTUP=1` if the user asked for
-/// `thanh dashboard`, and clears `args.command` so the regular
+/// `cook dashboard`, and clears `args.command` so the regular
 /// subcommand match doesn't try to handle it.
 ///
 /// The dashboard is independent of leader mode — it renders local
 /// sessions and, when a leader happens to be present, additionally shows
-/// the leader roster — so `thanh dashboard` does NOT force leader mode and
+/// the leader roster — so `cook dashboard` does NOT force leader mode and
 /// is compatible with `--no-leader`.
 ///
 /// The only gate is the feature flag: a disabled dashboard (`[dashboard].enabled = false` / `GROK_AGENT_DASHBOARD=0`) is a CLI error.
@@ -1706,7 +1706,7 @@ fn flag_dashboard_at_startup_if_requested(args: &mut PagerArgs) -> Result<()> {
     if !xai_grok_pager::views::dashboard::dashboard_enabled() {
         anyhow::bail!(
             "the Agent Dashboard is disabled. Enable it by removing \
-             `[dashboard] enabled = false` from ~/.thanh/config.toml and \
+             `[dashboard] enabled = false` from ~/.cook/config.toml and \
              unsetting GROK_AGENT_DASHBOARD=0."
         );
     }
@@ -1786,10 +1786,10 @@ impl WorkerCount {
                 used,
                 cores,
             } => Some(format!(
-                "thanh: clamped {GROK_WORKER_THREADS_ENV}={requested} to {used} (valid range is 1..={cores})"
+                "cook: clamped {GROK_WORKER_THREADS_ENV}={requested} to {used} (valid range is 1..={cores})"
             )),
             Self::Ignored { value, .. } => Some(format!(
-                "thanh: ignoring {GROK_WORKER_THREADS_ENV}={value:?} (not a valid integer)"
+                "cook: ignoring {GROK_WORKER_THREADS_ENV}={value:?} (not a valid integer)"
             )),
         }
     }
@@ -1962,7 +1962,7 @@ fn install_heap_profile_hooks() {
 }
 fn version_text(channel_label: &str) -> String {
     format!(
-        "thanh {}\n",
+        "cook {}\n",
         xai_grok_version::display_version_with_commit(
             xai_grok_version::full_version(),
             channel_label,
@@ -2078,7 +2078,7 @@ fn main() {
     builder.worker_threads(workers.get()).enable_all();
     let runtime =
         xai_tty_utils::runtime::build_with_blocking_pool(&mut builder).unwrap_or_else(|e| {
-            eprintln!("thanh: failed to start tokio runtime with {workers} workers: {e}");
+            eprintln!("cook: failed to start tokio runtime with {workers} workers: {e}");
             shutdown_and_flush_telemetry(1);
         });
     let result = run_and_shutdown(runtime, async_main(args), RUNTIME_SHUTDOWN_GRACE);
@@ -2200,7 +2200,7 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
                     };
                     anyhow::bail!(
                         "top-level {flag} applies to the pager TUI, not the agent subcommand. \
-                         Use `thanh agent {flag}` instead."
+                         Use `cook agent {flag}` instead."
                     );
                 }
                 enforce_version_policy_or_exit();
@@ -2407,7 +2407,7 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
             None,
         );
         if let Some(warning) = launch_yolo.blocked_warning {
-            eprintln!("thanh: {warning}");
+            eprintln!("cook: {warning}");
         }
         let json_schema = args
             .json_schema
@@ -2489,9 +2489,9 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
         Ok(true) => {
             let adopted = bg_update_wait.lock().await.take();
             if finish_update_on_exit(adopted, &update_config).await {
-                eprintln!("Update installed. Run `thanh` to start.");
+                eprintln!("Update installed. Run `cook` to start.");
             } else {
-                eprintln!("Update did not complete. Run `thanh update` to retry.");
+                eprintln!("Update did not complete. Run `cook update` to retry.");
             }
             Ok(())
         }
@@ -2502,11 +2502,11 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
 /// Complete the update after a quit-for-update (Ctrl+U) exit.
 /// Returns `true` when an update path completed without a reported failure.
 ///
-/// Prefers awaiting the parked waiter for the background `thanh update` child
+/// Prefers awaiting the parked waiter for the background `cook update` child
 /// spawned at startup — the download is usually already done or in flight.
 /// Only when there is no waiter (spawn failed, or no download was needed
 /// because the target was already on disk) or the child failed does this
-/// fall back to a fresh blocking `thanh update`, which itself resolves to
+/// fall back to a fresh blocking `cook update`, which itself resolves to
 /// "Already up to date" without downloading when the disk is current.
 #[tracing::instrument(level = "debug", skip_all)]
 async fn finish_update_on_exit(
@@ -2595,7 +2595,7 @@ fn stdio_auto_update_enabled(
 ) -> bool {
     is_stdio && !use_leader && updates_enabled && managed_install
 }
-/// True when `exe` is the binary `<grok_home>/bin/thanh` resolves to, the
+/// True when `exe` is the binary `<grok_home>/bin/cook` resolves to, the
 /// install that adopts a staged update on respawn. Both sides are
 /// canonicalized; any failure reports unmanaged and skips the update. The
 /// npm shim hardcodes `~/.grok`, so a custom `GROK_HOME` skips here too.
@@ -2625,7 +2625,7 @@ fn get_channel_switch(alpha: bool, stable: bool, enterprise: bool) -> Option<&'s
         None
     }
 }
-/// Handle `thanh update [--check] [--json] [--force-reinstall] [--version X] [--alpha|--stable|--enterprise]`.
+/// Handle `cook update [--check] [--json] [--force-reinstall] [--version X] [--alpha|--stable|--enterprise]`.
 /// --trigger is the one representation; --auto is the compat alias from
 /// older parents. Unknown values fall back to user_command (a human is the
 /// only caller that can produce them).
@@ -2701,7 +2701,7 @@ async fn run_update_command(
     result?;
     Ok(())
 }
-/// After a successful `thanh update`, ask any running leader on this machine that
+/// After a successful `cook update`, ask any running leader on this machine that
 /// is older than `installed_version` to relaunch onto the new binary (bounded
 /// grace; running sessions close and reconnect via `session/load`).
 ///
@@ -2864,7 +2864,7 @@ mod tests {
         );
         assert_eq!(
             resolve_worker_override("100000", cores).notice().unwrap(),
-            "thanh: clamped GROK_WORKER_THREADS=100000 to 360 (valid range is 1..=360)"
+            "cook: clamped GROK_WORKER_THREADS=100000 to 360 (valid range is 1..=360)"
         );
     }
     #[test]
@@ -2877,7 +2877,7 @@ mod tests {
         }
         assert_eq!(
             resolve_worker_override("abc", cores).notice().unwrap(),
-            "thanh: ignoring GROK_WORKER_THREADS=\"abc\" (not a valid integer)"
+            "cook: ignoring GROK_WORKER_THREADS=\"abc\" (not a valid integer)"
         );
     }
     #[test]
@@ -2891,20 +2891,20 @@ mod tests {
             let mut output = Vec::new();
             write_version(&mut output, label).unwrap();
             let output = String::from_utf8(output).unwrap();
-            assert!(output.starts_with("thanh "));
+            assert!(output.starts_with("cook "));
             assert!(output.contains(env!("VERSION_WITH_COMMIT")));
             assert!(output.ends_with(expected_suffix), "{output:?}");
         }
     }
     #[test]
     fn version_flags_and_doctor_are_distinct_early_intents() {
-        let version = PagerArgs::try_parse_from(["thanh", "--version"]).unwrap();
+        let version = PagerArgs::try_parse_from(["cook", "--version"]).unwrap();
         assert!(version.version);
         assert!(version.command.is_none());
-        let short = PagerArgs::try_parse_from(["thanh", "-v"]).unwrap();
+        let short = PagerArgs::try_parse_from(["cook", "-v"]).unwrap();
         assert!(short.version);
         assert!(short.command.is_none());
-        let subcommand = PagerArgs::try_parse_from(["thanh", "version"]).unwrap();
+        let subcommand = PagerArgs::try_parse_from(["cook", "version"]).unwrap();
         assert!(!subcommand.version);
         assert!(matches!(
             subcommand.command,
@@ -3058,30 +3058,30 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
-    fn is_managed_install_matches_only_the_bin_thanh_target() {
+    fn is_managed_install_matches_only_the_bin_cook_target() {
         let home =
-            std::env::temp_dir().join(format!("thanh-managed-install-{}", std::process::id()));
+            std::env::temp_dir().join(format!("cook-managed-install-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&home);
         std::fs::create_dir_all(home.join("bin")).unwrap();
         std::fs::create_dir_all(home.join("downloads")).unwrap();
         assert!(!is_managed_install(
-            Some(home.join("bin").join("thanh")),
+            Some(home.join("bin").join("cook")),
             &home
         ));
         assert!(!is_managed_install(None, &home));
         assert!(!is_managed_install(
-            Some(home.join("bin").join("thanh")),
+            Some(home.join("bin").join("cook")),
             std::path::Path::new("")
         ));
-        let target = home.join("downloads").join("thanh-1.2.3");
+        let target = home.join("downloads").join("cook-1.2.3");
         std::fs::write(&target, b"binary").unwrap();
-        std::os::unix::fs::symlink(&target, home.join("bin").join("thanh")).unwrap();
+        std::os::unix::fs::symlink(&target, home.join("bin").join("cook")).unwrap();
         assert!(is_managed_install(
-            Some(home.join("bin").join("thanh")),
+            Some(home.join("bin").join("cook")),
             &home
         ));
         assert!(is_managed_install(Some(target.clone()), &home));
-        let pinned = home.join("bin").join("thanh-9.9.9");
+        let pinned = home.join("bin").join("cook-9.9.9");
         std::fs::write(&pinned, b"binary").unwrap();
         assert!(!is_managed_install(Some(pinned), &home));
         let _ = std::fs::remove_dir_all(&home);
@@ -3108,13 +3108,13 @@ mod tests {
         );
     }
     use clap::Parser as _;
-    /// `thanh dashboard` flags the startup hook without forcing leader mode —
+    /// `cook dashboard` flags the startup hook without forcing leader mode —
     /// the dashboard is independent of leader mode, so the launch keeps
     /// whatever leader setting the user (or config) chose.
     #[serial_test::serial(GROK_AGENT_DASHBOARD)]
     #[test]
     fn dashboard_subcommand_flags_startup_without_forcing_leader() {
-        let mut args = PagerArgs::try_parse_from(["thanh", "dashboard"]).unwrap();
+        let mut args = PagerArgs::try_parse_from(["cook", "dashboard"]).unwrap();
         assert!(!args.leader, "fixture: no explicit --leader");
         flag_dashboard_at_startup_if_requested(&mut args).unwrap();
         assert!(!args.leader, "dashboard must NOT force leader mode");
@@ -3129,13 +3129,13 @@ mod tests {
         );
         unsafe { std::env::remove_var("GROK_OPEN_DASHBOARD_AT_STARTUP") };
     }
-    /// `thanh dashboard --no-leader` is allowed — the dashboard does not
+    /// `cook dashboard --no-leader` is allowed — the dashboard does not
     /// require a leader, so the combination launches into the dashboard in
     /// non-leader mode.
     #[serial_test::serial(GROK_AGENT_DASHBOARD)]
     #[test]
     fn dashboard_subcommand_allows_no_leader() {
-        let mut args = PagerArgs::try_parse_from(["thanh", "--no-leader", "dashboard"]).unwrap();
+        let mut args = PagerArgs::try_parse_from(["cook", "--no-leader", "dashboard"]).unwrap();
         flag_dashboard_at_startup_if_requested(&mut args)
             .expect("--no-leader + dashboard must be allowed");
         assert!(args.no_leader, "--no-leader must be preserved");
@@ -3156,7 +3156,7 @@ mod tests {
     #[test]
     fn dashboard_subcommand_errors_when_disabled() {
         unsafe { std::env::set_var("GROK_AGENT_DASHBOARD", "0") };
-        let mut args = PagerArgs::try_parse_from(["thanh", "dashboard"]).unwrap();
+        let mut args = PagerArgs::try_parse_from(["cook", "dashboard"]).unwrap();
         let result = flag_dashboard_at_startup_if_requested(&mut args);
         unsafe { std::env::remove_var("GROK_AGENT_DASHBOARD") };
         let err = result.expect_err("disabled dashboard must error");

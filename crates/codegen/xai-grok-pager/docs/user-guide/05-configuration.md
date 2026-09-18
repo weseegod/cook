@@ -1,6 +1,6 @@
 # Configuration
 
-Grok reads settings from config files, environment variables, and CLI flags. This page covers the common options. The field list for `config.toml`, `managed_config.toml`, and `requirements.toml` is [26-config-reference.md](26-config-reference.md) (extracted to `~/.thanh/docs/user-guide/` on launch).
+Grok reads settings from config files, environment variables, and CLI flags. This page covers the common options. The field list for `config.toml`, `managed_config.toml`, and `requirements.toml` is [26-config-reference.md](26-config-reference.md) (extracted to `~/.cook/docs/user-guide/` on launch).
 
 ---
 
@@ -12,7 +12,7 @@ Settings resolve highest-priority first:
 2. **Environment variables** (e.g. `XAI_API_KEY`, `GROK_MEMORY`)
 3. **`requirements.toml` / MDM** (org-enforced; clamps every config layer below, including the overlay)
 4. **`GROK_CONFIG` / `GROK_CONFIG_PATH` overlay** (above `config.toml` and managed, below `requirements.toml` / MDM)
-5. **config.toml** (`~/.thanh/config.toml`)
+5. **config.toml** (`~/.cook/config.toml`)
 6. **`managed_config.toml`** (org-deployed defaults; below `config.toml`)
 7. **Built-in defaults**
 
@@ -22,7 +22,7 @@ Within the config-file tier, the layers merge lowest-to-highest: `managed_config
 
 ### Injecting config with `GROK_CONFIG`
 
-A harness or ACP client that launches `thanh agent stdio` can inject settings without writing a `config.toml` or relocating `$GROK_HOME`:
+A harness or ACP client that launches `cook agent stdio` can inject settings without writing a `config.toml` or relocating `$GROK_HOME`:
 
 - **`GROK_CONFIG`**: an inline JSON object overlay.
 - **`GROK_CONFIG_PATH`**: an *additional* file overlay (not a replacement for `config.toml`), a JSON or TOML file read by its extension (`.json` → JSON, else TOML). `GROK_CONFIG` wins if both are set. An empty `GROK_CONFIG` is treated as unset, and a malformed one logs a warning and falls through to `GROK_CONFIG_PATH`.
@@ -30,14 +30,14 @@ A harness or ACP client that launches `thanh agent stdio` can inject settings wi
 The overlay is **deep-merged** on top of your `config.toml` (it overrides only the keys it sets), placed above the user/managed layers but **below** `requirements.toml` / MDM so an enterprise pin still wins. A malformed blob is ignored with a warning. This mirrors `CODEX_CONFIG` from the `codex-acp` adapter (a JSON object merged into the session config); Grok is ACP-native, so the overlay lives in the agent itself. It only affects settings read from the merged config, and it is **not** a permission-escalation path. The overlay is confined, fail-closed, to an **allowlist** of soft settings (`models`, `features`, a narrowed `toolset`, and a `shell_environment_policy` limited to its filter fields, which select among env names the launcher already controls and cannot inject an env value into tool subprocesses); every other table is dropped at the choke point, so the overlay cannot spawn commands, set auth policy, redirect network traffic, elevate trust, or add a discovery source. Even on the allowlisted settings, a specific set of security gates read the raw disk layers rather than the overlay. The `ConfigLayers::env_overlay` rustdoc is the canonical list of what the overlay can and cannot reach and which gates read it overlay-free; see also the [internal environment-variables reference](../internal/22-environment-variables.md). Use `GROK_DEFAULT_SELECTED_PERMISSION` for headless permission control. For example, to set the default reasoning effort:
 
 ```bash
-GROK_CONFIG='{"models": {"default_reasoning_effort": "high"}}' thanh agent stdio
+GROK_CONFIG='{"models": {"default_reasoning_effort": "high"}}' cook agent stdio
 ```
 
 ---
 
 ## config.toml (main configuration)
 
-Location: `~/.thanh/config.toml`. If the file is missing, Grok uses its built-in defaults, so you only need to set the values you want to override.
+Location: `~/.cook/config.toml`. If the file is missing, Grok uses its built-in defaults, so you only need to set the values you want to override.
 
 ### General settings
 
@@ -305,9 +305,9 @@ Remote (HTTP/SSE) servers receive a default `User-Agent: grok-cli/<version>` hea
 valid `User-Agent` entry in `headers` overrides it (Figma servers receive bare
 `grok-cli`). See [MCP servers](07-mcp-servers.md) for details.
 
-MCP servers can also be set per-project in `.grok/config.toml`. Project-scoped config contributes `[mcp_servers]`, `[plugins]`, and `[permission]` rules; every other section loads only from `~/.thanh/config.toml`.
+MCP servers can also be set per-project in `.grok/config.toml`. Project-scoped config contributes `[mcp_servers]`, `[plugins]`, and `[permission]` rules; every other section loads only from `~/.cook/config.toml`.
 
-Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) > `<repo-root>/.grok/config.toml` > `~/.thanh/config.toml`. `[permission]` rules aren't overridden by priority — they merge across all files with `deny` > `ask` > `allow` (see [22-permissions-and-safety.md](22-permissions-and-safety.md)).
+Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) > `<repo-root>/.grok/config.toml` > `~/.cook/config.toml`. `[permission]` rules aren't overridden by priority — they merge across all files with `deny` > `ask` > `allow` (see [22-permissions-and-safety.md](22-permissions-and-safety.md)).
 
 ### Memory
 
@@ -389,7 +389,7 @@ Background workflows — the `workflow` tool, named `.grok/workflows/*.rhai` scr
 enabled = false                       # disable background workflows (or GROK_WORKFLOWS=0)
 ```
 
-Project workflows are discovered from `<repo-root>/.grok/workflows/`; user workflows from `~/.thanh/workflows/`. Discovery and invocation key off the script's `meta.name`, so keep each filename aligned with its `meta.name`. Built-ins win over project names, and project names win over user names, so keep names unique across scopes.
+Project workflows are discovered from `<repo-root>/.grok/workflows/`; user workflows from `~/.cook/workflows/`. Discovery and invocation key off the script's `meta.name`, so keep each filename aligned with its `meta.name`. Built-ins win over project names, and project names win over user names, so keep names unique across scopes.
 
 Each launch gets a session-unique display handle such as `deep-research-2`. That handle is what you see in the `/workflow runs` dashboard and pass to `/workflow pause`, `resume`, or `stop` — the internal run IDs never surface in commands. A numbered handle isn't a reusable definition name, so the dashboard disables **save** until you pick a new unique `meta.name` and save the edited script yourself. See [Slash Commands](04-slash-commands.md) for examples.
 
@@ -433,7 +433,7 @@ For Claude and Cursor, `rules` and `agents` are independent: turning off named i
 
 Each cell can be set via environment variable or `config.toml`; see the environment-variables reference for the names. Resolution: env var > config.toml > default (on).
 
-`thanh inspect` reports cells that still need session-start resolution as `?` until a value is available; cells with an explicit env or TOML value use that value. Affected discovery entries report `compatibilityStatus: "unresolved"` in JSON and `[compat unresolved]` in human output.
+`cook inspect` reports cells that still need session-start resolution as `?` until a value is available; cells with an explicit env or TOML value use that value. Affected discovery entries report `compatibilityStatus: "unresolved"` in JSON and `[compat unresolved]` in human output.
 
 ### Plugins
 
@@ -447,7 +447,7 @@ disabled = ["user/a1b2c3d4/noisy-plugin"]
 
 `[hints]` holds small persisted UI preferences: remembered answers and modal layout. Grok writes these for you as you use the TUI, but you can edit or delete them by hand; removing a key restores the default.
 
-`[hints]` is read from the **effective config merge**, with the usual precedence: system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`, higher layers winning. The TUI only ever **writes** these to your user `~/.thanh/config.toml`.
+`[hints]` is read from the **effective config merge**, with the usual precedence: system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`, higher layers winning. The TUI only ever **writes** these to your user `~/.cook/config.toml`.
 
 ```toml
 [hints]
@@ -637,13 +637,13 @@ required_maximum_version = "0.2.200" # refuse to start above this
 - `required_minimum_version` (`GROK_REQUIRED_MINIMUM_VERSION`) and
   `required_maximum_version` (`GROK_REQUIRED_MAXIMUM_VERSION`) are hard bounds. If
   the running version is outside the range, the CLI exits at startup and instructs
-  the user to install an approved version. `thanh update` and `thanh --version` keep
+  the user to install an approved version. `cook update` and `cook --version` keep
   working so an out-of-range install can recover.
 - Bounds resolve across config layers by tightening only: a floor takes the
   highest value and a ceiling the lowest, so a managed bound can't be loosened,
   and a user or environment bound can't cancel a managed hard bound. An invalid
   value is ignored so a bad policy can't block startup.
-- An explicit `thanh update --version X` is allowed above the ceiling, to recover
+- An explicit `cook update --version X` is allowed above the ceiling, to recover
   from a too-new install, and rejected below the hard floor.
 
 ### Enterprise deployment
@@ -676,7 +676,7 @@ telemetry = false
 
 ## pager.toml (appearance configuration)
 
-Location: `~/.thanh/pager.toml`. This controls the TUI's look and feel. Changes apply on restart.
+Location: `~/.cook/pager.toml`. This controls the TUI's look and feel. Changes apply on restart.
 
 ### Terminal
 
@@ -823,7 +823,7 @@ The key ones. See the README for the complete list.
 
 | Variable | Description |
 |----------|-------------|
-| `GROK_HOME` | Override config directory (default: `~/.thanh`) |
+| `GROK_HOME` | Override config directory (default: `~/.cook`) |
 | `GROK_RESPECT_GITIGNORE` | Force gitignore filtering on (`1`) or off (`0`); overrides `[tools] respect_gitignore` |
 
 ### Telemetry
@@ -843,16 +843,16 @@ The key ones. See the README for the complete list.
 
 | Path | Description |
 |------|-------------|
-| `~/.thanh/config.toml` | Main configuration file |
-| `~/.thanh/pager.toml` | TUI appearance configuration |
-| `~/.thanh/auth.json` | Authentication credentials (auto-managed) |
-| `~/.thanh/sessions/` | Persisted sessions (organized by working directory) |
-| `~/.thanh/memory/` | Cross-session memory files and index |
-| `~/.thanh/skills/` | User-scoped skill definitions |
-| `~/.thanh/plugins/` | User-scoped plugins |
-| `~/.thanh/agents/` | User-scoped agent definitions |
-| `~/.thanh/lsp.json` | LSP server configuration (user-scoped) |
-| `~/.thanh/logs/` | Internal log files (e.g. `unified.jsonl`, MCP server logs) |
+| `~/.cook/config.toml` | Main configuration file |
+| `~/.cook/pager.toml` | TUI appearance configuration |
+| `~/.cook/auth.json` | Authentication credentials (auto-managed) |
+| `~/.cook/sessions/` | Persisted sessions (organized by working directory) |
+| `~/.cook/memory/` | Cross-session memory files and index |
+| `~/.cook/skills/` | User-scoped skill definitions |
+| `~/.cook/plugins/` | User-scoped plugins |
+| `~/.cook/agents/` | User-scoped agent definitions |
+| `~/.cook/lsp.json` | LSP server configuration (user-scoped) |
+| `~/.cook/logs/` | Internal log files (e.g. `unified.jsonl`, MCP server logs) |
 | `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules |
 | `.grok/skills/` | Project-scoped skill definitions |
 | `.grok/plugins/` | Project-scoped plugins |
@@ -868,7 +868,7 @@ Some settings can be set per-project by placing files in `.grok/` inside your re
 
 | File | What it configures |
 |------|--------------------|
-| `.grok/config.toml` | MCP servers, plugins, permission rules, and the `[mcp] max_output_bytes` tool-result cap (other sections load only from `~/.thanh/config.toml`) |
+| `.grok/config.toml` | MCP servers, plugins, permission rules, and the `[mcp] max_output_bytes` tool-result cap (other sections load only from `~/.cook/config.toml`) |
 | `.grok/skills/` | Project-specific skills |
 | `.grok/hooks/` | Project-specific lifecycle hooks |
 | `.grok/agents/` | Project-specific agent definitions |
@@ -886,14 +886,14 @@ Language servers power passive diagnostics and the optional `lsp` tool (see the 
 
 | Source | Location | Scope |
 |--------|----------|-------|
-| User | `~/.thanh/lsp.json` | All projects |
+| User | `~/.cook/lsp.json` | All projects |
 | Project | `.grok/lsp.json` | Current repository |
 | Plugin | A trusted plugin's `.lsp.json` file, or an inline `lspServers` block in its `plugin.json` | Wherever the plugin is enabled |
 
 When the same server name comes from more than one source, it resolves highest-priority first:
 
 1. **Project** — `.grok/lsp.json`
-2. **User** — `~/.thanh/lsp.json`
+2. **User** — `~/.cook/lsp.json`
 3. **Plugins** — file-based `.lsp.json`, then inline `lspServers`, in plugin load order
 
 Project and user entries replace lower-priority ones of the same name. Plugin entries only add servers whose names aren't already defined by a local file, so a local `lsp.json` always wins over a plugin. Plugin LSP servers load only after the plugin is trusted (see [Plugins](09-plugins.md)).

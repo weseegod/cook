@@ -1,6 +1,6 @@
-# Thanh Desktop — Architecture
+# Let Cook — Architecture
 
-Thanh Desktop is a **chat-first ACP client** for the existing `thanh` agent.
+Let Cook is a **chat-first ACP client** for the existing `cook` agent.
 It does not reimplement sampling, tools, or session storage.
 
 This file is the **architecture source of truth**: product boundary, process
@@ -8,9 +8,9 @@ model, capability honesty, inbound routing, and host roles. Live wire status
 (which methods the running app actually speaks) lives in the capability map,
 not here.
 
-**Code:** `frontend/apps/thanh-desktop/` (Tauri 2 + React, shipped as v1).
-**Agent:** `thanh agent stdio` (`xai-grok-shell` / `MvpAgent`).
-**Home:** `~/.thanh`, shared with the CLI.
+**Code:** `frontend/apps/let-cook/` (Tauri 2 + React, shipped as v1).
+**Agent:** `cook agent stdio` (`xai-grok-shell` / `MvpAgent`).
+**Home:** `~/.cook`, shared with the CLI.
 
 | Doc | Role |
 |---|---|
@@ -33,7 +33,7 @@ Desktop is a presentation client, not an IDE and not a second agent.
 |---|---|
 | Streaming chat over ACP | Cursor / VS Code feature clone |
 | Tool cards, diffs, permissions | Debugger, git GUI, LSP IDE |
-| Shared `~/.thanh` with CLI | Separate auth/config/session store |
+| Shared `~/.cook` with CLI | Separate auth/config/session store |
 | Linux + macOS first | Electron Chromium bundle |
 
 Upstream Grok Build already used this shape (`frontend/apps/grok-desktop`,
@@ -49,7 +49,7 @@ Desktop is a new app on the **same ACP contract**. If upstream lands
 |---|---|---|
 | Shell | Tauri 2 | Rust host, small installer, capability allowlist, Linux-first |
 | UI | React 19 + Vite + TypeScript | Chat/markdown/diff ecosystem |
-| Agent | Discovered `thanh agent stdio` | One runtime with TUI/headless |
+| Agent | Discovered `cook agent stdio` | One runtime with TUI/headless |
 | Protocol | ACP v1 + typed `x.ai/*` | Same wire as pager / IDE clients |
 | State | Zustand + TanStack Query | Transcript vs catalogs |
 | CSS | Tailwind v4 + semantic CSS tokens | VS Code visual density with TUI transcript semantics |
@@ -71,7 +71,7 @@ for no user value.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│  thanh-desktop (Tauri 2)                                         │
+│  let-cook (Tauri 2)                                         │
 │                                                                  │
 │  ┌─────────────────────────────┐   IPC (typed commands/events)  │
 │  │ Renderer (React, no Node)   │ ◄────────────────────────────► │
@@ -95,16 +95,16 @@ for no user value.
                                    │   grok-desktop               │
                                    └──────────────┬───────────────┘
                                                   │
-                                   ~/.thanh  (config, auth, sessions,
+                                   ~/.cook  (config, auth, sessions,
                                     models, memory, logs) — shared CLI
 ```
 
 **Lifecycle**
 
-1. Resolve binary: `THANH_BIN` → `~/.thanh/bin/thanh` → bundled sidecar (stable).
+1. Resolve binary: `COOK_BIN` → `~/.cook/bin/cook` → bundled sidecar (stable).
 2. Major-version gate against `xai-grok-version`.
-3. Spawn `thanh agent stdio` with the workspace cwd. Pin `GROK_HOME` to the
-   same directory Settings writes (`THANH_HOME` if set).
+3. Spawn `cook agent stdio` with the workspace cwd. Pin `GROK_HOME` to the
+   same directory Settings writes (`COOK_HOME` if set).
 4. `initialize` **once per agent process**, from the capabilities table (§5.1).
 5. `session/new` or `session/load` per conversation.
 6. Crash → host restart + client `session/load` replay.
@@ -166,7 +166,7 @@ documented lie (map `H-term`, `H-mcp`), not this contract. Fold in
 | Role | Code | Allowed | Forbidden |
 |---|---|---|---|
 | **ACP mux** | `acp_host.rs` | Spawn/kill sidecar, JSON-RPC id map, notification coalescing, native reverse `fs/*`, future real PTY | Stub a method while the cap is advertised |
-| **Secret-bearing TOML writer** | `provider_config.rs` | Locked, atomic `~/.thanh/config.toml` edits; credential-carrying `/models` probe; redacted DTOs to the renderer | Echo full keys to the WebView |
+| **Secret-bearing TOML writer** | `provider_config.rs` | Locked, atomic `~/.cook/config.toml` edits; credential-carrying `/models` probe; redacted DTOs to the renderer | Echo full keys to the WebView |
 | **Read-only workspace sidecar** | `workspace.rs` | Git review vs `HEAD`, file tree/preview, native open; paths confined to the workspace root | Write, commit, LSP, growing into a git GUI |
 
 The TOML writer is the **only production Desktop write path** for
@@ -203,7 +203,7 @@ Contract (honest):
     "terminal": false,
     "plan": {}
   },
-  "clientInfo": { "name": "Thanh Desktop", "title": "Thanh Desktop" },
+  "clientInfo": { "name": "Let Cook", "title": "Let Cook" },
   "_meta": {
     "clientIdentifier": "grok-desktop",
     "clientType": "grok_desktop",
@@ -242,7 +242,7 @@ tag is ignored, never rendered as a row.
 
 Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
 to the session cwd plus one allow-path: the agent's own session store
-(`$THANH_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.thanh/sessions`).
+(`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`).
 Without it plan mode cannot write `<session>/plan.md`, which lives outside
 every workspace. That allow-path is load-bearing.
 
@@ -305,7 +305,7 @@ Target renderer layout. Live tree is still the god-object (`client.ts` +
 the move, not a rewrite of `ui/`.
 
 ```
-frontend/apps/thanh-desktop/
+frontend/apps/let-cook/
   src/
     acp/
       host.ts              # IPC + wireMethod (unchanged)
@@ -361,15 +361,15 @@ change the product boundary.
 
 ## 8. Key decisions
 
-1. Desktop is an ACP client. Reuse `thanh agent stdio` and `~/.thanh`.
+1. Desktop is an ACP client. Reuse `cook agent stdio` and `~/.cook`.
 2. Tauri 2 + React + Vite + TypeScript.
 3. Chat-first, not an IDE.
 4. `clientIdentifier: grok-desktop` — upstream's desktop value, sent verbatim.
-5. Path `frontend/apps/thanh-desktop/` avoids colliding with upstream
+5. Path `frontend/apps/let-cook/` avoids colliding with upstream
    `grok-desktop`.
 6. `src-tauri` stays out of the Cargo workspace.
 7. Alpha requires the CLI binary; stable may bundle a sidecar. The app never
-   overwrites `~/.thanh/bin/thanh`.
+   overwrites `~/.cook/bin/cook`.
 8. Renderer does not merge `config.toml`. Host is the only production Desktop
    writer; agent `x.ai/providers/*` is CLI/TUI + mock fallback.
 9. Never advertise a cap the client cannot honour. `terminal: false` until a
@@ -386,7 +386,7 @@ change the product boundary.
 ## 9. Dev loop
 
 ```sh
-cd frontend/apps/thanh-desktop
+cd frontend/apps/let-cook
 pnpm install
 pnpm test
 pnpm tauri dev
@@ -394,8 +394,8 @@ pnpm tauri dev
 
 | Var | Meaning |
 |---|---|
-| `THANH_BIN` | Override path to `thanh` |
-| Home resolution | Must stay `~/.thanh`, never `~/.grok` |
+| `COOK_BIN` | Override path to `cook` |
+| Home resolution | Must stay `~/.cook`, never `~/.grok` |
 
 Linux build deps: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
 `patchelf`, `libssl-dev`.

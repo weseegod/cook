@@ -29,7 +29,7 @@ skills continue a recent session from those tools right here.
 
 ## Check what was discovered
 
-Run **`thanh inspect`** in a repo to see every rules file, skill, and MCP
+Run **`cook inspect`** in a repo to see every rules file, skill, and MCP
 server Grok picked up, tagged with where it came from. Each compat source
 can be toggled in `[compat.claude]` / `[compat.cursor]` config sections.
 

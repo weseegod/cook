@@ -15,7 +15,7 @@ pub fn is_ignored(gitignore: &Gitignore, path: &Path, git_root: Option<&Path>) -
     let check_path = match git_root {
         Some(root) => match path.strip_prefix(root) {
             Ok(relative) => relative,
-            // Outside the repo (e.g. ~/.thanh/Agents.md) → not ignored.
+            // Outside the repo (e.g. ~/.cook/Agents.md) → not ignored.
             Err(_) => return false,
         },
         None => {
@@ -91,7 +91,7 @@ mod tests {
         let root = &dunce::canonicalize(root).unwrap();
         let gi = build_gitignore(root, &["build/", "*.md"]);
         // A path completely outside the git root should not be checked
-        // against the repo's .gitignore (e.g., ~/.thanh/Agents.md).
+        // against the repo's .gitignore (e.g., ~/.cook/Agents.md).
         let outside_path = std::path::PathBuf::from("/some/other/path/Agents.md");
         assert!(!is_ignored(&gi, &outside_path, Some(root)));
     }

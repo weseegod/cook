@@ -1,4 +1,4 @@
-//! `thanh du`: what the user thanh home uses on disk. It creates no thanh home,
+//! `cook du`: what the user cook home uses on disk. It creates no cook home,
 //! registry file, or schema, but a read-only open of a WAL database leaves
 //! `-shm` and `-wal` sidecars, so sizes are collected before it opens.
 
@@ -28,7 +28,7 @@ const SCHEMA_VERSION: u32 = 1;
 #[command(
     after_help = "Lists every top-level directory in the grok home, largest first, then every \
 worktree under `worktrees/` and `worktree_pool/` with its size, age, and label. To reclaim space, preview a sweep with \
-`thanh worktree gc --max-age 7d --dry-run`: without `--max-age`, gc expires nothing, it \
+`cook worktree gc --max-age 7d --dry-run`: without `--max-age`, gc expires nothing, it \
 visits only worktrees the registry tracks, and it keeps a worktree whose work \
 it cannot find elsewhere."
 )]

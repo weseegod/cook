@@ -168,7 +168,7 @@ impl std::fmt::Display for UninstallError {
                 write!(
                     f,
                     "Plugin \"{name}\" not found.\n\
-                     Run `thanh plugin list` to see installed plugins."
+                     Run `cook plugin list` to see installed plugins."
                 )
             }
             Self::RegistryLock { detail } => {
@@ -308,7 +308,7 @@ impl std::fmt::Display for UpdateError {
                 write!(
                     f,
                     "Plugin \"{name}\" not found.\n\
-                     Run `thanh plugin list` to see installed plugins."
+                     Run `cook plugin list` to see installed plugins."
                 )
             }
             Self::RegistryLock { detail } => {
@@ -646,7 +646,7 @@ impl std::fmt::Display for MarketplaceInstallError {
                     write!(
                         f,
                         "Unknown marketplace \"{qualifier}\". No marketplaces are registered; \
-                         add one with `thanh plugin marketplace add`."
+                         add one with `cook plugin marketplace add`."
                     )
                 } else {
                     let list = bullet_list(registered);
@@ -683,8 +683,8 @@ impl std::fmt::Display for MarketplaceInstallError {
                 write!(
                     f,
                     "No marketplace plugin named \"{name}\" in any registered marketplace.\n\
-                     Install a local directory with `thanh plugin install ./{name}`, or add a \
-                     source with `thanh plugin marketplace add`."
+                     Install a local directory with `cook plugin install ./{name}`, or add a \
+                     source with `cook plugin marketplace add`."
                 )?;
                 if !skipped_sources.is_empty() {
                     write!(
@@ -701,7 +701,7 @@ impl std::fmt::Display for MarketplaceInstallError {
                 write!(
                     f,
                     "Multiple marketplaces provide a plugin named \"{name}\":\n{list}\n\
-                     Pin one with `thanh plugin install {name}@<qualifier>`."
+                     Pin one with `cook plugin install {name}@<qualifier>`."
                 )
             }
             Self::PartialScan {
@@ -713,7 +713,7 @@ impl std::fmt::Display for MarketplaceInstallError {
                     f,
                     "Couldn't scan every marketplace while resolving \"{name}\", so it can't be \
                      resolved safely. Unscanned source(s):\n{list}\n\
-                     Retry, or pin the source explicitly with `thanh plugin install {name}@<qualifier>`."
+                     Retry, or pin the source explicitly with `cook plugin install {name}@<qualifier>`."
                 )
             }
             Self::Sync {
@@ -1884,8 +1884,8 @@ mod tests {
             skipped_sources: vec![],
         };
         let msg = err.to_string();
-        assert!(msg.contains("thanh plugin install ./sentry"), "{msg}");
-        assert!(msg.contains("thanh plugin marketplace add"), "{msg}");
+        assert!(msg.contains("cook plugin install ./sentry"), "{msg}");
+        assert!(msg.contains("cook plugin marketplace add"), "{msg}");
         assert!(!msg.contains("could not be synced"), "{msg}");
     }
 
@@ -1918,7 +1918,7 @@ mod tests {
             "{msg}"
         );
         assert!(
-            msg.contains("thanh plugin install sentry@<qualifier>"),
+            msg.contains("cook plugin install sentry@<qualifier>"),
             "{msg}"
         );
     }

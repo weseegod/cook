@@ -26,7 +26,7 @@ pub fn is_workflow_tool(kind: Option<ToolKind>, id: &str) -> bool {
 pub enum WorkflowSource {
     Name {
         #[schemars(
-            description = "Name of a registered workflow (built-in, or discovered from the project `.grok/workflows/` or user `~/.thanh/workflows/`)."
+            description = "Name of a registered workflow (built-in, or discovered from the project `.grok/workflows/` or user `~/.cook/workflows/`)."
         )]
         name: String,
     },

@@ -1,4 +1,4 @@
-# Thanh Desktop — Client layering implementation
+# Let Cook — Client layering implementation
 
 Fold the live ACP client onto the architecture contract in
 [`desktop-app.md`](desktop-app.md). This is the **protocol/client track**,
@@ -19,7 +19,7 @@ and cites capability-map row ids. Do not invent method names.
 
 ## 1. Why this track exists
 
-The process model is right (Tauri host + `thanh agent stdio`). The running
+The process model is right (Tauri host + `cook agent stdio`). The running
 client is a partial ACP client of the same agent the TUI speaks fluently:
 
 - `initialize` advertises `terminal: true` and `mcpApps: true`, then stubs
@@ -110,8 +110,8 @@ of those PRs **must add a registry entry** (or this track has failed).
 
 **Files**
 
-- `frontend/apps/thanh-desktop/src/acp/client.ts` (`initialize`, `CLIENT_META`)
-- `frontend/apps/thanh-desktop/src-tauri/src/acp_host.rs` (`handle_host_request` terminal arms)
+- `frontend/apps/let-cook/src/acp/client.ts` (`initialize`, `CLIENT_META`)
+- `frontend/apps/let-cook/src-tauri/src/acp_host.rs` (`handle_host_request` terminal arms)
 - Tests next to `client.ts` / handshake once extracted
 
 **Tests**

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Bump the fork version, build `thanh` locally, and publish a GitHub Release
+# Bump the fork version, build `cook` locally, and publish a GitHub Release
 # with the local binary — NO GitHub Actions / CI.
 #
-# The updater (`thanh update` / Ctrl+U) reads from a GitHub Release:
+# The updater (`cook update` / Ctrl+U) reads from a GitHub Release:
 #   releases/latest/download/stable          (plain-text channel pointer)
-#   releases/latest/download/thanh-<ver>-<os>-<arch>  (the binary)
-#   releases/latest/download/thanh-<ver>-<os>-<arch>.sha256
+#   releases/latest/download/cook-<ver>-<os>-<arch>  (the binary)
+#   releases/latest/download/cook-<ver>-<os>-<arch>.sha256
 #
 # Usage:
 #   scripts/publish_release.sh            # bump patch: 1.0.0 -> 1.0.1
@@ -14,7 +14,7 @@
 # Prereqs / notes:
 #   - Binary is built LOCALLY via ./build.sh for the CURRENT platform only.
 #     To ship other platforms, build on each machine and upload the assets to
-#     the release yourself (e.g. `gh release upload vX.Y.Z thanh-...-macos-aarch64`).
+#     the release yourself (e.g. `gh release upload vX.Y.Z cook-...-macos-aarch64`).
 #   - The final publish uses `gh`; install it (brew install gh / apt install gh)
 #     and authenticate once (gh auth login). If `gh` is missing the script
 #     bumps/tags/pushes and prints the exact `gh release create` command to run.
@@ -26,12 +26,12 @@ cd "$REPO_DIR"
 VERSION_FILE="crates/codegen/xai-grok-version/Cargo.toml"
 PAGER_FILE="crates/codegen/xai-grok-pager-bin/Cargo.toml"
 LOCK_FILE="Cargo.lock"
-DESKTOP_DIR="frontend/apps/thanh-desktop"
+DESKTOP_DIR="frontend/apps/let-cook"
 DESKTOP_PACKAGE="$DESKTOP_DIR/package.json"
 DESKTOP_CARGO="$DESKTOP_DIR/src-tauri/Cargo.toml"
 DESKTOP_LOCK="$DESKTOP_DIR/src-tauri/Cargo.lock"
 DESKTOP_CONFIG="$DESKTOP_DIR/src-tauri/tauri.conf.json"
-APP="thanh"
+APP="cook"
 REPO="weseegod/thanh"
 
 if [ ! -f "$VERSION_FILE" ] || [ ! -f "$PAGER_FILE" ] || [ ! -f "$DESKTOP_PACKAGE" ]; then
@@ -108,13 +108,13 @@ case "$platform" in
     (cd "$DESKTOP_DIR" && pnpm install --frozen-lockfile && pnpm tauri build --bundles appimage,deb)
     desktop_built="$(find "$DESKTOP_DIR/src-tauri/target/release/bundle/appimage" -maxdepth 1 -type f -name '*.AppImage' -print -quit)"
     if [ -n "$desktop_built" ]; then
-      desktop_asset="thanh-desktop-$new-linux-x86_64.AppImage"
+      desktop_asset="let-cook-$new-linux-x86_64.AppImage"
       cp "$desktop_built" "$desktop_asset"
       desktop_assets+=("$desktop_asset")
     fi
     deb_built="$(find "$DESKTOP_DIR/src-tauri/target/release/bundle/deb" -maxdepth 1 -type f -name '*.deb' -print -quit)"
     if [ -n "$deb_built" ]; then
-      deb_asset="thanh-desktop-$new-linux-x86_64.deb"
+      deb_asset="let-cook-$new-linux-x86_64.deb"
       cp "$deb_built" "$deb_asset"
       desktop_assets+=("$deb_asset")
     fi
@@ -123,7 +123,7 @@ case "$platform" in
     (cd "$DESKTOP_DIR" && pnpm install --frozen-lockfile && pnpm tauri build --bundles dmg)
     desktop_built="$(find "$DESKTOP_DIR/src-tauri/target/release/bundle/dmg" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
     if [ -n "$desktop_built" ]; then
-      desktop_asset="thanh-desktop-$new-macos-aarch64.dmg"
+      desktop_asset="let-cook-$new-macos-aarch64.dmg"
       cp "$desktop_built" "$desktop_asset"
       desktop_assets+=("$desktop_asset")
     fi
@@ -152,4 +152,4 @@ fi
 gh release create "v$new" "${release_assets[@]}" \
   --repo "$REPO" --title "v$new" --generate-notes
 cleanup
-echo "==> Released v$new. Users get it via \`thanh update\` (Ctrl+U)."
+echo "==> Released v$new. Users get it via \`cook update\` (Ctrl+U)."

@@ -14,7 +14,7 @@ disk), or the workflows run UI (`/workflow runs`).
 
 ## Opening the dashboard
 
-- **`thanh dashboard`** — launch the TUI into the dashboard.
+- **`cook dashboard`** — launch the TUI into the dashboard.
 - **`/dashboard`** (aliases **`/agents-dashboard`**, **`/sessions`**) — open
   from inside a session.
 - **`Ctrl+\`** — same view as the slash command.
@@ -294,7 +294,7 @@ Prefixes (only inside search mode):
 
 ## Persistence
 
-Per-user preferences under `[dashboard]` in `~/.thanh/config.toml`:
+Per-user preferences under `[dashboard]` in `~/.cook/config.toml`:
 
 ```toml
 [dashboard]

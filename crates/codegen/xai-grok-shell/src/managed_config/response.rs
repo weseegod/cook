@@ -47,7 +47,7 @@ pub enum ManagedConfigError {
     )]
     DeploymentKeyRejected,
     #[error(
-        "Your team sign-in was rejected. It may have expired or lack access. Run `thanh login` to sign in again."
+        "Your team sign-in was rejected. It may have expired or lack access. Run `cook login` to sign in again."
     )]
     TeamAuthRejected,
     #[error("The server returned an unexpected error (HTTP {status}). Try again in a few minutes.")]
@@ -63,7 +63,7 @@ pub enum ManagedConfigError {
     )]
     SignatureRejected,
     #[error(
-        "Can't save the configuration to ~/.thanh. Make sure the directory exists and is writable.\n  ({0})"
+        "Can't save the configuration to ~/.cook. Make sure the directory exists and is writable.\n  ({0})"
     )]
     DiskWrite(#[from] std::io::Error),
 }

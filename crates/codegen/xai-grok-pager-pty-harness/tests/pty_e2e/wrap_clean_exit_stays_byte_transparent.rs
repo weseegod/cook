@@ -3,7 +3,7 @@
 use super::common::*;
 
 /// Transparency e2e: when the wrapped child balances every mode it enables and
-/// exits cleanly, `thanh wrap` must add zero reset bytes of its own. Blindly
+/// exits cleanly, `cook wrap` must add zero reset bytes of its own. Blindly
 /// blasting resets on exit would be visible here (duplicate disables, and a
 /// kitty pop that could corrupt an enclosing context's keyboard stack); the
 /// mode tracker keeps clean exits byte-for-byte transparent.

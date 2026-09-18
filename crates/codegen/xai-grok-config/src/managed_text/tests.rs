@@ -11,7 +11,7 @@ use super::*;
 fn request(path: &Path, items: &[(&str, &str)]) -> ManagedConfigRequest {
     ManagedConfigRequest {
         path: path.to_path_buf(),
-        namespace: "thanh doctor".to_owned(),
+        namespace: "cook doctor".to_owned(),
         owned_item_prefix: "terminal.".to_owned(),
         items: items
             .iter()
@@ -31,11 +31,11 @@ fn request(path: &Path, items: &[(&str, &str)]) -> ManagedConfigRequest {
 
 fn expected(body: &str, newline: &str) -> String {
     [
-        "# >>> thanh doctor >>>",
+        "# >>> cook doctor >>>",
         "# >>> terminal.ssh-wrap >>>",
         body,
         "# <<< terminal.ssh-wrap <<<",
-        "# <<< thanh doctor <<<",
+        "# <<< cook doctor <<<",
     ]
     .join(newline)
 }
@@ -54,25 +54,25 @@ fn missing_empty_normal_no_final_newline_and_crlf_are_preserved() {
     let missing = temp.path().join("missing.rc");
     let plan = ManagedConfig::plan(request(
         &missing,
-        &[("terminal.ssh-wrap", "alias ssh='thanh wrap ssh'")],
+        &[("terminal.ssh-wrap", "alias ssh='cook wrap ssh'")],
     ))
     .unwrap();
     assert_eq!(
         plan.updated_bytes(),
-        expected("alias ssh='thanh wrap ssh'", "\n").as_bytes()
+        expected("alias ssh='cook wrap ssh'", "\n").as_bytes()
     );
     assert!(plan.backup_path_hint().is_none());
     ManagedConfig::apply(plan).unwrap();
     assert_eq!(
         fs::read_to_string(&missing).unwrap(),
-        expected("alias ssh='thanh wrap ssh'", "\n")
+        expected("alias ssh='cook wrap ssh'", "\n")
     );
 
     let empty = temp.path().join("empty.rc");
     fs::write(&empty, "").unwrap();
     let plan = ManagedConfig::plan(request(
         &empty,
-        &[("terminal.ssh-wrap", "alias ssh='thanh wrap ssh'")],
+        &[("terminal.ssh-wrap", "alias ssh='cook wrap ssh'")],
     ))
     .unwrap();
     assert!(plan.backup_path_hint().is_some());
@@ -82,14 +82,14 @@ fn missing_empty_normal_no_final_newline_and_crlf_are_preserved() {
     fs::write(&normal, "export KEEP=1\n").unwrap();
     let plan = ManagedConfig::plan(request(
         &normal,
-        &[("terminal.ssh-wrap", "alias ssh='thanh wrap ssh'")],
+        &[("terminal.ssh-wrap", "alias ssh='cook wrap ssh'")],
     ))
     .unwrap();
     assert_eq!(
         String::from_utf8(plan.updated_bytes().to_vec()).unwrap(),
         format!(
             "export KEEP=1\n{}\n",
-            expected("alias ssh='thanh wrap ssh'", "\n")
+            expected("alias ssh='cook wrap ssh'", "\n")
         )
     );
 
@@ -115,7 +115,7 @@ fn typed_inspection_and_item_updates_share_one_validated_parse() {
     let path = temp.path().join("config.rc");
     fs::write(
         &path,
-        "before\n# >>> thanh doctor >>>\n# >>> terminal.old >>>\nold\n# <<< terminal.old <<<\n# <<< thanh doctor <<<\nafter\n",
+        "before\n# >>> cook doctor >>>\n# >>> terminal.old >>>\nold\n# <<< terminal.old <<<\n# <<< cook doctor <<<\nafter\n",
     )
     .unwrap();
     let plan = ManagedConfig::plan(request(&path, &[("new", "new body")])).unwrap();
@@ -140,9 +140,9 @@ fn prose_and_exports_with_owned_words_and_chevrons_are_inert() {
     let path = temp.path().join("inert");
     let content = [
         "# Terminal.app note: terminal. support >>> may vary <<< by host",
-        "# thanh doctor docs say >>> run this later <<<",
+        "# cook doctor docs say >>> run this later <<<",
         "export NOTE='terminal.ssh-wrap >>> not a marker'",
-        "printf '%s\\n' 'thanh doctor <<< prose >>>'",
+        "printf '%s\\n' 'cook doctor <<< prose >>>'",
         "#terminal.future prose >>> lacks marker grammar",
         "echo '# >>> terminal.future >>> embedded text'",
     ]
@@ -160,7 +160,7 @@ fn malformed_structural_owned_near_markers_are_rejected() {
         "# <<< terminal.future <<\n",
         "#   >>> terminal.future >> extra\n",
         "#\t<<< terminal.future <<< extra\n",
-        "# >>> thanh doctor >>\n",
+        "# >>> cook doctor >>\n",
     ]
     .iter()
     .enumerate()
@@ -179,7 +179,7 @@ fn owned_future_markers_are_rejected_independent_of_requested_items() {
     let temp = tempfile::tempdir().unwrap();
     for (index, content) in [
         "# >>> terminal.future >>>\nbody\n# <<< terminal.future <<<\n",
-        "# >>> thanh doctor >>>\n# >>> terminal.current >>>\nbody\n# <<< terminal.current <<<\n# <<< thanh doctor <<<\n# >>> terminal.future >>>\nbody\n# <<< terminal.future <<<\n",
+        "# >>> cook doctor >>>\n# >>> terminal.current >>>\nbody\n# <<< terminal.current <<<\n# <<< cook doctor <<<\n# >>> terminal.future >>>\nbody\n# <<< terminal.future <<<\n",
     ]
     .iter()
     .enumerate()
@@ -239,13 +239,13 @@ fn invalid_inputs_and_all_marker_shapes_are_refused() {
     }
 
     let cases = [
-        "# >>> thanh doctor >>>\n",
-        "# <<< thanh doctor <<<\n# >>> thanh doctor >>>\n",
-        "# >>> thanh doctor >>\n",
-        "# >>> thanh doctor >>>\nraw\n# <<< thanh doctor <<<\n",
-        "# >>> thanh doctor >>>\n# <<< terminal.item <<<\n# <<< thanh doctor <<<\n",
-        "# >>> thanh doctor >>>\n# >>> terminal.item >>>\nbody\n# <<< terminal.other <<<\n# <<< thanh doctor <<<\n",
-        "# >>> thanh doctor >>>\n# >>> terminal.item >>>\nbody\n# <<< terminal.item <<<\n# >>> terminal.item >>>\nbody\n# <<< terminal.item <<<\n# <<< thanh doctor <<<\n",
+        "# >>> cook doctor >>>\n",
+        "# <<< cook doctor <<<\n# >>> cook doctor >>>\n",
+        "# >>> cook doctor >>\n",
+        "# >>> cook doctor >>>\nraw\n# <<< cook doctor <<<\n",
+        "# >>> cook doctor >>>\n# <<< terminal.item <<<\n# <<< cook doctor <<<\n",
+        "# >>> cook doctor >>>\n# >>> terminal.item >>>\nbody\n# <<< terminal.other <<<\n# <<< cook doctor <<<\n",
+        "# >>> cook doctor >>>\n# >>> terminal.item >>>\nbody\n# <<< terminal.item <<<\n# >>> terminal.item >>>\nbody\n# <<< terminal.item <<<\n# <<< cook doctor <<<\n",
         "# >>> terminal.item >>>\nbody\n# <<< terminal.item <<<\n",
     ];
     for (index, content) in cases.iter().enumerate() {

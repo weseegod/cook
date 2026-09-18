@@ -16,7 +16,7 @@ Everything else is taken from upstream exactly as shipped.
 - **KEEP (upstream-owned — never fork):** the agent runtime, TUI, tools, core
   features, module layout, generated/read-only files. Upstream is the source
   of truth; every sync imports its changes wholesale.
-- **ADAPT (fork-owned — thin layer only):** `~/.thanh` home so BYOK
+- **ADAPT (fork-owned — thin layer only):** `~/.cook` home so BYOK
   `config.toml` is read; model config parsing (`input_modalities`); text-only
   image stripping; BYOK auth/sampling; plan-approval `g` run-as-goal;
   plan-approval `/model` picker on top of the overlay; a small set of TUI
@@ -28,14 +28,14 @@ Everything else is taken from upstream exactly as shipped.
   product telemetry (`xai-grok-telemetry` — Mixpanel, Sentry, OTel). Hide at
   chokepoints after each sync — do not delete whole upstream modules.
 - **LEAF (fork-owned, no upstream equivalent today):** entire
-  `frontend/apps/thanh-desktop/` and the Desktop docs
+  `frontend/apps/let-cook/` and the Desktop docs
   (`docs/desktop-app.md`, `docs/desktop-app-client-implement.md`,
   `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md`).
   A sync must not rewrite this tree. Never patch `xai-grok-shell` / pager
   for Desktop-only behaviour except existing BYOK `providers/*` and
   `clientIdentifier: grok-desktop` (already upstream’s desktop value). If
   upstream lands `grok-desktop`, do not rename; cherry-pick protocol
-  patterns into `thanh-desktop`.
+  patterns into `let-cook`.
 - **NEVER:** reimplement upstream features, redesign upstream UI, restructure
   upstream modules, or carry features that only this fork would maintain.
 
@@ -47,7 +47,7 @@ Everything else is taken from upstream exactly as shipped.
 3. A trim — hide/remove grok.com product chrome this fork doesn't need
    (billing, Privacy, usage limits, announcements, telemetry, …) — or a
    genuine bug fix that upstream hasn't accepted yet.
-4. Desktop client work under `frontend/apps/thanh-desktop/` (leaf; see
+4. Desktop client work under `frontend/apps/let-cook/` (leaf; see
    [`docs/desktop-app.md`](docs/desktop-app.md)). Not an upstream-crate
    change.
 
@@ -72,19 +72,19 @@ that must stay removed. The v1.0.14 merge (`692cb182`) dropped A–C because
 the marker grep only covered `input_modalities` / `ModelByok`. Do not merge
 to `main` until each row below is green.
 
-### A — BYOK reads `~/.thanh/config.toml`
+### A — BYOK reads `~/.cook/config.toml`
 
-- **User:** puts `[model.*]` / `[model_providers.*]` in `~/.thanh/config.toml`.
-- **Must remain true:** default user home is `~/.thanh`, never upstream
-  `~/.grok`. `$GROK_HOME` still overrides. `thanh models` lists those models.
+- **User:** puts `[model.*]` / `[model_providers.*]` in `~/.cook/config.toml`.
+- **Must remain true:** default user home is `~/.cook`, never upstream
+  `~/.grok`. `$GROK_HOME` still overrides. `cook models` lists those models.
 - **Source of truth:** `crates/codegen/xai-dirs/src/lib.rs` —
-  `grok_home_in` joins `".thanh"`. Keep upstream's `GrokHomeSource`,
+  `grok_home_in` joins `".cook"`. Keep upstream's `GrokHomeSource`,
   `home_dir()`, `resolve_grok_home_with_source()`; only the directory name is
   fork-owned. `xai-fast-worktree` already delegates here.
-- **Do not** dual-read `~/.grok` and `~/.thanh`. Do not rewrite project-level
+- **Do not** dual-read `~/.grok` and `~/.cook`. Do not rewrite project-level
   `.grok/` (workspace config, agents, hooks).
-- **Marker / test:** `join(".thanh")` in `xai-dirs`;
-  `default_grok_home_has_no_verbatim_prefix` asserts `ends_with(".thanh")`.
+- **Marker / test:** `join(".cook")` in `xai-dirs`;
+  `default_grok_home_has_no_verbatim_prefix` asserts `ends_with(".cook")`.
   `rg 'join\("\.grok"\)' crates/codegen/xai-dirs/src/lib.rs` must be empty.
 
 ### B — Plan approval `g` run as goal
@@ -219,7 +219,7 @@ git fetch --all
 
 8. **Bump the fork version and publish a release** (see
    [Release & versioning](#release--versioning)) — **do this after every
-   sync** so `thanh update` (Ctrl+U) on all machines picks up the new
+   sync** so `cook update` (Ctrl+U) on all machines picks up the new
    binaries (only skip if the user explicitly says no release):
 
    ```bash
@@ -227,7 +227,7 @@ git fetch --all
    ```
 
    The script bumps `xai-grok-version` + `xai-grok-pager-bin` (+ `Cargo.lock`),
-   tags `vX.Y.Z`, builds `thanh` **locally** via `./build.sh` for the current
+   tags `vX.Y.Z`, builds `cook` **locally** via `./build.sh` for the current
    platform, and publishes the GitHub Release with the local binary + `stable`/
    `alpha` pointers. **There is no CI** — the fork builds and releases from the
    machine running the script (needs `gh` installed + authenticated). Before
@@ -264,10 +264,10 @@ These paths contain fork customizations. Preserve them during merges.
 | Category | Paths | Rule |
 |----------|-------|------|
 | Fork-only files | `build.sh`, `docs/byok-models.md`, `docs/post-merge-core-fix.md` | Never delete; keep fork version |
-| Desktop ACP client (leaf) | entire `frontend/apps/thanh-desktop/`; `docs/desktop-app.md`, `docs/desktop-app-client-implement.md`, `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md` | Never delete; never fold into an upstream `grok-desktop` tree. Do not patch shell/pager for Desktop-only behaviour. |
+| Desktop ACP client (leaf) | entire `frontend/apps/let-cook/`; `docs/desktop-app.md`, `docs/desktop-app-client-implement.md`, `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md` | Never delete; never fold into an upstream `grok-desktop` tree. Do not patch shell/pager for Desktop-only behaviour. |
 | Fork release pipeline | `scripts/publish_release.sh` (self-build via `./build.sh`; **no CI** — `.github/` is removed) | Never delete; keep fork-owned |
-| Self-update feed (`thanh`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/thanh` releases), fork home `~/.thanh` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `thanh` managed binary name (`~/.thanh/bin/thanh`, assets `thanh-<ver>-<os>-<arch>`), `version-thanh.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
-| User home (`~/.thanh`) | `crates/codegen/xai-dirs/src/lib.rs` (`grok_home_in`) | **Single source of truth.** Upstream rewrites this file every sync (`GrokHomeSource`, `home_dir()`). Keep those APIs; re-apply `.join(".thanh")`. Never take upstream's `.join(".grok")` wholesale. |
+| Self-update feed (`cook`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/thanh` releases), fork home `~/.cook` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `cook` managed binary name (`~/.cook/bin/cook`, assets `cook-<ver>-<os>-<arch>`), `version-cook.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
+| User home (`~/.cook`) | `crates/codegen/xai-dirs/src/lib.rs` (`grok_home_in`) | **Single source of truth.** Upstream rewrites this file every sync (`GrokHomeSource`, `home_dir()`). Keep those APIs; re-apply `.join(".cook")`. Never take upstream's `.join(".grok")` wholesale. |
 | Version lockstep | `crates/codegen/xai-grok-version/Cargo.toml`, `crates/codegen/xai-grok-pager-bin/Cargo.toml` | Keep fork version; bump after every sync (see [Release & versioning](#release--versioning)) |
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
 | Image stripping | `crates/codegen/xai-grok-sampling-types/src/conversation.rs`, `types.rs`, `crates/codegen/xai-grok-shell/src/session/compaction.rs`, `acp_session_impl/turn.rs`, `helpers/full_replace_compaction.rs` | Keep `strip_image_parts_for_text_only` and all call sites |
@@ -291,13 +291,13 @@ sync #2, 7 inventory files merged that way; the marker diff caught no loss.
 
 ## Release & versioning
 
-The fork ships binaries as **`thanh`** (not `grok`) with its own home
-**`~/.thanh`** (config, auth, sessions, `bin/`, `downloads/`, caches) so it
+The fork ships binaries as **`cook`** (not `grok`) with its own home
+**`~/.cook`** (config, auth, sessions, `bin/`, `downloads/`, caches) so it
 runs fully isolated from an official grok install that keeps `~/.grok`.
 Release assets on `weseegod/thanh` GitHub Releases are named
 `thanh-<version>-<os>-<arch>` (e.g. `thanh-0.2.122-macos-aarch64`), plus
 plain-text `stable` / `alpha` channel pointers that the built-in updater
-(Ctrl+U / `thanh update`) reads from `releases/latest/download/`.
+(Ctrl+U / `cook update`) reads from `releases/latest/download/`.
 
 Rules:
 
@@ -307,16 +307,16 @@ Rules:
   lockstepped (they already are, both synced to upstream's current version).
 - **After every upstream sync**, bump the version (typically patch
   `1.0.0 → 1.0.1`) and publish: `scripts/publish_release.sh`. It builds
-  `thanh` **locally** via `./build.sh` for the machine it runs on (no CI).
+  `cook` **locally** via `./build.sh` for the machine it runs on (no CI).
   `gh` must be installed and authenticated (`gh auth login`) to create the
   GitHub Release; to ship other platforms, build on each machine and
   `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
 - **Verify the release after publishing**: the `stable`/`alpha` pointers and
   the `thanh-<ver>-<os>-<arch>` assets must exist on the GitHub Release
-  before `thanh update` can serve them — check `gh release view vX.Y.Z`.
+  before `cook update` can serve them — check `gh release view vX.Y.Z`.
 - The updater's default installer is `internal` (pure HTTP against the fork's
   GitHub Releases); `gh-release` (needs `gh`) is also supported. It manages
-  `~/.thanh/bin/thanh` only and never touches grok's `~/.grok` tree.
+  `~/.cook/bin/cook` only and never touches grok's `~/.grok` tree.
 
 ### Fork commit map
 
@@ -359,13 +359,13 @@ After resolving shared hot files, grep for fork markers:
 MARKER='strip_image_parts_for_text_only|input_modalities|ModelByok|byok|ApprovedAsGoal|approved_as_goal|GoalPlanSource|LeaveAndStartGoal'
 rg "$MARKER" --type rust
 
-# Home must be .thanh, never .grok, in the single source of truth:
-rg 'join\("\.thanh"\)' crates/codegen/xai-dirs/src/lib.rs
+# Home must be .cook, never .grok, in the single source of truth:
+rg 'join\("\.cook"\)' crates/codegen/xai-dirs/src/lib.rs
 rg 'join\("\.grok"\)' crates/codegen/xai-dirs/src/lib.rs   # must be empty
 ```
 
 All expected matches must still be present. `xai-dirs` joining `.grok` is an
-automatic fail — that is how `~/.thanh/config.toml` stops being read.
+automatic fail — that is how `~/.cook/config.toml` stops being read.
 
 ### Common upstream structural changes
 
@@ -399,7 +399,7 @@ git grep -n "$MARKER" -- '*.rs' | sort > /tmp/post.txt
 diff /tmp/pre.txt /tmp/post.txt   # empty = preserved
 
 rg "$MARKER|byok" --type rust
-rg 'join\("\.thanh"\)' crates/codegen/xai-dirs/src/lib.rs
+rg 'join\("\.cook"\)' crates/codegen/xai-dirs/src/lib.rs
 rg 'join\("\.grok"\)' crates/codegen/xai-dirs/src/lib.rs   # must be empty
 ```
 
@@ -426,10 +426,10 @@ Manual checks:
 
 - [ ] `docs/byok-models.md` and `docs/post-merge-core-fix.md` exist
 - [ ] `build.sh` exists and is executable
-- [ ] `./build.sh` prints a version (e.g. `thanh 0.2.x`)
-- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok|ApprovedAsGoal|GoalPlanSource|LeaveAndStartGoal`, plus `weseegod/thanh`, `version-thanh.json`, `~/.thanh`, `bin/thanh`
-- [ ] `xai-dirs` default home is `~/.thanh` (`ends_with(".thanh")`)
-- [ ] `thanh models` sees models from `~/.thanh/config.toml` (not `~/.grok/config.toml`)
+- [ ] `./build.sh` prints a version (e.g. `cook 0.2.x`)
+- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok|ApprovedAsGoal|GoalPlanSource|LeaveAndStartGoal`, plus `weseegod/thanh`, `version-cook.json`, `~/.cook`, `bin/cook`
+- [ ] `xai-dirs` default home is `~/.cook` (`ends_with(".cook")`)
+- [ ] `cook models` sees models from `~/.cook/config.toml` (not `~/.grok/config.toml`)
 - [ ] Plan approval footer still has `g run as goal`; `g` seeds a goal (not "request changes")
 - [ ] With a parked plan, `/model` or `Ctrl+M` shows the picker **on top of** the plan; overlay stays for `a`/`g`
 - [ ] No Privacy banner, no `/privacy`, no Settings coding-data row
@@ -443,11 +443,11 @@ Manual checks:
 - Do **not** force-push `main`
 - Do **not** rebase fork commits onto upstream
 - Do **not** delete `build.sh`, `docs/byok-models.md`, or `docs/post-merge-core-fix.md`
-- Do **not** commit API keys or real credentials from `~/.thanh/config.toml`
+- Do **not** commit API keys or real credentials from `~/.cook/config.toml`
 - Do **not** take upstream's `xai-dirs` `.join(".grok")` wholesale
 - Do **not** drop `ApprovedAsGoal` because the wire string is "unknown" to upstream (unknown maps to `Cancelled` = request-changes)
 - Do **not** paint `line_viewer` after slash dropdowns / ArgPicker (covers `/model`)
-- Do **not** dual-read `~/.grok` and `~/.thanh`
+- Do **not** dual-read `~/.grok` and `~/.cook`
 - Do **not** re-show Privacy, `/usage` limits, announcements, or the consumer paywall
 - Do **not** add fork-only features unrelated to BYOK support, small TUI
   ergonomics, or trimming — propose them upstream instead

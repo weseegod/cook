@@ -1,6 +1,6 @@
-# Thanh Desktop — Production Implementation
+# Let Cook — Production Implementation
 
-Bring v1 (`feat: implement Thanh Desktop v1`) to a **Claude Desktop–class**
+Bring v1 (`feat: implement Let Cook v1`) to a **Claude Desktop–class**
 product: first-run provider connect, attachments, MCP connectors, memory,
 skills, polish, and shippable installers.
 
@@ -23,7 +23,7 @@ registry) is **not this file**:
 
 Shipped and usable as a local ACP chat shell:
 
-- Tauri host spawns `thanh agent stdio`, JSON-RPC mux, crash restart
+- Tauri host spawns `cook agent stdio`, JSON-RPC mux, crash restart
 - Folder picker, session sidebar (list / search / rename / delete / resume)
 - Streaming chat with turn-scoped coalescing, markdown + deferred Shiki/mermaid,
   TUI-copied turn-status row, verb-group folding, collapsed tool rows, todo
@@ -77,12 +77,12 @@ attachments, settings, notifications, a model picker — while the model runs
 tools against the user’s world. Thanh already *is* that agent. Desktop must
 expose it without a terminal.
 
-| Claude Desktop | Thanh Desktop production |
+| Claude Desktop | Let Cook production |
 |---|---|
 | Sign in to Anthropic | **Connect a provider** (BYOK wizard + presets). Optional xAI login. |
 | Model picker (Opus / Sonnet / Haiku) | Catalog from `x.ai/models/list` grouped by provider |
 | Conversation sidebar + search | Already in v1; add pin, export, fork UI |
-| Projects | Workspace folder + optional project instructions (`.thanh` / `AGENTS.md` already exist) |
+| Projects | Workspace folder + optional project instructions (`.cook` / `AGENTS.md` already exist) |
 | Right tools | Review current Git changes and browse/read workspace files |
 | Attach files / images / screenshots | Composer drop + paste → ACP content parts |
 | Connectors / MCP | Settings → Connectors: list, toggle, add stdio/HTTP, OAuth elicit |
@@ -93,7 +93,7 @@ expose it without a terminal.
 | Dark theme | Keep dark; add system / light |
 | Auto-update | Tauri updater for the app shell only |
 | Voice | Defer (agent has `xai-grok-voice`; v2) |
-| Claude.ai cloud sync | **Out of scope** — local-first `~/.thanh` |
+| Claude.ai cloud sync | **Out of scope** — local-first `~/.cook` |
 
 Still out of scope: Monaco-as-IDE, debugger, git GUI, Windows until after
 Linux+macOS ship.
@@ -110,7 +110,7 @@ Anthropic, Gemini, Groq, local Ollama, or a custom OpenAI-compatible URL
 
 That method is xAI-session keyed (`store_api_key` / `XAI_API_KEY`). Production
 adds **fork-owned** ACP extensions. The renderer still writes nothing: the Rust
-host performs the locked, atomic `~/.thanh/config.toml` edit with the credential
+host performs the locked, atomic `~/.cook/config.toml` edit with the credential
 it was handed, and the agent extensions write the same file for callers that
 reach the agent directly.
 
@@ -226,7 +226,7 @@ Ship in layers. Each layer is independently reviewable.
      `elicit_complete`.
    - Do not spawn MCP from Tauri; agent already does.
    - Do not register SDK MCP until `R-sdk` exists (architecture §4.2).
-9. **Project instructions** — show/edit `AGENTS.md` / `.thanh` rules for the
+9. **Project instructions** — show/edit `AGENTS.md` / `.cook` rules for the
    cwd (read/write through ACP fs or a small `x.ai/project/files` helper).
 10. **Memory** — settings panel + transcript “remember this”:
    `x.ai/memory/flush`, `rewrite`, open `MEMORY.md`.
@@ -255,11 +255,11 @@ Ship in layers. Each layer is independently reviewable.
 20. **macOS dmg** — targeted in `tauri.conf.json` (`appimage` / `deb` / `dmg`).
     Unsigned ok for this fork (same as CLI).
 21. **Tauri updater** — `tauri-plugin-updater` for the **app shell only**; never
-    write `~/.thanh/bin/thanh`. Placeholder pubkey + empty endpoints +
+    write `~/.cook/bin/cook`. Placeholder pubkey + empty endpoints +
     `createUpdaterArtifacts: false` until release signing is wired; Settings →
     About **Check for updates** gated via `UPDATER_CONFIGURED`.
-22. **Stable sidecar optional** — `bin_resolve` prefers `THANH_BIN` →
-    `~/.thanh/bin/thanh` → bundled `thanh-<triple>`; enable with
+22. **Stable sidecar optional** — `bin_resolve` prefers `COOK_BIN` →
+    `~/.cook/bin/cook` → bundled `thanh-<triple>`; enable with
     `bundle.externalBin` when binaries are present (see app README).
 23. **Windows** after Linux+macOS are boring.
 24. Voice, embedded xterm PTY, worktree UI: keep as post-1.0.
@@ -339,7 +339,7 @@ Do not add these to `xai-grok-pager-pty-harness`.
 - Alpha: keep requiring CLI; optional sidecar documented, not required.
 - Production Linux: AppImage + deb (targets already in `tauri.conf.json`).
 - Production macOS: dmg; **unsigned ok for this fork**; signing follow-up.
-- App updater ≠ CLI updater (plugin updates shell only; never `~/.thanh/bin/thanh`).
+- App updater ≠ CLI updater (plugin updates shell only; never `~/.cook/bin/cook`).
 - Linux runtime: `webkit2gtk-4.1`.
 - Windows installers: after Linux + macOS.
 ---

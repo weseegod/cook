@@ -7,7 +7,7 @@ multiplexers, containers, and SSH sessions can handle these features differently
 ## Diagnose and Fix Terminal Problems
 
 Run `/doctor` in Grok to check the current session and see available fixes. If
-Grok cannot start, run `thanh doctor` in your shell. Use `thanh doctor --json`
+Grok cannot start, run `cook doctor` in your shell. Use `cook doctor --json`
 for a machine-readable report.
 
 Doctor checks the terminal, multiplexer, color support, keyboard and newline
@@ -16,7 +16,7 @@ included. The in-app command can also check live session details such as
 notification focus tracking and sandbox profile conflicts.
 
 A report can contain issues or recommendations and still exit successfully.
-`thanh doctor --json` reports the same color capability when piped. Microphone
+`cook doctor --json` reports the same color capability when piped. Microphone
 checks do not start recording, so Doctor cannot detect macOS permission failures
 that appear only as silence during capture.
 
@@ -25,7 +25,7 @@ that appear only as silence during capture.
 
 When Doctor finds an explicit unhealthy tmux setting, `/doctor fix` lists the
 available automatic fixes. Apply one named fix at a time, for example
-`/doctor fix tmux-clipboard` or `thanh doctor fix dcs-passthrough --yes`.
+`/doctor fix tmux-clipboard` or `cook doctor fix dcs-passthrough --yes`.
 Doctor can persist these four tmux options:
 
 - `terminal.tmux-clipboard` — `set -g set-clipboard on`
@@ -141,29 +141,29 @@ backup file so you can retrieve the text. Run `/doctor` for other copy options.
 #### Apple Terminal over SSH
 
 Apple Terminal does not support OSC 52, so a remote copy cannot reach the local
-clipboard. Each copy is still saved to a backup file (`~/.thanh/last-copy.txt` by
+clipboard. Each copy is still saved to a backup file (`~/.cook/last-copy.txt` by
 default; override with `GROK_COPY_FILE`); the toast names that path when delivery
 is unverified or the clipboard is unreachable. You can also use `/copy <file>` or
 `/minimal`.
 
 For direct clipboard forwarding, run the SSH command from the local computer
-through `thanh wrap`, for example `thanh wrap ssh user@host`. The same command can
+through `cook wrap`, for example `cook wrap ssh user@host`. The same command can
 wrap container and pod shells. It also restores terminal modes after a dropped
 connection.
 
-When an SSH session is not using `thanh wrap`, Grok shows the one-time tip
+When an SSH session is not using `cook wrap`, Grok shows the one-time tip
 “Run `/doctor` for details and fixes.” The tip stops appearing after the session
 is launched through wrap. Turn it off with `/settings` → **Show contextual
 hints** → **SSH wrap**, or set `ssh_wrap = false` under
 `[ui.contextual_hints]` in `$GROK_HOME/config.toml`. This setting does not hide
 the Doctor recommendation.
 
-For repeated SSH use, Doctor offers `thanh doctor fix ssh-wrap`. It also shows
+For repeated SSH use, Doctor offers `cook doctor fix ssh-wrap`. It also shows
 the one-off command, the file that would change, and the cases where the alias
 should be bypassed. The ID `terminal.ssh-wrap` remains accepted and appears in
 JSON.
 
-> **Warning**: `thanh wrap` is experimental and may not work in every setup.
+> **Warning**: `cook wrap` is experimental and may not work in every setup.
 
 #### iTerm2
 
@@ -175,8 +175,8 @@ check.
 
 Zellij and tmux control mode can limit the alternate screen. Grok normally uses
 inline mode in those environments. Run `/doctor` to see the detected condition.
-You can configure `[terminal] alt_screen` in `~/.thanh/pager.toml`, or run
-`thanh --no-alt-screen` to confirm inline mode works.
+You can configure `[terminal] alt_screen` in `~/.cook/pager.toml`, or run
+`cook --no-alt-screen` to confirm inline mode works.
 
 ### Zellij keybindings interfere with Grok
 
@@ -228,7 +228,7 @@ Microphone**, enable the terminal, and restart it. If access is already on, chec
 the input device and level under **System Settings → Sound → Input** and try
 again.
 
-Run `thanh doctor`, or run `/doctor` while voice mode is on. The **Voice** section
+Run `cook doctor`, or run `/doctor` while voice mode is on. The **Voice** section
 shows the microphone Grok would use. If no input device is available, Doctor
 shows `voice.no-input-device` and the next steps. Doctor cannot detect denied
 macOS microphone access passively when macOS supplies silence.
@@ -250,7 +250,7 @@ terminals, Terminal.app, Konsole, mlterm, and others). Grok Build therefore
 **does not** reorder RTL by default.
 
 If Arabic or Persian in **scrollback** (or list content) reads backwards,
-enable app-side reordering in `~/.thanh/pager.toml` (or project config):
+enable app-side reordering in `~/.cook/pager.toml` (or project config):
 
 ```toml
 [scrollback.display]

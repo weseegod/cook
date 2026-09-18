@@ -13,7 +13,7 @@ use common::{reset_home, test_home};
 use xai_grok_update::write_version_cache;
 
 fn version_cache_path() -> PathBuf {
-    test_home().join("version-thanh.json")
+    test_home().join("version-cook.json")
 }
 
 fn reset() {
@@ -35,7 +35,7 @@ async fn write_version_cache_creates_file_at_grok_home() {
     let path = version_cache_path();
     assert!(
         path.exists(),
-        "version-thanh.json should exist at {}",
+        "version-cook.json should exist at {}",
         path.display()
     );
 
@@ -73,7 +73,7 @@ async fn write_version_cache_does_not_leave_tmp_file_behind() {
 
     write_version_cache("0.1.180", None).await;
 
-    let tmp = test_home().join("version-thanh.json.tmp");
+    let tmp = test_home().join("version-cook.json.tmp");
     assert!(
         !tmp.exists(),
         "atomic rename must clean up tmp file: {}",
@@ -128,7 +128,7 @@ fn write_cache_with_timestamp(version: &str, ts: time::OffsetDateTime) {
 /// its on-disk contract: file shape + freshness logic via the public
 /// `GrokVersion` JSON layout.
 async fn cache_is_fresh() -> bool {
-    // Mirror the implementation: look at version-thanh.json under GROK_HOME,
+    // Mirror the implementation: look at version-cook.json under GROK_HOME,
     // parse, and check the TTL.
     let path = version_cache_path();
     let Ok(body) = tokio::fs::read_to_string(&path).await else {
@@ -190,7 +190,7 @@ async fn version_cache_missing_file_is_not_fresh() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// version-thanh.json wire format — the on-disk file is read by every thanh launch.
+// version-cook.json wire format — the on-disk file is read by every cook launch.
 // ─────────────────────────────────────────────────────────────────────────────
 #[tokio::test]
 #[serial]

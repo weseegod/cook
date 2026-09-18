@@ -39,7 +39,7 @@ Grok also scans home-level rules, regardless of where it starts. These roots are
 
 | Location | Notes |
 |----------|-------|
-| `$GROK_HOME/rules/` (default `~/.thanh/rules/`) | Always scanned; applies to all projects |
+| `$GROK_HOME/rules/` (default `~/.cook/rules/`) | Always scanned; applies to all projects |
 | `~/.claude/rules/` | Controlled by `compat.claude.rules` |
 | `~/.cursor/rules/` | Controlled by `compat.cursor.rules` |
 | Each entry of `[paths] extra_rule_dirs` | Any absolute directory you list in `config.toml`; `~` is expanded |
@@ -171,7 +171,7 @@ my-monorepo/
 To add rules for a single session without editing files, pass `--rules` (alias `--append-system-prompt`):
 
 ```bash
-thanh --rules "Always use TypeScript. Prefer functional components."
+cook --rules "Always use TypeScript. Prefer functional components."
 ```
 
 Grok appends this text to the session's system prompt. Use it for session-specific customization.
@@ -205,7 +205,7 @@ Beyond AGENTS.md files, the `.grok/` directory in your project root can contain 
 
 | Path | Purpose |
 |------|---------|
-| `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules (other settings load only from `~/.thanh/config.toml`) |
+| `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules (other settings load only from `~/.cook/config.toml`) |
 | `.grok/skills/` | Project-scoped skill definitions |
 | `.grok/plugins/` | Project-scoped plugins |
 | `.grok/agents/` | Project-scoped agent definitions |
@@ -218,10 +218,10 @@ These are all optional. See the respective guides for details on each.
 
 ## Inspecting Loaded Rules
 
-Use `thanh inspect` to see all loaded project instructions:
+Use `cook inspect` to see all loaded project instructions:
 
 ```bash
-thanh inspect
+cook inspect
 ```
 
 This shows each project instruction file it finds, with its path and approximate token count. Use it to confirm Grok picks up your rules.
@@ -238,7 +238,7 @@ This shows each project instruction file it finds, with its path and approximate
 
 4. **Use subdirectory scoping for large repos.** Different parts of a monorepo may have different conventions. Use per-directory AGENTS.md to scope rules appropriately.
 
-5. **Version control your rules.** Commit AGENTS.md to the repository so the whole team benefits. User-specific overrides belong in `~/.thanh/` (global rules).
+5. **Version control your rules.** Commit AGENTS.md to the repository so the whole team benefits. User-specific overrides belong in `~/.cook/` (global rules).
 
 6. **Do not duplicate documentation.** AGENTS.md should contain actionable instructions, not a copy of your project's README. Link to external docs if needed.
 

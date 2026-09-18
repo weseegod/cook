@@ -108,13 +108,13 @@ enabled = true
 
 ```bash
 export GROK_MEMORY=1
-thanh
+cook
 ```
 
 ### Legacy Config (Persistent)
 
 ```toml
-# ~/.thanh/config.toml
+# ~/.cook/config.toml
 [memory]
 enabled = true
 ```
@@ -162,13 +162,13 @@ the legacy `grok_build_settings` object.
 
 ## How Memory Is Stored
 
-Memory is stored as Markdown files under `~/.thanh/memory/`:
+Memory is stored as Markdown files under `~/.cook/memory/`:
 
 | Location | Scope | Description |
 |----------|-------|-------------|
-| `~/.thanh/memory/MEMORY.md` | Global | Facts that apply across all your projects |
-| `~/.thanh/memory/<project-slug>-<hash8>/MEMORY.md` | Workspace | Project-specific conventions and context |
-| `~/.thanh/memory/<project-slug>-<hash8>/sessions/` | Sessions | Per-session summaries and logs |
+| `~/.cook/memory/MEMORY.md` | Global | Facts that apply across all your projects |
+| `~/.cook/memory/<project-slug>-<hash8>/MEMORY.md` | Workspace | Project-specific conventions and context |
+| `~/.cook/memory/<project-slug>-<hash8>/sessions/` | Sessions | Per-session summaries and logs |
 
 Grok suffixes each workspace directory with a short hash of the repository's identity. The identity is the `origin` remote in `org/repo` form when the directory is a Git repository with an `origin` remote, or the directory path otherwise. Because clones and worktrees of the same repository share an `origin` remote, they also share one memory directory.
 
@@ -213,7 +213,7 @@ Use `/flush` when you want to preserve important context:
 
 ### Remember
 
-Ask Grok to remember something, and it appends the note to a `MEMORY.md` file -- the workspace file for project-specific items, or the global `~/.thanh/memory/MEMORY.md` for cross-project preferences:
+Ask Grok to remember something, and it appends the note to a `MEMORY.md` file -- the workspace file for project-specific items, or the global `~/.cook/memory/MEMORY.md` for cross-project preferences:
 
 ```
 > remember to always open PR links after pushing
@@ -227,7 +227,7 @@ You can also save a note directly with the `/remember` command:
 /remember always open PR links after pushing
 ```
 
-Run `/remember` with no text to enter remember mode, where the next line you type becomes the note. Either way, Grok opens a review panel showing the note (with an optional rewritten version you can toggle with `Tab`); the note is written only after you confirm. On save, Grok shows `Memory saved to ~/.thanh/memory/MEMORY.md`.
+Run `/remember` with no text to enter remember mode, where the next line you type becomes the note. Either way, Grok opens a review panel showing the note (with an optional rewritten version you can toggle with `Tab`); the note is written only after you confirm. On save, Grok shows `Memory saved to ~/.cook/memory/MEMORY.md`.
 
 ### Forget
 
@@ -237,7 +237,7 @@ Ask Grok to forget something, and it finds and removes the matching entry:
 > forget the snake_case convention
 ```
 
-Forget is best-effort: the model searches memory and removes entries that match. For guaranteed removal, edit the files under `~/.thanh/memory/` directly and delete the entry yourself. To locate a file, open the `/memory` browser and press `y` to copy its path.
+Forget is best-effort: the model searches memory and removes entries that match. For guaranteed removal, edit the files under `~/.cook/memory/` directly and delete the entry yourself. To locate a file, open the `/memory` browser and press `y` to copy its path.
 
 ### Recall
 
@@ -251,7 +251,7 @@ Grok searches across all memory files and summarizes what it knows, grouped by s
 
 ### Direct Editing
 
-You can edit memory files directly under `~/.thanh/memory/`. The file watcher reindexes your changes on the next memory search. Use `/flush` to save the current session now, and `/dream` to consolidate session logs into organized topics.
+You can edit memory files directly under `~/.cook/memory/`. The file watcher reindexes your changes on the next memory search. Use `/flush` to save the current session now, and `/dream` to consolidate session logs into organized topics.
 
 ---
 
@@ -296,7 +296,7 @@ You can also open `/memory` from the command palette.
 When you save a note with `/remember`, Grok confirms in the scrollback:
 
 ```
-Memory saved to ~/.thanh/memory/MEMORY.md
+Memory saved to ~/.cook/memory/MEMORY.md
 ```
 
 Background saves — flush, dream, and session-end — run silently and do not post a scrollback message. Use `/memory` at any time to browse what Grok has stored.
@@ -400,26 +400,26 @@ lambda = 0.7             # 0.0 = max diversity, 1.0 = pure relevance
 
 ## CLI Commands
 
-The `thanh memory` command manages memory from the shell. It has one subcommand, `clear`:
+The `cook memory` command manages memory from the shell. It has one subcommand, `clear`:
 
 ```bash
 # Clear workspace memory (MEMORY.md, sessions/, and index.sqlite). This is the default scope.
-thanh memory clear
+cook memory clear
 
 # The same scope, stated explicitly
-thanh memory clear --workspace
+cook memory clear --workspace
 
 # Clear the global MEMORY.md
-thanh memory clear --global
+cook memory clear --global
 
 # Clear both workspace and global memory
-thanh memory clear --all
+cook memory clear --all
 
 # Skip the confirmation prompt (-y is the short form)
-thanh memory clear --yes
+cook memory clear --yes
 ```
 
-To edit memory from the shell, open the files in your editor directly -- for example, `$EDITOR ~/.thanh/memory/MEMORY.md`.
+To edit memory from the shell, open the files in your editor directly -- for example, `$EDITOR ~/.cook/memory/MEMORY.md`.
 
 ---
 
@@ -431,7 +431,7 @@ To edit memory from the shell, open the files in your editor directly -- for exa
 |-----|---------|-------------|
 | `enabled` | `false` | Enable memory |
 | `session.save_on_end` | `true` | Write metadata summary on session end |
-| `watcher.enabled` | `true` | Watch `~/.thanh/memory/` for external edits and reindex |
+| `watcher.enabled` | `true` | Watch `~/.cook/memory/` for external edits and reindex |
 
 ### Index Settings (`[memory.index]`)
 
@@ -510,7 +510,7 @@ When a session memory is old, Grok attaches a staleness note to it in search res
 
 ## File Watcher
 
-By default, Grok watches `~/.thanh/memory/` for external file changes. If you edit memory files directly (e.g., in your editor), the changes are picked up automatically on the next memory search:
+By default, Grok watches `~/.cook/memory/` for external file changes. If you edit memory files directly (e.g., in your editor), the changes are picked up automatically on the next memory search:
 
 - Created or modified files are reindexed.
 - Deleted files have their stale chunks removed from the index.
@@ -526,7 +526,7 @@ enabled = true    # default
 
 ### Memory Not Working
 
-1. Verify memory is enabled: check `thanh inspect` output.
+1. Verify memory is enabled: check `cook inspect` output.
 2. Check `GROK_MEMORY` or `[memory] enabled` in effective TOML.
 3. Check for `GROK_MEMORY=0` or a deprecated compatibility flag overriding config.
 
@@ -539,9 +539,9 @@ Memory is injected on the first turn. If you started a session before enabling m
 Use `/memory` in the TUI to browse all memory files with a preview. You can also access them directly:
 
 ```bash
-ls ~/.thanh/memory/
-cat ~/.thanh/memory/MEMORY.md
-$EDITOR ~/.thanh/memory/MEMORY.md
+ls ~/.cook/memory/
+cat ~/.cook/memory/MEMORY.md
+$EDITOR ~/.cook/memory/MEMORY.md
 ```
 
 ### Debug Logging

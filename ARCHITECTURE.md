@@ -1,4 +1,4 @@
-# Grok Build (`thanh`) — Architecture
+# Grok Build (`cook`) — Architecture
 
 This document is the engineer-facing map of the repository: what the pieces
 are, how they fit together, and — most importantly — **where to go to change,
@@ -11,19 +11,19 @@ into the tree cold. See `README.md` for user-level build/install info and
 ## 1. Overview
 
 This is a Rust workspace (93 crates) implementing **Grok Build**, a
-terminal-based AI coding agent. This fork ships the binary as **`thanh`**
+terminal-based AI coding agent. This fork ships the binary as **`cook`**
 (the cargo artifact is `xai-grok-pager`) with its own home directory
-**`~/.thanh`**, fully isolated from the official grok CLI's `~/.grok`.
+**`~/.cook`**, fully isolated from the official grok CLI's `~/.grok`.
 
 The product runs in four modes, all sharing one agent runtime:
 
 - **Interactive TUI** — full-screen terminal UI (default).
-- **Headless single-turn** — `thanh -c "<prompt>"` for scripting/CI.
-- **Stdio / ACP agent** — `thanh agent stdio`, the
+- **Headless single-turn** — `cook -c "<prompt>"` for scripting/CI.
+- **Stdio / ACP agent** — `cook agent stdio`, the
   [Agent Client Protocol](https://agentclientprotocol.com) server used by
   editor integrations.
 - **Desktop ACP client** — Tauri 2 + React application in
-  `frontend/apps/thanh-desktop/`. Architecture contract:
+  `frontend/apps/let-cook/`. Architecture contract:
   [`docs/desktop-app.md`](docs/desktop-app.md). Client-layering fold:
   [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md).
   Production plan: [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md).
@@ -43,7 +43,7 @@ System context (arrows = data flow):
         ▲ renders via                 ▲ ACP stdio                        │
         │                             │                                  │
 ┌──────────────────────────┐  ┌───────┴────────────────┐  tool calls     │ LLM requests
-│ xai-grok-pager-render    │  │ thanh-desktop (Tauri)  │         ▼       ▼
+│ xai-grok-pager-render    │  │ let-cook (Tauri)  │         ▼       ▼
 │ theme · render · terminal│  │ React ACP client       │  ┌────────────┐ ┌──────────────┐
 │ (draw primitives)        │  │ docs/desktop-app.md    │  │ xai-grok-  │ │ xai-grok-    │
 └──────────────────────────┘  └────────────────────────┘  │ tools      │ │ sampler      │
@@ -89,10 +89,10 @@ agent process.
 ### Build / release
 
 - `build.sh` — `cargo build -p xai-grok-pager-bin --release`, installs the
-  artifact as `thanh` into `~/.thanh/bin/thanh` + `~/.local/bin` symlink.
+  artifact as `cook` into `~/.cook/bin/cook` + `~/.local/bin` symlink.
 - `scripts/publish_release.sh` — bumps the lockstepped version in
   `xai-grok-version` + `xai-grok-pager-bin`, builds locally, publishes
-  `thanh-<ver>-<os>-<arch>` assets + `stable`/`alpha` channel pointers to
+  `cook-<ver>-<os>-<arch>` assets + `stable`/`alpha` channel pointers to
   GitHub Releases (the updater reads these).
 - `SOURCE_REV` at the root records the upstream monorepo commit SHA.
 
@@ -138,7 +138,7 @@ All paths under `crates/`. The workspace is split into `crates/codegen/*`
 | `xai-grok-sampler` + `xai-grok-sampling-types` | Actor-based LLM inference: HTTP streaming, retry, cancellation (`sampling/` in shell re-exports the types). |
 | `xai-grok-compaction`, `xai-compaction-transcript` | Shared transport-agnostic context-window compaction engine. |
 | `xai-interjection-core` | Mid-turn user-interjection buffering/formatting. |
-| `xai-grok-memory` | Persistent memory under `~/.thanh/memory/` (global `MEMORY.md` + per-workspace blake3 dirs; FTS5 + vector store). |
+| `xai-grok-memory` | Persistent memory under `~/.cook/memory/` (global `MEMORY.md` + per-workspace blake3 dirs; FTS5 + vector store). |
 
 ### Tools infrastructure
 
@@ -170,7 +170,7 @@ All paths under `crates/`. The workspace is split into `crates/codegen/*`
 | `xai-grok-config` | Effective config loader: merge order `managed_config.toml` > `config.toml` > signed `requirements.toml` > macOS MDM, TOML merge, `[[version_overrides]]`. |
 | `xai-grok-config-types` | Dependency-light config value types (dependency inversion for the shell). |
 | `xai-grok-auth` | Bearer-token auth trait seam + retry middleware. |
-| `xai-grok-home`, `xai-grok-paths` | Home-dir resolution (`~/.thanh` by default) + path helpers. |
+| `xai-grok-home`, `xai-grok-paths` | Home-dir resolution (`~/.cook` by default) + path helpers. |
 | `xai-grok-secrets`, `xai-grok-extra-ca`, `xai-grok-http`, `xai-grok-env` | Secrets handling, extra CA roots, HTTP helpers, env presets. |
 
 ### Sessions & storage
@@ -286,8 +286,8 @@ Other trees:
 - `src/extensions/` — extension points (46 files: MCP, notification, bundle,
   web-search, image-gen, …).
 - `src/config/` — config load/reload/watcher; `src/cli_models.rs` for
-  `thanh models`; `src/plugin.rs` for plugin lifecycle; `src/mcp_doctor.rs`
-  for `thanh mcp doctor`.
+  `cook models`; `src/plugin.rs` for plugin lifecycle; `src/mcp_doctor.rs`
+  for `cook mcp doctor`.
 
 ### 4.3 `xai-grok-tools` — tools registry + implementations
 
@@ -400,14 +400,14 @@ effects spawn tasks → `Presenter` coalesces draws → `render::draw::draw_fram
 
 ---
 
-## 6. Storage layout (`~/.thanh`)
+## 6. Storage layout (`~/.cook`)
 
 | Path | Contents |
 |---|---|
 | `config.toml` | User config (model, keys, agents, permissions, UI). |
 | `managed_config.toml`, `requirements.toml` | Higher-priority config layers merged by `xai-grok-config` (managed > user > signed requirements > MDM). |
 | `auth.json` / credentials | Auth tokens (`xai-grok-auth`); MCP credentials in `mcp_credentials.json` (`xai-grok-mcp`). |
-| `bin/thanh` | The managed binary (updated in place by the self-updater). |
+| `bin/cook` | The managed binary (updated in place by the self-updater). |
 | `sessions/<session_id>/` | Per-session dirs: `events.jsonl` (canonical record via `xai-grok-session-events`), transcripts, uploads. |
 | `sessions/session_search.sqlite` | **Derived** FTS5 search index (`xai-grok-session-search`). |
 | `memory/` | `MEMORY.md` + per-workspace blake3-hashed dirs (`xai-grok-memory`). |
@@ -434,7 +434,7 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
 | Read the TUI presentation catalog (screens, realtime, timers, tool rows, folds, cards) | [`docs/tui-presentation.md`](docs/tui-presentation.md) |
-| Change / start the desktop app | `frontend/apps/thanh-desktop/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); client fold [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md); wire map [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md). Keep model/tool execution in `thanh agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). Do not add `src-tauri` to the Cargo workspace. |
+| Change / start the desktop app | `frontend/apps/let-cook/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); client fold [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md); wire map [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md). Keep model/tool execution in `cook agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). Do not add `src-tauri` to the Cargo workspace. |
 
 ### Agent / shell
 
@@ -492,7 +492,7 @@ models (DeepSeek, OpenRouter, OpenAI-compatible) work with bring-your-own-key.
 Frequently touched fork-owned files (also the upstream-merge inventory in
 `UPSTREAM-MERGE.md`):
 
-- Identity: `thanh` binary, `~/.thanh` home (never `~/.grok`; single source of
+- Identity: `cook` binary, `~/.cook` home (never `~/.grok`; single source of
   truth `xai-dirs` `grok_home_in`), fork release feed in
   `xai-grok-update/src/version.rs` + `auto_update.rs`.
 - BYOK model config: `xai-grok-shell/src/agent/config.rs`,
@@ -513,7 +513,7 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
   CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
   `docs/desktop-app.md` + `docs/desktop-app-client-implement.md` +
   `docs/desktop-app-implement.md` + `docs/desktop-tui-capability-map.md`
-  (desktop ACP client; code in `frontend/apps/thanh-desktop/`, not a
+  (desktop ACP client; code in `frontend/apps/let-cook/`, not a
   workspace crate).
 - Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D;
   Desktop is a fork-owned leaf).
@@ -535,7 +535,7 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
   `xai-tool-runtime`, wire types in `xai-tool-protocol`.
 - **Desktop is a leaf ACP client.** Architecture:
   [`docs/desktop-app.md`](docs/desktop-app.md). Never link
-  `frontend/apps/thanh-desktop/src-tauri` into the generated root workspace,
+  `frontend/apps/let-cook/src-tauri` into the generated root workspace,
   never path-depend it on `xai-grok-shell` / pager / tools, and never patch
   those crates for Desktop-only behaviour (BYOK `providers/*` and
   `clientIdentifier: grok-desktop` are the existing exceptions).
