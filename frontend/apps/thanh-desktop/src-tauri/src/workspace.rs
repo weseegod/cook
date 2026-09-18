@@ -1,3 +1,6 @@
+//! Read-only workspace sidecar (C5): git review vs HEAD, file tree/preview, native open.
+//! Paths stay confined to the workspace root. No write, commit, or LSP — this is not a git GUI.
+
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};

@@ -1,19 +1,19 @@
-import {
-  PROTOCOL_VERSION,
-  type InitializeRequest,
-  type InitializeResponse,
-  type LoadSessionRequest,
-  type NewSessionRequest,
-  type NewSessionResponse,
-  type PromptRequest,
-  type PromptResponse,
-  type RequestPermissionRequest,
-  type SessionNotification,
+import type {
+  InitializeResponse,
+  LoadSessionRequest,
+  NewSessionRequest,
+  NewSessionResponse,
+  PromptRequest,
+  PromptResponse,
+  SessionNotification,
 } from "@agentclientprotocol/sdk";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { buildPromptParts, imageAttachEnabled, optimisticImages, type Attachment } from "./attachments";
+import { buildInitializeRequest, CAPABILITIES } from "./handshake";
+import { dispatchNotification } from "./notifications";
+import { dispatchReverseRequest, elicitInteraction } from "./reverse";
 import { useCatalogStore } from "../state/catalog";
-import { useSessionStore, type PendingQuestion, type TurnOutcome } from "../state/session";
+import { useSessionStore, type TurnOutcome } from "../state/session";
 import {
   notify,
   onLog,
@@ -28,12 +28,8 @@ import {
 import { setDefaultModel as setDefaultModelOnAgent } from "./providers";
 import { commandsFromUpdate, modelCatalog, XaiClient, type SessionInfo } from "./xai";
 
-const CLIENT_META = {
-  clientIdentifier: "grok-desktop",
-  clientType: "grok_desktop",
-  mcpApps: true,
-  bufferingSettings: { minDelayMs: 16, maxDelayMs: 64, maxBytes: 65536 },
-};
+export { elicitInteraction };
+export { CAPABILITIES } from "./handshake";
 
 export class ThanhAcpClient {
   readonly xai = new XaiClient();
@@ -89,18 +85,7 @@ export class ThanhAcpClient {
   }
 
   private async initialize() {
-    const params: InitializeRequest = {
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-        terminal: true,
-        plan: {},
-        _meta: { "x.ai/folderTrust": { interactive: true } },
-      },
-      clientInfo: { name: "Thanh Desktop", title: "Thanh Desktop", version: __APP_VERSION__ },
-      _meta: CLIENT_META,
-    };
-    await request<InitializeResponse>("initialize", params);
+    await request<InitializeResponse>("initialize", buildInitializeRequest(__APP_VERSION__));
   }
 
   async newSession(): Promise<string> {
@@ -111,7 +96,7 @@ export class ThanhAcpClient {
       cwd: this.cwd,
       mcpServers: [],
       _meta: {
-        clientIdentifier: "grok-desktop",
+        clientIdentifier: CAPABILITIES.clientIdentifier,
         ...(defaultModel ? { modelId: defaultModel } : {}),
         ...(yoloMode ? { yoloMode: true } : {}),
       },
@@ -199,7 +184,10 @@ export class ThanhAcpClient {
       throw error;
     } finally {
       await this.inboundMessages;
-      useSessionStore.getState().finishTurn(outcome);
+      // N-pcomplete may already have finalized; finishTurn is idempotent on the marker.
+      if (useSessionStore.getState().turnStartedAt !== null) {
+        useSessionStore.getState().finishTurn(outcome);
+      }
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       const store = useSessionStore.getState();
       store.set({
@@ -258,7 +246,7 @@ export class ThanhAcpClient {
     useSessionStore.getState().set({ alwaysApprove: enabled });
     await notify("x.ai/yolo_mode_changed", {
       yolo_mode: enabled,
-      clientIdentifier: "grok-desktop",
+      clientIdentifier: CAPABILITIES.clientIdentifier,
     });
   }
 
@@ -377,61 +365,28 @@ export class ThanhAcpClient {
         continue;
       }
       flushUpdates();
-      await this.handleMessage(message);
+      await this.handleMessage(message, method, params);
     }
     flushUpdates();
   }
 
-  private async handleMessage(message: RpcMessage) {
-    const method = unwrapMethod(message);
-    const params = unwrapParams(message);
-    if (method === "session/request_permission" && message.id !== undefined) {
-      useSessionStore.getState().set({
-        pendingPermission: {
-          rpcId: message.id,
-          request: params as unknown as RequestPermissionRequest,
-        },
-      });
+  private async handleMessage(
+    message: RpcMessage,
+    method = unwrapMethod(message),
+    params = unwrapParams(message),
+  ) {
+    if (!method) return;
+
+    // Layer 2 — reverse requests (message has id).
+    if (message.id !== undefined) {
+      await dispatchReverseRequest(message, method, params);
       return;
     }
-    if (method === "x.ai/models/update") {
-      // The notification carries the catalog, so the picker updates without a round trip. The
-      // machine-wide broadcast form carries no payload at all, which only means the catalog moved
-      // on disk: applying it as a catalog would empty the picker, so it re-lists instead.
-      const catalog = modelCatalog(params);
-      if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
-      else await this.refreshModels();
-      return;
-    }
-    if (method === "x.ai/yolo_mode_changed") return;
-    if (method === "x.ai/ask_user_question" && message.id !== undefined) {
-      useSessionStore.getState().set({ pendingQuestion: questionInteraction(message.id, params) });
-      return;
-    }
-    if (method === "x.ai/exit_plan_mode" && message.id !== undefined) {
-      // The request carries the whole `plan.md`; ACP `Plan` updates carry entries only, so this is
-      // the one place the full body reaches the renderer. Stash it before parking the decision.
-      const body = typeof params.planContent === "string" && params.planContent.trim() !== ""
-        ? params.planContent
-        : null;
-      useSessionStore.getState().beginPlanReview(body);
-      useSessionStore.getState().set({ pendingQuestion: planInteraction(message.id, params) });
-      return;
-    }
-    if (method === "x.ai/folder_trust/request" && message.id !== undefined) {
-      useSessionStore.getState().set({ pendingQuestion: trustInteraction(message.id, params) });
-      return;
-    }
-    if (method === "x.ai/mcp/elicit" && message.id !== undefined) {
-      useSessionStore.getState().set({ pendingQuestion: elicitInteraction(message.id, params) });
-      return;
-    }
-    if (message.id !== undefined && message.method) {
-      console.warn(`Unsupported agent request: ${message.method}`);
-      await respond(message.id, undefined, { code: -32601, message: `Unsupported method: ${message.method}` });
-      return;
-    }
-    if (message.method) console.debug(`Ignored ACP notification: ${message.method}`);
+
+    // Layer 3 — notifications.
+    await dispatchNotification(message, method, params, {
+      refreshModels: () => this.refreshModels(),
+    });
   }
 
   private async restartAfterCrash(detail?: string) {
@@ -475,87 +430,6 @@ function unwrapMethod(message: RpcMessage): string | undefined {
 function unwrapParams(message: RpcMessage): Record<string, unknown> {
   if (message.method?.startsWith("_x.ai/") && isRecord(message.params?.params)) return message.params.params;
   return message.params ?? {};
-}
-
-function questionInteraction(rpcId: number | string, raw: Record<string, unknown>): PendingQuestion {
-  const questions = Array.isArray(raw.questions) ? raw.questions.filter(isRecord) : [];
-  return {
-    rpcId,
-    title: raw.mode === "plan" ? "Plan needs your input" : "Thanh has a question",
-    kind: "question",
-    raw,
-    questions: questions.map((question, questionIndex) => ({
-      question: String(question.question ?? `Question ${questionIndex + 1}`),
-      multiSelect: question.multiSelect === true,
-      options: (Array.isArray(question.options) ? question.options.filter(isRecord) : []).map((option, optionIndex) => ({
-        id: String(option.id ?? option.label ?? optionIndex),
-        label: String(option.label ?? option.id ?? `Option ${optionIndex + 1}`),
-        description: typeof option.description === "string" ? option.description : undefined,
-      })),
-    })),
-  };
-}
-
-function planInteraction(rpcId: number | string, raw: Record<string, unknown>): PendingQuestion {
-  const hasPlan = typeof raw.planContent === "string" && raw.planContent.trim() !== "";
-  return {
-    rpcId,
-    // No card title: the review keeps the composer, so the decision status is the card's only header.
-    kind: "plan",
-    raw,
-    questions: [{
-      // `plan_approval_view::plan_approval_status_label`: the plan body itself lives in the popup,
-      // so the card carries the decision status instead of dumping the whole file inline.
-      question: hasPlan
-        ? "Waiting on plan approval"
-        : "No plan written: approve or request changes",
-      options: [
-        { id: "approved", label: "Approve", description: "Proceed with the plan" },
-        // The TUI's `g` decision. Its button reads `run as goal`; `approved_as_goal` is the wire value.
-        { id: "approved_as_goal", label: "Run as goal", description: "Run the approved plan as an autonomous goal" },
-        { id: "cancelled", label: "Request changes", description: "Keep planning and send feedback" },
-        { id: "abandoned", label: "Quit plan", description: "Leave plan mode without executing" },
-      ],
-    }],
-  };
-}
-
-function trustInteraction(rpcId: number | string, raw: Record<string, unknown>): PendingQuestion {
-  const kinds = Array.isArray(raw.configKinds) ? raw.configKinds.join(", ") : "project configuration";
-  return {
-    rpcId,
-    title: "Trust this workspace?",
-    kind: "trust",
-    raw,
-    questions: [{
-      question: `${String(raw.workspace ?? raw.cwd ?? "This folder")} contains ${kinds}. Trusting it may run local hooks or MCP servers.`,
-      options: [
-        { id: "trust", label: "Trust workspace" },
-        { id: "reject", label: "Keep restricted" },
-      ],
-    }],
-  };
-}
-
-/** `x.ai/mcp/elicit`: the agent asks the user for MCP-server input or a URL visit. */
-export function elicitInteraction(rpcId: number | string, raw: Record<string, unknown>): PendingQuestion {
-  const server = String(raw.serverName ?? raw.server_name ?? "an MCP server");
-  const message = String(raw.message ?? "This connector needs your input.");
-  const url = typeof raw.url === "string" ? raw.url : undefined;
-  const mode = String(raw.mode ?? "form");
-  return {
-    rpcId,
-    title: `${server} needs your input`,
-    kind: "elicit",
-    raw,
-    questions: [{
-      question: url ? `${message}\n\n${url}` : message,
-      options: [
-        { id: "accept", label: url ? "Open and continue" : "Accept", description: mode === "url" ? "Open the link, then continue the tool call" : "Send this input to the connector" },
-        { id: "decline", label: "Decline", description: "The connector continues without this input" },
-      ],
-    }],
-  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,5 +1,10 @@
 //! Desktop-owned provider/model settings backed by `~/.thanh/config.toml`.
 //!
+//! **Host role (C5):** this module is the only production Desktop write path for
+//! `[model_providers.*]` / `[model.*]`. Agent `x.ai/providers/*` remains the CLI/TUI
+//! path and the mock/test fallback (`desktopCommand`). Do not dual-write the same
+//! edit through both in Tauri.
+//!
 //! Secrets stay in this native process. The renderer receives only credential presence and a
 //! first-four/last-four hint. Every write is a locked, atomic TOML edit so comments and unrelated
 //! upstream fields survive.

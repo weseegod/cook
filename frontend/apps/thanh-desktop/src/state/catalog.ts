@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { McpServerView } from "../acp/extensions";
 import type { CommandSummary, ModelSummary, SessionSummary } from "../acp/xai";
 import { useSessionStore } from "./session";
 
@@ -8,10 +9,13 @@ interface CatalogState {
   /** The model the agent would use right now; the picker's value before the first session. */
   currentModelId: string | null;
   commands: CommandSummary[];
+  /** MCP connectors; kept fresh by N-mcp-* notifications (C3). */
+  mcpServers: McpServerView[];
   sessionSearch: string;
   setSessions: (sessions: SessionSummary[]) => void;
   setModelCatalog: (catalog: { currentModelId: string | null; models: ModelSummary[] }) => void;
   setCommands: (commands: CommandSummary[]) => void;
+  setMcpServers: (mcpServers: McpServerView[]) => void;
   setSessionSearch: (sessionSearch: string) => void;
 }
 
@@ -20,10 +24,12 @@ export const useCatalogStore = create<CatalogState>((set) => ({
   models: [],
   currentModelId: null,
   commands: [],
+  mcpServers: [],
   sessionSearch: "",
   setSessions: (sessions) => set({ sessions }),
   setModelCatalog: ({ currentModelId, models }) => set({ currentModelId, models }),
   setCommands: (commands) => set({ commands }),
+  setMcpServers: (mcpServers) => set({ mcpServers }),
   setSessionSearch: (sessionSearch) => set({ sessionSearch }),
 }));
 

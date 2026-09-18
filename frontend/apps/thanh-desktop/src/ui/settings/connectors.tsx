@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Cable, Plus, RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { listConnectors, serverEnabled, serverTransportLabel, toggleConnector, upsertConnector } from "../../acp/extensions";
+import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
 import { ToggleSwitch } from "../components/toggle-switch";
@@ -9,6 +10,8 @@ import { ToggleSwitch } from "../components/toggle-switch";
 /** Settings → Connectors: the agent's MCP servers, their state, and add/toggle. */
 export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const sessionId = useSessionStore((state) => state.sessionId);
+  const mcpServers = useCatalogStore((state) => state.mcpServers);
+  const setMcpServers = useCatalogStore((state) => state.setMcpServers);
   const queryClient = useQueryClient();
   const [adding, setAdding] = useState<"stdio" | "http" | null>(null);
   const [name, setName] = useState("");
@@ -16,12 +19,18 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   const [args, setArgs] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // Seed the catalog once; live updates arrive via N-mcp-srv / N-mcp-tools (no poll required).
   const servers = useQuery({
     queryKey: ["connectors", sessionId],
     queryFn: () => listConnectors(sessionId ?? undefined, true),
-    enabled: connected,
+    enabled: connected && Boolean(sessionId),
     retry: 0,
   });
+
+  useEffect(() => {
+    if (servers.data?.servers) setMcpServers(servers.data.servers);
+  }, [servers.data, setMcpServers]);
+
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["connectors"] });
 
   const toggle = useMutation({
@@ -58,7 +67,8 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
     onError: (caught) => setError(caught instanceof Error ? caught.message : String(caught)),
   });
 
-  const list = servers.data?.servers ?? [];
+  const list = mcpServers;
+  const showLoading = Boolean(sessionId) && servers.isLoading && list.length === 0;
 
   return (
     <div className="connectors-panel">
@@ -72,9 +82,9 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
       </div>
       {!sessionId ? (
         <EmptyState label="No active session" detail="Start a conversation to manage its connectors." />
-      ) : servers.isLoading ? (
+      ) : showLoading ? (
         <LoadingState label="Loading connectors" />
-      ) : servers.isError ? (
+      ) : servers.isError && list.length === 0 ? (
         <ErrorState label="Could not load connectors." />
       ) : list.length === 0 ? (
         <EmptyState label="No connectors" detail="Add an MCP server for this session." />

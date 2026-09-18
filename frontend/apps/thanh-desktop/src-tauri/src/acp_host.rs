@@ -1,3 +1,9 @@
+//! ACP stdio mux + native Layer 1 reverse handlers (C5).
+//!
+//! Role: spawn/kill the agent sidecar, map JSON-RPC ids, coalesce notifications, and
+//! answer `fs/read_text_file` / `fs/write_text_file` with the sessions-root allow-path.
+//! Terminal stub arms are intentionally absent while `terminal: false` (H-term / C1).
+
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -392,6 +398,13 @@ fn spawn_stderr_reader(app: AppHandle, stderr: impl Read + Send + 'static) {
     });
 }
 
+/// Layer 1 host intercept: ACP `fs/*` only until a real PTY exists (H-term).
+/// Do not stub `terminal/*` while `clientCapabilities.terminal` is false — leave those
+/// for the renderer Layer 2 typed-decline path (`docs/desktop-app.md` §5.4).
+///
+/// Sessions-root allow-path: `fs/*` may touch the workspace cwd **and** the agent's
+/// session store (`$THANH_HOME/sessions` / `$GROK_HOME/sessions` / `~/.thanh/sessions`)
+/// so plan mode can write `<session>/plan.md` outside any workspace.
 fn handle_host_request(
     message: &Value,
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -404,17 +417,8 @@ fn handle_host_request(
         return false;
     };
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
-    let outcome = match method {
-        "fs/read_text_file" => read_text_file(&params, workspace),
-        "fs/write_text_file" => write_text_file(&params, workspace),
-        "terminal/create" | "x.ai/terminal/create" => Ok(json!({
-            "terminalId": format!("desktop-stub-{}", id.as_u64().unwrap_or_default())
-        })),
-        "terminal/output" => Ok(json!({ "output": "", "truncated": false, "exitStatus": null })),
-        "terminal/wait_for_exit" => Ok(json!({ "exitCode": 0, "signal": null })),
-        "terminal/release" | "terminal/kill" => Ok(json!({})),
-        _ if method.starts_with("x.ai/terminal/") => Ok(json!({})),
-        _ => return false,
+    let Some(outcome) = host_native_outcome(method, &params, workspace) else {
+        return false;
     };
     let response = match outcome {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }),
@@ -426,6 +430,20 @@ fn handle_host_request(
     };
     let _ = write_message(stdin, &response);
     true
+}
+
+/// Returns `Some` only for methods this host implements natively (fs). Terminal
+/// methods return `None` so they are not answered with a fake `exitCode: 0`.
+fn host_native_outcome(
+    method: &str,
+    params: &Value,
+    workspace: &Arc<Mutex<Option<PathBuf>>>,
+) -> Option<Result<Value, String>> {
+    match method {
+        "fs/read_text_file" => Some(read_text_file(params, workspace)),
+        "fs/write_text_file" => Some(write_text_file(params, workspace)),
+        _ => None,
+    }
 }
 
 /// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file to
@@ -538,6 +556,17 @@ fn write_text_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_does_not_stub_terminal_wait_for_exit() {
+        let workspace = Arc::new(Mutex::new(None));
+        assert!(
+            host_native_outcome("terminal/wait_for_exit", &json!({}), &workspace).is_none(),
+            "terminal stubs must not return exitCode: 0 while terminal cap is false"
+        );
+        assert!(host_native_outcome("terminal/create", &json!({}), &workspace).is_none());
+        assert!(host_native_outcome("x.ai/terminal/create", &json!({}), &workspace).is_none());
+    }
 
     #[test]
     fn rejects_parent_traversal() {
