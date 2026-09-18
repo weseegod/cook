@@ -50,7 +50,8 @@ Harvested 2026-09-18 from git `705f3572`. A string is in this map only if it app
 | TUI slash registry | `crates/codegen/xai-grok-pager/src/slash/commands/mod.rs` `builtin_commands` |
 | Agent slash builtins | `crates/codegen/xai-grok-shell/src/session/slash_commands.rs` `BUILTIN_COMMANDS` |
 | Desktop reverse | `frontend/apps/let-cook/src/acp/client.ts` `handleMessage`; `src-tauri/src/acp_host.rs` `handle_host_request` |
-| Desktop forward | `frontend/apps/let-cook/src/acp/{xai,extensions,providers,client,host}.ts` |
+| Desktop forward | `frontend/apps/let-cook/src/acp/{xai,extensions,providers,client,host,wire-params}.ts` |
+| Desktop settings surfaces | `frontend/apps/let-cook/src/ui/settings/{connectors,context-panels,skills-groups}.tsx` |
 | Desktop transcript | `frontend/apps/let-cook/src/state/session.ts` `reduceNotifications` / `reduceTranscript` |
 | Tools | `crates/codegen/xai-grok-tools/src/types/tool.rs` `ToolKind`; pager `scrollback/blocks/tool/*`; Desktop `ui/chat/tool-card.tsx` |
 | User-facing names | `~/.cook/docs/user-guide/` (`04-slash-commands`, `07-mcp-servers`, `08-skills`, `09-plugins`, `10-hooks`, `13-memory`, `16-subagents`, `19-plan-mode`, `20-background-tasks`, `21-terminal-support`, `23-dashboard`) |
@@ -220,11 +221,11 @@ TUI match: `acp_handler/mod.rs` L605–628. Plus session-update carriers via `is
 | N-git | `x.ai/git_head_changed` | `handle_git_head_changed` | ignored (Review is Tauri `loadWorkspaceReview`, not this notif) | `gap` | surface |
 | N-ver | `x.ai/leader/version_mismatch` | toast | ignored | `out` | out |
 | N-mcp-init | `x.ai/mcp/init_progress` | `handle_mcp_init_progress` | catalog status patch | `ok` | surface |
-| N-mcp-tools | `x.ai/mcp/tools_changed` | `handle_mcp_tools_changed` | catalog tools patch | `ok` | surface |
+| N-mcp-tools | `x.ai/mcp/tools_changed` | `handle_mcp_tools_changed` | catalog tools patch; an empty catalog triggers a `connectors` refetch instead of dropping the push | `ok` | surface |
 | N-mcp-inited | `x.ai/mcp_initialized` | same handler | status → ready | `ok` | surface |
 | N-mcp-stat | `x.ai/mcp/server_status` | gated `handle_mcp_server_status` | catalog status patch | `ok` | surface |
 | N-mcp-elic | `x.ai/mcp/elicit_complete` | `handle_mcp_elicit_complete` | clears pending elicit | `ok` | protocol |
-| N-mcp-srv | `x.ai/mcp/servers_updated` | `handle_mcp_servers_updated` | replaces MCP catalog (Connectors live) | `ok` | surface |
+| N-mcp-srv | `x.ai/mcp/servers_updated` | `handle_mcp_servers_updated` | merges into MCP catalog (Connectors live; an unannotated payload keeps known tools) | `ok` | surface |
 | N-yolo | `x.ai/yolo_mode_changed` | settings path | consumed no-op | `ok` | protocol |
 | N-chunk | `x.ai/session/updates/chunk` | — | ignored | `na` | chrome |
 | N-hookev | `x.ai/hooks/event` | — | ignored | `gap` | surface |
@@ -349,14 +350,14 @@ Desktop queues a second `session/prompt` (`queuePrompt`). That is not the TUI qu
 
 | Id | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
-| C-sk-list | `x.ai/skills/list` | `/skills` | Settings Skills | `ok` | surface |
-| C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle | `ok` | surface |
-| C-sk-add | `x.ai/skills/add` / `remove` / `reset` / `config` / `refresh-baseline` | modal | — | `gap` | surface |
-| C-wf-list | `x.ai/workflows/list` | `/workflows` | — | `gap` | surface |
-| C-pl-list | `x.ai/plugins/list` | `/plugins` | Settings list only | `partial` | surface |
-| C-pl-act | `x.ai/plugins/action` | modal | — | `gap` | surface |
+| C-sk-list | `x.ai/skills/list` | `/skills` | Settings Skills, grouped by discovery source (Project / User / Plugin / Bundled / Server / Config) | `ok` | surface |
+| C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle, persists `[skills].disabled` | `ok` | surface |
+| C-sk-add | `x.ai/skills/add` / `remove` / `reset` / `config` | modal | Settings Skills add/remove/reset/config | `ok` (`refresh-baseline` still `gap`) | surface |
+| C-wf-list | `x.ai/workflows/list` | `/workflows` | Settings Skills workflow list (browse-only) | `partial` | surface |
+| C-pl-list | `x.ai/plugins/list` | `/plugins` | Settings list with enable/disable | `ok` | surface |
+| C-pl-act | `x.ai/plugins/action` | modal | Settings enable/disable | `ok` (install/uninstall/update still CLI) | surface |
 | C-pl-nt | `x.ai/plugins/notify-updates` | modal | — | `gap` | chrome |
-| C-pl-rel | `x.ai/plugins/reload` | `/plugins reload` | — | `gap` | surface |
+| C-pl-rel | `x.ai/plugins/reload` | `/plugins reload` | Settings Reload plugins | `ok` | surface |
 | C-mkt | `x.ai/marketplace/list` / `action` | `/marketplace` | — | `gap` | surface |
 | C-hk-list | `x.ai/hooks/list` | `/hooks` | — | `gap` | surface |
 | C-hk-act | `x.ai/hooks/action` | modal | — | `gap` | surface |
@@ -367,12 +368,12 @@ Constants: `extensions/mcp.rs` `mcp_methods` + `xai-grok-mcp/src/wire.rs`.
 
 | Id | Wire | Dir | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|---|
-| C-mcp-list | `x.ai/mcp/list` | C→A | `/mcps` | `extensions.ts` Connectors | `partial` (no live notifs) | surface |
-| C-mcp-tog | `x.ai/mcp/toggle` | C→A | modal | Connectors | `partial` | surface |
-| C-mcp-up | `x.ai/mcp/upsert` | C→A | modal | Connectors add | `partial` | surface |
-| C-mcp-del | `x.ai/mcp/delete` | C→A | modal | — | `gap` | surface |
-| C-mcp-tool | `x.ai/mcp/toggle_tool` | C→A | modal | — | `gap` | surface |
-| C-mcp-auth | `x.ai/mcp/auth_status` / `auth_trigger` / `setup` | C→A | connectors UI | — | `gap` | surface |
+| C-mcp-list | `x.ai/mcp/list` | C→A | `/mcps` | `extensions.ts` Connectors, uncached first read so `session.tools` is annotated | `ok` | surface |
+| C-mcp-tog | `x.ai/mcp/toggle` | C→A | modal | Connectors server switch | `ok` | surface |
+| C-mcp-up | `x.ai/mcp/upsert` | C→A | modal | Connectors add (stdio + HTTP) | `ok` | surface |
+| C-mcp-del | `x.ai/mcp/delete` | C→A | modal | Connectors delete (local servers only) | `ok` | surface |
+| C-mcp-tool | `x.ai/mcp/toggle_tool` | C→A | modal | Connectors per-tool switch | `ok` | surface |
+| C-mcp-auth | `x.ai/mcp/auth_status` / `auth_trigger` / `setup` | C→A | connectors UI | Connectors auth status / authenticate / setup form | `ok` | surface |
 | C-mcp-res | `x.ai/mcp/read_resource` | C→A | debug | — | `na` | chrome |
 | C-mcp-call | `x.ai/mcp/call` | C→A | debug / outside LLM loop | — | `na` | chrome |
 | C-mcp-sdk | `x.ai/mcp/sdk_call` | A→C | see R-sdk | see R-sdk | `gap` | protocol |
@@ -504,8 +505,8 @@ Ties handshake + reverse + notifs + Settings.
 
 | Id | Path | Status | Must |
 |---|---|---|---|
-| MCP-agent | Agent-hosted servers (`config.toml` / `x.ai/mcp/upsert`). Desktop Settings list/toggle/add (`extensions.ts`, `connectors.tsx`) | `partial` — no `servers_updated` / `tools_changed` / `init_progress` / `elicit_complete`; UI can look fine and still be stale | surface |
-| MCP-auth | `auth_status` / `auth_trigger` / `setup`. TUI connectors UI | `gap` | surface |
+| MCP-agent | Agent-hosted servers (`config.toml` / `x.ai/mcp/upsert`). Desktop Settings list/toggle/add (`extensions.ts`, `connectors.tsx`) | `ok` — `N-mcp-*` consumed; a payload not yet session-annotated keeps the tools already listed | surface |
+| MCP-auth | `auth_status` / `auth_trigger` / `setup`. Connectors status / authenticate / setup form | `ok` | surface |
 | MCP-sdk | `session/new` `_meta["x.ai/mcp/servers"]` + reverse `x.ai/mcp/sdk_call`. Desktop: empty servers + `-32601` | `gap` and **unsafe to enable** | protocol |
 | MCP-call | `x.ai/mcp/call` outside the LLM loop | `na` | chrome |
 | MCP-elicit | Modal exists; `elicit_complete` ignored | `partial` | protocol |
@@ -517,10 +518,10 @@ Ties handshake + reverse + notifs + Settings.
 
 | Id | Item | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
-| SK-disc | Discovery: `x.ai/skills/list`, slash names from `available_commands_update`, `SKILL.md` as `Skill` rows | modal + slash | Settings list/toggle; slash `ok-prompt` for invocable skills | `partial` | surface |
-| SK-mut | add/remove/config/reset/refresh-baseline | modal | — | `gap` | surface |
-| PL-list | `x.ai/plugins/list` | `/plugins` | Settings list, no action | `partial` | surface |
-| PL-act | `action` / `notify-updates` / `reload` | modal | — | `gap` | surface |
+| SK-disc | Discovery: `x.ai/skills/list`, slash names from `available_commands_update`, `SKILL.md` as `Skill` rows | modal + slash | Settings Skills list grouped by source + search + toggle, `cwd` always sent; slash `ok-prompt` for invocable skills | `ok` | surface |
+| SK-mut | add/remove/config/reset/refresh-baseline | modal | add/remove/config/reset in Settings Skills | `partial` (`refresh-baseline` still `gap`) | surface |
+| PL-list | `x.ai/plugins/list` | `/plugins` | Settings list with enable/disable | `ok` | surface |
+| PL-act | `action` / `notify-updates` / `reload` | modal | enable/disable + reload in Settings Skills | `partial` (install/uninstall/update, notify-updates still `gap`) | surface |
 | WF-list | `x.ai/workflows/list`, `/workflow`, `ToolKind::Workflow` | `/workflows` + runs pane | `/workflow` as prompt only; no runs surface | `gap` | surface |
 | HK | Client `_meta["x.ai/hooks"]`, `x.ai/hooks/{list,action,run}` | `/hooks` modal; does **not** register client hooks on `session/new` | **gap** | surface |
 

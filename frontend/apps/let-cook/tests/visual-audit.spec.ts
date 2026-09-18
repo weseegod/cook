@@ -108,8 +108,17 @@ test.describe("visual audit", () => {
         await expect(page.getByText("Choose a provider")).toHaveCount(0);
         await expect(page.getByText("Could not read providers from the agent.")).toHaveCount(0);
       }
-      if (tab === "Connectors") await expect(page.getByTestId("connector-filesystem")).toBeVisible();
-      if (tab === "Skills") await expect(page.getByTestId("skill-help")).toBeVisible();
+      if (tab === "Connectors") {
+        await expect(page.getByTestId("connector-filesystem")).toBeVisible();
+        // Each server carries its tools, and each tool its own toggle.
+        await expect(page.getByTestId("connector-tool-filesystem-read_file")).toBeVisible();
+        await expect(page.getByLabel("Toggle tool list_dir")).toBeVisible();
+      }
+      if (tab === "Skills") {
+        await expect(page.getByTestId("skill-help")).toBeVisible();
+        await expect(page.getByTestId("skill-group-Bundled")).toBeVisible();
+        await expect(page.getByLabel("Toggle skill help")).toBeVisible();
+      }
       await capture(page, `settings-${tab.toLowerCase().replaceAll(" ", "-")}`);
       await expectNoHorizontalOverflow(page);
     }
@@ -133,6 +142,18 @@ test.describe("visual audit", () => {
     await expect(page.getByTestId("provider-row-openai")).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await capture(page, "minimum-settings-models");
+
+    // The tool and skill rows carry two lines of text plus a switch, so they are the narrowest
+    // content in Settings.
+    await page.getByRole("tab", { name: "Connectors" }).click();
+    await expect(page.getByTestId("connector-tool-filesystem-list_dir")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "minimum-settings-connectors");
+
+    await page.getByRole("tab", { name: "Skills" }).click();
+    await expect(page.getByTestId("skill-help")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "minimum-settings-skills");
   });
 
   test("shows the goal chip and its detail surface in both themes", async ({ page }) => {
@@ -392,5 +413,53 @@ test.describe("visual audit", () => {
     await expect(page.getByTestId("composer-input")).toBeVisible();
     await expect(page.getByTestId("composer-input")).toHaveAttribute("placeholder", "Request changes…");
     await capture(page, "chat-turn-status-inline-decisions");
+  });
+
+  test("keeps the conversation list, its row menu and the sort groups inside the shell", async ({ page }) => {
+    await openWorkspace(page, {
+      ...VISUAL_SEED,
+      sessions: [
+        { id: "session-long", title: "Investigate the authentication flow and document the regression", cwd: "/Users/demo/projects/cook-demo", updatedAt: "2026-09-17T10:00:00Z" },
+        { id: "session-login", title: "Fix login bug", cwd: "/Users/demo/work/api-server", updatedAt: "2026-09-15T10:00:00Z" },
+        { id: "session-providers", title: "Provider settings", cwd: "/Users/demo/projects/cook-demo", updatedAt: "2026-09-14T10:00:00Z" },
+      ],
+    });
+
+    // The brand mark is drawn at twice the size the sidebar shipped with.
+    expect((await page.locator(".brand-mark").boundingBox())?.width).toBe(44);
+    await expect(page.locator(".session-group-heading")).toHaveCount(0);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-list-time");
+
+    // One overflow menu per row, kept inside the window next to its trigger.
+    const row = page.getByTestId("session-row-session-login");
+    await row.hover();
+    await row.getByTestId("session-menu-session-login").click();
+    const viewport = page.viewportSize()!;
+    const menu = (await page.locator(".session-menu").boundingBox())!;
+    expect(menu.x).toBeGreaterThanOrEqual(0);
+    expect(menu.x + menu.width).toBeLessThanOrEqual(viewport.width);
+    expect(menu.y + menu.height).toBeLessThanOrEqual(viewport.height);
+    await capture(page, "conversation-row-menu");
+
+    await page.getByTestId("session-pin-session-login").click();
+    await expect(page.locator(".session-group-heading span")).toHaveText(["Pinned"]);
+    await page.getByTestId("conversation-sort").click();
+    await page.getByTestId("sort-workspace").click();
+    // The pinned block leads, then one block per workspace, most recently used first.
+    await expect(page.locator(".session-group-heading span")).toHaveText(["Pinned", "cook-demo"]);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-list-workspace");
+
+    await page.getByLabel("Settings").click();
+    await page.getByTestId("theme-option-light").click();
+    await page.keyboard.press("Escape");
+    await page.getByTestId("conversation-sort").click();
+    await page.getByTestId("sort-time").click();
+    await row.hover();
+    await row.getByTestId("session-menu-session-login").click();
+    // Delete keeps the light red danger tone in the light theme too.
+    await expect(page.locator(".session-menu button.session-menu-danger")).toHaveCSS("color", "rgb(205, 49, 49)");
+    await capture(page, "conversation-row-menu-light");
   });
 });

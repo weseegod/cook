@@ -158,9 +158,35 @@ function outcomeFromPromptComplete(params: Record<string, unknown>): TurnOutcome
   return { kind: "completed" };
 }
 
+/**
+ * Fold a freshly listed catalog into the one already on screen.
+ *
+ * `x.ai/mcp/list` answers from the agent-level catalog before the session's MCP pool has been
+ * annotated, and those rows carry `session.status: undefined` with an empty tool list. Replacing
+ * a list the user is looking at with that would blank every tool row mid-toggle, so an
+ * unannotated incoming row keeps the tools already known.
+ */
+export function mergeMcpCatalog(current: McpServerView[], incoming: McpServerView[]): McpServerView[] {
+  const previousByName = new Map(current.map((server) => [server.name, server]));
+  return incoming.map((server) => {
+    const previous = previousByName.get(server.name);
+    if (!previous) return server;
+    const previousTools = previous.session?.tools ?? [];
+    const incomingTools = server.session?.tools ?? [];
+    const unannotated = server.session?.status === undefined && incomingTools.length < previousTools.length;
+    return {
+      ...server,
+      session: { ...server.session, tools: unannotated ? previousTools : incomingTools },
+    };
+  });
+}
+
 function patchServerStatus(serverName: string, status: string): void {
   const { mcpServers, setMcpServers } = useCatalogStore.getState();
-  if (mcpServers.length === 0) return;
+  if (mcpServers.length === 0) {
+    void refreshConnectorCatalog();
+    return;
+  }
   setMcpServers(
     mcpServers.map((server) =>
       server.name === serverName
@@ -172,7 +198,11 @@ function patchServerStatus(serverName: string, status: string): void {
 
 function patchServerTools(serverName: string, tools: McpToolSummary[]): void {
   const { mcpServers, setMcpServers } = useCatalogStore.getState();
-  if (mcpServers.length === 0 || !serverName) return;
+  if (mcpServers.length === 0) {
+    void refreshConnectorCatalog();
+    return;
+  }
+  if (!serverName) return;
   setMcpServers(
     mcpServers.map((server) =>
       server.name === serverName
@@ -180,6 +210,12 @@ function patchServerTools(serverName: string, tools: McpToolSummary[]): void {
         : server,
     ),
   );
+}
+
+/** A `tools_changed` before the list query seeded the catalog must still reach the screen. */
+async function refreshConnectorCatalog(): Promise<void> {
+  const { queryClient } = await import("../../state/query-client");
+  void queryClient.invalidateQueries({ queryKey: ["connectors"] });
 }
 
 function taskNoticeName(params: Record<string, unknown>): string {
@@ -237,7 +273,10 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/mcp/servers_updated",
     handle: (ctx) => {
       const servers = mcpServersFromParams(ctx.params);
-      if (servers) useCatalogStore.getState().setMcpServers(servers);
+      if (servers) {
+        const store = useCatalogStore.getState();
+        store.setMcpServers(mergeMcpCatalog(store.mcpServers, servers));
+      }
     },
   },
   {

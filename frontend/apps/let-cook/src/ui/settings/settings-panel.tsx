@@ -20,9 +20,9 @@ type Tab = SettingsTab;
 const TABS: Array<{ id: Tab; label: string; description: string; icon: React.ReactNode }> = [
   { id: "general", label: "General", description: "Appearance and behavior", icon: <SlidersHorizontal size={16} /> },
   { id: "models", label: "Models", description: "Providers, connections and model catalog", icon: <Cpu size={16} /> },
-  { id: "connectors", label: "Connectors", description: "MCP servers and tools", icon: <Cable size={16} /> },
+  { id: "connectors", label: "Connectors", description: "MCP servers and their tools", icon: <Cable size={16} /> },
   { id: "context", label: "Memory & project", description: "Instructions and memory", icon: <Palette size={16} /> },
-  { id: "skills", label: "Skills", description: "Skills, plugins and workflows", icon: <Sparkles size={16} /> },
+  { id: "skills", label: "Skills", description: "Enable or disable discovered skills", icon: <Sparkles size={16} /> },
   { id: "hooks", label: "Hooks", description: "Lifecycle hooks and event log", icon: <Webhook size={16} /> },
   { id: "about", label: "About", description: "Let Cook details", icon: <Info size={16} /> },
 ];

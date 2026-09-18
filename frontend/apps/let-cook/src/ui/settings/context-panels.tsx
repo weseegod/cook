@@ -5,6 +5,7 @@ import {
   PROJECT_FILES,
   listPlugins,
   listSkills,
+  normalizeSkill,
   readProjectFile,
   toggleSkill,
   writeProjectFile,
@@ -21,9 +22,10 @@ import {
 import { normalizeError } from "../../acp/errors";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
-import { EmptyState, LoadingState } from "../components/async-state";
+import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
 import { InfoTip } from "../components/info-tip";
 import { ToggleSwitch } from "../components/toggle-switch";
+import { groupSkills } from "./skills-groups";
 
 export { MemoryBrowserPanel as MemoryPanel } from "./memory-browser";
 
@@ -110,16 +112,24 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   const sessionId = useSessionStore((state) => state.sessionId);
   const catalogPlugins = useCatalogStore((state) => state.plugins);
   const queryClient = useQueryClient();
+  const [query, setQuery] = useState("");
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
   const [skillPath, setSkillPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [configMessage, setConfigMessage] = useState<string | null>(null);
 
-  const skills = useQuery({ queryKey: ["skills", cwd], queryFn: () => listSkills(cwd ?? undefined), enabled: connected, retry: 0 });
+  const skills = useQuery({
+    queryKey: ["skills", cwd],
+    queryFn: () => listSkills(cwd ?? undefined),
+    enabled: connected,
+    retry: 0,
+  });
   const plugins = useQuery({
     queryKey: ["plugins", sessionId],
     queryFn: () => listPlugins(sessionId ?? undefined),
-    enabled: connected,
+    // `x.ai/plugins/list` requires a session id. Without one the U-plug notification still fills
+    // the catalog, so there is nothing useful to ask for.
+    enabled: connected && Boolean(sessionId),
     retry: 0,
   });
   const workflows = useQuery({
@@ -129,13 +139,24 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
     retry: 0,
   });
 
-  const skillList = skills.data?.skills ?? skills.data?.items ?? [];
+  const skillList = skills.data?.skills ?? [];
   const pluginList = plugins.data?.plugins ?? plugins.data?.items ?? (catalogPlugins.length > 0 ? catalogPlugins : []);
   const workflowList = workflows.data?.workflows ?? [];
+  const groups = groupSkills(skillList, query);
 
   const toggle = useMutation({
     mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) => toggleSkill(name, enabled, cwd ?? undefined),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["skills"] }),
+    onSuccess: (result) => {
+      setStatus(null);
+      if (result?.skills?.length) {
+        queryClient.setQueryData(["skills", cwd], { skills: result.skills.map(normalizeSkill) });
+      }
+      void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    },
+    onError: (error) => {
+      setStatus(normalizeError(error, "Could not update skills"));
+      void queryClient.invalidateQueries({ queryKey: ["skills"] });
+    },
   });
 
   const mutateSkills = useMutation({
@@ -184,39 +205,78 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
     <div className="skills-panel">
       <h3>Skills</h3>
       {skills.isLoading && <LoadingState label="Loading skills" />}
-      {skillList.length === 0 && !skills.isLoading && <EmptyState label="No skills" detail="Skills discovered in this workspace will appear here." />}
-      <ul className="skill-list">
-        {skillList.map((skill) => (
-          <li key={skill.name} data-testid={`skill-${skill.name}`}>
-            <div>
-              <strong>{skill.name}</strong>
-              {skill.description && (
-                <button
-                  type="button"
-                  className={`skill-description${expandedSkills.has(skill.name) ? " expanded" : ""}`}
-                  aria-expanded={expandedSkills.has(skill.name)}
-                  onClick={() => setExpandedSkills((current) => {
-                    const next = new Set(current);
-                    if (next.has(skill.name)) next.delete(skill.name);
-                    else next.add(skill.name);
-                    return next;
-                  })}
-                >
-                  {skill.description}
-                </button>
-              )}
-            </div>
-            <div className="skill-toggle">
-              <ToggleSwitch
-                checked={skill.enabled !== false}
-                ariaLabel={`Toggle skill ${skill.name}`}
-                onChange={(enabled) => toggle.mutate({ name: skill.name, enabled })}
-                disabled={toggle.isPending}
-              />
-            </div>
-          </li>
-        ))}
-      </ul>
+      {skills.isError && (
+        <ErrorState label={normalizeError(skills.error, "Could not load skills from the agent.")} />
+      )}
+      {!skills.isLoading && !skills.isError && (
+        <>
+          <label className="field skill-search">
+            <span>Search</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Filter by name, description or source"
+              aria-label="Search skills"
+              data-testid="skill-search"
+            />
+          </label>
+          <p className="settings-note" data-testid="skills-summary">
+            {skillList.length} skill{skillList.length === 1 ? "" : "s"} found
+            {query && ` · ${groups.reduce((count, group) => count + group.skills.length, 0)} matching`}
+          </p>
+          {skillList.length === 0 && (
+            <EmptyState
+              label="No skills"
+              detail={cwd
+                ? "Skills discovered here and in ~/.cook will appear after the agent finds them."
+                : "Open a folder, then reopen this tab to list project skills."}
+            />
+          )}
+          {skillList.length > 0 && groups.length === 0 && (
+            <EmptyState label="No matching skills" detail="Clear the search to see every discovered skill." />
+          )}
+          {groups.map((group) => (
+            <section className="skill-group" key={group.label} data-testid={`skill-group-${group.label}`}>
+              <h4 className="skill-group-heading">{group.label} ({group.skills.length})</h4>
+              <ul className="skill-list">
+                {group.skills.map((skill) => {
+                  const label = skill.displayName ?? skill.name;
+                  return (
+                    <li key={skill.path ?? `${group.label}:${skill.name}`} data-testid={`skill-${skill.name}`}>
+                      <div>
+                        <strong title={skill.path}>{label}</strong>
+                        {skill.description && (
+                          <button
+                            type="button"
+                            className={`skill-description${expandedSkills.has(skill.name) ? " expanded" : ""}`}
+                            aria-expanded={expandedSkills.has(skill.name)}
+                            onClick={() => setExpandedSkills((current) => {
+                              const next = new Set(current);
+                              if (next.has(skill.name)) next.delete(skill.name);
+                              else next.add(skill.name);
+                              return next;
+                            })}
+                          >
+                            {skill.description}
+                          </button>
+                        )}
+                      </div>
+                      <div className="skill-toggle">
+                        <ToggleSwitch
+                          checked={skill.enabled !== false}
+                          ariaLabel={`Toggle skill ${skill.name}`}
+                          onChange={(enabled) => toggle.mutate({ name: skill.name, enabled })}
+                          disabled={toggle.isPending}
+                        />
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))}
+        </>
+      )}
 
       <div className="skills-mutate" data-testid="skills-mutate">
         <label className="field">

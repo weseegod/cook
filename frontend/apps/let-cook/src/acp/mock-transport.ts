@@ -69,7 +69,12 @@ export interface MockMcpServer {
 
 export interface MockSkill {
   name: string;
+  /** Frontmatter label, serialized on the wire as `display_name` (SkillInfo has no rename_all). */
+  display_name?: string;
   description?: string;
+  /** `local` | `repo` | `user` | `bundled` | `plugin` | `server`. */
+  scope?: string;
+  path?: string;
   enabled: boolean;
 }
 
@@ -206,8 +211,21 @@ function defaultState(): MockState {
       { name: "linear", transport: "http", url: "https://mcp.linear.app/sse", enabled: false, toolCount: 0, tools: [] },
     ],
     skills: [
-      { name: "help", description: "Documentation help", enabled: true },
-      { name: "review", description: "Review my changes", enabled: false },
+      {
+        name: "help",
+        display_name: "Help",
+        description: "Documentation help",
+        scope: "bundled",
+        path: "/home/demo/.cook/bundled/skills/help/SKILL.md",
+        enabled: true,
+      },
+      {
+        name: "review",
+        description: "Review my changes",
+        scope: "user",
+        path: "/home/demo/.cook/skills/review/SKILL.md",
+        enabled: false,
+      },
     ],
     plugins: [{ name: "cook-core", id: "user/abcd1234/cook-core", version: "1.0.0", enabled: true, scope: "user" }],
     hooks: [
@@ -813,17 +831,19 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
     }
     case "x.ai/mcp/list":
       return respond({ result: mcpList() });
+    // The mutating MCP methods decode snake_case only (no `rename_all` on the shell request
+    // structs), so reading `serverName` here would hide a camelCase-only client.
     case "x.ai/mcp/toggle": {
-      const server = state.mcpServers.find((entry) => entry.name === p.serverName);
-      if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
+      const server = state.mcpServers.find((entry) => entry.name === p.server_name);
+      if (!server) return respond({ error: `unknown MCP server: ${String(p.server_name)}` });
       server.enabled = p.enabled !== false;
       notify("_x.ai/mcp/servers_updated", mcpList());
       return respond({ result: { ok: true } });
     }
     case "x.ai/mcp/toggle_tool": {
-      const server = state.mcpServers.find((entry) => entry.name === p.serverName);
-      if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
-      const toolName = String(p.toolName ?? "");
+      const server = state.mcpServers.find((entry) => entry.name === p.server_name);
+      if (!server) return respond({ error: `unknown MCP server: ${String(p.server_name)}` });
+      const toolName = String(p.tool_name ?? "");
       const tools = mcpToolsFor(server);
       const tool = tools.find((entry) => entry.name === toolName);
       if (!tool) return respond({ error: `unknown MCP tool: ${toolName}` });
@@ -835,7 +855,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return respond({ result: { ok: true } });
     }
     case "x.ai/mcp/delete": {
-      const name = String(p.serverName ?? "");
+      const name = String(p.server_name ?? "");
       if (!state.mcpServers.some((entry) => entry.name === name)) {
         return respond({ error: `server '${name}' not found in config.toml (only locally-configured servers can be deleted)` });
       }
@@ -844,7 +864,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return respond({ result: { ok: true } });
     }
     case "x.ai/mcp/auth_status": {
-      const filter = typeof p.serverName === "string" ? p.serverName : null;
+      const filter = typeof p.server_name === "string" ? p.server_name : null;
       const servers = state.mcpServers
         .filter((entry) => !filter || entry.name === filter)
         .map((entry) => ({
@@ -854,8 +874,8 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return respond({ result: { servers } });
     }
     case "x.ai/mcp/auth_trigger": {
-      const server = state.mcpServers.find((entry) => entry.name === p.serverName);
-      if (!server) return respond({ error: `unknown MCP server: ${String(p.serverName)}` });
+      const server = state.mcpServers.find((entry) => entry.name === p.server_name);
+      if (!server) return respond({ error: `unknown MCP server: ${String(p.server_name)}` });
       if (server.setupRequired) {
         return respond({ result: { status: "setup_required", setup: server.setup ?? { fields: [] } } });
       }
@@ -877,7 +897,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       return respond({ result: { ok: true } });
     }
     case "x.ai/mcp/upsert": {
-      const name = String(p.serverName ?? "");
+      const name = String(p.server_name ?? "");
       if (!name) return respond({ error: "serverName is required" });
       const transport = p.type === "http" ? "http" : "stdio";
       state.mcpServers = [

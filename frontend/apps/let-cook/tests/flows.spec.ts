@@ -875,7 +875,13 @@ test.describe("connectors", () => {
 
     const toggles = await waitForCalls(page, "x.ai/mcp/toggle");
     expect(toggles).toHaveLength(1);
-    expect(toggles[0].params).toMatchObject({ serverName: "filesystem", enabled: false });
+    expect(toggles[0].params).toMatchObject({
+      sessionId: "mock-session",
+      session_id: "mock-session",
+      serverName: "filesystem",
+      server_name: "filesystem",
+      enabled: false,
+    });
 
     // Adding a stdio connector is an `x.ai/mcp/upsert` request as well.
     await page.getByTestId("connector-add").click();
@@ -886,7 +892,8 @@ test.describe("connectors", () => {
     await expect(page.getByTestId("connector-github")).toContainText("npx");
     const upsert = await waitForCalls(page, "x.ai/mcp/upsert");
     expect(upsert[0].params).toMatchObject({
-      serverName: "github",
+      session_id: "mock-session",
+      server_name: "github",
       type: "stdio",
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-github"],
@@ -900,7 +907,7 @@ test.describe("connectors", () => {
     await page.getByTestId("connector-save").click();
     await expect(page.getByTestId("connector-linear-http")).toContainText("https://mcp.example.com/sse");
     expect((await waitForCalls(page, "x.ai/mcp/upsert", 2))[1].params).toMatchObject({
-      serverName: "linear-http",
+      server_name: "linear-http",
       type: "http",
       url: "https://mcp.example.com/sse",
     });
@@ -921,9 +928,14 @@ test.describe("connectors", () => {
     await expect(page.getByTestId("connector-tool-filesystem-list_dir")).toBeVisible();
     await page.getByLabel("Toggle tool list_dir").click();
     const toolToggles = await waitForCalls(page, "x.ai/mcp/toggle_tool");
+    // The shell decodes snake_case for every mutating MCP method, so the app must send both.
     expect(toolToggles[0].params).toMatchObject({
+      sessionId: "mock-session",
+      session_id: "mock-session",
       serverName: "filesystem",
+      server_name: "filesystem",
       toolName: "list_dir",
+      tool_name: "list_dir",
       enabled: true,
     });
     await expect.poll(async () => {
@@ -934,13 +946,24 @@ test.describe("connectors", () => {
     await page.getByTestId("connector-delete-linear").click();
     await page.getByTestId("connector-delete-confirm").click();
     const deletes = await waitForCalls(page, "x.ai/mcp/delete");
-    expect(deletes[0].params).toMatchObject({ serverName: "linear" });
+    expect(deletes[0].params).toMatchObject({ session_id: "mock-session", server_name: "linear" });
     await expect(page.getByTestId("connector-linear")).toHaveCount(0);
     await expect.poll(async () => {
       const servers = (await mock.state()).mcpServers as Array<{ name: string }>;
       return servers.map((server) => server.name);
     }).toEqual(["filesystem"]);
     expect(errors).toEqual([]);
+  });
+
+  test("opens a session so the tool list can be annotated when Settings is opened first", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+
+    // Tools hang off the session's MCP pool: without a session the agent has nothing to annotate.
+    await waitForCalls(page, "session/new");
+    await expect(page.getByTestId("connector-tool-filesystem-list_dir")).toBeVisible();
+    await expect(page.getByTestId("connector-tool-filesystem-read_file")).toBeVisible();
   });
 
   test("shows auth and setup actions when the agent requires them", async ({ page }) => {
@@ -1048,14 +1071,26 @@ test.describe("agent-driven surfaces", () => {
     await waitForCalls(page, "session/new");
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Skills" }).click();
-    await expect(page.getByTestId("skill-help")).toBeVisible();
+    // Rows are grouped by discovery source, the way the TUI's Skills tab groups them.
+    await expect(page.getByTestId("skill-group-Bundled")).toContainText("Bundled (1)");
+    await expect(page.getByTestId("skill-group-User")).toContainText("User (1)");
+    await expect(page.getByTestId("skill-help")).toContainText("Help");
     await expect(page.getByTestId("plugin-cook-core")).toContainText("1.0.0");
     await page.getByLabel("Toggle skill help").click();
-    await waitForCalls(page, "x.ai/skills/toggle");
+    const skillToggles = await waitForCalls(page, "x.ai/skills/toggle");
+    // `SkillsListRequest.cwd` is a required field on the shell side, so it must always travel.
+    expect(skillToggles[0].params).toMatchObject({ name: "help", enabled: false, cwd: "/tmp/cook-demo" });
     const skillDescription = page.getByTestId("skill-help").locator(".skill-description");
     await expect(skillDescription).toHaveAttribute("aria-expanded", "false");
     await skillDescription.click();
     await expect(skillDescription).toHaveAttribute("aria-expanded", "true");
+    // The search box filters without dropping the source groups.
+    await page.getByTestId("skill-search").fill("review");
+    await expect(page.getByTestId("skill-help")).toHaveCount(0);
+    await expect(page.getByTestId("skill-review")).toBeVisible();
+    await expect(page.getByTestId("skill-group-Bundled")).toHaveCount(0);
+    await page.getByTestId("skill-search").fill("");
+    await expect(page.getByTestId("skill-help")).toBeVisible();
     await expect(page.getByTestId("plugins-reload")).toBeVisible();
     await expect(page.getByTestId("workflow-list")).toBeVisible();
 
@@ -1352,6 +1387,7 @@ test.describe("session fork and export", () => {
 
     const row = page.locator(".session-row", { hasText: "Fix login bug" });
     await row.hover();
+    await row.getByTestId("session-menu-session-login").click();
     await row.getByTestId("session-fork-session-login").click();
 
     const forks = await waitForCalls(page, "x.ai/session/fork");
@@ -1384,6 +1420,139 @@ test.describe("session fork and export", () => {
       newCwd: "/tmp/cook-demo",
     });
     await waitForCalls(page, "session/load", 2);
+  });
+});
+
+test.describe("conversation list", () => {
+  /** Three conversations across two workspaces, newest first: alpha-new, beta, alpha-old. */
+  const LIST_SEED = {
+    ...CONNECTED_SEED,
+    sessions: [
+      { id: "s-alpha-new", title: "Alpha newest", cwd: "/Users/demo/projects/cook-demo", updatedAt: "2026-09-18T10:00:00Z" },
+      { id: "s-beta", title: "Beta task", cwd: "/Users/demo/work/api-server", updatedAt: "2026-09-17T10:00:00Z" },
+      { id: "s-alpha-old", title: "Alpha oldest", cwd: "/Users/demo/projects/cook-demo", updatedAt: "2026-09-10T10:00:00Z" },
+    ],
+  };
+
+  function rowTitles(page: Page) {
+    return page.locator(".session-row .session-open strong").allTextContents();
+  }
+
+  async function openRowMenu(page: Page, id: string) {
+    const row = page.getByTestId(`session-row-${id}`);
+    await row.hover();
+    await row.getByTestId(`session-menu-${id}`).click();
+    await expect(row.getByRole("menu")).toBeVisible();
+    return row;
+  }
+
+  test("folds the row actions into one menu and pins a conversation across reloads", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openWorkspace(page, LIST_SEED);
+
+    // The four hover icons are gone; each row carries one overflow trigger instead.
+    await expect(page.getByTestId("session-fork-s-alpha-old")).toHaveCount(0);
+    await expect(page.locator(".session-menu-trigger")).toHaveCount(3);
+
+    const row = await openRowMenu(page, "s-alpha-old");
+    const menu = row.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText(["Pin to top", "Rename", "Fork", "Export", "Delete"]);
+
+    // Delete reads as the light red danger tone; the other actions stay grey.
+    const [danger, plain] = await Promise.all([
+      menu.getByTestId("session-delete-s-alpha-old").evaluate((node) => getComputedStyle(node).color),
+      menu.getByTestId("session-rename-s-alpha-old").evaluate((node) => getComputedStyle(node).color),
+    ]);
+    expect(danger).toBe("rgb(244, 135, 113)");
+    expect(plain).not.toBe(danger);
+
+    await menu.getByTestId("session-pin-s-alpha-old").click();
+    await expect(row).toHaveAttribute("data-pinned", "true");
+    await expect(page.locator(".session-group-heading span")).toHaveText(["Pinned"]);
+    expect(await rowTitles(page)).toEqual(["Alpha oldest", "Alpha newest", "Beta task"]);
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+    await expect(page.getByTestId("session-row-s-alpha-old")).toHaveAttribute("data-pinned", "true");
+    expect(await rowTitles(page)).toEqual(["Alpha oldest", "Alpha newest", "Beta task"]);
+
+    // The same menu unpins, and the pinned block disappears with it.
+    const reopened = await openRowMenu(page, "s-alpha-old");
+    await reopened.getByTestId("session-pin-s-alpha-old").click();
+    await expect(page.getByTestId("session-row-s-alpha-old")).toHaveAttribute("data-pinned", "false");
+    await expect(page.locator(".session-group-heading")).toHaveCount(0);
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Beta task", "Alpha oldest"]);
+    expect(errors).toEqual([]);
+  });
+
+  test("sorts by time by default and by workspace on request", async ({ page }) => {
+    await openWorkspace(page, LIST_SEED);
+
+    await expect(page.getByTestId("conversation-sort")).toContainText("Time");
+    await expect(page.locator(".session-group-heading")).toHaveCount(0);
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Beta task", "Alpha oldest"]);
+
+    await page.getByTestId("conversation-sort").click();
+    await page.getByTestId("sort-workspace").click();
+    await expect(page.getByTestId("conversation-sort")).toContainText("Workspace");
+
+    // One block per workspace, most recently used first, newest conversation on top inside each.
+    await expect(page.locator(".session-group-heading span")).toHaveText(["cook-demo", "api-server"]);
+    await expect(page.locator(".session-group-heading small")).toHaveText(["2", "1"]);
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Alpha oldest", "Beta task"]);
+    // Workspace blocks belong to their folder, so rows stop being draggable.
+    await expect(page.getByTestId("session-row-s-beta")).toHaveAttribute("draggable", "false");
+
+    await page.reload();
+    await expect(page.getByTestId("conversation-sort")).toContainText("Workspace");
+    await expect(page.locator(".session-group-heading span")).toHaveText(["cook-demo", "api-server"]);
+  });
+
+  test("reorders conversations by dragging a row", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openWorkspace(page, LIST_SEED);
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Beta task", "Alpha oldest"]);
+
+    // While a row is being carried over another one, the target paints a drop line.
+    await page.getByTestId("session-row-s-alpha-old").evaluate((node) => {
+      node.dispatchEvent(new DragEvent("dragstart", { dataTransfer: new DataTransfer(), bubbles: true, cancelable: true }));
+    });
+    await page.getByTestId("session-row-s-alpha-new").evaluate((node) => {
+      const rect = node.getBoundingClientRect();
+      node.dispatchEvent(
+        new DragEvent("dragover", {
+          dataTransfer: new DataTransfer(),
+          clientX: rect.left + 40,
+          clientY: rect.top + 4,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect(page.getByTestId("session-row-s-alpha-new")).toHaveClass(/drop-before/);
+    await expect(page.getByTestId("session-row-s-alpha-old")).toHaveClass(/dragging/);
+    await page.getByTestId("session-row-s-alpha-old").evaluate((node) => {
+      node.dispatchEvent(new DragEvent("dragend", { dataTransfer: new DataTransfer(), bubbles: true, cancelable: true }));
+    });
+    await expect(page.getByTestId("session-row-s-alpha-new")).not.toHaveClass(/drop-before/);
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Beta task", "Alpha oldest"]);
+
+    await page
+      .getByTestId("session-row-s-alpha-old")
+      .dragTo(page.getByTestId("session-row-s-alpha-new"), { targetPosition: { x: 60, y: 4 } });
+    expect(await rowTitles(page)).toEqual(["Alpha oldest", "Alpha newest", "Beta task"]);
+
+    // The arrangement survives a reload, and the sort menu offers a way back to plain recency.
+    await page.reload();
+    await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+    expect(await rowTitles(page)).toEqual(["Alpha oldest", "Alpha newest", "Beta task"]);
+
+    await page.getByTestId("conversation-sort").click();
+    await page.getByTestId("sort-reset-order").click();
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Beta task", "Alpha oldest"]);
+    expect(errors).toEqual([]);
   });
 });
 

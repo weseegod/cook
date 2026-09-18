@@ -15,6 +15,8 @@ import {
   type McpServerView,
 } from "../../acp/extensions";
 import { normalizeError } from "../../acp/errors";
+import { acpClient } from "../../acp/client";
+import { mergeMcpCatalog } from "../../acp/notifications/handlers";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
@@ -24,6 +26,7 @@ import { ToggleSwitch } from "../components/toggle-switch";
 /** Settings → Connectors: the agent's MCP servers, tools, auth/setup, and add/toggle/delete. */
 export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boolean; onDirtyChange?: (dirty: boolean) => void }) {
   const sessionId = useSessionStore((state) => state.sessionId);
+  const cwd = useSessionStore((state) => state.cwd);
   const mcpServers = useCatalogStore((state) => state.mcpServers);
   const setMcpServers = useCatalogStore((state) => state.setMcpServers);
   const queryClient = useQueryClient();
@@ -37,16 +40,25 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   const [setupFor, setSetupFor] = useState<string | null>(null);
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
 
-  // Seed the catalog once; live updates arrive via N-mcp-srv / N-mcp-tools (no poll required).
+  // Tool lists live on the session's MCP pool, so a session must exist before the agent can
+  // annotate `session.tools`. Plan mode creates one the same way.
+  useEffect(() => {
+    if (connected && cwd && !sessionId) void acpClient.ensureSession();
+  }, [connected, cwd, sessionId]);
+
+  // Read uncached: a cached catalog can arrive before the handshake and `tools/list` finish, which
+  // is exactly the empty-tools row the user came here to toggle.
   const servers = useQuery({
     queryKey: ["connectors", sessionId],
-    queryFn: () => listConnectors(sessionId ?? undefined, true),
+    queryFn: () => listConnectors(sessionId ?? undefined, false),
     enabled: connected && Boolean(sessionId),
     retry: 0,
   });
 
   useEffect(() => {
-    if (servers.data?.servers) setMcpServers(servers.data.servers);
+    if (!servers.data?.servers) return;
+    const store = useCatalogStore.getState();
+    setMcpServers(mergeMcpCatalog(store.mcpServers, servers.data.servers));
   }, [servers.data, setMcpServers]);
 
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["connectors"] });
@@ -83,7 +95,10 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   });
 
   const authStatus = useMutation({
-    mutationFn: (serverName: string) => mcpAuthStatus(sessionId ?? undefined, serverName),
+    mutationFn: (serverName: string) => {
+      if (!sessionId) throw new Error("Start a conversation before checking connector auth");
+      return mcpAuthStatus(sessionId, serverName);
+    },
     onSuccess: (result, serverName) => {
       setError(null);
       const entry = result.servers?.find((server) => server.serverName === serverName);
@@ -259,21 +274,30 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
                 </div>
               </div>
 
-              {tools.length > 0 && (
-                <ul className="connector-tools" data-testid={`connector-tools-${server.name}`}>
-                  {tools.map((tool) => (
-                    <li key={tool.name} data-testid={`connector-tool-${server.name}-${tool.name}`}>
-                      <span>{tool.displayName ?? tool.name}</span>
-                      <ToggleSwitch
-                        checked={tool.enabled !== false}
-                        ariaLabel={`Toggle tool ${tool.name}`}
-                        onChange={(enabled) => toggleTool.mutate({ serverName: server.name, toolName: tool.name, enabled })}
-                        disabled={toggleTool.isPending || !serverEnabled(server)}
-                      />
-                    </li>
-                  ))}
-                </ul>
-              )}
+              <ul className="connector-tools" data-testid={`connector-tools-${server.name}`}>
+                {tools.map((tool) => (
+                  <li key={tool.name} data-testid={`connector-tool-${server.name}-${tool.name}`}>
+                    <span title={tool.description}>{tool.displayName ?? tool.name}</span>
+                    <ToggleSwitch
+                      checked={tool.enabled !== false}
+                      ariaLabel={`Toggle tool ${tool.name}`}
+                      onChange={(enabled) => toggleTool.mutate({ serverName: server.name, toolName: tool.name, enabled })}
+                      disabled={toggleTool.isPending || !serverEnabled(server)}
+                    />
+                  </li>
+                ))}
+                {tools.length === 0 && (
+                  <li className="connector-tools-empty">
+                    <span>
+                      {server.session?.status === "initializing"
+                        ? "Initializing tools…"
+                        : serverEnabled(server)
+                          ? "No tools reported yet"
+                          : "Enable this connector to load its tools"}
+                    </span>
+                  </li>
+                )}
+              </ul>
 
               {settingUp && (
                 <form
