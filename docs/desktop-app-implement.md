@@ -7,6 +7,10 @@ skills, polish, and shippable installers.
 Architecture and invariants: [`docs/desktop-app.md`](desktop-app.md).  
 Do not violate them. The renderer still never calls models or tools.
 
+Protocol coverage (what the TUI uses vs what Desktop actually speaks):
+[`docs/desktop-tui-capability-map.md`](desktop-tui-capability-map.md).
+P1/P2 items should cite map row ids, not invent new method names.
+
 ---
 
 ## 1. Where v1 stands
@@ -42,10 +46,11 @@ and auto-update are missing.
 
 | Bug | Detail |
 |---|---|
-| `setApiKey` param mismatch | **Resolved by dropping the path.** The desktop no longer calls `x.ai/setApiKey` for BYOK: the provider form hands the typed credential to the Rust host, which writes `[model_providers.<id>]`. The agent handler is upstream's, unchanged. |
-| No provider catalog | User must hand-edit `~/.thanh/config.toml` (see [`byok-models.md`](byok-models.md)). Claude Desktop does not make you write JSON to chat. |
+| `setApiKey` param mismatch | **Resolved by dropping the path.** Map row `A-setkey`. The desktop no longer calls `x.ai/setApiKey` for BYOK: the provider form hands the typed credential to the Rust host, which writes `[model_providers.<id>]`. The agent handler is upstream's, unchanged. |
+| No provider catalog | User must hand-edit `~/.thanh/config.toml` (see [`byok-models.md`](byok-models.md)). Claude Desktop does not make you write JSON to chat. Map §13 is the healthiest Desktop slice. |
 | Prompt is text-only | `session/prompt` sends `[{ type: "text" }]`. No image/file parts, so vision models and “drop a PDF” are dead. |
-| `mcpServers: []` on every `session/new` | Relies on agent-side config discovery. Fine if that works; still no UI to enable/disable/add connectors. |
+| `mcpServers: []` on every `session/new` | Map `H-mcp` / class F. Relies on agent-side config discovery. SDK MCP must not be enabled until `R-sdk`. Connectors UI is still stale without `N-mcp-*` (class B). |
+| `terminal: true` + stub | Map `H-term` / class C. Host answers `terminal/*` with empty output and `exitCode: 0`. Until a real PTY exists, advertise `terminal: false`. |
 
 ---
 

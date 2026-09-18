@@ -12,6 +12,8 @@ Production work (providers, Claude Desktop–class features, packaging) lives in
 [`docs/byok-models.md`](byok-models.md). Runtime map: [`ARCHITECTURE.md`](../ARCHITECTURE.md).
 TUI presentation (screens, realtime, timers, tool rows — source of truth to copy, not §5.4):
 [`docs/tui-presentation.md`](tui-presentation.md).
+Method-level TUI ↔ Desktop protocol map (ACP, `x.ai/*`, tools, slash, MCP):
+[`docs/desktop-tui-capability-map.md`](desktop-tui-capability-map.md).
 
 ---
 
@@ -169,26 +171,16 @@ workspace.
 
 ### 5.3 `x.ai/*` groups
 
-Wire strings in `mvp_agent/acp_agent.rs` and `xai-grok-mcp/src/wire.rs` are
-authoritative.
+Method-level inventory of every TUI ACP / `x.ai/*` / tool / slash / MCP row
+and its live Desktop status lives in
+[`docs/desktop-tui-capability-map.md`](desktop-tui-capability-map.md). That
+file is the source of truth. Do not duplicate its tables here.
 
-| Group | Methods |
-|---|---|
-| Session | `x.ai/session/list`, `search`, `load_history`, `info`, `close`, `rename`, `delete`, `fork`, `usage` |
-| Models | `x.ai/models/list`, `x.ai/models/update` |
-| Commands | `x.ai/commands/list` |
-| Permissions | `session/request_permission`, `x.ai/permissions/reset`, `x.ai/yolo_mode_changed` |
-| Plan / queue | `x.ai/toggle_plan_mode`, `x.ai/exit_plan_mode`, `x.ai/queue/*` |
-| Tasks | `x.ai/task/*`, `x.ai/subagent/*`, `x.ai/scheduler/*` |
-| Terminal | `x.ai/terminal/*` |
-| MCP | `x.ai/mcp/call`, `sdk_call`, `elicit`, tools_changed |
-| Auth | `x.ai/auth/*`, `x.ai/getApiKey`, `x.ai/setApiKey` |
-| Memory / skills | `x.ai/memory/*`, `x.ai/skills/*`, `x.ai/workflows/list` |
-| Interaction | `x.ai/ask_user_question`, rewind, compact, folder trust |
-
-v1 handles a subset (sessions, models, commands, permissions, plan, ask-user,
-folder trust, a single API-key field). Production extensions are listed in the
-implement doc.
+Agent dispatch remains `mvp_agent/acp_agent.rs` and
+`xai-grok-mcp/src/wire.rs`; the map was harvested from those plus the pager
+handlers and Desktop `handleMessage` / `handle_host_request`. Production work
+cites map row ids (`H-term`, `R-sdk`, `N-mcp-tools`, …) instead of inventing
+method names — see [`desktop-app-implement.md`](desktop-app-implement.md).
 
 ### 5.4 Transcript presentation
 
