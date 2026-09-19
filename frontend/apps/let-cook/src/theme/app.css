@@ -1422,7 +1422,35 @@ body { font-size: 14px; }
   white-space: nowrap;
 }
 .context-chip-trigger:hover, .context-chip-trigger[aria-expanded="true"] { color: var(--text); background: var(--raised-2); }
+.context-chip-display {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
 .context-chip-usage { color: var(--text-soft); }
+.context-chip-hover-usage { display: inline-flex; align-items: center; gap: 5px; }
+.context-chip-meter {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 5ch;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--muted), transparent 76%);
+}
+.context-chip-meter-fill {
+  display: block;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .15s ease, background-color .15s ease;
+}
+.context-chip-meter-fill[data-tone="warning"] { background: var(--warning); }
+.context-chip-meter-fill[data-tone="danger"] { background: var(--danger); }
+.context-chip-percentage { color: var(--text-soft); font-size: 11px; }
 .context-chip-menu {
   position: absolute;
   top: calc(100% + 3px);

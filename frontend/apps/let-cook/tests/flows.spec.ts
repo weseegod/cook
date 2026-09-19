@@ -786,6 +786,10 @@ test.describe("slash commands", () => {
     await expect(page.getByTestId("context-chip")).toBeVisible();
     await waitForCalls(page, "x.ai/session/info");
 
+    await page.getByLabel("Context status").hover();
+    await expect(page.getByTestId("context-chip-percent")).toHaveText("0.90%");
+    await expect(page.getByTestId("context-chip-meter")).toHaveAttribute("aria-valuenow", "1");
+
     await composer(page).fill("/context");
     await page.keyboard.press("Enter");
     const notice = page.getByTestId("notice-banner");
