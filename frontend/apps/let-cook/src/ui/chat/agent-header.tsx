@@ -2,6 +2,7 @@ import { ListTodo, PanelLeftClose, PanelLeftOpen, PanelRight } from "lucide-reac
 import { acpClient } from "../../acp/client";
 import { pickFolder } from "../../acp/host";
 import { useSessionStore } from "../../state/session";
+import { TasksChip } from "../activity/tasks-chip";
 import { ContextChip } from "./context-chip";
 import { GitChip } from "./git-chip";
 import { GoalStatus } from "./goal-status";
@@ -55,6 +56,7 @@ export function AgentHeader({
           <span>{cwdLabel}</span>
         </button>
         <PlanChip />
+        <TasksChip />
       </div>
       <div className="agent-header-right">
         <HeaderDiffstat />

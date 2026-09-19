@@ -28,6 +28,12 @@ export interface ActivityItem {
   humanSchedule?: string;
   nextFireAt?: string | null;
   isMonitor?: boolean;
+  /**
+   * Conversation that owns the row. `undefined` for legacy flat payloads, which belong to whatever
+   * conversation is open; a stamped row from another conversation stays out of this one's list
+   * (`shouldApplyToActiveSession` deliberately lets background subagents and workflows through).
+   */
+  sessionId?: string;
 }
 
 interface ActivityState {
@@ -38,9 +44,13 @@ interface ActivityState {
   /** Incremented when `/tasks` or `/dashboard` asks the shell to open the Activity tab. */
   panelNonce: number;
   panelTarget: "activity" | null;
+  /** Whether the header's tasks strip is showing (`ToggleTasks`, Ctrl-G). */
+  overlayOpen: boolean;
   lastError: string | null;
   requestOpenPanel: () => void;
   clearPanelTarget: () => void;
+  setOverlayOpen: (open: boolean) => void;
+  toggleOverlay: () => void;
   reset: () => void;
   upsertTask: (item: ActivityItem) => void;
   completeTask: (taskId: string, patch?: Partial<ActivityItem>) => void;
@@ -57,7 +67,11 @@ const empty = () => ({
   subagents: {} as Record<string, ActivityItem>,
   schedules: {} as Record<string, ActivityItem>,
   workflows: {} as Record<string, ActivityItem>,
+  overlayOpen: false,
 });
+
+/** The maps a row list is derived from, so a component can subscribe to exactly those. */
+export type ActivityRowsSource = Pick<ActivityState, "tasks" | "subagents" | "schedules" | "workflows">;
 
 export const useActivityStore = create<ActivityState>((set, get) => ({
   ...empty(),
@@ -66,6 +80,8 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
   lastError: null,
   requestOpenPanel: () => set((state) => ({ panelNonce: state.panelNonce + 1, panelTarget: "activity" })),
   clearPanelTarget: () => set({ panelTarget: null }),
+  setOverlayOpen: (overlayOpen) => set({ overlayOpen }),
+  toggleOverlay: () => set((state) => ({ overlayOpen: !state.overlayOpen })),
   reset: () => set({ ...empty(), lastError: null }),
   upsertTask: (item) => set((state) => ({ tasks: { ...state.tasks, [item.id]: mergeItem(state.tasks[item.id], item) } })),
   completeTask: (taskId, patch) =>
@@ -90,6 +106,7 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
           [taskId]: {
             ...prev,
             ...patch,
+            sessionId: patch?.sessionId ?? prev.sessionId,
             status: patch?.status ?? terminalStatus(prev.status, "completed"),
             endedAt: patch?.endedAt ?? Date.now(),
           },
@@ -111,10 +128,10 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
     try {
       const [tasks, subagents] = await Promise.all([listTasks(sessionId), listRunningSubagents(sessionId)]);
       set((state) => ({
-        tasks: { ...state.tasks, ...Object.fromEntries(tasks.filter((t) => t.taskId).map((t) => [t.taskId, fromTaskList(t)])) },
+        tasks: { ...state.tasks, ...Object.fromEntries(tasks.filter((t) => t.taskId).map((t) => [t.taskId, fromTaskList(t, sessionId)])) },
         subagents: {
           ...state.subagents,
-          ...Object.fromEntries(subagents.filter((s) => s.subagentId).map((s) => [s.subagentId, fromSubagentList(s)])),
+          ...Object.fromEntries(subagents.filter((s) => s.subagentId).map((s) => [s.subagentId, fromSubagentList(s, sessionId)])),
         },
         lastError: null,
       }));
@@ -142,7 +159,7 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
   },
 }));
 
-export function activityRows(state: ActivityState = useActivityStore.getState()): ActivityItem[] {
+export function activityRows(state: ActivityRowsSource = useActivityStore.getState()): ActivityItem[] {
   const rows = [
     ...Object.values(state.tasks),
     ...Object.values(state.subagents),
@@ -157,9 +174,49 @@ export function activityRows(state: ActivityState = useActivityStore.getState())
   });
 }
 
+/**
+ * The rows one conversation owns: what the header chip and the tasks strip list. A row with no
+ * owner (flat payload, no envelope session) belongs to whatever conversation is open.
+ */
+export function conversationRows(
+  sessionId: string | null,
+  state: ActivityRowsSource = useActivityStore.getState(),
+): ActivityItem[] {
+  if (!sessionId) return [];
+  return activityRows(state).filter((row) => row.sessionId === undefined || row.sessionId === sessionId);
+}
+
+/** Rows still in flight — the count the header chip carries (`tasks_pane::status_counts`). */
+export function runningCount(rows: readonly ActivityItem[]): number {
+  return rows.filter((row) => isLive(row.status)).length;
+}
+
+/** Workflow statuses that will not move again (`views/workflows.rs::is_terminal`). */
+const TERMINAL_WORKFLOW_STATUSES = new Set(["interrupted", "complete", "completed", "failed", "cancelled", "canceled", "error", "killed"]);
+
+/** A workflow parked mid-run: not working now, but not finished either. */
+export function isParked(row: ActivityItem): boolean {
+  return row.kind === "workflow" && !isLive(row.status) && !TERMINAL_WORKFLOW_STATUSES.has(row.status.toLowerCase());
+}
+
+/** Workflows parked mid-run — the TUI chip's `P N` (`tasks_pane::status_counts`). */
+export function pausedWorkflowCount(rows: readonly ActivityItem[]): number {
+  return rows.filter(isParked).length;
+}
+
+/** What the tasks list shows: running work and parked workflows. Finished work is never listed. */
+export function activeRows(rows: readonly ActivityItem[]): ActivityItem[] {
+  return rows.filter((row) => isLive(row.status) || isParked(row));
+}
+
 export function isLive(status: string): boolean {
   const s = status.toLowerCase();
   return s === "running" || s === "active" || s === "scheduled" || s === "pending" || s === "fired";
+}
+
+/** Conversation an ext-notification envelope names, when it carries one. */
+function envelopeSession(params: Record<string, unknown>): string | undefined {
+  return stringOr(params.sessionId) ?? stringOr(params.session_id) ?? undefined;
 }
 
 /** N-tbg: `x.ai/task_backgrounded` (mapId N-tbg). */
@@ -182,6 +239,7 @@ export function applyTaskBackgrounded(params: Record<string, unknown>): void {
     startedAt: Date.now(),
     detail: stringOr(update.command) ?? undefined,
     isMonitor: monitor,
+    sessionId: envelopeSession(params),
   });
 }
 
@@ -210,6 +268,7 @@ export function applyTaskCompleted(params: Record<string, unknown>): void {
     status: killed ? "killed" : success ? "completed" : "failed",
     detail: stringOr(snap.command) ?? undefined,
     endedAt: Date.now(),
+    sessionId: envelopeSession(params),
   });
 }
 
@@ -228,6 +287,7 @@ export function applyScheduledTask(params: Record<string, unknown>, status: "sch
     humanSchedule: stringOr(update.human_schedule ?? update.humanSchedule) ?? prev?.humanSchedule,
     nextFireAt: (stringOr(update.next_fire_at ?? update.nextFireAt) ?? prev?.nextFireAt) as string | null | undefined,
     detail: stringOr(update.human_schedule ?? update.humanSchedule) ?? undefined,
+    sessionId: envelopeSession(params),
   });
 }
 
@@ -254,11 +314,12 @@ export function applyMonitorEvent(params: Record<string, unknown>): void {
     startedAt: prev?.startedAt ?? Date.now(),
     detail: eventText ?? prev?.detail,
     isMonitor: true,
+    sessionId: envelopeSession(params),
   });
 }
 
 /** U-sub-s / U-sub-p / U-sub-f — sessionUpdate tags; no transcript spam. */
-export function applySubagentSessionUpdate(raw: Record<string, unknown>): void {
+export function applySubagentSessionUpdate(raw: Record<string, unknown>, sessionId?: string): void {
   const kind = String(raw.sessionUpdate ?? "");
   const id = String(raw.subagent_id ?? raw.subagentId ?? "");
   if (!id) return;
@@ -271,6 +332,7 @@ export function applySubagentSessionUpdate(raw: Record<string, unknown>): void {
       status: "running",
       startedAt: Date.now(),
       detail: stringOr(raw.subagent_type ?? raw.subagentType) ?? undefined,
+      sessionId,
     });
     return;
   }
@@ -282,6 +344,7 @@ export function applySubagentSessionUpdate(raw: Record<string, unknown>): void {
       status: "running",
       startedAt: prev?.startedAt ?? Date.now() - (numberOr(raw.duration_ms ?? raw.durationMs) ?? 0),
       detail: progressDetail(raw) ?? prev?.detail,
+      sessionId,
     });
     return;
   }
@@ -294,12 +357,13 @@ export function applySubagentSessionUpdate(raw: Record<string, unknown>): void {
       startedAt: prev?.startedAt ?? Date.now() - (numberOr(raw.duration_ms ?? raw.durationMs) ?? 0),
       endedAt: Date.now(),
       detail: stringOr(raw.error) ?? prev?.detail,
+      sessionId,
     });
   }
 }
 
 /** U-wf: `workflow_updated`. */
-export function applyWorkflowUpdated(raw: Record<string, unknown>): void {
+export function applyWorkflowUpdated(raw: Record<string, unknown>, sessionId?: string): void {
   const id = String(raw.run_id ?? raw.runId ?? "");
   if (!id) return;
   const prev = useActivityStore.getState().workflows[id];
@@ -311,10 +375,11 @@ export function applyWorkflowUpdated(raw: Record<string, unknown>): void {
     startedAt: prev?.startedAt ?? Date.now() - (numberOr(raw.elapsed_ms ?? raw.elapsedMs) ?? 0),
     detail: stringOr(raw.current_phase ?? raw.currentPhase ?? raw.objective) ?? prev?.detail,
     endedAt: isLive(stringOr(raw.status) ?? "active") ? undefined : Date.now(),
+    sessionId,
   });
 }
 
-function fromTaskList(task: TaskListItem): ActivityItem {
+function fromTaskList(task: TaskListItem, sessionId: string): ActivityItem {
   return {
     id: task.taskId,
     kind: "task",
@@ -324,10 +389,11 @@ function fromTaskList(task: TaskListItem): ActivityItem {
     endedAt: task.completed ? Date.now() : undefined,
     detail: task.command,
     isMonitor: task.kind === "monitor",
+    sessionId,
   };
 }
 
-function fromSubagentList(sub: SubagentListItem): ActivityItem {
+function fromSubagentList(sub: SubagentListItem, sessionId: string): ActivityItem {
   return {
     id: sub.subagentId,
     kind: "subagent",
@@ -335,6 +401,7 @@ function fromSubagentList(sub: SubagentListItem): ActivityItem {
     status: sub.status ?? "running",
     startedAt: sub.startedAtEpochMs ?? Date.now() - (sub.durationMs ?? 0),
     detail: sub.subagentType,
+    sessionId,
   };
 }
 
@@ -349,6 +416,7 @@ function mergeItem(prev: ActivityItem | undefined, next: ActivityItem): Activity
     humanSchedule: next.humanSchedule ?? prev.humanSchedule,
     nextFireAt: next.nextFireAt !== undefined ? next.nextFireAt : prev.nextFireAt,
     isMonitor: next.isMonitor ?? prev.isMonitor,
+    sessionId: next.sessionId ?? prev.sessionId,
   };
 }
 

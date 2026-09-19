@@ -75,7 +75,8 @@ test.describe("plan list", () => {
 
     // The chip belongs to the conversation, not to the moment the first plan file lands.
     await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByTestId("plan-chip")).toContainText("plan");
+    await expect(page.getByTestId("plan-chip")).toContainText("Plans");
+    await expect(page.getByTestId("plan-chip-count")).toHaveText("0");
     await page.getByTestId("plan-chip").click();
     await expect(page.getByTestId("plan-menu")).toBeVisible();
     await expect(page.getByTestId("plan-menu-empty")).toContainText("No plans in this conversation yet");
@@ -88,8 +89,8 @@ test.describe("plan list", () => {
     await startSession(page);
     await expect(page.getByTestId("plan-chip")).toBeVisible();
 
-    // The chip names the episode by its H1, not the UTC filename.
-    await expect(page.getByTestId("plan-chip")).toContainText("Current plan");
+    // The chip carries the conversation's plan count; the list names each episode by its H1.
+    await expect(page.getByTestId("plan-chip-count")).toHaveText("3");
 
     await page.getByTestId("plan-chip").click();
 
@@ -161,6 +162,26 @@ test.describe("plan list", () => {
     await expect(page.getByTestId("notice-banner")).toContainText(`${PLAN_DIR}/${OLDEST}`);
   });
 
+  test("opens the current episode read-only with Copy actions when no review is parked", async ({ page }) => {
+    await openWorkspace(page);
+    await startSession(page);
+
+    // Without a parked approval, the current episode uses the same read-only viewer as history.
+    await page.getByTestId("plan-chip").click();
+    await page.getByTestId(`plan-file-open-${NEWEST}`).click();
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
+    await expect(page.getByTestId("plan-file-body")).toBeVisible();
+    await expect(page.getByTestId("plan-file-view-copy")).toContainText("Copy");
+    await expect(page.getByTestId("plan-file-view-copy-path")).toContainText("Copy file path");
+
+    await page.getByTestId("plan-file-view-copy").click();
+    await expect(page.getByTestId("notice-banner")).toContainText(`Copied ${NEWEST}`);
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("# Current plan\n\n1. Add the plan list");
+
+    await page.getByTestId("plan-file-view-copy-path").click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${PLAN_DIR}/${NEWEST}`);
+  });
+
   test("opens an earlier plan read-only and the current one in the review pane", async ({ page }) => {
     await openWorkspace(page);
     await startSession(page);
@@ -174,12 +195,14 @@ test.describe("plan list", () => {
     await page.getByTestId(`plan-file-open-${NEWEST}`).click();
     await expect(page.getByTestId("plan-pane")).toBeVisible();
 
-    // An earlier plan has no decision attached: it opens as a read-only document.
+    // An earlier plan has no decision attached: it opens as a read-only document with Copy actions.
     await page.getByTestId("plan-chip").click();
     await page.getByTestId(`plan-file-open-${OLDEST}`).click();
     const viewer = page.getByRole("dialog");
     await expect(viewer).toContainText(OLDEST);
     await expect(viewer).toContainText("Allocate one file per episode");
+    await expect(page.getByTestId("plan-file-view-copy")).toContainText("Copy");
+    await expect(page.getByTestId("plan-file-view-copy-path")).toContainText("Copy file path");
     expect((await api(page).requests()).some((entry) => entry.method === "x.ai/session/plans/delete")).toBe(false);
 
     await page.keyboard.press("Escape");

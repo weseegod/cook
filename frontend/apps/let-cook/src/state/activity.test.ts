@@ -3,10 +3,15 @@ import { dispatchNotification, lookupNotification } from "../acp/notifications";
 import { killTask } from "../acp/activity";
 import {
   activityRows,
+  applySubagentSessionUpdate,
   applyTaskBackgrounded,
   applyTaskCompleted,
+  conversationRows,
+  pausedWorkflowCount,
+  runningCount,
   useActivityStore,
 } from "./activity";
+import { useSessionStore } from "./session";
 
 vi.mock("../acp/host", () => ({
   request: vi.fn(async (method: string, params: unknown) => {
@@ -114,5 +119,78 @@ describe("activity store (P4)", () => {
       task_snapshot: { task_id: "flat-1", exit_code: 1, command: "echo hi" },
     });
     expect(useActivityStore.getState().tasks["flat-1"].status).toBe("failed");
+  });
+});
+
+describe("activity rows belong to a conversation", () => {
+  const backgrounded = (sessionId: string, taskId: string, description: string) =>
+    applyTaskBackgrounded({ sessionId, update: { task_id: taskId, command: "sleep 30", description } });
+
+  beforeEach(() => {
+    useActivityStore.getState().reset();
+  });
+
+  it("stamps the envelope's session and keeps other conversations out of the list", () => {
+    backgrounded("s1", "t-1", "Mine");
+    backgrounded("s2", "t-2", "Theirs");
+    expect(useActivityStore.getState().tasks["t-1"].sessionId).toBe("s1");
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["t-1"]);
+    expect(conversationRows("s2").map((row) => row.id)).toEqual(["t-2"]);
+  });
+
+  it("survives a completion that carries no session of its own", () => {
+    backgrounded("s1", "t-1", "Mine");
+    applyTaskCompleted({ update: { task_snapshot: { task_id: "t-1", exit_code: 0 } } });
+    expect(useActivityStore.getState().tasks["t-1"]).toMatchObject({ sessionId: "s1", status: "completed" });
+  });
+
+  it("stamps subagent updates from the session envelope", () => {
+    applySubagentSessionUpdate(
+      { sessionUpdate: "subagent_spawned", subagent_id: "sa-1", description: "scan src/" },
+      "s1",
+    );
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["sa-1"]);
+    expect(conversationRows("s2")).toEqual([]);
+  });
+
+  it("keeps a legacy row with no owner visible, and lists nothing without a conversation", () => {
+    applyTaskBackgrounded({ task_id: "flat-1", command: "echo hi", description: "Echo" });
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["flat-1"]);
+    expect(conversationRows(null)).toEqual([]);
+  });
+
+  it("counts only the rows still in flight", () => {
+    backgrounded("s1", "t-1", "Mine");
+    backgrounded("s1", "t-2", "Also mine");
+    expect(runningCount(conversationRows("s1"))).toBe(2);
+    applyTaskCompleted({ sessionId: "s1", update: { task_snapshot: { task_id: "t-1", exit_code: 0 } } });
+    expect(runningCount(conversationRows("s1"))).toBe(1);
+  });
+
+  it("counts workflows parked mid-run, not the active or terminal ones", () => {
+    const workflow = (id: string, status: string) =>
+      useActivityStore.getState().upsertWorkflow({ id, kind: "workflow", name: id, status, startedAt: 0, sessionId: "s1" });
+    workflow("wf-active", "active");
+    workflow("wf-paused", "paused");
+    workflow("wf-parked", "budget");
+    workflow("wf-done", "complete");
+    expect(pausedWorkflowCount(conversationRows("s1"))).toBe(2);
+  });
+
+  it("reset drops the rows and closes the strip", () => {
+    backgrounded("s1", "t-1", "Mine");
+    useActivityStore.getState().setOverlayOpen(true);
+    useActivityStore.getState().reset();
+    expect(activityRows()).toEqual([]);
+    expect(useActivityStore.getState().overlayOpen).toBe(false);
+  });
+
+  it("hides a previous conversation's rows without dropping them", () => {
+    backgrounded("s1", "t-1", "Mine");
+    useSessionStore.getState().resetConversation("s2");
+    expect(conversationRows("s2")).toEqual([]);
+    // Switching back still finds the work the first conversation left behind.
+    useSessionStore.getState().resetConversation("s1");
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["t-1"]);
   });
 });

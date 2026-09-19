@@ -635,11 +635,11 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
     }
     // U-sub-* / U-wf: activity dock only — do not spam the transcript.
     if (kind === "subagent_spawned" || kind === "subagent_progress" || kind === "subagent_finished") {
-      applySubagentSessionUpdate(raw);
+      applySubagentSessionUpdate(raw, notification.sessionId);
       continue;
     }
     if (kind === "workflow_updated") {
-      applyWorkflowUpdated(raw);
+      applyWorkflowUpdated(raw, notification.sessionId);
       continue;
     }
     const next = reduceTranscript({ blocks, cursor }, raw);

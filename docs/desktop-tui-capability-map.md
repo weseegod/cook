@@ -467,7 +467,7 @@ Internal kinds: `crates/codegen/xai-grok-tools/src/types/tool.rs` `ToolKind`. TU
 |---|---|---|---|---|---|---|
 | T-read | `Read` | `tool/read.rs` | path header + content | — | `ok` | surface |
 | T-edit | `Edit` | `tool/edit.rs` (diff hunks) | generic + markdown/diff content | — | `partial` (no TUI hunk highlight) | surface |
-| T-write | `Write` | edit.rs `"Creating "` | `Creating {path}` | ACP fs for plan.md | `ok` | surface |
+| T-write | `Write` | edit.rs `"Creating "` | `Creating {path}`, body opened while it fits the chat frame | ACP fs for plan.md | `ok` | surface |
 | T-del | `Delete` | `other.rs` | generic | — | `ok` | surface |
 | T-move | `Move` | `other.rs` | generic | — | `ok` | surface |
 | T-list | `ListDir` / `List` | `list_dir.rs` | `List {path}` | — | `ok` | surface |

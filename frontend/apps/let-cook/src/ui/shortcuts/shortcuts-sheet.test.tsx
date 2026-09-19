@@ -23,6 +23,7 @@ describe("shortcuts sheet", () => {
       "stop",
       "yolo",
       "review",
+      "tasks",
       "files",
     ]);
   });

@@ -4,6 +4,7 @@ import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
 import { deletePlanFile, type PlanFileSummary } from "../../acp/plan-files";
 import { useSessionStore } from "../../state/session";
+import { clampMenuToViewport } from "../components/anchored-menu";
 import { ConfirmDialog } from "../components/dialog";
 import { copyText } from "./clipboard";
 
@@ -18,7 +19,8 @@ interface PlanRowMenu {
 }
 
 /**
- * The header's `plan` chip, carrying the session's plan files.
+ * The header's `Plans` chip, carrying the session's plan files and their count — the same shape as
+ * the `Tasks` chip beside it.
  *
  * Plan mode allocates one file per planning episode (`<session>/plans/<utc>.md`, published to
  * `<slug>-<utc>.md` when the episode ends), so the chip opens
@@ -47,20 +49,7 @@ export function PlanChip() {
     if (!listOpen) return;
     const node = menu.current;
     const parent = root.current;
-    if (!node || !parent) return;
-    // The chip sits in the header's left cluster, so the list hangs off its left edge and grows
-    // right — over the transcript, never over the conversation list beside it.
-    node.style.right = "auto";
-    node.style.left = "0px";
-    node.style.width = "";
-    const rect = node.getBoundingClientRect();
-    const parentRect = parent.getBoundingClientRect();
-    const gutter = 6;
-    const width = Math.min(rect.width, window.innerWidth - gutter * 2);
-    node.style.width = `${width}px`;
-    // Only a window too narrow for a left-anchored list shifts it, and never past the left gutter.
-    const shift = Math.min(0, window.innerWidth - gutter - (parentRect.left + width));
-    node.style.left = `${Math.max(gutter - parentRect.left, shift)}px`;
+    if (node && parent) clampMenuToViewport(node, parent);
   }, [listOpen, files]);
 
   useEffect(() => {
@@ -183,13 +172,16 @@ export function PlanChip() {
         type="button"
         className="plan-chip"
         data-testid="plan-chip"
-        title={listOpen ? "Hide plans" : "Plans in this conversation"}
+        title={planChipTitle(current, listOpen)}
         aria-haspopup="menu"
         aria-expanded={listOpen}
         onClick={() => (opensList ? toggleList() : useSessionStore.getState().setPlanDialogOpen(true))}
       >
         <FileText size={12} aria-hidden="true" />
-        <span className="plan-chip-name">{current ? planFileLabel(current) : "plan"}</span>
+        <span className="plan-chip-name">Plans</span>
+        <span className="plan-chip-count" data-testid="plan-chip-count" title={`${files.length} in this conversation`}>
+          {files.length}
+        </span>
         {opensList && <ChevronDown size={12} aria-hidden="true" />}
       </button>
       {listOpen && (
@@ -290,6 +282,15 @@ export function PlanChip() {
       )}
     </div>
   );
+}
+
+/**
+ * The chip is the count, so the episode it holds is named in the tooltip — the list's first row
+ * carries the H1 itself.
+ */
+function planChipTitle(current: PlanFileSummary | null, open: boolean): string {
+  if (open) return "Hide plans";
+  return current ? `${planFileLabel(current)} — plans in this conversation` : "Plans in this conversation";
 }
 
 /** H1 the list API sent, falling back to the filename while a plan is still empty. */

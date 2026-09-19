@@ -124,6 +124,12 @@ export function AppShell() {
         openSettings("general");
         return;
       }
+      // TUI `ToggleTasks`: the tasks strip opens and closes on Ctrl-G (`ActionId::ToggleTasks`).
+      if (event.ctrlKey && !event.shiftKey && key === "g") {
+        event.preventDefault();
+        useActivityStore.getState().toggleOverlay();
+        return;
+      }
       if (event.key === "?" && !commandKey && !event.altKey && !isTypingTarget(event.target)) {
         event.preventDefault();
         setPaletteOpen(false);

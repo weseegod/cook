@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../acp/host", () => ({ openPath: vi.fn(async () => undefined) }));
 
@@ -73,5 +73,68 @@ describe("ToolRow", () => {
     details!.open = true;
     fireEvent(details!, new Event("toggle"));
     expect(screen.queryByText("+3")).toBeNull();
+  });
+});
+
+/**
+ * jsdom reports every box as 0×0, so the frame the row measures itself against is stubbed here:
+ * `clientHeight` on the transcript ancestor, `offsetHeight` on the detail body it mounts.
+ */
+function stubLayout(heights: { detail: number; frame: number }) {
+  vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+    return this.classList.contains("transcript") ? heights.frame : 0;
+  });
+  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains("tool-detail") ? heights.detail : 24;
+  });
+}
+
+describe("write rows", () => {
+  const writeTool = (newText: string): ToolBlock => ({
+    ...editTool,
+    id: "write-1",
+    kind: "write",
+    title: "write",
+    content: [{ type: "diff", path: "src/new.ts", oldText: "", newText }],
+    paths: ["src/new.ts"],
+  });
+
+  const renderInTranscript = (tool: ToolBlock) => render(<div className="transcript"><ToolRow tool={tool} /></div>);
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("opens a write whose body fits the transcript frame", () => {
+    stubLayout({ detail: 240, frame: 600 });
+    const { container } = renderInTranscript(writeTool("one\ntwo\nthree"));
+    expect(container.querySelector("details")!.open).toBe(true);
+    expect(container.querySelector(".tool-detail-full")).not.toBeNull();
+    // The diffstat is the collapsed row's cue; the open row shows the lines instead.
+    expect(screen.queryByText("+3")).toBeNull();
+  });
+
+  it("folds a write back to its one-liner once the body outgrows the frame", () => {
+    stubLayout({ detail: 620, frame: 600 });
+    const { container } = renderInTranscript(writeTool("one\ntwo\nthree"));
+    expect(container.querySelector("details")!.open).toBe(false);
+    expect(container.querySelector(".tool-detail-full")).toBeNull();
+    expect(screen.getByText("+3")).toBeInTheDocument();
+  });
+
+  it("keeps an auto-folded write open after the user opens it", () => {
+    stubLayout({ detail: 620, frame: 600 });
+    const { container } = renderInTranscript(writeTool("one\ntwo\nthree"));
+    const details = container.querySelector("details")!;
+
+    details.open = true;
+    fireEvent(details, new Event("toggle"));
+    expect(details.open).toBe(true);
+  });
+
+  it("leaves a write the Preview dock owns folded, even when the frame is roomy", () => {
+    stubLayout({ detail: 240, frame: 600 });
+    const lines = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`).join("\n");
+    const { container } = renderInTranscript(writeTool(lines));
+    expect(container.querySelector("details")!.open).toBe(false);
+    expect(screen.getByText(/Diff is large/)).toBeInTheDocument();
   });
 });

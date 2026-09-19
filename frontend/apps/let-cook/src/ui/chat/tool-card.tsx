@@ -9,7 +9,7 @@ import {
   Search,
   Terminal,
 } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { openPath } from "../../acp/host";
 import { normalizeError } from "../../acp/errors";
 import { useArtifactStore } from "../../state/artifacts";
@@ -26,6 +26,23 @@ import { verbGroupLabel } from "./verb-group";
 const TALL_DIFF_LINES = 40;
 
 const EDIT_KINDS = ["edit", "write", "write_file"];
+
+/** Tool kinds that create or overwrite a whole file, painted as `Creating {path}` rows. */
+export const WRITE_TOOL_KINDS = ["write", "write_file"];
+
+export function isWriteTool(kind: string | null | undefined): boolean {
+  return WRITE_TOOL_KINDS.includes((kind ?? "").toLowerCase());
+}
+
+/**
+ * Whether a write row keeps its body open. The chat shows what the agent wrote rather than the
+ * TUI's one-liner (`edit.rs::header_line`, which folds an Edit row to `+N/-M`), but only while the
+ * body fits the transcript frame it would be read in: a taller body folds back to the one-liner,
+ * where opening it is the user's call.
+ */
+export function writeBodyFitsFrame(bodyHeight: number, frameHeight: number): boolean {
+  return bodyHeight > 0 && frameHeight > 0 && bodyHeight <= frameHeight;
+}
 
 /** The collapsed Edit suffix (`edit.rs::header_line`): a diffstat, else ` ({n} edits)`. */
 export type EditSuffix =
@@ -129,17 +146,65 @@ export const VerbGroupRow = memo(function VerbGroupRow({ tools }: { tools: ToolB
   && previous.tools.every((tool, index) => toolVisualEqual(tool, next.tools[index]))
 ));
 
-/** One tool block, collapsed by default; no elapsed in the row and no rerun control. */
+/**
+ * One tool block; no elapsed in the row and no rerun control. Edit rows stay folded (the diffstat
+ * belongs to the one-liner: an expanded row shows the hunks themselves), while a write row opens
+ * itself so the file the agent wrote is readable in the chat.
+ */
 export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
   const header = toolHeader(tool);
   const running = isLiveTool(tool);
-  // The diffstat belongs to the one-liner: an expanded row shows the hunks themselves.
+  const write = isWriteTool(tool.kind);
   const [open, setOpen] = useState(false);
+  // The body is only worth opening while it fits the frame; `full` drops the body's inner scroll cap
+  // for the rows that earned that, so an opened write reads as one piece.
+  const [full, setFull] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const openRef = useRef(false);
+  const decidedContent = useRef<readonly unknown[] | null>(null);
+
+  const applyOpen = useCallback((value: boolean) => {
+    openRef.current = value;
+    setOpen(value);
+  }, []);
+
+  // A write decides once per content revision, mounting the body so the frame fit below can measure
+  // it. Content the transcript defers to the Preview dock, and a call that has not reported anything
+  // yet, keep the one-liner.
+  useLayoutEffect(() => {
+    if (!write || pinned || decidedContent.current === tool.content) return;
+    decidedContent.current = tool.content;
+    const readable = tool.content.length > 0 && !tallDiffText(toolDetailText(tool));
+    setFull(readable);
+    applyOpen(readable);
+  }, [applyOpen, pinned, tool, write]);
+
+  // An oversized body folds back to the one-liner; the user can still open it by hand.
+  useLayoutEffect(() => {
+    if (!write || pinned || !open) return;
+    const details = detailsRef.current;
+    const body = details?.querySelector<HTMLElement>(".tool-detail") ?? null;
+    const frame = details?.closest<HTMLElement>(".transcript") ?? null;
+    if (writeBodyFitsFrame(body?.offsetHeight ?? 0, frame?.clientHeight ?? 0)) return;
+    setFull(false);
+    applyOpen(false);
+  }, [applyOpen, open, pinned, tool, write]);
+
   return (
     <details
+      ref={detailsRef}
       className={`tool-row tool-${running ? "running" : normalizedStatus(tool.status)}`}
       data-testid={`tool-row-${tool.id}`}
-      onToggle={(event) => setOpen(event.currentTarget.open)}
+      open={open}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        // Our own collapses echo back as toggles; only a change we did not ask for is the user's.
+        if (next === openRef.current) return;
+        openRef.current = next;
+        setPinned(true);
+        setOpen(next);
+      }}
     >
       <summary>
         <span className="row-chevron"><ChevronRight size={13} /></span>
@@ -151,7 +216,7 @@ export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
         </strong>
         {!open && header.suffix && <EditSuffixSpans suffix={header.suffix} />}
       </summary>
-      <ToolDetail tool={tool} />
+      <ToolDetail tool={tool} full={full} />
     </details>
   );
 }, toolPropsEqual);
@@ -216,12 +281,14 @@ function ThinkingPreviewBody({ preview }: { preview: ThinkingPreview }) {
   );
 }
 
-export function ToolDetail({ tool }: { tool: ToolBlock }) {
+export function ToolDetail({ tool, full = false }: { tool: ToolBlock; full?: boolean }) {
   const [copied, setCopied] = useState<string | null>(null);
-  const text = tool.content.map(contentText).filter(Boolean).join("\n");
+  const text = toolDetailText(tool);
   const images = tool.content.flatMap(contentImages);
   const pathText = tool.paths.map(displayPath).join("\n");
-  const tallDiff = looksLikeDiff(text) && text.split("\n").length >= TALL_DIFF_LINES;
+  // A write row that opened itself fits the frame, so it paints the whole body instead of the
+  // Preview hand-off.
+  const tallDiff = !full && tallDiffText(text);
   const isEdit = EDIT_KINDS.includes((tool.kind ?? "").toLowerCase()) || tallDiff;
 
   async function copy(label: string, value: string) {
@@ -236,7 +303,7 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
   }
 
   return (
-    <div className="tool-detail">
+    <div className={`tool-detail${full ? " tool-detail-full" : ""}`}>
       {(tool.command || pathText || text) && (
         <div className="tool-actions" aria-label="Tool actions">
           {tool.command && <button type="button" onClick={() => void copy("command", tool.command!)}><Copy size={12} /> {copied === "command" ? "Copied" : "Copy command"}</button>}
@@ -284,6 +351,16 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
       {tool.paths.length > 0 && <div className="tool-locations">{tool.paths.map((path) => <code key={path} title={displayPath(path)}>{displayPath(path)}</code>)}</div>}
     </div>
   );
+}
+
+/** The text a tool row would paint, shared by the detail body and the write row's fold decision. */
+function toolDetailText(tool: ToolBlock): string {
+  return tool.content.map(contentText).filter(Boolean).join("\n");
+}
+
+/** Diffs this tall are not painted inline; the row hands them to the Preview dock instead. */
+function tallDiffText(text: string): boolean {
+  return looksLikeDiff(text) && text.split("\n").length >= TALL_DIFF_LINES;
 }
 
 function contentText(value: unknown): string {

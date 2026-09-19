@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolBlock } from "../../state/session";
-import { editHeaderSuffix, toolHeader } from "./tool-card";
+import { editHeaderSuffix, isWriteTool, toolHeader, writeBodyFitsFrame } from "./tool-card";
 
 const diff = (oldText: string, newText: string, path = "src/a.ts") => ({ type: "diff", path, oldText, newText });
 
@@ -65,5 +65,26 @@ describe("edit row suffix", () => {
 
   it("does not count non-edit rows", () => {
     expect(editHeaderSuffix(tool("read", "read", ["src/a.ts"], [diff("a", "a\nb")]))).toBeNull();
+  });
+});
+
+describe("write row fold", () => {
+  it("recognizes the file-creating tool kinds", () => {
+    expect(isWriteTool("write")).toBe(true);
+    expect(isWriteTool("Write")).toBe(true);
+    expect(isWriteTool("write_file")).toBe(true);
+    expect(isWriteTool("edit")).toBe(false);
+    expect(isWriteTool(null)).toBe(false);
+  });
+
+  it("opens a row while its body fits the frame it is read in, edges included", () => {
+    expect(writeBodyFitsFrame(240, 600)).toBe(true);
+    expect(writeBodyFitsFrame(600, 600)).toBe(true);
+    expect(writeBodyFitsFrame(601, 600)).toBe(false);
+  });
+
+  it("keeps a row folded when there is no body or no measured frame", () => {
+    expect(writeBodyFitsFrame(0, 600)).toBe(false);
+    expect(writeBodyFitsFrame(240, 0)).toBe(false);
   });
 });

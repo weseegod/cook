@@ -846,6 +846,9 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .tool-detail > header strong { flex: 1; font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; font-weight: 400; }
 .tool-detail > header span { display: flex; align-items: center; gap: 4px; color: var(--muted); font-size: 10px; text-transform: capitalize; }
 .tool-detail > pre { max-height: 320px; overflow: auto; margin: 0; padding: 8px 10px; border-top: 1px solid var(--border); background: #181818; color: #c5c5c5; font-family: SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; line-height: 1.45; }
+/* A write row that opened itself was measured against the transcript frame: its body fits, so the
+   cap that keeps other expanded rows in a scrollable box would only hide it again. */
+.tool-detail-full > pre { max-height: none; }
 @keyframes pulse { 50% { opacity: .35; } }
 
 /* Plan entries as the TUI's todo pane paints them (`views/todo_pane.rs`): status glyph + content. */
@@ -1343,6 +1346,51 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .activity-kill { width: 22px; height: 22px; flex: 0 0 auto; }
 .activity-kill-spacer { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; color: transparent; }
 .activity-row-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; font-family: var(--font-mono); padding-left: 2px; }
+/* Tasks pane: the popover under the header's Tasks chip (`views/tasks_pane.rs`), centred on the
+   chat, half as wide as it and capped like the plans list. The chip script measures the chat and
+   sets the width and offset; these are the fallbacks. */
+.tasks-chip-root { position: relative; flex: 0 0 auto; min-width: 0; }
+.tasks-menu {
+  position: absolute;
+  top: calc(100% + 3px);
+  left: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  width: 440px;
+  max-width: calc(100vw - 12px);
+  max-height: 320px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-elevated);
+  box-shadow: var(--shadow);
+}
+/* Rows only, like the plans list, and about as tall per row: the shared row carries a 30px
+   minimum for the Tools panel's touch targets, which is more air than a header popover needs. */
+.tasks-menu .activity-list { min-height: 0; overflow-y: auto; border-top: 0; }
+.tasks-menu .activity-row { padding: 4px 6px; }
+/* Three classes deep: the header's own `.agent-header .icon-button` sizes every icon in the bar. */
+.tasks-menu .activity-row .activity-kill,
+.tasks-menu .activity-row .activity-kill-spacer { width: 20px; height: 20px; min-height: 20px; }
+.tasks-menu .activity-group { padding: 4px 2px 1px; }
+.tasks-menu .utility-state { min-height: 0; padding: 8px; }
+/* Section header inside the row list (`views/tasks_pane.rs`: Workflows / Subagents / Tasks / Watchers). */
+.activity-group { display: flex; align-items: center; gap: 6px; padding: 6px 2px 2px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: 0.04em; }
+.activity-group-count { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* Header chip for the conversation's background work, beside the plan chip. The badge is the TUI's
+   running count (`agent_status.rs::task_status_line`), in the same blue as the turn-status spinner. */
+.tasks-chip { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 4px; min-height: 24px; padding: 3px 8px; border: 1px solid color-mix(in srgb, #75beff, var(--border) 60%); border-radius: 3px; color: #9ecbff; background: #1b2733; cursor: pointer; font-size: 11px; white-space: nowrap; }
+.tasks-chip:hover { border-color: #75beff; color: #d4e8ff; }
+.tasks-chip.active { border-color: #75beff; color: #e6f1ff; background: #223244; }
+.tasks-chip:focus-visible { outline: 2px solid color-mix(in srgb, #75beff, transparent 45%); outline-offset: 1px; }
+/* How many jobs are running, beside the label the Plans chip mirrors; parked work in warning. */
+.tasks-chip-count { color: color-mix(in srgb, currentColor, transparent 25%); font-variant-numeric: tabular-nums; }
+.tasks-chip-paused { color: var(--warning); font-variant-numeric: tabular-nums; }
+:root[data-theme="light"] .tasks-chip { border-color: color-mix(in srgb, #2f7dc4, var(--border) 60%); color: #1c5b96; background: #eaf3fd; }
+:root[data-theme="light"] .tasks-chip:hover { border-color: #2f7dc4; color: #14456f; }
+:root[data-theme="light"] .tasks-chip.active { border-color: #2f7dc4; color: #10395c; background: #dceafb; }
+:root[data-theme="light"] .tasks-chip-paused { color: #a66d08; }
 .spin { animation: spin 0.8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 :root[data-theme="light"] .utility-preview > pre { background: #1f1f1f; color: #cccccc; }
@@ -1941,7 +1989,9 @@ body { font-size: 14px; }
   cursor: pointer;
 }
 .plan-chip:hover { border-color: var(--plan-accent); font-weight: 600; }
-.plan-chip-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-chip-name { white-space: nowrap; }
+/* How many plans this conversation holds, beside the label the Tasks chip mirrors. */
+.plan-chip-count { color: color-mix(in srgb, currentColor, transparent 25%); font-variant-numeric: tabular-nums; }
 .plan-chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--plan-accent), transparent 45%); outline-offset: 1px; }
 
 /* The plan list: one row per episode file, newest first, current one marked. */
@@ -2075,6 +2125,9 @@ body { font-size: 14px; }
 .plan-row-menu-separator { height: 1px; margin: 4px 2px; background: var(--border); }
 .plan-file-body { max-height: 60vh; overflow-y: auto; }
 .plan-file-empty { color: var(--muted); font-size: 12px; }
+.dialog-footer { flex: 0 0 auto; padding: 12px 18px 18px; border-top: 1px solid var(--border); }
+.plan-file-actions { display: flex; justify-content: flex-end; gap: 7px; }
+.plan-file-actions .ghost-button { min-height: 28px; padding: 4px 9px; font-size: 12px; }
 
 .plan-pane {
   position: absolute;

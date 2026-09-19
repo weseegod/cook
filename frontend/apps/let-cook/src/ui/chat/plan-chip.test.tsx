@@ -67,7 +67,8 @@ describe("PlanChip", () => {
     render(<PlanChip />);
 
     const chip = screen.getByTestId("plan-chip");
-    expect(chip).toHaveTextContent("plan");
+    expect(chip).toHaveTextContent("Plans");
+    expect(screen.getByTestId("plan-chip-count")).toHaveTextContent("0");
 
     fireEvent.click(chip);
     expect(screen.getByTestId("plan-menu-empty")).toHaveTextContent("No plans in this conversation yet");
@@ -81,11 +82,13 @@ describe("PlanChip", () => {
     expect(screen.queryByTestId("plan-chip")).toBeNull();
   });
 
-  it("names the current episode and lists every plan file", () => {
+  it("counts the conversation's plans and names the current episode in the tooltip", () => {
     useSessionStore.setState({ planFiles: [planFile(), OLDER] });
     render(<PlanChip />);
 
-    expect(screen.getByTestId("plan-chip")).toHaveTextContent("Current plan");
+    expect(screen.getByTestId("plan-chip")).toHaveTextContent("Plans");
+    expect(screen.getByTestId("plan-chip-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("plan-chip")).toHaveAttribute("title", expect.stringContaining("Current plan"));
     fireEvent.click(screen.getByTestId("plan-chip"));
 
     expect(screen.getByTestId(`plan-file-row-${OLDER.name}`)).toHaveTextContent("804 B");
