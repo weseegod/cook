@@ -1135,6 +1135,26 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .turn-status-stop { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; }
 .prompt-slot { flex: 0 0 auto; width: min(var(--content-max), calc(100% - 24px)); margin: 0 auto 8px; }
 .prompt-composer.stashed { display: none; }
+.turn-status-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+.turn-status-diffstat { gap: 8px; }
+.turn-status-diff-add,
+.turn-status-diff-del {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.turn-status-diff-add { color: color-mix(in srgb, var(--success) 45%, var(--muted)); }
+.turn-status-diff-del { color: color-mix(in srgb, var(--danger) 45%, var(--muted)); }
+.turn-status.idle-metrics { border-top-color: transparent; }
 .inline-interaction { border: 1px solid #4b4b4b; border-left: 2px solid #0078d4; background: #252526; color: #cccccc; padding: 10px 12px; font-size: 12px; }
 .inline-permission { border-left-color: #cca700; }
 .inline-interaction-header { display: flex; align-items: center; gap: 9px; margin-bottom: 9px; }

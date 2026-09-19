@@ -14,6 +14,11 @@ import { ProvidersPanel } from "./providers";
 import { useTheme, type ThemePreference } from "../theme/theme";
 import { ConfirmDialog } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
+import {
+  COMPOSER_SHOW_DIFFSTAT_KEY,
+  COMPOSER_SHOW_TPS_KEY,
+  useBooleanPref,
+} from "../preferences";
 
 export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "data" | "about";
 type Tab = SettingsTab;
@@ -138,6 +143,9 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
               </Section>
               <Section title="Behavior" description="Control how Cook handles permissions." icon={<SlidersHorizontal size={15} />}>
                 <BehaviorOptions sessionId={sessionId} alwaysApprove={alwaysApprove} />
+              </Section>
+              <Section title="Display" description="Muted metrics on the turn status bar." icon={<Monitor size={15} />}>
+                <DisplayOptions />
               </Section>
             </>
           )}
@@ -298,6 +306,37 @@ function BehaviorOptions({ sessionId, alwaysApprove }: { sessionId: string | nul
       <button className="ghost-button" disabled={!sessionId} onClick={() => sessionId && void acpClient.xai.resetPermissions(sessionId)}>
         <ShieldCheck size={15} /> Reset permissions
       </button>
+    </>
+  );
+}
+
+function DisplayOptions() {
+  const [showTps, setShowTps] = useBooleanPref(COMPOSER_SHOW_TPS_KEY);
+  const [showDiffstat, setShowDiffstat] = useBooleanPref(COMPOSER_SHOW_DIFFSTAT_KEY);
+  return (
+    <>
+      <div className="toggle-row">
+        <span title="Tokens/sec of the last completed reply on the status bar.">
+          <strong>Show tokens per second</strong>
+          <small>Tokens/sec of the last completed reply on the status bar.</small>
+        </span>
+        <ToggleSwitch
+          checked={showTps}
+          ariaLabel="Show tokens per second"
+          onChange={setShowTps}
+        />
+      </div>
+      <div className="toggle-row">
+        <span title="Working-tree +added −removed on the status bar.">
+          <strong>Show line changes</strong>
+          <small>Working-tree +added −removed on the status bar.</small>
+        </span>
+        <ToggleSwitch
+          checked={showDiffstat}
+          ariaLabel="Show line changes"
+          onChange={setShowDiffstat}
+        />
+      </div>
     </>
   );
 }
