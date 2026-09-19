@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 import type { SessionSummary } from "../../acp/xai";
 import {
   DEFAULT_PREFS,
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
   arrangeSessions,
+  clampSidebarWidth,
   flattenGroupIds,
   groupConversations,
   moveId,
@@ -29,10 +32,27 @@ describe("parsePrefs", () => {
     expect(parsePrefs('{"sort":"random"}')).toEqual({ ...DEFAULT_PREFS, sort: "time" });
   });
 
-  test("keeps the stored sort, pins, and order, dropping junk entries", () => {
+  test("keeps the stored sort, pins, order, and width, dropping junk entries", () => {
     expect(
-      parsePrefs('{"sort":"workspace","pinned":["a","a",7,null],"order":["b","","c"]}'),
-    ).toEqual({ sort: "workspace", pinned: ["a"], order: ["b", "c"] });
+      parsePrefs('{"sort":"workspace","pinned":["a","a",7,null],"order":["b","","c"],"width":320}'),
+    ).toEqual({ sort: "workspace", pinned: ["a"], order: ["b", "c"], width: 320 });
+  });
+
+  test("clamps a stored width and rejects a width that is not a number", () => {
+    expect(parsePrefs('{"width":9000}').width).toBe(MAX_SIDEBAR_WIDTH);
+    expect(parsePrefs('{"width":10}').width).toBe(MIN_SIDEBAR_WIDTH);
+    expect(parsePrefs('{"width":"320"}').width).toBeNull();
+    expect(parsePrefs('{"width":null}').width).toBeNull();
+  });
+});
+
+describe("clampSidebarWidth", () => {
+  test("rounds to whole pixels inside the usable range", () => {
+    expect(clampSidebarWidth(300.4)).toBe(300);
+    expect(clampSidebarWidth(MIN_SIDEBAR_WIDTH - 1)).toBe(MIN_SIDEBAR_WIDTH);
+    expect(clampSidebarWidth(MAX_SIDEBAR_WIDTH + 1)).toBe(MAX_SIDEBAR_WIDTH);
+    expect(clampSidebarWidth(Number.NaN)).toBeNull();
+    expect(clampSidebarWidth(undefined)).toBeNull();
   });
 });
 
@@ -46,8 +66,8 @@ describe("togglePinned", () => {
 
 describe("prunePrefs", () => {
   test("forgets a deleted conversation", () => {
-    expect(prunePrefs({ sort: "time", pinned: ["a", "b"], order: ["b", "a"] }, "b")).toEqual({
-      sort: "time",
+    expect(prunePrefs({ ...DEFAULT_PREFS, pinned: ["a", "b"], order: ["b", "a"] }, "b")).toEqual({
+      ...DEFAULT_PREFS,
       pinned: ["a"],
       order: ["a"],
     });
@@ -125,7 +145,7 @@ describe("groupConversations", () => {
   });
 
   test("pinned conversations lead both sort modes, in their own block", () => {
-    const prefs = { sort: "workspace" as const, pinned: ["beta", "orphan"], order: [] };
+    const prefs = { ...DEFAULT_PREFS, sort: "workspace" as const, pinned: ["beta", "orphan"] };
     const groups = groupConversations(all, prefs);
     expect(groups[0].pinned).toBe(true);
     expect(groups[0].label).toBe("Pinned");
@@ -133,5 +153,19 @@ describe("groupConversations", () => {
     expect(flattenGroupIds(groups)).toEqual(["beta", "orphan", "alpha", "alpha-old"]);
     // A pinned conversation is not repeated in its workspace block.
     expect(groups.flatMap((group) => group.sessions).map((entry) => entry.id)).toHaveLength(all.length);
+  });
+
+  test("a hand-made order reorders inside each workspace block", () => {
+    const groups = groupConversations(all, {
+      ...DEFAULT_PREFS,
+      sort: "workspace",
+      order: ["alpha-old", "alpha"],
+    });
+    // Only the two conversations that share a workspace rearrange; other blocks are untouched.
+    expect(groups.map((group) => group.sessions.map((entry) => entry.id))).toEqual([
+      ["alpha-old", "alpha"],
+      ["beta"],
+      ["orphan"],
+    ]);
   });
 });

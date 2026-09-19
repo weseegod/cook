@@ -1,18 +1,15 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { acpClient } from "../../acp/client";
 import { turnElapsedMs, useSessionStore } from "../../state/session";
 import { formatDuration, formatTokensShort } from "./format-duration";
 import {
+  BRAILLE_FRAMES,
   activityParts,
   isSendableWait,
   phaseKey,
-  type TurnActivity,
+  resolveTurnActivity,
 } from "./turn-activity";
-
-/** Keep the TUI's 30 fps capability while painting the status row at roughly 7.5 fps. */
-const TICK_MS = 1000 / 30;
-const SPINNER_DIVISOR = 4;
-const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+import { useSpinFrame } from "./use-spin-frame";
 
 /**
  * The live activity row between the transcript and the prompt (`views/turn_status.rs`).
@@ -29,25 +26,19 @@ export function TurnStatus() {
   const queued = useSessionStore((state) => state.queuedPromptCount);
   const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const pendingPermission = useSessionStore((state) => state.pendingPermission);
-  const [tick, setTick] = useState(0);
+  const tick = useSpinFrame(turnRunning);
   const phase = useRef<{ key: string | null; startedAt: number }>({ key: null, startedAt: Date.now() });
-
-  useEffect(() => {
-    if (!turnRunning) return;
-    const timer = window.setInterval(() => setTick((value) => value + 1), TICK_MS * SPINNER_DIVISOR);
-    return () => window.clearInterval(timer);
-  }, [turnRunning]);
 
   // Goal verification runs in-turn while the model is idle, so the TUI labels the whole window
   // `Verifying…` ahead of any stale streaming activity (`views/turn_status.rs::compute_activity`).
   const goalVerifying = useSessionStore((state) => state.goal?.verifyingCompletion === true);
   // An ask tool owns the row while its card is open (`AskUserQuestion`), and its phase timer is hidden.
-  const activity: TurnActivity | null = goalVerifying && turnRunning
-    ? { kind: "verifying" }
-    : pendingQuestion?.kind === "question"
-      ? { kind: "ask", detail: pendingQuestion.title ?? "" }
-      : derived;
-  const resolved: TurnActivity | null = activity ?? (turnRunning ? { kind: "waiting", reason: { kind: "model" } } : null);
+  const resolved = resolveTurnActivity({
+    derived,
+    turnRunning,
+    goalVerifying,
+    askDetail: pendingQuestion?.kind === "question" ? pendingQuestion.title ?? "" : null,
+  });
 
   const key = phaseKey(resolved);
   useEffect(() => {

@@ -1203,10 +1203,11 @@ export function mockPlan(overrides: Record<string, unknown> = {}): number {
 
 /**
  * Ship one `x.ai/session_notification` update the way the shell does (goal updates, relay status):
- * an extension method carrying `{ sessionId, update }`.
+ * an extension method carrying `{ sessionId, update }`. `sessionId` defaults to this agent's own
+ * session, and names another one when a test drives a conversation the window is not showing.
  */
-export function mockSessionNotification(update: Record<string, unknown>): void {
-  notify("_x.ai/session_notification", { sessionId: "mock-session", update });
+export function mockSessionNotification(update: Record<string, unknown>, sessionId = "mock-session"): void {
+  notify("_x.ai/session_notification", { sessionId, update });
 }
 
 /** Ext notif helpers for activity panel tests (SessionNotification envelope). */
@@ -1283,7 +1284,7 @@ export interface MockControl {
   permission(overrides?: Record<string, unknown>): number;
   question(overrides?: Record<string, unknown>): number;
   plan(overrides?: Record<string, unknown>): number;
-  sessionNotification(update: Record<string, unknown>): void;
+  sessionNotification(update: Record<string, unknown>, sessionId?: string): void;
   taskBackgrounded(overrides?: Record<string, unknown>): void;
   taskCompleted(overrides?: Record<string, unknown>): void;
   goalUpdate(overrides?: Record<string, unknown>): Record<string, unknown>;

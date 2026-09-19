@@ -23,9 +23,16 @@ export interface ConversationPrefs {
   pinned: string[];
   /** Ids the user arranged by hand, in display order; wins over recency for those ids. */
   order: string[];
+  /** Width the user dragged the sidebar to, or `null` to follow the stylesheet. */
+  width: number | null;
 }
 
-export const DEFAULT_PREFS: ConversationPrefs = { sort: "time", pinned: [], order: [] };
+export const DEFAULT_PREFS: ConversationPrefs = { sort: "time", pinned: [], order: [], width: null };
+
+/** Sidebar width bounds in CSS pixels. The maximum leaves the chat column usable at the window's
+ * minimum width (`minWidth: 840` in `src-tauri/tauri.conf.json`). */
+export const MIN_SIDEBAR_WIDTH = 208;
+export const MAX_SIDEBAR_WIDTH = 440;
 
 const PREFS_KEY = "sessionSidebar";
 /** Conversations with no `cwd` share this group key. */
@@ -40,10 +47,17 @@ export function parsePrefs(raw: string | null): ConversationPrefs {
       sort: value.sort === "workspace" ? "workspace" : "time",
       pinned: idList(value.pinned),
       order: idList(value.order),
+      width: clampSidebarWidth(value.width),
     };
   } catch {
     return DEFAULT_PREFS;
   }
+}
+
+/** A persisted or dragged width, clamped to the usable range; `null` when unusable. */
+export function clampSidebarWidth(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.round(Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, value)));
 }
 
 export function loadPrefs(): ConversationPrefs {

@@ -2112,8 +2112,6 @@ body { font-size: 14px; }
 .session-menu-separator { height: 1px; margin: 4px 2px; background: var(--border); }
 
 /* Drag to arrange: only accepted inside the same block (pinned vs. unpinned). */
-.session-row[draggable="true"] .session-open { cursor: grab; }
-.session-row[draggable="true"]:active .session-open { cursor: grabbing; }
 .session-row.dragging { opacity: .45; }
 .session-row.drop-before::before,
 .session-row.drop-after::after {
@@ -2197,3 +2195,55 @@ body { font-size: 14px; }
 
 .sidebar-footer { padding: 9px 6px 0; border-top-color: var(--border); }
 .sidebar-footer-button { border-radius: 6px; }
+
+/* Reordering, live turn status and the width handle for the conversation sidebar. */
+.sidebar { position: relative; }
+.sidebar-resizer {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background .12s ease;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+body.session-resizing .sidebar-resizer::after { background: var(--accent); }
+.sidebar-resizer:focus-visible { outline: 0; }
+body.session-resizing { cursor: col-resize; user-select: none; }
+
+/* Rows reorder by pointer drag; the grab cursor is the affordance. */
+.session-row { touch-action: pan-y; }
+.session-row .session-open { cursor: grab; }
+.session-row.dragging .session-open { cursor: grabbing; }
+body.session-dragging { cursor: grabbing; user-select: none; }
+body.session-dragging .session-list { user-select: none; }
+
+/* A working conversation keeps its workspace path and gains the live turn on the right of the same
+   line, where the date sits on an idle row. */
+.session-open .session-meta > .session-turn { flex: 0 1 auto; margin-left: auto; }
+.session-open .session-turn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1;
+}
+.session-open .session-turn-spinner { flex: 0 0 auto; color: var(--accent); font-size: 11px; line-height: 1; }
+.session-open .session-turn-spinner.blocked { color: var(--warning); }
+.session-open .session-turn-label { min-width: 0; overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
+.session-open .session-turn-timer { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }

@@ -122,6 +122,13 @@ interface SessionState {
   transcriptCursor: TranscriptCursor;
   turnRunning: boolean;
   turnStartedAt: number | null;
+  /**
+   * Every session with a prompt in flight, keyed by session id. `turnRunning` covers only the
+   * session the window is showing; the conversation list reads this map so a turn stays visible —
+   * with its last reported phase — after the user opens another conversation. The agent streams a
+   * phase only for the session the window has loaded, so `activity` is what that turn last said.
+   */
+  workingSessions: Record<string, SessionTurn>;
   /** Time inside this turn that a question card held the clock still (`QuestionViewState.opened_at`). */
   turnPausedMs: number;
   questionOpenedAt: number | null;
@@ -190,6 +197,17 @@ interface SessionState {
   finishTurn: (outcome?: TurnOutcome) => void;
 }
 
+/** Title a conversation carries until the agent names it. */
+export const DEFAULT_SESSION_TITLE = "New chat";
+
+/** One in-flight turn, as the conversation list reports it. */
+export interface SessionTurn {
+  /** When the prompt went out, epoch ms. */
+  startedAt: number;
+  /** Last phase the window learned for this turn; `null` until the agent reports one. */
+  activity: TurnActivity | null;
+}
+
 /** Turn clock with question-card pauses netted out, in the shared `formatDuration` unit. */
 export function turnElapsedMs(
   state: Pick<SessionState, "turnStartedAt" | "turnPausedMs" | "questionOpenedAt">,
@@ -212,13 +230,14 @@ export const useSessionStore = create<SessionState>((set) => ({
   cwd: null,
   binaryVersion: null,
   sessionId: null,
-  sessionTitle: "New chat",
+  sessionTitle: DEFAULT_SESSION_TITLE,
   blocks: [],
   activity: null,
   planEntries: EMPTY_PLAN_ENTRIES,
   transcriptCursor: emptyCursor(),
   turnRunning: false,
   turnStartedAt: null,
+  workingSessions: {},
   turnPausedMs: 0,
   questionOpenedAt: null,
   modelId: localStorage.getItem("cook.defaultModel"),
@@ -374,7 +393,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       activity: null,
       planEntries: EMPTY_PLAN_ENTRIES,
       transcriptCursor: emptyCursor(),
-      sessionTitle: "New chat",
+      sessionTitle: DEFAULT_SESSION_TITLE,
       turnRunning: false,
       turnStartedAt: null,
       turnPausedMs: 0,
@@ -616,9 +635,11 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
     cursor = next.cursor;
   }
 
+  const transcriptChanged = blocks !== state.blocks;
+  const activity = transcriptChanged ? deriveActivity(blocks) : state.activity;
   return {
     blocks,
-    ...(blocks !== state.blocks ? { activity: deriveActivity(blocks), planEntries: latestPlanEntries(blocks) } : {}),
+    ...(transcriptChanged ? { activity, planEntries: latestPlanEntries(blocks) } : {}),
     transcriptCursor: cursor,
     usage,
     planMode,
@@ -637,7 +658,16 @@ function reduceNotifications(state: SessionState, notifications: SessionNotifica
     recapSummary,
     recapError,
     recapDialogOpen,
+    workingSessions: recordTurnActivity(state, activity),
   };
+}
+
+/** Remember the visible conversation's phase on its in-flight turn, for the list to keep showing. */
+function recordTurnActivity(state: SessionState, activity: TurnActivity | null): Record<string, SessionTurn> {
+  const { sessionId, workingSessions } = state;
+  const turn = sessionId === null ? undefined : workingSessions[sessionId];
+  if (!turn || turn.activity === activity) return workingSessions;
+  return { ...workingSessions, [sessionId!]: { ...turn, activity } };
 }
 
 function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknown>): TranscriptState {

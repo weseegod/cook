@@ -30,6 +30,7 @@ import {
   type RpcMessage,
 } from "./host";
 import { setDefaultModel as setDefaultModelOnAgent } from "./providers";
+import { activityFromUpdate, phaseKey } from "../ui/chat/turn-activity";
 import { commandsFromUpdate, modelCatalog, XaiClient, type SessionInfo } from "./xai";
 import { readLocal, writeLocal } from "../ui/storage";
 
@@ -160,11 +161,26 @@ export class CookAcpClient {
     await this.inboundMessages;
     this.sessionUpdates.flushNow();
     useSessionStore.getState().resetConversation(sessionId);
+    // Switching back into a conversation whose turn is still in flight keeps the window in turn
+    // state, so the composer queues instead of sending and both status rows agree on the clock.
+    const working = useSessionStore.getState().workingSessions[sessionId];
+    if (working) useSessionStore.getState().set({ turnRunning: true, turnStartedAt: working.startedAt });
     this.promptCorrelation.clear();
     const response = await request<{ models?: unknown }>("session/load", params);
     await this.inboundMessages;
     this.sessionUpdates.flushNow();
-    useSessionStore.getState().finishTurn();
+    // The replay opens a turn of its own, which `finishTurn` closes. A prompt of ours is still in
+    // flight for this conversation though, so the turn stays open and the clock and phase the
+    // conversation list already shows are re-applied instead of being thrown away.
+    if (working) {
+      useSessionStore.getState().set({
+        turnRunning: true,
+        turnStartedAt: working.startedAt,
+        ...(working.activity ? { activity: working.activity } : {}),
+      });
+    } else {
+      useSessionStore.getState().finishTurn();
+    }
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
     const catalog = modelCatalog(response?.models);
@@ -250,6 +266,7 @@ export class CookAcpClient {
       _meta: { promptId },
     };
     this.pendingPromptRequests += 1;
+    this.trackWorking(sessionId, Date.now());
     useSessionStore.getState().set({ turnRunning: true, error: null });
     let outcome: TurnOutcome = { kind: "completed" };
     try {
@@ -268,6 +285,7 @@ export class CookAcpClient {
       }
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       this.promptCorrelation.end(promptId);
+      this.trackWorking(sessionId, null);
       const store = useSessionStore.getState();
       store.set({
         turnRunning: this.pendingPromptRequests > 0,
@@ -278,6 +296,33 @@ export class CookAcpClient {
     }
   }
 
+  /**
+   * Record (or forget) a session's in-flight turn. The conversation list paints a live row from
+   * this map, so a turn stays visible — with its last reported phase — after the user opens a
+   * different conversation.
+   */
+  private trackWorking(sessionId: string, startedAt: number | null): void {
+    const working = { ...useSessionStore.getState().workingSessions };
+    if (startedAt === null) delete working[sessionId];
+    else working[sessionId] = { startedAt, activity: working[sessionId]?.activity ?? null };
+    useSessionStore.getState().set({ workingSessions: working });
+  }
+
+  /**
+   * Keep a backgrounded conversation's turn phase moving. `shouldApplyToActiveSession` drops the
+   * updates of every other session, so this folds them into the list's snapshot instead.
+   */
+  private noteBackgroundActivity(params: Record<string, unknown>, update: Record<string, unknown> | undefined): void {
+    const sessionId = typeof params.sessionId === "string" ? params.sessionId : null;
+    if (!sessionId || !update) return;
+    const working = useSessionStore.getState().workingSessions;
+    const turn = working[sessionId];
+    if (!turn) return;
+    const activity = activityFromUpdate(update);
+    if (!activity || phaseKey(activity) === phaseKey(turn.activity)) return;
+    useSessionStore.getState().set({ workingSessions: { ...working, [sessionId]: { ...turn, activity } } });
+  }
+
   async cancel(): Promise<void> {
     const sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) return;
@@ -286,6 +331,7 @@ export class CookAcpClient {
     this.sessionUpdates.flushNow();
     useSessionStore.getState().finishTurn({ kind: "cancelled" });
     useSessionStore.getState().set({ turnRunning: false });
+    this.trackWorking(sessionId, null);
   }
 
   async setModel(modelId: string): Promise<void> {
@@ -455,6 +501,8 @@ export class CookAcpClient {
         }
         if (this.shouldApplyToActiveSession(params, update)) {
           this.sessionUpdates.enqueue(params as unknown as SessionNotification);
+        } else {
+          this.noteBackgroundActivity(params, update);
         }
         continue;
       }

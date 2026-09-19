@@ -21,10 +21,13 @@ import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
 import { basename } from "../../acp/attachments";
 import type { SessionSummary } from "../../acp/xai";
-import { useSessionStore } from "../../state/session";
+import { DEFAULT_SESSION_TITLE, useSessionStore } from "../../state/session";
 import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "../chat/export-transcript";
 import { ConfirmDialog, Dialog, DialogActions } from "../components/dialog";
 import {
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  clampSidebarWidth,
   flattenGroupIds,
   groupConversations,
   loadPrefs,
@@ -35,9 +38,15 @@ import {
   type ConversationPrefs,
   type ConversationSort,
 } from "./session-sidebar-utils";
+import { SessionMetaLine } from "./session-meta-line";
 
 /** Room a five-item conversation menu needs below its trigger before it flips upwards. */
 const ROW_MENU_HEIGHT = 190;
+/** Pixels the pointer travels before a press on a row becomes a reorder instead of a click. */
+const DRAG_THRESHOLD = 4;
+/** Arrow-key step, and its bigger step with Shift held. */
+const RESIZE_STEP = 16;
+const RESIZE_STEP_LARGE = 48;
 
 interface RowMenu {
   id: string;
@@ -47,8 +56,23 @@ interface RowMenu {
   trigger: HTMLElement;
 }
 
+interface DragState {
+  id: string;
+  startX: number;
+  startY: number;
+  /** False until the pointer passes {@link DRAG_THRESHOLD}. */
+  active: boolean;
+}
+
+interface DropTarget {
+  id: string;
+  position: "before" | "after";
+}
+
 export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSettings: () => void; onOpenSearch: () => void }) {
   const activeId = useSessionStore((state) => state.sessionId);
+  const activeTitle = useSessionStore((state) => state.sessionTitle);
+  const workspace = useSessionStore((state) => state.cwd);
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
   const [target, setTarget] = useState<SessionSummary | null>(null);
@@ -59,9 +83,18 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
   const [rowMenu, setRowMenu] = useState<RowMenu | null>(null);
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
-  const [dropAt, setDropAt] = useState<{ id: string; position: "before" | "after" } | null>(null);
+  const [dropAt, setDropAt] = useState<DropTarget | null>(null);
+  const [liveWidth, setLiveWidth] = useState<number | null>(null);
   const rowMenuRef = useRef<HTMLDivElement>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
+  const asideRef = useRef<HTMLElement>(null);
+  const dragRef = useRef<DragState | null>(null);
+  const dropRef = useRef<DropTarget | null>(null);
+  /** Set while a reorder is in flight, so releasing the pointer does not also open the row. */
+  const suppressClickRef = useRef(false);
+  const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const liveWidthRef = useRef<number | null>(null);
+  const prefsRef = useRef(prefs);
 
   const sessions = useQuery({
     queryKey: ["sessions"],
@@ -70,14 +103,115 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
   });
 
   const list = sessions.data ?? [];
-  const groups = useMemo(() => groupConversations(list, prefs), [list, prefs]);
+  /**
+   * The agent lists a conversation only once it has saved one, so the conversation the window has
+   * open is shown from the start. That is where a brand-new chat reports its running turn, and it
+   * disappears from the list on its own once the agent reports the real row.
+   */
+  const rows = useMemo(() => {
+    if (!activeId || list.some((session) => session.id === activeId)) return list;
+    // An unnamed conversation keeps the list's own fallback title, which also stops the row from
+    // reading exactly like the "New chat" button beside it.
+    const title = activeTitle === DEFAULT_SESSION_TITLE ? "" : activeTitle;
+    return [
+      { id: activeId, title, cwd: workspace ?? undefined, updatedAt: Date.now() },
+      ...list,
+    ];
+  }, [activeId, activeTitle, list, workspace]);
+  const groups = useMemo(() => groupConversations(rows, prefs), [rows, prefs]);
   const groupKeyOf = useMemo(() => {
     const lookup = new Map<string, string>();
     for (const group of groups) for (const session of group.sessions) lookup.set(session.id, group.key);
     return lookup;
   }, [groups]);
-  // Ids only reorder by hand in the time sort; workspace blocks belong to their folder.
-  const dragEnabled = prefs.sort === "time";
+  const sidebarWidth = liveWidth ?? prefs.width;
+  prefsRef.current = prefs;
+
+  /**
+   * Pointer-driven reordering. Reorders run on pointer events rather than HTML5 drag-and-drop: the
+   * desktop shell takes over native drags for its own file-drop handler (`onFileDrop` in
+   * `acp/host.ts`), which leaves HTML5 drags unusable inside the app's webview.
+   */
+  useEffect(() => {
+    function onPointerMove(event: PointerEvent) {
+      const drag = dragRef.current;
+      if (!drag) return;
+      if (!drag.active) {
+        if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD) return;
+        drag.active = true;
+        suppressClickRef.current = true;
+        document.body.classList.add("session-dragging");
+        window.getSelection()?.removeAllRanges();
+        setDragId(drag.id);
+      }
+      event.preventDefault();
+      const row = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-session-id]");
+      const targetId = row?.dataset.sessionId;
+      // A drop across blocks would silently re-pin the conversation, so only same-block drops land.
+      if (!row || !targetId || targetId === drag.id || groupKeyOf.get(targetId) !== groupKeyOf.get(drag.id)) {
+        dropRef.current = null;
+        setDropAt(null);
+        return;
+      }
+      const rect = row.getBoundingClientRect();
+      dropRef.current = {
+        id: targetId,
+        position: event.clientY < rect.top + rect.height / 2 ? "before" : "after",
+      };
+      setDropAt(dropRef.current);
+    }
+
+    function onPointerUp() {
+      const drag = dragRef.current;
+      const drop = dropRef.current;
+      dragRef.current = null;
+      dropRef.current = null;
+      if (drag) {
+        document.body.classList.remove("session-dragging");
+        if (drag.active && drop) {
+          updatePrefs({ ...prefsRef.current, order: moveId(flattenGroupIds(groups), drag.id, drop.id, drop.position) });
+        }
+      }
+      setDragId(null);
+      setDropAt(null);
+    }
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [groups, groupKeyOf]);
+
+  useEffect(() => {
+    if (liveWidth === null) return undefined;
+    function onPointerMove(event: PointerEvent) {
+      const start = resizeRef.current;
+      if (!start) return;
+      event.preventDefault();
+      setLive(clampSidebarWidth(start.startWidth + (event.clientX - start.startX)));
+    }
+    function onPointerUp() {
+      const width = liveWidthRef.current ?? prefsRef.current.width;
+      resizeRef.current = null;
+      document.body.classList.remove("session-resizing");
+      setLive(null);
+      updatePrefs({ ...prefsRef.current, width });
+    }
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [liveWidth]);
 
   useEffect(() => {
     if (!rowMenu) return;
@@ -199,25 +333,36 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     });
   }
 
-  function dragOverRow(event: React.DragEvent<HTMLDivElement>, session: SessionSummary) {
-    if (!dragId || dragId === session.id) return;
-    // Dropping across blocks would silently re-pin, so only same-block drops are accepted.
-    if (groupKeyOf.get(dragId) !== groupKeyOf.get(session.id)) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    setDropAt({ id: session.id, position: event.clientY < rect.top + rect.height / 2 ? "before" : "after" });
+  /** Arm a reorder. Nothing moves until the pointer clears {@link DRAG_THRESHOLD}. */
+  function beginRowDrag(event: React.PointerEvent<HTMLDivElement>, session: SessionSummary) {
+    suppressClickRef.current = false;
+    if (event.button !== 0) return;
+    if ((event.target as HTMLElement).closest(".session-menu-trigger")) return;
+    dragRef.current = { id: session.id, startX: event.clientX, startY: event.clientY, active: false };
   }
 
-  function dropOnRow(event: React.DragEvent<HTMLDivElement>, session: SessionSummary) {
+  function setLive(width: number | null) {
+    liveWidthRef.current = width;
+    setLiveWidth(width);
+  }
+
+  function beginResize(event: React.PointerEvent<HTMLDivElement>) {
+    const aside = asideRef.current;
+    if (event.button !== 0 || !aside) return;
     event.preventDefault();
-    const dragged = dragId;
-    const position = dropAt?.id === session.id ? dropAt.position : "after";
-    setDragId(null);
-    setDropAt(null);
-    if (!dragged || dragged === session.id) return;
-    if (groupKeyOf.get(dragged) !== groupKeyOf.get(session.id)) return;
-    updatePrefs({ ...prefs, order: moveId(flattenGroupIds(groups), dragged, session.id, position) });
+    const startWidth = aside.getBoundingClientRect().width;
+    resizeRef.current = { startX: event.clientX, startWidth };
+    document.body.classList.add("session-resizing");
+    setLive(Math.round(startWidth));
+  }
+
+  function resizeByKey(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const step = event.shiftKey ? RESIZE_STEP_LARGE : RESIZE_STEP;
+    const current = sidebarWidth ?? asideRef.current?.getBoundingClientRect().width;
+    if (current === undefined) return;
+    updatePrefs({ ...prefs, width: clampSidebarWidth(current + (event.key === "ArrowRight" ? step : -step)) });
   }
 
   async function confirmRename() {
@@ -259,7 +404,11 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
 
   return (
     <>
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        ref={asideRef}
+        style={sidebarWidth === null ? undefined : { width: sidebarWidth, flexBasis: sidebarWidth }}
+      >
         <header className="sidebar-header">
           <div className="sidebar-brand">
             <img className="brand-mark" src="/logo.svg" alt="" width={44} height={44} />
@@ -276,7 +425,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
         <div className="session-list">
           <div className="session-list-heading">
             <span className="session-list-title">Conversations</span>
-            {list.length > 0 && <small>{list.length}</small>}
+            {rows.length > 0 && <small>{rows.length}</small>}
             <div className="session-sort" ref={sortMenuRef}>
               <button
                 type="button"
@@ -309,7 +458,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                     role="menuitemradio"
                     aria-checked={prefs.sort === "workspace"}
                     data-testid="sort-workspace"
-                    title="Group conversations by workspace; drag reordering applies to the time sort."
+                    title="Group conversations by workspace; rows reorder inside their own workspace."
                     onClick={() => changeSort("workspace")}
                   >
                     <FolderTree size={13} aria-hidden="true" />
@@ -358,25 +507,20 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                     key={session.id}
                     className={`session-row ${activeId === session.id ? "active" : ""} ${dragId === session.id ? "dragging" : ""} ${drop ? `drop-${drop}` : ""}`}
                     data-testid={`session-row-${session.id}`}
+                    data-session-id={session.id}
                     data-pinned={pinned ? "true" : "false"}
-                    draggable={dragEnabled}
-                    onDragStart={
-                      dragEnabled
-                        ? (event) => {
-                            event.dataTransfer.effectAllowed = "move";
-                            event.dataTransfer.setData("text/plain", session.id);
-                            setDragId(session.id);
-                          }
-                        : undefined
-                    }
-                    onDragOver={dragEnabled ? (event) => dragOverRow(event, session) : undefined}
-                    onDrop={dragEnabled ? (event) => dropOnRow(event, session) : undefined}
-                    onDragEnd={() => {
-                      setDragId(null);
-                      setDropAt(null);
-                    }}
+                    onPointerDown={(event) => beginRowDrag(event, session)}
                   >
-                    <button className="session-open" onClick={() => void acpClient.loadSession(session.id, session.cwd)}>
+                    <button
+                      className="session-open"
+                      onClick={() => {
+                        if (suppressClickRef.current) {
+                          suppressClickRef.current = false;
+                          return;
+                        }
+                        void acpClient.loadSession(session.id, session.cwd);
+                      }}
+                    >
                       <span className="session-title">
                         {pinned && <Pin className="session-pin-mark" size={11} aria-label="Pinned" />}
                         <strong>{session.title || "Untitled conversation"}</strong>
@@ -387,8 +531,10 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                           <span className="session-workspace-name">{session.cwd ? basename(session.cwd) : "Workspace unavailable"}</span>
                           {session.cwd && <span className="sr-only">{session.cwd}</span>}
                         </span>
-                        <span className="session-meta-separator" aria-hidden="true">·</span>
-                        <span className="session-date">{formatDate(session.updatedAt)}</span>
+                        <SessionMetaLine sessionId={session.id} active={activeId === session.id}>
+                          <span className="session-meta-separator" aria-hidden="true">·</span>
+                          <span className="session-date">{formatDate(session.updatedAt)}</span>
+                        </SessionMetaLine>
                       </span>
                     </button>
                     <button
@@ -444,7 +590,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
               })}
             </Fragment>
           ))}
-          {sessions.data?.length === 0 && <div className="sidebar-hint">No conversations found.</div>}
+          {rows.length === 0 && <div className="sidebar-hint">No conversations found.</div>}
         </div>
         <footer className="sidebar-footer">
           <div className="sidebar-footer-actions">
@@ -452,6 +598,20 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
             <button type="button" className="sidebar-footer-button" aria-label="Help" title="Help"><CircleHelp size={15} /></button>
           </div>
         </footer>
+        <div
+          className="sidebar-resizer"
+          data-testid="sidebar-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize conversation sidebar"
+          aria-valuemin={MIN_SIDEBAR_WIDTH}
+          aria-valuemax={MAX_SIDEBAR_WIDTH}
+          aria-valuenow={sidebarWidth ?? undefined}
+          tabIndex={0}
+          onPointerDown={beginResize}
+          onKeyDown={resizeByKey}
+          onDoubleClick={() => updatePrefs({ ...prefs, width: null })}
+        />
       </aside>
       {dialog === "rename" && target && (
         <Dialog title="Rename conversation" onClose={() => setDialog(null)}>

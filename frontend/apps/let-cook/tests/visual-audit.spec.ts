@@ -41,6 +41,11 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(overflow).toBeLessThanOrEqual(1);
 }
 
+/** The working conversation's sidebar row paints its live status. */
+async function waitForTurnStatus(page: Page) {
+  await expect(page.locator(".session-row.active").getByTestId("session-turn-status")).toBeVisible();
+}
+
 test.describe("visual audit", () => {
   test("covers chat, sidebar, palette and every Settings surface", async ({ page }) => {
     await openWorkspace(page);
@@ -461,5 +466,104 @@ test.describe("visual audit", () => {
     // Delete keeps the light red danger tone in the light theme too.
     await expect(page.locator(".session-menu button.session-menu-danger")).toHaveCSS("color", "rgb(205, 49, 49)");
     await capture(page, "conversation-row-menu-light");
+  });
+
+  test("keeps the live turn status, the reorder line and the width handle inside the sidebar", async ({ page }) => {
+    // Hold the turn open so the working conversation keeps its status row while we measure.
+    await openWorkspace(page, { ...VISUAL_SEED, promptDelayMs: 20_000 });
+    await page.getByTestId("session-row-session-login").locator(".session-open").click();
+    await page.getByTestId("composer-input").fill("document the regression");
+    await page.getByTestId("send-button").click();
+    await waitForTurnStatus(page);
+
+    // The status replaces the date line on the working row only: same height, inside the row.
+    const running = page.locator(".session-row.active");
+    const status = running.getByTestId("session-turn-status");
+    const rowBox = (await running.boundingBox())!;
+    const statusBox = (await status.boundingBox())!;
+    expect(statusBox.x).toBeGreaterThanOrEqual(rowBox.x);
+    expect(statusBox.x + statusBox.width).toBeLessThanOrEqual(rowBox.x + rowBox.width + 1);
+    await expect(status.locator(".session-turn-spinner")).toHaveCSS("color", "rgb(0, 120, 212)");
+    await expect(page.locator(".session-date")).toHaveCount(VISUAL_SEED.sessions.length - 1);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-turn-status");
+
+    // A conversation the window is not showing keeps its status: the path stays on the line, the
+    // status takes the date's place at the right, and its clock keeps ticking on its own.
+    await page.getByTestId("session-row-session-long").locator(".session-open").click();
+    await expect(page.getByTestId("session-row-session-long")).toHaveClass(/active/);
+    const background = page.getByTestId("session-row-session-login");
+    const backgroundStatus = background.getByTestId("session-turn-status");
+    await expect(backgroundStatus).toHaveAttribute("data-live", "false");
+    const pathBox = (await background.locator(".session-workspace-name").boundingBox())!;
+    const carriedBox = (await backgroundStatus.boundingBox())!;
+    expect(pathBox.x + pathBox.width).toBeLessThanOrEqual(carriedBox.x);
+    await expect(background.locator(".session-date")).toHaveCount(0);
+    const backgroundTimer = background.locator(".session-turn-timer");
+    await expect(backgroundTimer).toHaveText(/^\d/);
+    const firstTick = await backgroundTimer.textContent();
+    await expect.poll(() => backgroundTimer.textContent()).not.toBe(firstTick);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-turn-status-background");
+
+    // The narrowest sidebar still holds the path and the status on one line.
+    await page.getByTestId("sidebar-resizer").focus();
+    for (let step = 0; step < 20; step += 1) await page.keyboard.press("ArrowLeft");
+    expect(await page.getByTestId("sidebar-resizer").getAttribute("aria-valuenow")).toBe("208");
+    const narrowRow = (await background.boundingBox())!;
+    const narrowStatus = (await backgroundStatus.boundingBox())!;
+    expect(narrowStatus.x + narrowStatus.width).toBeLessThanOrEqual(narrowRow.x + narrowRow.width + 1);
+    expect(narrowStatus.height).toBeLessThanOrEqual(14);
+    await expect(background.locator(".session-workspace-name")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-turn-status-narrow");
+
+    // Reopening it lands the chat's own row on that same clock and phase.
+    await background.locator(".session-open").click();
+    await expect(background).toHaveClass(/active/);
+    await expect(page.getByTestId("turn-status")).toContainText("Responding…");
+    await expect(page.getByTestId("turn-status").locator(".turn-status-timer")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+
+    // A carried row paints its drop line inside the sidebar, and the source dims.
+    const source = (await page.getByTestId("session-row-session-login").boundingBox())!;
+    const target = (await page.getByTestId("session-row-session-long").boundingBox())!;
+    await page.mouse.move(source.x + 60, source.y + source.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(source.x + 60, source.y + source.height / 2 + 12, { steps: 3 });
+    await page.mouse.move(source.x + 60, target.y + 4, { steps: 8 });
+    await expect(page.getByTestId("session-row-session-login")).toHaveClass(/dragging/);
+    const line = page.locator(".session-row.drop-before");
+    await expect(line).toHaveCount(1);
+    const lineBox = await line.evaluate((node) => node.getBoundingClientRect().width);
+    expect(lineBox).toBeLessThanOrEqual((await page.locator(".sidebar").boundingBox())!.width);
+    await capture(page, "conversation-row-dragging");
+    await page.mouse.up();
+    await expect(page.locator(".session-row.drop-before")).toHaveCount(0);
+
+    // The width handle straddles the sidebar's right edge and spans its full height.
+    const sidebarBefore = (await page.locator(".sidebar").boundingBox())!;
+    const handle = (await page.getByTestId("sidebar-resizer").boundingBox())!;
+    expect(handle.height).toBeCloseTo(sidebarBefore.height, 0);
+    const edge = sidebarBefore.x + sidebarBefore.width;
+    expect(handle.x + handle.width / 2).toBeGreaterThan(edge - 6);
+    expect(handle.x + handle.width / 2).toBeLessThan(edge + 6);
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + 120);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + 600, handle.y + 120, { steps: 10 });
+    await page.mouse.up();
+    const widened = (await page.locator(".sidebar").boundingBox())!.width;
+    expect(widened).toBeGreaterThan(sidebarBefore.width);
+    expect(widened).toBe(440);
+    expect((await page.locator(".main-column").boundingBox())!.width).toBeGreaterThan(600);
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-sidebar-wide");
+
+    await page.getByLabel("Settings").click();
+    await page.getByTestId("theme-option-light").click();
+    await page.keyboard.press("Escape");
+    await expect(page.locator(".session-row.active").getByTestId("session-turn-status")).toBeVisible();
+    await expectNoHorizontalOverflow(page);
+    await capture(page, "conversation-sidebar-wide-light");
   });
 });

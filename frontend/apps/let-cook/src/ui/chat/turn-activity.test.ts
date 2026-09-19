@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activityFromUpdate,
   activityParts,
   activityText,
   clampActivitySubject,
@@ -8,6 +9,7 @@ import {
   isSendableWait,
   MAX_ACTIVITY_SUBJECT_CHARS,
   phaseKey,
+  resolveTurnActivity,
   writingToolCallLabel,
   type TurnActivity,
 } from "./turn-activity";
@@ -105,6 +107,58 @@ describe("activity priority", () => {
       { type: "message", role: "thought", streaming: true },
       { type: "tool", title: "Read a.ts", status: "pending" },
     ])).toEqual({ kind: "thinking" });
+  });
+});
+
+describe("resolveTurnActivity", () => {
+  const idle = { derived: null, turnRunning: false, goalVerifying: false, askDetail: null };
+
+  it("hides the row when nothing is running", () => {
+    expect(resolveTurnActivity(idle)).toBeNull();
+  });
+
+  it("falls back to a plain wait while a turn is open with no streaming block yet", () => {
+    expect(resolveTurnActivity({ ...idle, turnRunning: true })).toEqual({ kind: "waiting", reason: { kind: "model" } });
+  });
+
+  it("prefers an open ask card, then goal verification, over the transcript's activity", () => {
+    const derived: TurnActivity = { kind: "responding" };
+    expect(resolveTurnActivity({ ...idle, turnRunning: true, derived, askDetail: "Which storage?" }))
+      .toEqual({ kind: "ask", detail: "Which storage?" });
+    expect(resolveTurnActivity({ ...idle, turnRunning: true, derived, goalVerifying: true }))
+      .toEqual({ kind: "verifying" });
+    // Verification only labels the row while the turn it belongs to is open.
+    expect(resolveTurnActivity({ ...idle, derived, goalVerifying: true })).toEqual({ kind: "responding" });
+  });
+});
+
+describe("activityFromUpdate", () => {
+  it("reads a phase out of the streamed chunks", () => {
+    expect(activityFromUpdate({ sessionUpdate: "agent_thought_chunk" })).toEqual({ kind: "thinking" });
+    expect(activityFromUpdate({ sessionUpdate: "agent_message_chunk" })).toEqual({ kind: "responding" });
+  });
+
+  it("reads a tool call from the update's own fields", () => {
+    expect(activityFromUpdate({
+      sessionUpdate: "tool_call",
+      title: "execute",
+      status: "pending",
+      rawInput: { command: "pnpm build" },
+    })).toMatchObject({ kind: "tool", verb: "run", command: "pnpm build" });
+    // A tool that is still streaming its arguments keeps the title's verb and its description,
+    // exactly like the tool card the transcript derives from the same update.
+    expect(activityFromUpdate({
+      sessionUpdate: "tool_call_update",
+      title: "web_search",
+      status: "in_progress",
+      description: "Tauri IPC docs",
+    })).toMatchObject({ kind: "tool", verb: "search", description: "Tauri IPC docs" });
+  });
+
+  it("says nothing for a finished tool or a kind it does not track", () => {
+    expect(activityFromUpdate({ sessionUpdate: "tool_call", title: "execute", status: "completed" })).toBeNull();
+    expect(activityFromUpdate({ sessionUpdate: "usage_update" })).toBeNull();
+    expect(activityFromUpdate({})).toBeNull();
   });
 });
 

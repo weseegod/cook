@@ -58,6 +58,8 @@ const SLASH_HOST: SlashCommandHost = {
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
+  /** Bumped by every started operation and by every conversation change, to invalidate finishers. */
+  const busyToken = useRef(0);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragging, setDragging] = useState(false);
   const [menuClosed, setMenuClosed] = useState(false);
@@ -78,6 +80,12 @@ export function Composer() {
   // Permission/question/elicit cards stop input; a parked plan review deliberately does not.
   const blocked = interactionPending && !planReview;
   const sessionId = useSessionStore((state) => state.sessionId);
+  // An operation belongs to the conversation that started it: opening another one hands this
+  // composer a fresh state, and the old one's finisher must not clear the new one's spinner.
+  useEffect(() => {
+    busyToken.current += 1;
+    setBusy(false);
+  }, [sessionId]);
   const planMode = useSessionStore((state) => state.planMode);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
   const modelId = useSessionStore((state) => state.modelId);
@@ -197,6 +205,15 @@ export function Composer() {
     else await addPaths(paths);
   }
 
+  /** Mark an operation in flight; the returned finisher clears it only if nothing newer started. */
+  function beginWork(): () => void {
+    const token = ++busyToken.current;
+    setBusy(true);
+    return () => {
+      if (busyToken.current === token) setBusy(false);
+    };
+  }
+
   /**
    * Run the turn.
    *
@@ -223,7 +240,7 @@ export function Composer() {
       // line does nothing (`empty_enter_on_revise_prompt_does_not_approve`).
       if (!prompt && planComments.length === 0) return;
       enableFollow();
-      setBusy(true);
+      const finish = beginWork();
       setText("");
       setMenuClosed(false);
       try {
@@ -231,7 +248,7 @@ export function Composer() {
       } catch (error) {
         reportError(error);
       } finally {
-        setBusy(false);
+        finish();
         textarea.current?.focus();
       }
       return;
@@ -246,7 +263,7 @@ export function Composer() {
         useSessionStore.getState().set({ notice: "Usage: /btw <question>" });
         return;
       }
-      setBusy(true);
+      const finish = beginWork();
       setText("");
       setMenuClosed(false);
       try {
@@ -257,14 +274,14 @@ export function Composer() {
       } catch (error) {
         reportError(error);
       } finally {
-        setBusy(false);
+        finish();
         textarea.current?.focus();
       }
       return;
     }
     const command = slash && attachments.length === 0 ? clientCommand(slash.name) : undefined;
     enableFollow();
-    setBusy(true);
+    const finish = beginWork();
     const sending = attachments;
     setText("");
     setAttachments([]);
@@ -289,7 +306,7 @@ export function Composer() {
         error: normalizeError(error, "Could not send the prompt"),
       });
     } finally {
-      setBusy(false);
+      finish();
       textarea.current?.focus();
     }
   }
@@ -298,7 +315,7 @@ export function Composer() {
     const prompt = text.trim();
     if (busy || blocked || !turnRunning || !sessionId || (!prompt && attachments.length === 0)) return;
     enableFollow();
-    setBusy(true);
+    const finish = beginWork();
     const sending = text;
     setText("");
     setAttachments([]);
@@ -326,7 +343,7 @@ export function Composer() {
     } catch (error) {
       reportError(error);
     } finally {
-      setBusy(false);
+      finish();
       textarea.current?.focus();
     }
   }
