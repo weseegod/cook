@@ -1,41 +1,48 @@
 import type {
-  InitializeResponse,
   LoadSessionRequest,
   NewSessionRequest,
   NewSessionResponse,
   PromptRequest,
   PromptResponse,
-  SessionNotification,
 } from "@agentclientprotocol/sdk";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { buildPromptParts, imageAttachEnabled, optimisticImages, type Attachment } from "./attachments";
+import { optimisticImages, type Attachment } from "./attachments";
 import { SessionNotificationCoalescer, type ScheduleFlush } from "./client-coalesce";
+import { initializeHandshake } from "./client/initialize";
+import { handleInboundMessages, type InboundPipeline } from "./client/messages";
+import {
+  activeModelAcceptsImages,
+  answerPendingQuestion,
+  answerPermissionRequest,
+  composePromptParts,
+  pullPlanFiles,
+  pullUsage,
+  pushDefaultModel,
+  readSessionInfo,
+  resolveParkedPlan,
+  sendModelChoice,
+  sendYoloMode,
+} from "./client/requests";
+import { rememberWorkspace, trackWorking } from "./client/state";
 import { normalizeError } from "./errors";
+import { CAPABILITIES } from "./handshake";
+import { elicitInteraction } from "./reverse";
 import { PromptCorrelation, SessionEventDedupe } from "./session-events";
 import { desktopTrace } from "./trace";
-import { buildInitializeRequest, CAPABILITIES } from "./handshake";
-import { dispatchNotification } from "./notifications";
-import { dispatchReverseRequest, elicitInteraction } from "./reverse";
-import { listPlanFiles } from "./plan-files";
 import { useCatalogStore } from "../state/catalog";
-import { useActivityStore, rowForChildSession } from "../state/activity";
-import { emptyTranscriptCursor, reduceTranscript, useSessionStore, type TurnOutcome } from "../state/session";
+import { useSessionStore, type TurnOutcome } from "../state/session";
 import {
   notify,
   onLog,
   onMessages,
   onStatus,
   request,
-  respond,
   startProcess,
   stopProcess,
   type RpcMessage,
 } from "./host";
-import { setDefaultModel as setDefaultModelOnAgent } from "./providers";
-import { activityFromUpdate, phaseKey } from "../ui/chat/turn-activity";
-import { taskActivityLabel } from "../ui/chat/task-activity";
-import { commandsFromUpdate, modelCatalog, XaiClient, type SessionInfo } from "./xai";
-import { readLocal, writeLocal } from "../ui/storage";
+import { modelCatalog, XaiClient, type SessionInfo } from "./xai";
+import { readLocal } from "../ui/storage";
 
 export { elicitInteraction };
 export { CAPABILITIES } from "./handshake";
@@ -52,6 +59,7 @@ export class CookAcpClient {
   private readonly sessionEvents = new SessionEventDedupe();
   private readonly promptCorrelation = new PromptCorrelation();
   private readonly sessionUpdates: SessionNotificationCoalescer;
+  private readonly pipeline: InboundPipeline;
   private inboundMessages: Promise<void> = Promise.resolve();
 
   constructor(options: { scheduleFlush?: ScheduleFlush } = {}) {
@@ -59,6 +67,13 @@ export class CookAcpClient {
       (notifications) => useSessionStore.getState().applyNotifications(notifications),
       options.scheduleFlush,
     );
+    this.pipeline = {
+      promptCorrelation: this.promptCorrelation,
+      sessionEvents: this.sessionEvents,
+      sessionUpdates: this.sessionUpdates,
+      refreshPlanFiles: () => { void this.refreshPlanFiles(); },
+      refreshModels: () => this.refreshModels(),
+    };
   }
 
   async connect(cwd: string): Promise<void> {
@@ -84,7 +99,7 @@ export class CookAcpClient {
       await stopProcess();
       this.stopping = false;
       const info = await startProcess(cwd);
-      await this.initialize();
+      await initializeHandshake();
       this.restartCount = 0;
       store.set({ connection: "ready", binaryVersion: info.binaryVersion, cwd: info.cwd });
       rememberWorkspace(info.cwd);
@@ -107,16 +122,6 @@ export class CookAcpClient {
       }),
       await onLog((line) => desktopTrace("agent.stderr", normalizeError(line))),
     );
-  }
-
-  private async initialize() {
-    const response = await request<InitializeResponse>(
-      "initialize",
-      buildInitializeRequest(__APP_VERSION__),
-    );
-    // P5 / P10: feature gates from InitializeResponse.meta (cancelRewind, sessionRecap).
-    // Keep this parse minimal — another agent may own the rest of loadSession meta.
-    applyInitializeFeatureGates(response);
   }
 
   async newSession(): Promise<string> {
@@ -142,8 +147,8 @@ export class CookAcpClient {
       useSessionStore.getState().set({ modelId: catalog.currentModelId });
     }
     await this.refreshCommands();
-    void this.refreshUsage();
-    void this.refreshPlanFiles();
+    void pullUsage(this.xai);
+    void pullPlanFiles(this.cwd);
     return response.sessionId;
   }
 
@@ -193,8 +198,8 @@ export class CookAcpClient {
       useSessionStore.getState().set({ modelId: catalog.currentModelId });
     }
     await this.refreshCommands();
-    void this.refreshUsage();
-    void this.refreshPlanFiles();
+    void pullUsage(this.xai);
+    void pullPlanFiles(this.cwd);
   }
 
   /**
@@ -241,25 +246,12 @@ export class CookAcpClient {
     void this.dispatchPrompt(store.sessionId, this.buildParts(text, attachments)).catch(() => undefined);
   }
 
-  /** Whether the active model accepts `image` prompt parts. */
   imageAttachEnabled(): boolean {
-    const { modelId } = useSessionStore.getState();
-    const { models, currentModelId } = useCatalogStore.getState();
-    // Before the first session the active model is the one the agent reports, so the gate still holds.
-    const activeId = modelId ?? currentModelId;
-    const active = models.find((model) => model.id === activeId) ?? models.find((model) => model.isDefault) ?? null;
-    return imageAttachEnabled(active);
+    return activeModelAcceptsImages();
   }
 
-  /** Turn the composer's text + attachments into ACP content parts, surfacing rejections. */
   buildParts(text: string, attachments: Attachment[]) {
-    const { parts, rejected } = buildPromptParts(text, attachments, { supportsImages: this.imageAttachEnabled() });
-    if (rejected.length > 0) {
-      useSessionStore.getState().set({
-        error: rejected.map((item) => `${item.name} was not attached: ${item.reason}`).join("; "),
-      });
-    }
-    return parts;
+    return composePromptParts(text, attachments);
   }
 
   private async dispatchPrompt(sessionId: string, parts: PromptRequest["prompt"]): Promise<PromptResponse> {
@@ -271,7 +263,7 @@ export class CookAcpClient {
       _meta: { promptId },
     };
     this.pendingPromptRequests += 1;
-    this.trackWorking(sessionId, Date.now());
+    trackWorking(sessionId, Date.now());
     useSessionStore.getState().set({ turnRunning: true, error: null });
     let outcome: TurnOutcome = { kind: "completed" };
     try {
@@ -290,63 +282,15 @@ export class CookAcpClient {
       }
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       this.promptCorrelation.end(promptId);
-      this.trackWorking(sessionId, null);
+      trackWorking(sessionId, null);
       const store = useSessionStore.getState();
       store.set({
         turnRunning: this.pendingPromptRequests > 0,
         queuedPromptCount: Math.max(0, store.queuedPromptCount - 1),
       });
       void this.refreshSessions();
-      void this.refreshUsage();
+      void pullUsage(this.xai);
     }
-  }
-
-  /**
-   * Record (or forget) a session's in-flight turn. The conversation list paints a live row from
-   * this map, so a turn stays visible — with its last reported phase — after the user opens a
-   * different conversation.
-   */
-  private trackWorking(sessionId: string, startedAt: number | null): void {
-    const working = { ...useSessionStore.getState().workingSessions };
-    if (startedAt === null) delete working[sessionId];
-    else working[sessionId] = { startedAt, activity: working[sessionId]?.activity ?? null };
-    useSessionStore.getState().set({ workingSessions: working });
-  }
-
-  /**
-   * Keep a backgrounded conversation's turn phase moving. `shouldApplyToActiveSession` drops the
-   * updates of every other session, so this folds them into the list's snapshot instead.
-   */
-  private noteBackgroundActivity(params: Record<string, unknown>, update: Record<string, unknown> | undefined): void {
-    const sessionId = typeof params.sessionId === "string" ? params.sessionId : null;
-    if (!sessionId || !update) return;
-    const working = useSessionStore.getState().workingSessions;
-    const turn = working[sessionId];
-    if (!turn) return;
-    const activity = activityFromUpdate(update);
-    if (!activity || phaseKey(activity) === phaseKey(turn.activity)) return;
-    useSessionStore.getState().set({ workingSessions: { ...working, [sessionId]: { ...turn, activity } } });
-  }
-
-  /**
-   * A subagent runs its own ACP session, so its `session/update` traffic arrives under the child's
-   * session id and is dropped from the parent transcript. Route it to the row it belongs to: the
-   * ` · {activity}` suffix the tasks list paints, and the transcript its viewer reads
-   * (`views/tasks_pane.rs`, `app/subagent.rs::format_activity_label`).
-   */
-  private routeChildUpdate(params: Record<string, unknown>, update: Record<string, unknown> | undefined): void {
-    if (!update) return;
-    const childSessionId = typeof (params.sessionId ?? params.session_id) === "string"
-      ? String(params.sessionId ?? params.session_id)
-      : null;
-    if (!childSessionId) return;
-    const row = rowForChildSession(childSessionId);
-    if (!row) return;
-    const label = taskActivityLabel(activityFromUpdate(update));
-    if (label) useActivityStore.getState().setActivityLabel(row.id, label);
-    const store = useActivityStore.getState();
-    const prev = store.childTranscripts[childSessionId] ?? { blocks: [], cursor: emptyTranscriptCursor() };
-    store.setChildTranscript(childSessionId, reduceTranscript(prev, update));
   }
 
   async cancel(): Promise<void> {
@@ -357,49 +301,19 @@ export class CookAcpClient {
     this.sessionUpdates.flushNow();
     useSessionStore.getState().finishTurn({ kind: "cancelled" });
     useSessionStore.getState().set({ turnRunning: false });
-    this.trackWorking(sessionId, null);
+    trackWorking(sessionId, null);
   }
 
   async setModel(modelId: string): Promise<void> {
-    const sessionId = useSessionStore.getState().sessionId;
-    // Before the first prompt there is no session to switch, and there does not need to be: the
-    // choice rides `session/new`'s `_meta.modelId` and is applied by the agent when it spawns.
-    if (sessionId) await request("session/set_model", { sessionId, modelId });
-    writeLocal("defaultModel", modelId);
-    useSessionStore.getState().set({ modelId });
-    useCatalogStore.getState().setModelCatalog({
-      currentModelId: modelId,
-      models: useCatalogStore.getState().models,
-    });
+    await sendModelChoice(modelId);
   }
 
-  /**
-   * Persist the default through the desktop config service when available.
-   *
-   * Browser/legacy clients fall back to `x.ai/models/set_default`; if that is unavailable, the
-   * choice still reaches the next session through `_meta.modelId`.
-   */
   async setDefaultModel(modelId: string): Promise<void> {
-    try {
-      await setDefaultModelOnAgent(modelId);
-    } catch (error) {
-      const detail = normalizeError(error, "The request failed");
-      useSessionStore.getState().set({
-        notice: /-32601|method not found/i.test(detail)
-          ? "This agent build cannot write [models] default, so the choice applies to this window only."
-          : `${detail} — the default applies to this window only.`,
-      });
-    }
-    await this.setModel(modelId);
+    await pushDefaultModel(modelId);
   }
 
   async setYolo(enabled: boolean): Promise<void> {
-    writeLocal("alwaysApprove", String(enabled));
-    useSessionStore.getState().set({ alwaysApprove: enabled });
-    await notify("x.ai/yolo_mode_changed", {
-      yolo_mode: enabled,
-      clientIdentifier: CAPABILITIES.clientIdentifier,
-    });
+    await sendYoloMode(enabled);
   }
 
   /**
@@ -419,34 +333,15 @@ export class CookAcpClient {
   }
 
   async answerPermission(optionId?: string): Promise<void> {
-    const pending = useSessionStore.getState().pendingPermission;
-    if (!pending) return;
-    await respond(
-      pending.rpcId,
-      optionId ? { outcome: { outcome: "selected", optionId } } : { outcome: { outcome: "cancelled" } },
-    );
-    useSessionStore.getState().set({ pendingPermission: null });
+    await answerPermissionRequest(optionId);
   }
 
   async answerQuestion(result: unknown): Promise<void> {
-    const pending = useSessionStore.getState().pendingQuestion;
-    if (!pending) return;
-    await respond(pending.rpcId, result);
-    useSessionStore.getState().set({ pendingQuestion: null });
-    if (pending.kind === "plan") useSessionStore.getState().endPlanReview();
+    await answerPendingQuestion(result);
   }
 
-  /**
-   * Answer a parked `x.ai/exit_plan_mode`. One path for the popup, the inline card and every key
-   * binding so the payload cannot drift: only `cancelled` carries feedback
-   * (`ExitPlanModeExtResponse`), and an empty one is sent as absent.
-   */
   async resolvePlan(outcome: string, feedback?: string | null): Promise<void> {
-    const trimmed = feedback?.trim();
-    await this.answerQuestion({
-      outcome,
-      ...(outcome === "cancelled" && trimmed ? { feedback: trimmed } : {}),
-    });
+    await resolveParkedPlan(outcome, feedback);
   }
 
   async refreshSessions(query = useCatalogStore.getState().sessionSearch): Promise<void> {
@@ -463,49 +358,12 @@ export class CookAcpClient {
     );
   }
 
-  /**
-   * The agent's own view of the session, or `null` when there is no session yet or the agent
-   * build has no such extension.
-   */
   async sessionInfo(): Promise<SessionInfo | null> {
-    const sessionId = useSessionStore.getState().sessionId;
-    if (!sessionId) return null;
-    try {
-      return await this.xai.sessionInfo(sessionId);
-    } catch {
-      return null;
-    }
+    return readSessionInfo(this.xai);
   }
 
-  /**
-   * Feed the status bar and `/context` from `x.ai/session/info`.
-   *
-   * A real turn emits no ACP `usage_update`, so without this the token chip never moves. A failed
-   * or silent call leaves the last known numbers in place rather than blanking them.
-   */
-  private async refreshUsage(): Promise<void> {
-    const context = (await this.sessionInfo())?.context;
-    if (typeof context?.used !== "number") return;
-    useSessionStore.getState().set({
-      usage: { used: context.used, ...(typeof context.total === "number" ? { size: context.total } : {}) },
-    });
-  }
-
-  /**
-   * Feed the header's plan list from `x.ai/session/plans`.
-   *
-   * Agents that predate the method answer -32601; the header then keeps its older single-chip
-   * behavior, so a failure here must never surface as an error.
-   */
   async refreshPlanFiles(): Promise<void> {
-    const { sessionId, cwd } = useSessionStore.getState();
-    const workspace = cwd ?? this.cwd;
-    if (!sessionId || !workspace) return;
-    try {
-      useSessionStore.getState().set({ planFiles: await listPlanFiles({ sessionId, cwd: workspace }) });
-    } catch {
-      // Keep the last known list.
-    }
+    await pullPlanFiles(this.cwd);
   }
 
   private async refreshCatalogs() {
@@ -513,102 +371,7 @@ export class CookAcpClient {
   }
 
   private async handleMessages(messages: RpcMessage[]) {
-    for (const message of messages) {
-      const method = unwrapMethod(message);
-      const params = unwrapParams(message);
-      // Both envelopes carry `{ sessionId, update }`. The extension ones (`x.ai/session_notification`,
-      // `x.ai/session/update`) are how the shell ships what ACP has no slot for — goal orchestration above all.
-      if (
-        method === "session/update"
-        || method === "x.ai/session_notification"
-        || method === "x.ai/session/update"
-      ) {
-        if (!this.promptCorrelation.accept(params)) continue;
-        const rail: "acp" | "xai" = method === "session/update" ? "acp" : "xai";
-        if (!this.sessionEvents.accept(rail, params)) continue;
-        const update = params.update as Record<string, unknown> | undefined;
-        if (update?.sessionUpdate === "available_commands_update") {
-          useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
-        }
-        // P6–P8: catalog/settings notifs arrive as sessionUpdate tags (U-memf / U-plug / U-hook*).
-        const sessionKind = typeof update?.sessionUpdate === "string" ? update.sessionUpdate : "";
-        if (
-          sessionKind === "memory_files"
-          || sessionKind === "plugins_changed"
-          || sessionKind === "hooks_changed"
-          || sessionKind === "hook_annotation"
-          || sessionKind === "hook_run_started"
-          || sessionKind === "hook_execution"
-        ) {
-          await dispatchNotification(message, sessionKind, update ?? {});
-        }
-        // `PlanModeEntered` arrives as a mode update, and it is the moment the episode's plan file
-        // appears (`enter_plan_mode` rotates the file before seeding it); list again so the header
-        // shows the new episode.
-        if (sessionKind === "current_mode_update" && this.planModeIsOn(update)) {
-          void this.refreshPlanFiles();
-        }
-        if (this.shouldApplyToActiveSession(params, update)) {
-          this.sessionUpdates.enqueue(params as unknown as SessionNotification);
-        } else {
-          // A child's first update can share a packet batch with its spawn, which the coalescer is
-          // still holding: apply what is pending so the row exists before the update is routed.
-          this.sessionUpdates.flushNow();
-          this.routeChildUpdate(params, update);
-          this.noteBackgroundActivity(params, update);
-        }
-        continue;
-      }
-      // Non-session messages can affect prompt completion, so do not let a deferred update pass
-      // them in the wire order.
-      this.sessionUpdates.flushNow();
-      if (method === "x.ai/session/prompt_complete" && !this.promptCorrelation.accept(params)) continue;
-      await this.handleMessage(message, method, params);
-    }
-  }
-
-  /** Whether a `current_mode_update` reports plan mode, matching the store's own reduction. */
-  private planModeIsOn(update: Record<string, unknown> | undefined): boolean {
-    const mode = update?.currentModeId ?? update?.modeId;
-    return typeof mode === "string" && mode.toLowerCase().includes("plan");
-  }
-
-  private shouldApplyToActiveSession(
-    params: Record<string, unknown>,
-    update: Record<string, unknown> | undefined,
-  ): boolean {
-    const sessionId = typeof (params.sessionId ?? params.session_id) === "string"
-      ? String(params.sessionId ?? params.session_id)
-      : null;
-    const activeSessionId = useSessionStore.getState().sessionId;
-    if (!sessionId || !activeSessionId || sessionId === activeSessionId) return true;
-    const kind = typeof update?.sessionUpdate === "string" ? update.sessionUpdate : "";
-    return kind === "subagent_spawned"
-      || kind === "subagent_progress"
-      || kind === "subagent_finished"
-      || kind === "workflow_updated";
-  }
-
-  private async handleMessage(
-    message: RpcMessage,
-    method = unwrapMethod(message),
-    params = unwrapParams(message),
-  ) {
-    if (!method) return;
-
-    // Layer 2 — reverse requests (message has id).
-    if (message.id !== undefined) {
-      await dispatchReverseRequest(message, method, params);
-      // A parked review means the episode's plan file exists, even when the mode update that would
-      // otherwise reveal it was missed (a session loaded mid-plan, for instance).
-      if (method === "x.ai/exit_plan_mode") void this.refreshPlanFiles();
-      return;
-    }
-
-    // Layer 3 — notifications.
-    await dispatchNotification(message, method, params, {
-      refreshModels: () => this.refreshModels(),
-    });
+    return handleInboundMessages(this.pipeline, messages);
   }
 
   private async restartAfterCrash(detail?: string) {
@@ -634,7 +397,7 @@ export class CookAcpClient {
       this.stopping = true;
       const info = await startProcess(this.cwd);
       this.stopping = false;
-      await this.initialize();
+      await initializeHandshake();
       if (sessionId) {
         const defaultModel = readLocal("defaultModel");
         const yoloMode = readLocal("alwaysApprove") !== "false";
@@ -664,49 +427,6 @@ export class CookAcpClient {
     this.promptCorrelation.clear();
     for (const dispose of this.unlisten.splice(0)) dispose();
   }
-}
-
-function unwrapMethod(message: RpcMessage): string | undefined {
-  if (message.method?.startsWith("_x.ai/") && typeof message.params?.method === "string") {
-    return message.params.method;
-  }
-  return message.method?.startsWith("_x.ai/") ? message.method.slice(1) : message.method;
-}
-
-function unwrapParams(message: RpcMessage): Record<string, unknown> {
-  if (message.method?.startsWith("_x.ai/") && isRecord(message.params?.params)) return message.params.params;
-  return message.params ?? {};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * Store `cancelRewind` / `sessionRecap` from initialize meta. Matches the pager:
- * cancelRewind defaults on when absent; sessionRecap is fail-closed (off until advertised).
- */
-function applyInitializeFeatureGates(response: InitializeResponse): void {
-  const meta = (response as { _meta?: unknown; meta?: unknown })._meta
-    ?? (response as { meta?: unknown }).meta;
-  if (!isRecord(meta)) return;
-  const cancelRewind = meta.cancelRewind;
-  const sessionRecap = meta.sessionRecap;
-  useCatalogStore.getState().setFeatureGates({
-    ...(typeof cancelRewind === "boolean" ? { cancelRewindEnabled: cancelRewind } : {}),
-    ...(typeof sessionRecap === "boolean" ? { sessionRecapEnabled: sessionRecap } : {}),
-  });
-  // Seed slash catalog before the first `commands/list` / ACU (P10).
-  if (Array.isArray(meta.availableCommands) && meta.availableCommands.length > 0) {
-    useCatalogStore.getState().setCommands(commandsFromUpdate(meta.availableCommands));
-  }
-}
-
-
-function rememberWorkspace(cwd: string) {
-  const previous = JSON.parse(readLocal("recentWorkspaces") ?? "[]") as string[];
-  writeLocal("recentWorkspaces", JSON.stringify([cwd, ...previous.filter((item) => item !== cwd)].slice(0, 8)));
-  writeLocal("lastWorkspace", cwd);
 }
 
 export const acpClient = new CookAcpClient();

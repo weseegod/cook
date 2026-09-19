@@ -2,12 +2,9 @@ import { ChevronDown, CornerDownLeft, FileText, LoaderCircle, Plus, X } from "lu
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
-import { attachmentFromFile, attachmentFromPath, isImage, readAsDataUrl, type Attachment } from "../../acp/attachments";
-import { onFileDrop, pickFiles, readFilePayload } from "../../acp/host";
 import { askBtw, interjectPrompt } from "../../acp/turn-ops";
 import { groupByProvider } from "../../acp/xai";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
-import { useActivityStore } from "../../state/activity";
 import { useSessionStore } from "../../state/session";
 import { planFeedback } from "../../state/plan-review";
 import {
@@ -15,58 +12,21 @@ import {
   matchSlashCommands,
   parseSlash,
   slashEntries,
-  type SlashCommandHost,
   type SlashEntry,
 } from "./slash-commands";
-import { hasViewablePlan, viewPlan } from "./view-plan";
-import { openRecap } from "./view-recap";
-import { openRewind } from "./view-rewind";
-import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "./export-transcript";
+import { hasViewablePlan } from "./view-plan";
 import { useTranscriptActions } from "./transcript-context";
 import { ContextChip } from "./context-chip";
-
-/** The window's own half of the slash commands; the agent's half arrives as an ordinary prompt. */
-const SLASH_HOST: SlashCommandHost = {
-  setPlanMode: (enabled) => acpClient.setPlanMode(enabled),
-  setModel: (modelId) => acpClient.setModel(modelId),
-  setYolo: (enabled) => acpClient.setYolo(enabled),
-  newSession: async () => {
-    await acpClient.newSession();
-  },
-  forkSession: () => acpClient.forkSession(),
-  exportTranscript: async () => {
-    const store = useSessionStore.getState();
-    const markdown = exportTranscriptMarkdown(store.blocks);
-    if (!markdown) throw new Error("Nothing to export yet.");
-    downloadMarkdown(exportFilename(store.sessionTitle, store.sessionId), markdown);
-  },
-  sendPrompt: (text) => acpClient.prompt(text),
-  sessionInfo: () => acpClient.sessionInfo(),
-  openPlan: () => {
-    viewPlan();
-  },
-  openActivity: () => {
-    useActivityStore.getState().requestOpenPanel();
-  },
-  openMemory: () => {
-    useCatalogStore.getState().requestSettingsTab("context");
-  },
-  openRewind: () => {
-    openRewind();
-  },
-  openRecap: () => openRecap(),
-};
+import { SLASH_HOST } from "./composer/slash-host";
+import { useComposerAttachments } from "./composer/use-composer-attachments";
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
   /** Bumped by every started operation and by every conversation change, to invalidate finishers. */
   const busyToken = useRef(0);
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [dragging, setDragging] = useState(false);
   const [menuClosed, setMenuClosed] = useState(false);
   const [active, setActive] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const filePicker = useRef<HTMLInputElement>(null);
   const text = useSessionStore((state) => state.composerDraft);
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
@@ -126,85 +86,8 @@ export function Composer() {
     }
   }, [planFocus, planReview]);
 
-  // Native drops arrive as paths from the Tauri webview, not as HTML5 events.
-  useEffect(() => {
-    let dispose: (() => void) | undefined;
-    void onFileDrop((paths, phase) => {
-      if (blocked) {
-        setDragging(false);
-        return;
-      }
-      setDragging(phase === "over");
-      if (phase === "drop") void addPaths(paths);
-    }).then((unlisten) => {
-      dispose = unlisten;
-    });
-    return () => dispose?.();
-  }, [blocked]);
-
-  async function addFiles(files: FileList | File[] | null) {
-    if (!files) return;
-    const allowsImages = acpClient.imageAttachEnabled();
-    const next: Attachment[] = [];
-    const refused: string[] = [];
-    for (const file of Array.from(files)) {
-      // A text-only model has no image input: refuse here instead of sending a part the
-      // provider would reject with a 400.
-      if (!allowsImages && isImage(file)) {
-        refused.push(file.name);
-        continue;
-      }
-      const dataUrl = await readAsDataUrl(file);
-      next.push(attachmentFromFile(file, dataUrl, (file as File & { path?: string }).path));
-    }
-    if (next.length > 0) setAttachments((current) => [...current, ...next]);
-    reportRefused(refused);
-  }
-
-  /** Attach real paths (native picker, OS drop): images are read inline, everything else travels as a path. */
-  async function addPaths(paths: string[]) {
-    if (paths.length === 0) return;
-    const allowsImages = acpClient.imageAttachEnabled();
-    const next: Attachment[] = [];
-    const refused: string[] = [];
-    const failed: string[] = [];
-    for (const path of paths) {
-      const image = isImage({ name: path });
-      if (!allowsImages && image) {
-        refused.push(path.split(/[\\/]/).pop() ?? path);
-        continue;
-      }
-      let payload: { data: string; mediaType: string; size: number } | null = null;
-      if (image && allowsImages) {
-        try {
-          payload = await readFilePayload(path);
-        } catch {
-          failed.push(path);
-        }
-      }
-      next.push(attachmentFromPath(path, payload));
-    }
-    if (next.length > 0) setAttachments((current) => [...current, ...next]);
-    reportRefused(refused);
-    if (failed.length > 0) {
-      useSessionStore.getState().set({ error: `${failed.join(", ")}: could not read the file` });
-    }
-  }
-
-  function reportRefused(refused: string[]) {
-    if (refused.length > 0) {
-      useSessionStore.getState().set({
-        error: `${refused.join(", ")}: the selected model cannot read images`,
-      });
-    }
-  }
-
-  async function openPicker() {
-    const paths = await pickFiles();
-    // No native picker (a plain browser): the hidden input is the only way to get the bytes.
-    if (paths === null) filePicker.current?.click();
-    else await addPaths(paths);
-  }
+  const { attachments, setAttachments, dragging, setDragging, filePicker, addFiles, openPicker } =
+    useComposerAttachments(blocked);
 
   /** Mark an operation in flight; the returned finisher clears it only if nothing newer started. */
   function beginWork(): () => void {
