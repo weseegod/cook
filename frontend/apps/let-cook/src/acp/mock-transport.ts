@@ -189,6 +189,8 @@ export interface MockState {
   setDefaultUnsupported: boolean;
   /** Model a build that predates the plan list, which answers -32601 to `x.ai/session/plans`. */
   planListUnsupported: boolean;
+  /** Model a build that predates the data-controls wipe, which answers -32601 to `x.ai/sessions/delete_all`. */
+  deleteAllUnsupported: boolean;
   /** Assistant text streamed back for each prompt. */
   reply: string;
   /** Optional exact ACP update sequence for transcript and visual tests. */
@@ -331,6 +333,7 @@ function defaultState(): MockState {
     probeFails: false,
     setDefaultUnsupported: false,
     planListUnsupported: false,
+    deleteAllUnsupported: false,
     reply: "Mock assistant reply.",
     promptUpdates: [],
     historyUpdates: [],
@@ -785,6 +788,19 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       const id = String(p.sessionId ?? "");
       state.sessions = state.sessions.filter((session) => session.id !== id);
       return respond({ ok: true });
+    }
+    case "x.ai/sessions/delete_all": {
+      if (state.deleteAllUnsupported) {
+        return respond({
+          error: { code: -32601, message: "Method not found", data: "unknown ACP extension method: x.ai/sessions/delete_all" },
+        });
+      }
+      // The real handler walks every session on disk and reports what it removed, so the counts are
+      // read before the state is emptied.
+      const result = { deleted: state.sessions.length, plansDeleted: state.planFiles.length, failed: 0 };
+      state.sessions = [];
+      state.planFiles = [];
+      return respond(result);
     }
     case "x.ai/commands/list":
       return respond(commandList());

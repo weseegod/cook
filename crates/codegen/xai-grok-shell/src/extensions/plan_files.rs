@@ -134,6 +134,19 @@ pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
         .collect()
 }
 
+/// How many plan files a session directory holds: the per-episode `plans/*.md` plus the legacy
+/// `plan.md`. Deleting a session takes its directory with them, so a bulk wipe reports this to say
+/// what the conversations carried.
+pub(crate) fn count_plan_files(session_dir: &Path) -> usize {
+    let episodes = std::fs::read_dir(session_dir.join(st::PLANS_DIR))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == PLAN_EXTENSION))
+        .count();
+    episodes + usize::from(legacy_plan_file_path(session_dir).is_file())
+}
+
 /// Remove one plan file.
 ///
 /// Reachability is deliberately narrow: a direct `.md` child of `<session>/plans/`, or the legacy
@@ -398,5 +411,22 @@ mod tests {
         let error = delete_plan(tmp.path(), &missing).unwrap_err();
 
         assert!(error.contains("no longer exists"), "{error}");
+    }
+
+    #[test]
+    fn counts_episodes_and_the_legacy_plan() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(count_plan_files(tmp.path()), 0, "an empty session has no plans");
+
+        write_plan(tmp.path(), &format!("plans/{EPISODE_A}"), "# one");
+        write_plan(tmp.path(), &format!("plans/{EPISODE_B}"), "# two");
+        assert_eq!(count_plan_files(tmp.path()), 2);
+
+        // Only markdown counts, matching what the list reports and what delete accepts.
+        write_plan(tmp.path(), "plans/notes.txt", "not a plan");
+        assert_eq!(count_plan_files(tmp.path()), 2);
+
+        write_plan(tmp.path(), "plan.md", "# legacy");
+        assert_eq!(count_plan_files(tmp.path()), 3);
     }
 }

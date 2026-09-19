@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Cable, Cpu, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
+import { Cable, Cpu, Database, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { getConfigSecurity } from "../../acp/host";
@@ -7,6 +7,7 @@ import { useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { checkForAppUpdates, UPDATER_CONFIGURED, type UpdateCheckResult } from "../../updater";
 import { ConnectorsPanel } from "./connectors";
+import { DataControlsPanel } from "./data-controls";
 import { MemoryPanel, ProjectInstructionsPanel, SkillsPanel } from "./context-panels";
 import { HooksPanel } from "./hooks-panel";
 import { ProvidersPanel } from "./providers";
@@ -14,7 +15,7 @@ import { useTheme, type ThemePreference } from "../theme/theme";
 import { ConfirmDialog } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
 
-export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "about";
+export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "data" | "about";
 type Tab = SettingsTab;
 
 const TABS: Array<{ id: Tab; label: string; description: string; icon: React.ReactNode }> = [
@@ -24,6 +25,7 @@ const TABS: Array<{ id: Tab; label: string; description: string; icon: React.Rea
   { id: "context", label: "Memory & project", description: "Instructions and memory", icon: <Palette size={16} /> },
   { id: "skills", label: "Skills", description: "Enable or disable discovered skills", icon: <Sparkles size={16} /> },
   { id: "hooks", label: "Hooks", description: "Lifecycle hooks and event log", icon: <Webhook size={16} /> },
+  { id: "data", label: "Data Controls", description: "Stored data and erasure", icon: <Database size={16} /> },
   { id: "about", label: "About", description: "Let Cook details", icon: <Info size={16} /> },
 ];
 
@@ -171,6 +173,12 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
           {tab === "hooks" && (
             <Section title="Hooks" description="Trust, enable, and inspect lifecycle hooks." icon={<Webhook size={15} />}>
               <HooksPanel connected={connected} />
+            </Section>
+          )}
+
+          {tab === "data" && (
+            <Section title="Data controls" description="What this machine stores, and how to erase it." icon={<Database size={15} />}>
+              <DataControlsPanel connected={connected} />
             </Section>
           )}
 

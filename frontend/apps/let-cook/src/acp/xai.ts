@@ -38,6 +38,13 @@ export interface CommandSummary {
   inputHint?: string;
 }
 
+/** `x.ai/sessions/delete_all`: what a wipe removed, and what it could not. */
+export interface DeletedSessions {
+  deleted: number;
+  plansDeleted: number;
+  failed: number;
+}
+
 /** The context block of `x.ai/session/info`: what the agent is holding right now. */
 export interface SessionContextInfo {
   used?: number;
@@ -115,6 +122,21 @@ export class XaiClient {
 
   deleteSession(sessionId: string) {
     return this.call("x.ai/session/delete", { sessionId });
+  }
+
+  /**
+   * `x.ai/sessions/delete_all`: erase every conversation this machine holds, with their plan files.
+   *
+   * The counts come back from the agent, which knows what it removed; `failed` is the number of
+   * conversations it could not delete, so a partial wipe is reported rather than rounded to success.
+   */
+  async deleteAllSessions(): Promise<DeletedSessions> {
+    const value = await this.call<UnknownRecord>("x.ai/sessions/delete_all");
+    return {
+      deleted: numberValue(value.deleted) ?? 0,
+      plansDeleted: numberValue(value.plansDeleted ?? value.plans_deleted) ?? 0,
+      failed: numberValue(value.failed) ?? 0,
+    };
   }
 
   /**
