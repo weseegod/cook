@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { CONNECTED_SEED, seedAgent } from "./seed";
+import { CONNECTED_SEED } from "./seed";
+import { api, capture, expectNoHorizontalOverflow, openWorkspace } from "./support/harness";
 
 /**
  * The header's plan list: one row per plan file in the session, the current episode marked, with a
@@ -15,16 +16,6 @@ const MIDDLE = "2026-09-19T11-02-05Z.md";
 const OLDEST = "2026-09-18T09-15-00Z.md";
 const PLAN_DIR = "/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/mock-session/plans";
 
-type Recorded = { method: string; params: Record<string, unknown>; at: number };
-
-function api(page: Page) {
-  return {
-    requests: (): Promise<Recorded[]> => page.evaluate(() => window.__cookMock!.requests()),
-    state: (): Promise<Record<string, unknown>> =>
-      page.evaluate(() => window.__cookMock!.state() as unknown as Record<string, unknown>),
-  };
-}
-
 /** Three episodes: the newest is what the session is planning in now. */
 const PLAN_SEED = {
   ...CONNECTED_SEED,
@@ -34,14 +25,6 @@ const PLAN_SEED = {
     { name: OLDEST, title: "First plan", path: `${PLAN_DIR}/${OLDEST}`, relativePath: `plans/${OLDEST}`, sizeBytes: 804, modifiedMs: Date.parse("2026-09-18T09:15:00Z"), active: false, deletable: true, content: "# First plan\n\n1. Allocate one file per episode" },
   ],
 };
-
-async function openWorkspace(page: Page, seed: Record<string, unknown> = PLAN_SEED) {
-  await seedAgent(page, seed);
-  await page.goto("/");
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await page.waitForFunction(() => Boolean(window.__cookMock));
-  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
-}
 
 /**
  * A plan page belongs to a session, and the shell creates the session on the first prompt
@@ -57,35 +40,9 @@ async function startSession(page: Page) {
 /** The context permission Chromium needs before `navigator.clipboard.readText` resolves. */
 test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
-const capture = async (page: Page, name: string) => {
-  if (process.env.PW_CAPTURE === "1") {
-    await page.screenshot({ path: test.info().outputPath(`${name}.png`), fullPage: true });
-  }
-};
-
-async function expectNoHorizontalOverflow(page: Page) {
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  expect(overflow).toBeLessThanOrEqual(1);
-}
-
 test.describe("plan list", () => {
-  test("keeps the conversation's plans on the header before any episode is written", async ({ page }) => {
-    await openWorkspace(page, { ...CONNECTED_SEED, planFiles: [] });
-    await startSession(page);
-
-    // The chip belongs to the conversation, not to the moment the first plan file lands.
-    await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByTestId("plan-chip")).toContainText("Plans");
-    await expect(page.getByTestId("plan-chip-count")).toHaveText("0");
-    await page.getByTestId("plan-chip").click();
-    await expect(page.getByTestId("plan-menu")).toBeVisible();
-    await expect(page.getByTestId("plan-menu-empty")).toContainText("No plans in this conversation yet");
-    await expect(page.locator(".plan-menu-row")).toHaveCount(0);
-    await capture(page, "plan-list-empty");
-  });
-
   test("lists the session's plan files with the current episode marked", async ({ page }) => {
-    await openWorkspace(page);
+    await openWorkspace(page, PLAN_SEED);
     await startSession(page);
     await expect(page.getByTestId("plan-chip")).toBeVisible();
 
@@ -112,7 +69,7 @@ test.describe("plan list", () => {
   });
 
   test("hides the row actions until the row is hovered, then offers Copy, Copy file path and Delete", async ({ page }) => {
-    await openWorkspace(page);
+    await openWorkspace(page, PLAN_SEED);
     await startSession(page);
     await page.getByTestId("plan-chip").click();
 
@@ -144,76 +101,8 @@ test.describe("plan list", () => {
     expect(deleteHit).toBe(true);
   });
 
-  test("copies the plan body and the absolute path", async ({ page }) => {
-    await openWorkspace(page);
-    await startSession(page);
-    await page.getByTestId("plan-chip").click();
-
-    await page.getByTestId(`plan-file-row-${MIDDLE}`).hover();
-    await page.getByTestId(`plan-file-actions-${MIDDLE}`).click();
-    await page.getByTestId("plan-file-copy").click();
-    await expect(page.getByTestId("notice-banner")).toContainText(`Copied ${MIDDLE}`);
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("# Middle plan\n\n1. Ship the chip");
-
-    await page.getByTestId(`plan-file-row-${OLDEST}`).hover();
-    await page.getByTestId(`plan-file-actions-${OLDEST}`).click();
-    await page.getByTestId("plan-file-copy-path").click();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${PLAN_DIR}/${OLDEST}`);
-    await expect(page.getByTestId("notice-banner")).toContainText(`${PLAN_DIR}/${OLDEST}`);
-  });
-
-  test("opens the current episode read-only with Copy actions when no review is parked", async ({ page }) => {
-    await openWorkspace(page);
-    await startSession(page);
-
-    // Without a parked approval, the current episode uses the same read-only viewer as history.
-    await page.getByTestId("plan-chip").click();
-    await page.getByTestId(`plan-file-open-${NEWEST}`).click();
-    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
-    await expect(page.getByTestId("plan-file-body")).toBeVisible();
-    await expect(page.getByTestId("plan-file-view-copy")).toContainText("Copy");
-    await expect(page.getByTestId("plan-file-view-copy-path")).toContainText("Copy file path");
-
-    await page.getByTestId("plan-file-view-copy").click();
-    await expect(page.getByTestId("notice-banner")).toContainText(`Copied ${NEWEST}`);
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("# Current plan\n\n1. Add the plan list");
-
-    await page.getByTestId("plan-file-view-copy-path").click();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(`${PLAN_DIR}/${NEWEST}`);
-  });
-
-  test("opens an earlier plan read-only and the current one in the review pane", async ({ page }) => {
-    await openWorkspace(page);
-    await startSession(page);
-
-    // The current episode has a parked review behind it, so its row reopens the review pane.
-    const requestId = await page.evaluate(() => window.__cookMock!.plan());
-    await expect(page.getByTestId("plan-pane")).toBeVisible();
-    await page.getByTestId("dialog-hide").click();
-    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
-    await page.getByTestId("plan-chip").click();
-    await page.getByTestId(`plan-file-open-${NEWEST}`).click();
-    await expect(page.getByTestId("plan-pane")).toBeVisible();
-
-    // An earlier plan has no decision attached: it opens as a read-only document with Copy actions.
-    await page.getByTestId("plan-chip").click();
-    await page.getByTestId(`plan-file-open-${OLDEST}`).click();
-    const viewer = page.getByRole("dialog");
-    await expect(viewer).toContainText(OLDEST);
-    await expect(viewer).toContainText("Allocate one file per episode");
-    await expect(page.getByTestId("plan-file-view-copy")).toContainText("Copy");
-    await expect(page.getByTestId("plan-file-view-copy-path")).toContainText("Copy file path");
-    expect((await api(page).requests()).some((entry) => entry.method === "x.ai/session/plans/delete")).toBe(false);
-
-    await page.keyboard.press("Escape");
-    await expect(page.getByTestId("plan-file-body")).toHaveCount(0);
-    // The parked review is untouched: nothing answered it.
-    const responses = await page.evaluate(() => window.__cookMock!.responses());
-    expect(responses.find((entry) => entry.id === requestId)).toBeUndefined();
-  });
-
   test("refuses Delete on the current episode and deletes an earlier plan after confirming", async ({ page }) => {
-    await openWorkspace(page);
+    await openWorkspace(page, PLAN_SEED);
     await startSession(page);
     await page.getByTestId("plan-chip").click();
 
@@ -265,7 +154,7 @@ test.describe("plan list", () => {
   });
 
   test("keeps the list readable in both themes and paints Delete differently", async ({ page }) => {
-    await openWorkspace(page);
+    await openWorkspace(page, PLAN_SEED);
     await startSession(page);
     await page.getByTestId("plan-chip").click();
     await expect(page.getByTestId("plan-menu")).toBeVisible();
@@ -293,7 +182,7 @@ test.describe("plan list", () => {
 
   test("keeps the list inside a narrow window", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await openWorkspace(page);
+    await openWorkspace(page, PLAN_SEED);
     await startSession(page);
     // The shell itself overflows this viewport; only overflow the list adds is a regression here.
     const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

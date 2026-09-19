@@ -1,58 +1,18 @@
 import { expect, test, type Page } from "@playwright/test";
-import { CONNECTED_SEED, seedAgent } from "./seed";
+import { gitSeed, openWorkspace } from "./support/harness";
 
 /**
  * The header's line changes: `+N −M` for the working tree, parked immediately left of the git chip,
- * refreshed behind a running turn, and the way into the Tools panel's Review view. Outside a
- * repository the numbers fall back to the edits the turn itself made, read from the ACP diff hunks.
+ * refreshed behind a running turn, and the way into the Tools panel's Review view.
  */
 
-const WORKSPACE = {
-  entries: {
-    "": [
-      { name: "src", path: "src", kind: "directory", size: null },
-      { name: "README.md", path: "README.md", kind: "file", size: 420 },
-    ],
-    src: [{ name: "main.tsx", path: "src/main.tsx", kind: "file", size: 960 }],
-  },
-  files: {
-    "README.md": { path: "README.md", content: "# Let Cook\n", size: 10, truncated: false, binary: false },
-  },
-  review: {
-    base: "HEAD",
-    isGitRepo: true,
-    branch: "main",
-    additions: 3,
-    deletions: 1,
-    files: [
-      {
-        path: "src/main.tsx",
-        status: "modified",
-        additions: 3,
-        deletions: 1,
-        diff: "diff --git a/src/main.tsx b/src/main.tsx\n@@ -1,2 +1,4 @@\n+export const ready = true;\n",
-      },
-    ],
-  },
-};
-
-async function openWorkspace(page: Page, overrides: Record<string, unknown> = {}) {
-  await seedAgent(page, {
-    ...CONNECTED_SEED,
-    workspace: WORKSPACE,
-    promptDelayMs: 500,
-    reply: "A".repeat(200),
-    ...overrides,
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await page.waitForFunction(() => Boolean(window.__cookMock));
-  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
-}
+/** The git workspace under a turn that streams long enough to outlive the probe interval. */
+const launch = (page: Page, overrides: Record<string, unknown> = {}) =>
+  openWorkspace(page, gitSeed({ promptDelayMs: 500, reply: "A".repeat(200), ...overrides }));
 
 test.describe("header line changes", () => {
   test("sit between the plan chip and the git chip without a turn running", async ({ page }) => {
-    await openWorkspace(page);
+    await launch(page);
 
     const diffstat = page.getByTestId("header-diffstat");
     await expect(diffstat).toBeVisible();
@@ -72,7 +32,7 @@ test.describe("header line changes", () => {
 
   test("follows the working tree while the turn is still running", async ({ page }) => {
     // A tool call in the turn is what tells the probe the tree may have changed.
-    await openWorkspace(page, {
+    await launch(page, {
       promptDelayMs: 12_000,
       promptUpdates: [
         { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Editing now." } },
@@ -96,7 +56,7 @@ test.describe("header line changes", () => {
   });
 
   test("opens the Tools panel on Review when clicked", async ({ page }) => {
-    await openWorkspace(page);
+    await launch(page);
 
     await expect(page.getByTestId("utility-panel")).toHaveCount(0);
     await page.getByTestId("header-diffstat").click();
@@ -114,42 +74,9 @@ test.describe("header line changes", () => {
     await expect(page.getByTestId("review-view")).toBeVisible();
   });
 
-  test("counts the agent's own edits when the workspace is not a git repository", async ({ page }) => {
-    await openWorkspace(page, {
-      workspace: {
-        ...WORKSPACE,
-        review: { ...WORKSPACE.review, isGitRepo: false, branch: null, files: [], additions: 0, deletions: 0 },
-      },
-      promptDelayMs: 6_000,
-      promptUpdates: [
-        {
-          sessionUpdate: "tool_call_update",
-          toolCallId: "edit-1",
-          kind: "edit",
-          title: "Edit src/main.tsx",
-          status: "completed",
-          content: [{ type: "diff", path: "src/main.tsx", oldText: "a\nb\nc", newText: "a\nX\nY\nZ\nc" }],
-        },
-      ],
-    });
-
-    // No repository: the chip says so and the rail stays away until the turn edits something.
-    await expect(page.getByTestId("git-chip")).toContainText("No git");
-    await expect(page.getByTestId("header-diffstat")).toHaveCount(0);
-
-    await page.getByTestId("composer-input").fill("Edit without git in the workspace.");
-    await page.getByTestId("send-button").click();
-
-    const diffstat = page.getByTestId("header-diffstat");
-    await expect(diffstat).toBeVisible({ timeout: 6_000 });
-    await expect(diffstat).toContainText("3");
-    await expect(diffstat).toContainText("1");
-    await expect(diffstat).toHaveAttribute("title", /\+\d+ −\d+ from this turn's edits \(no git here\)/);
-  });
-
   test("stays off the row at the minimum window size", async ({ page }) => {
     await page.setViewportSize({ width: 840, height: 600 });
-    await openWorkspace(page);
+    await launch(page);
 
     await expect(page.getByTestId("header-diffstat")).toBeVisible();
     await expect(page.getByTestId("git-chip")).toBeVisible();

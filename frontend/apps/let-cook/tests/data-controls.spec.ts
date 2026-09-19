@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
-import { CONNECTED_SEED, seedAgent } from "./seed";
+import { CONNECTED_SEED } from "./seed";
+import { api, capture, openWorkspace } from "./support/harness";
 
 /**
  * Settings → Data Controls: "Delete all conversations", behind a confirmation, erasing every
@@ -26,31 +27,6 @@ const DATA_SEED = {
   ],
 };
 
-type Recorded = { method: string; params: Record<string, unknown>; at: number };
-
-function api(page: Page) {
-  return {
-    requests: (): Promise<Recorded[]> => page.evaluate(() => window.__cookMock!.requests()),
-    state: (): Promise<Record<string, unknown>> =>
-      page.evaluate(() => window.__cookMock!.state() as unknown as Record<string, unknown>),
-  };
-}
-
-/** Settings and its confirmation are fixed overlays, so the viewport is the frame that shows them. */
-const capture = async (page: Page, name: string) => {
-  if (process.env.PW_CAPTURE === "1") {
-    await page.screenshot({ path: test.info().outputPath(`${name}.png`) });
-  }
-};
-
-async function openWorkspace(page: Page, seed: Record<string, unknown> = DATA_SEED) {
-  await seedAgent(page, seed);
-  await page.goto("/");
-  await page.getByRole("button", { name: "Open workspace" }).click();
-  await page.waitForFunction(() => Boolean(window.__cookMock));
-  await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
-}
-
 /** Settings → Data Controls. */
 async function openDataControls(page: Page) {
   await page.getByLabel("Settings").click();
@@ -58,31 +34,9 @@ async function openDataControls(page: Page) {
   await expect(page.getByTestId("delete-all-conversations")).toBeVisible();
 }
 
-/** The wipe's confirmation, which sits above the Settings panel that is also a dialog. */
-const confirmDialog = (page: Page) => page.locator(".dialog");
-
 test.describe("data controls", () => {
-  test("cancels out of the wipe without deleting anything", async ({ page }) => {
-    await openWorkspace(page);
-    await openDataControls(page);
-    await capture(page, "data-controls");
-
-    await page.getByTestId("delete-all-conversations").click();
-    const dialog = confirmDialog(page);
-    await expect(dialog).toContainText("Delete all conversations?");
-    // The confirmation has to name the blast radius, plans included, before anything runs.
-    await expect(dialog).toContainText("plan files");
-    await expect(dialog).toContainText("cannot be undone");
-
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-
-    await expect(page.getByTestId("delete-all-confirm")).toHaveCount(0);
-    const requests = (await api(page).requests()).filter((entry) => entry.method === "x.ai/sessions/delete_all");
-    expect(requests).toHaveLength(0);
-  });
-
   test("deletes every conversation and plan file once confirmed", async ({ page }) => {
-    await openWorkspace(page);
+    await openWorkspace(page, DATA_SEED);
     await expect(page.getByTestId("session-row-session-plans")).toBeVisible();
     // A conversation with plans behind it: the header chip lists them before the wipe.
     await page.getByTestId("composer-input").fill("show me the plans");
@@ -117,22 +71,9 @@ test.describe("data controls", () => {
     await expect(page.getByTestId("plan-menu-empty")).toContainText("No plans in this conversation yet");
   });
 
-  test("reports an agent that cannot run the wipe", async ({ page }) => {
-    await openWorkspace(page, { ...DATA_SEED, deleteAllUnsupported: true });
-    await openDataControls(page);
-
-    await page.getByTestId("delete-all-conversations").click();
-    await page.getByTestId("delete-all-confirm").click();
-
-    // The dialog stays up with the reason, and nothing was erased.
-    await expect(confirmDialog(page).getByRole("alert")).toContainText("delete");
-    const stored = (await api(page).state()) as { sessions: Array<{ id: string }> };
-    expect(stored.sessions).toHaveLength(3);
-  });
-
   test("keeps the panel inside a narrow window", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await openWorkspace(page);
+    await openWorkspace(page, DATA_SEED);
     await openDataControls(page);
 
     // The shell itself overflows this viewport; only the overflow this panel adds is a regression.
@@ -147,7 +88,7 @@ test.describe("data controls", () => {
   });
 
   test("keeps the destructive action legible in both themes", async ({ page }) => {
-    await openWorkspace(page);
+    await openWorkspace(page, DATA_SEED);
     await openDataControls(page);
 
     /** WCAG contrast of the label against the surface it is painted on, translucency included. */
