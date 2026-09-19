@@ -12,6 +12,11 @@ pub struct ExitPlanModeExtRequest {
     pub session_id: String,
     pub tool_call_id: String,
     pub plan_content: Option<String>,
+    /// Absolute path of the episode's plan file on disk. Clients use its basename for the review
+    /// title. Absent from agents that predate per-episode plan files; clients then fall back to
+    /// `plan.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file_path: Option<String>,
 }
 
 /// ACP `ext_method` response payload (client/pager returns to shell coordinator).
@@ -34,15 +39,34 @@ mod tests {
             session_id: "sess-1".into(),
             tool_call_id: "tc-1".into(),
             plan_content: Some("# Plan".into()),
+            plan_file_path: Some("/home/u/.cook/sessions/p/abc/plans/2026-09-19T14-30-22Z.md".into()),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("sessionId").is_some());
         assert!(json.get("toolCallId").is_some());
         assert!(json.get("planContent").is_some());
+        assert!(json.get("planFilePath").is_some());
         // Must NOT contain snake_case keys
         assert!(json.get("session_id").is_none());
         assert!(json.get("tool_call_id").is_none());
         assert!(json.get("plan_content").is_none());
+        assert!(json.get("plan_file_path").is_none());
+    }
+
+    #[test]
+    fn ext_request_omits_absent_plan_file_path() {
+        let req = ExitPlanModeExtRequest {
+            session_id: "sess-1".into(),
+            tool_call_id: "tc-1".into(),
+            plan_content: None,
+            plan_file_path: None,
+        };
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("planFilePath").is_none());
+        // Older clients/agents: a payload without the field still deserializes.
+        let back: ExitPlanModeExtRequest =
+            serde_json::from_str(r#"{"sessionId":"s","toolCallId":"t","planContent":null}"#).unwrap();
+        assert!(back.plan_file_path.is_none());
     }
 
     #[test]
@@ -51,6 +75,7 @@ mod tests {
             session_id: "sess-1".into(),
             tool_call_id: "tc-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            plan_file_path: Some("/s/plans/2026-09-19T14-30-22Z.md".into()),
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: ExitPlanModeExtRequest = serde_json::from_str(&json).unwrap();
@@ -60,6 +85,10 @@ mod tests {
             back.plan_content.as_deref(),
             Some("# Plan\n\n## Step 1\nDo something")
         );
+        assert_eq!(
+            back.plan_file_path.as_deref(),
+            Some("/s/plans/2026-09-19T14-30-22Z.md")
+        );
     }
 
     #[test]
@@ -68,6 +97,7 @@ mod tests {
             session_id: "sess-2".into(),
             tool_call_id: "tc-2".into(),
             plan_content: None,
+            plan_file_path: None,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: ExitPlanModeExtRequest = serde_json::from_str(&json).unwrap();

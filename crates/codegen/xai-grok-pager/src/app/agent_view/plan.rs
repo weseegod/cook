@@ -37,6 +37,33 @@ fn read_kept_plan_file(path: &std::path::Path) -> Option<String> {
     limited.read_to_string(&mut body).ok()?;
     capped_kept_plan_body(body)
 }
+
+/// The current episode's plan file, relative to the session directory, mirroring the shell's
+/// `PlanModeSnapshot.plan_file`. Unreadable, missing, or unsafe values fall back to `plan.md`,
+/// which is both the pre-episode filename and the legacy one.
+fn current_plan_relative_path(session_dir: &std::path::Path) -> std::path::PathBuf {
+    const LEGACY: &str = "plan.md";
+    let legacy = || std::path::PathBuf::from(LEGACY);
+    let Ok(raw) = std::fs::read_to_string(session_dir.join("plan_mode.json")) else {
+        return legacy();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return legacy();
+    };
+    let Some(plan_file) = value.get("plan_file").and_then(serde_json::Value::as_str) else {
+        return legacy();
+    };
+    let path = std::path::Path::new(plan_file);
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return legacy();
+    }
+    path.to_path_buf()
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PostTurnPlanCommit {
     Approved,
@@ -52,8 +79,8 @@ fn log_plan_submit(action: &str) {
     });
 }
 impl AgentView {
-    /// Resolve the absolute path to the plan file for this session.
-    fn plan_file_path(&self) -> Option<std::path::PathBuf> {
+    /// Absolute path to this session's artifacts directory (`~/.cook/sessions/<cwd>/<session-id>/`).
+    fn plan_session_dir(&self) -> Option<std::path::PathBuf> {
         let session_id = self.session.session_id.as_ref()?;
         let cwd_str = self.session.cwd.to_string_lossy().into_owned();
         let encoded_cwd = urlencoding::encode(&cwd_str);
@@ -61,8 +88,28 @@ impl AgentView {
             xai_grok_shell::util::grok_home::grok_home()
                 .join("sessions")
                 .join(encoded_cwd.as_ref())
-                .join(session_id.0.as_ref())
-                .join("plan.md"),
+                .join(session_id.0.as_ref()),
+        )
+    }
+    /// Resolve the absolute path to the current episode's plan file for this session.
+    /// The shell records the episode file in `plan_mode.json`; a session that has not started an
+    /// episode yet (or one that predates per-episode files) resolves to the legacy `plan.md`.
+    fn plan_file_path(&self) -> Option<std::path::PathBuf> {
+        let dir = self.plan_session_dir()?;
+        Some(dir.join(current_plan_relative_path(&dir)))
+    }
+    /// Basename shown in the plan overlay title: the parked review's episode file when a review is
+    /// open, else the session's current plan file.
+    fn plan_display_name(&self) -> String {
+        if let Some(name) = self
+            .plan_approval_view
+            .as_ref()
+            .map(|pav| pav.plan_file_name.clone())
+        {
+            return name;
+        }
+        crate::views::plan_approval_view::plan_file_name(
+            self.plan_file_path().as_deref().and_then(std::path::Path::to_str),
         )
     }
     /// Whether the current line viewer is showing a plan preview.
@@ -345,16 +392,17 @@ impl AgentView {
     /// When plan approval is parked without a body, opens a placeholder preview.
     /// The user then always sees a decision surface (a/s/q) instead of a dead "Waiting on plan approval" line with a no-op Tab:plan.
     pub fn show_plan_preview(&mut self) {
+        let plan_name = self.plan_display_name();
         let body = self.plan_body_for_preview();
         let approval_empty = self
             .plan_approval_view
             .as_ref()
             .is_some_and(|p| !p.has_plan);
         let Some(mut viewer) = (if let Some(content) = body {
-            LineViewerState::open_markdown_content("plan.md", content, None)
+            LineViewerState::open_markdown_content(&plan_name, content, None)
         } else if approval_empty {
             LineViewerState::open_markdown_content(
-                "plan.md",
+                &plan_name,
                 crate::views::plan_approval_view::EMPTY_PLAN_PLACEHOLDER.to_owned(),
                 None,
             )
@@ -368,9 +416,9 @@ impl AgentView {
         };
         viewer.kind = crate::views::file_search::line_viewer::LineViewerKind::PlanPreview;
         viewer.title_override = Some(if approval_empty {
-            "plan.md (empty)".to_string()
+            format!("{plan_name} (empty)")
         } else {
-            "plan.md".to_string()
+            plan_name
         });
         viewer.fullscreen = true;
         {
@@ -1470,6 +1518,7 @@ mod plan_approval_enter_tests {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            plan_file_path: None,
         };
         let mut pav = crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,
@@ -2053,6 +2102,7 @@ mod plan_approval_optimistic_mode_tests {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            plan_file_path: None,
         };
         let pav = crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,
@@ -2882,6 +2932,7 @@ mod plan_approval_slash_tests {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            plan_file_path: None,
         };
         let mut pav = crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,
@@ -2984,6 +3035,82 @@ mod plan_approval_slash_tests {
         assert!(
             agent.plan_approval_view.is_none(),
             "`a` must still approve after a slash command ran on the prompt"
+        );
+    }
+}
+
+/// The plan file the TUI reads is the session's current episode, recorded by the shell in
+/// `plan_mode.json`; a session that has not planned yet falls back to the legacy `plan.md`.
+#[cfg(test)]
+mod plan_episode_file_tests {
+    use super::*;
+
+    fn legacy() -> std::path::PathBuf {
+        std::path::PathBuf::from("plan.md")
+    }
+
+    #[test]
+    fn missing_state_file_falls_back_to_plan_md() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(current_plan_relative_path(dir.path()), legacy());
+    }
+
+    #[test]
+    fn episode_file_is_read_from_the_state_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plan_mode.json"),
+            r#"{"state":"Active","plan_file":"plans/2026-09-19T14-30-22Z.md"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            current_plan_relative_path(dir.path()),
+            std::path::PathBuf::from("plans/2026-09-19T14-30-22Z.md")
+        );
+    }
+
+    #[test]
+    fn state_file_without_plan_file_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("plan_mode.json"),
+            r#"{"state":"Active","was_previously_active":true,"reminder_count":0,"pending_exit_reminder":false,"awaiting_plan_approval":false}"#,
+        )
+        .unwrap();
+        assert_eq!(current_plan_relative_path(dir.path()), legacy());
+    }
+
+    #[test]
+    fn malformed_or_unsafe_state_files_fall_back() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("plan_mode.json"), "not json").unwrap();
+        assert_eq!(current_plan_relative_path(dir.path()), legacy());
+
+        for plan_file in ["../outside.md", "/abs/outside.md", ""] {
+            std::fs::write(
+                dir.path().join("plan_mode.json"),
+                serde_json::json!({ "plan_file": plan_file }).to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                current_plan_relative_path(dir.path()),
+                legacy(),
+                "plan_file {plan_file:?} must not escape the session directory"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_file_name_is_the_overlay_title() {
+        assert_eq!(
+            crate::views::plan_approval_view::plan_file_name(Some(
+                "/home/u/.cook/sessions/p/abc/plans/2026-09-19T14-30-22Z.md"
+            )),
+            "2026-09-19T14-30-22Z.md"
+        );
+        assert_eq!(
+            crate::views::plan_approval_view::plan_file_name(None),
+            "plan.md"
         );
     }
 }

@@ -53,7 +53,7 @@ Do not move `ui/`. Chat UI rebuild is a separate track.
 ## 3. Invariants the PRs must not break
 
 - Renderer never calls the LLM or writes `config.toml`.
-- Host ACP `fs/*` keep the sessions-root allow-path (`plan.md`).
+- Host ACP `fs/*` keep the sessions-root allow-path (plan files: `<session>/plan.md`, `<session>/plans/<utc>.md`).
 - `wireMethod` `_x.ai/` prefix stays (map class E).
 - `clientIdentifier: grok-desktop` stays verbatim.
 - Production BYOK writes stay on `provider_config.rs`; mock may fall back to

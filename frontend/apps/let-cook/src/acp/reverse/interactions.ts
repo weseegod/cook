@@ -1,5 +1,6 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { useSessionStore, type PendingQuestion } from "../../state/session";
+import { planFileName } from "../../state/plan-review";
 import type { ReverseContext, ReverseDisposition, ReverseEntry } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -120,7 +121,8 @@ export const interactionEntries: ReverseEntry[] = [
         const body = typeof ctx.params.planContent === "string" && ctx.params.planContent.trim() !== ""
           ? ctx.params.planContent
           : null;
-        useSessionStore.getState().beginPlanReview(body);
+        const planPath = typeof ctx.params.planFilePath === "string" ? ctx.params.planFilePath : null;
+        useSessionStore.getState().beginPlanReview(body, planFileName(planPath));
         useSessionStore.getState().set({ pendingQuestion: planInteraction(rpcId, ctx.params) });
       }),
   },

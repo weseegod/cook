@@ -519,7 +519,8 @@ fn exit_detail(
 ///
 /// Sessions-root allow-path: `fs/*` may touch the workspace cwd **and** the agent's
 /// session store (`$COOK_HOME/sessions` / `$GROK_HOME/sessions` / `~/.cook/sessions`)
-/// so plan mode can write `<session>/plan.md` outside any workspace.
+/// so plan mode can write its plan file (`<session>/plan.md`, or `<session>/plans/<utc>.md`
+/// for each planning episode) outside any workspace.
 fn handle_host_request(
     message: &Value,
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -561,9 +562,9 @@ fn host_native_outcome(
     }
 }
 
-/// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file to
-/// `<session>/plan.md` through this client filesystem, so that tree has to stay reachable even
-/// though it sits outside any workspace.
+/// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file there
+/// (`<session>/plan.md`, or `<session>/plans/<utc>.md` per episode) through this client
+/// filesystem, so that tree has to stay reachable even though it sits outside any workspace.
 fn agent_state_root() -> PathBuf {
     agent_state_root_from(
         std::env::var_os("GROK_HOME").as_deref(),
@@ -717,8 +718,9 @@ mod tests {
         );
     }
 
-    /// Plan mode writes `<session>/plan.md` through the client filesystem; the session store is
-    /// outside the workspace, so it must be an allow-path.
+    /// Plan mode writes its plan file through the client filesystem; the session store is
+    /// outside the workspace, so it must be an allow-path. Each planning episode gets its own file
+    /// under `<session>/plans/`, so the allow-path must cover that subdirectory too.
     #[test]
     fn allows_plan_file_in_session_store_outside_workspace() {
         let tmp = tempfile::tempdir().unwrap();
@@ -728,14 +730,21 @@ mod tests {
             .join("store")
             .join("%2FUsers%2Fdemo%2FProjects")
             .join("01a0afaa");
+        let plans = session.join("plans");
         std::fs::create_dir_all(&workspace).unwrap();
-        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&plans).unwrap();
         let allowed = vec![workspace.clone(), base.join("store")];
 
         let plan = session.join("plan.md");
         assert_eq!(
             safe_path(plan.to_str().unwrap(), &workspace, &allowed, true).unwrap(),
             plan
+        );
+
+        let episode = plans.join("2026-09-19T14-30-22Z.md");
+        assert_eq!(
+            safe_path(episode.to_str().unwrap(), &workspace, &allowed, true).unwrap(),
+            episode
         );
     }
 

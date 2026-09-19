@@ -326,10 +326,7 @@ impl SessionActor {
             if let Some(client) = self.rebuild_spec.managed_gateway_tool_client.clone() {
                 bridge.update_resource(client).await;
             }
-            let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
-            bridge
-                .update_resource(xai_grok_tools::types::resources::PlanFilePath(plan_path))
-                .await;
+            self.sync_plan_file_path_resource().await;
             if let Some(display_cwd) = self.display_cwd.get() {
                 bridge
                     .set_display_cwd(std::path::PathBuf::from(display_cwd))

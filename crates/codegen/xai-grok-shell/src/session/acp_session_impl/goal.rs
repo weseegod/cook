@@ -847,7 +847,9 @@ impl SessionActor {
         let content = match source {
             GoalPlanSource::Content(content) => content,
             GoalPlanSource::SessionPlan => {
-                let path = self.goal_tracker.lock().plan_mode_plan_path();
+                // The plan tracker owns the current episode's file; a session that has not started
+                // an episode yet still resolves to the legacy `<session>/plan.md`.
+                let path = self.plan_mode.lock().plan_file_path().to_path_buf();
                 tokio::fs::read_to_string(&path).await.map_err(|err| {
                     format!(
                         "failed to read the session plan at {}: {err}",

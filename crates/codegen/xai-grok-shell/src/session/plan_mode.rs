@@ -40,9 +40,15 @@ pub struct PlanModeTracker {
     /// While set, the model has NOT seen plan mode yet.
     /// A toggle-off withdraws it and rolls the activation back instead of deferring an exit the model never knew about.
     pending_activation: Option<PendingActivation>,
-    /// Lives inside the session directory:
-    /// `~/.grok/sessions/<cwd>/<session_id>/plan.md`
+    /// The session directory holding the plan files (`plans/` and the legacy `plan.md`).
+    session_dir: PathBuf,
+    /// Current planning episode's plan file. Allocated by [`Self::begin_plan_episode`] under
+    /// `<session_dir>/plans/<utc>.md`; `<session_dir>/plan.md` until a session starts its first episode.
     plan_file_path: PathBuf,
+    /// Every path allocated in this process, so two episodes inside the same clock second still get
+    /// distinct files even before either is written to disk. Not persisted: on resume the restored
+    /// `plan_file_path` plus an on-disk exists() check cover the same guarantee.
+    episode_files: Vec<PathBuf>,
 }
 /// A buffered mid-turn activation reminder plus the state needed to roll the activation back if it is withdrawn before delivery.
 struct PendingActivation {
@@ -63,6 +69,11 @@ pub struct PlanModeSnapshot {
     /// Survives process restart so the pager can restore approval chrome without treating every Active session that has a plan.md as pending.
     #[serde(default)]
     pub awaiting_plan_approval: bool,
+    /// Current episode's plan file, relative to the session directory (`plans/<utc>.md`).
+    /// `None` on snapshots written before episodes were allocated, and for the legacy
+    /// `<session_dir>/plan.md` default: both restore to `<session_dir>/plan.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file: Option<String>,
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
@@ -75,7 +86,9 @@ impl PlanModeTracker {
             pending_exit_reminder: false,
             awaiting_plan_approval: false,
             pending_activation: None,
-            plan_file_path: session_dir.join("plan.md"),
+            plan_file_path: legacy_plan_file_path(&session_dir),
+            session_dir,
+            episode_files: Vec::new(),
         }
     }
     /// `session_dir` is used to recompute `plan_file_path`.
@@ -99,7 +112,9 @@ impl PlanModeTracker {
             pending_exit_reminder: snapshot.pending_exit_reminder,
             awaiting_plan_approval: snapshot.awaiting_plan_approval,
             pending_activation: None,
-            plan_file_path: session_dir.join("plan.md"),
+            plan_file_path: restore_plan_file_path(&session_dir, snapshot.plan_file.as_deref()),
+            session_dir,
+            episode_files: Vec::new(),
         }
     }
     /// Mark that the client is waiting on plan approval (`exit_plan_mode` parked).
@@ -117,7 +132,56 @@ impl PlanModeTracker {
             awaiting_plan_approval: self.awaiting_plan_approval,
             reminder_count: self.reminder_count,
             pending_exit_reminder: self.pending_exit_reminder,
+            plan_file: self.relative_plan_file(),
         }
+    }
+
+    /// The current plan file relative to the session directory, when it lives inside it.
+    /// Used for persistence so a session's plan file survives resume.
+    fn relative_plan_file(&self) -> Option<String> {
+        let relative = self.plan_file_path.strip_prefix(&self.session_dir).ok()?;
+        let text = relative.to_string_lossy().replace('\\', "/");
+        (!text.is_empty()).then_some(text)
+    }
+
+    /// The path a new episode would allocate, without mutating tracker state.
+    /// Deterministic for unchanged state so a caller can render the activation reminder with the
+    /// path the subsequent [`Self::activate`] / [`Self::activate_mid_turn`] will install.
+    pub(crate) fn next_episode_path(&self) -> PathBuf {
+        let plans_dir = self.session_dir.join("plans");
+        let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
+        let mut candidate = plans_dir.join(format!("{stamp}.md"));
+        let mut suffix = 2u32;
+        while candidate == self.plan_file_path
+            || self.episode_files.contains(&candidate)
+            || candidate.exists()
+        {
+            candidate = plans_dir.join(format!("{stamp}-{suffix}.md"));
+            suffix += 1;
+        }
+        candidate
+    }
+
+    /// Start a new planning episode on a fresh file under `<session_dir>/plans/`.
+    ///
+    /// Called when plan mode activates from `Inactive`, so each `/plan` (or agent
+    /// `enter_plan_mode`) after a finished episode gets its own timestamped file instead of
+    /// overwriting the previous plan. Request-changes does not re-activate and so keeps editing
+    /// the current file. Returns the newly installed path.
+    pub(crate) fn begin_plan_episode(&mut self) -> PathBuf {
+        let path = self.next_episode_path();
+        if let Some(dir) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(dir)
+        {
+            tracing::warn!(
+                error = %e,
+                dir = %dir.display(),
+                "failed to create plan episode directory"
+            );
+        }
+        self.episode_files.push(path.clone());
+        self.plan_file_path = path.clone();
+        path
     }
     pub fn state(&self) -> PlanModeState {
         self.state
@@ -170,12 +234,13 @@ impl PlanModeTracker {
             _ => false,
         }
     }
-    /// First user prompt while Pending: activate plan mode.
+    /// First user prompt while Pending: activate plan mode on a fresh plan file.
     /// Returns true if state actually changed.
     pub fn activate(&mut self) -> bool {
         if self.state != PlanModeState::Pending {
             return false;
         }
+        self.begin_plan_episode();
         self.state = PlanModeState::Active;
         self.was_previously_active = true;
         self.reminder_count = 0;
@@ -188,6 +253,7 @@ impl PlanModeTracker {
         if self.state != PlanModeState::Pending {
             return false;
         }
+        self.begin_plan_episode();
         let prior_was_previously_active = self.was_previously_active;
         self.state = PlanModeState::Active;
         self.was_previously_active = true;
@@ -316,14 +382,44 @@ pub(crate) fn plan_mode_reminder_sparse_template() -> &'static str {
 }
 /// Returns a MiniJinja template string injected when entering plan mode for the second or later time in the same session.
 /// Render via `TemplateRenderer::render_with_extra()` with `{ "plan_path": "..." }`.
+/// The path is the NEW episode's file (allocation happens on activation), so the copy must not
+/// claim a previous plan exists: doing so makes the model read the old plan back into context.
 pub(crate) fn plan_mode_reentry_reminder_template() -> &'static str {
     "\
 ## Returning to Plan Mode
 
-You are entering plan mode again after having previously exited it. \
-A plan file exists at ${{ plan_path }} from your previous planning session.
+You are entering plan mode again. A new plan file has been opened at ${{ plan_path }} \
+for this planning session and it starts empty.
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
+}
+
+/// `<session_dir>/plan.md`: the single plan file used before per-episode allocation, and the
+/// fallback for snapshots that predate it.
+pub(crate) fn legacy_plan_file_path(session_dir: &Path) -> PathBuf {
+    session_dir.join("plan.md")
+}
+
+/// Resolve a persisted `plan_file` against the session directory.
+/// Falls back to [`legacy_plan_file_path`] for `None`, empty, or unsafe values: an absolute path
+/// or any `..` component would escape the session directory the edit gate and ACP allow-path are
+/// anchored to.
+fn restore_plan_file_path(session_dir: &Path, plan_file: Option<&str>) -> PathBuf {
+    use std::path::Component;
+    let fallback = legacy_plan_file_path(session_dir);
+    let Some(plan_file) = plan_file else {
+        return fallback;
+    };
+    let relative = Path::new(plan_file);
+    if relative.as_os_str().is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|c| !matches!(c, Component::Normal(_)))
+    {
+        return fallback;
+    }
+    session_dir.join(relative)
 }
 /// Rejection message for an edit outside the plan file while plan mode is active.
 /// Returned as the tool result so the model knows the only editable path.
@@ -404,8 +500,17 @@ impl PromptMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// A per-test session directory. `activate()` allocates a plan file under it, so two tests
+    /// sharing a directory (or a clock second) could collide.
     fn test_tracker() -> PlanModeTracker {
-        PlanModeTracker::new(PathBuf::from("/tmp/test-session"))
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static SEQ: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "cook-plan-mode-test-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::SeqCst)
+        ));
+        PlanModeTracker::new(dir)
     }
     #[test]
     fn user_initiated_lifecycle() {
@@ -469,6 +574,154 @@ mod tests {
         assert_eq!(
             t.plan_file_path(),
             Path::new("/home/user/.grok/sessions/proj/abc-123/plan.md")
+        );
+    }
+    /// A session that never plans must not scatter empty `plans/` files.
+    #[test]
+    fn pending_does_not_allocate_a_plan_file() {
+        let mut t = test_tracker();
+        let legacy = t.plan_file_path().to_path_buf();
+        assert!(t.enter_pending());
+        assert_eq!(t.plan_file_path(), legacy);
+        assert!(t.episode_files.is_empty());
+        assert!(!t.enter_pending(), "already pending");
+        assert!(t.episode_files.is_empty());
+    }
+    #[test]
+    fn first_episode_allocates_a_timestamped_file_under_plans() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        assert!(t.activate());
+        let path = t.plan_file_path().to_path_buf();
+        assert_eq!(path.parent(), Some(t.session_dir.join("plans").as_path()));
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("md"));
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            name.ends_with("Z.md") && name.starts_with("20"),
+            "expected a UTC timestamp filename, got {name}"
+        );
+        assert!(path.parent().unwrap().is_dir(), "plans/ must exist on disk");
+    }
+    /// The whole point of the change: episode two must not reuse (or truncate) episode one's file.
+    #[test]
+    fn second_episode_allocates_a_different_file_and_keeps_the_first() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let first = t.plan_file_path().to_path_buf();
+        std::fs::write(&first, "# first plan\n").unwrap();
+        assert!(t.deactivate_approved());
+
+        t.enter_pending();
+        t.activate();
+        let second = t.plan_file_path().to_path_buf();
+
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "# first plan\n");
+        assert_eq!(t.episode_files.len(), 2);
+    }
+    /// Two episodes inside one clock second still get distinct paths: the previous allocation may
+    /// not have been written to disk yet.
+    #[test]
+    fn same_second_episodes_do_not_collide() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let first = t.plan_file_path().to_path_buf();
+        t.deactivate_approved();
+        t.enter_pending();
+        t.activate();
+        assert_ne!(first, t.plan_file_path());
+    }
+    /// Mid-turn activation installs the path its caller already rendered the reminder with.
+    #[test]
+    fn midturn_activation_installs_the_path_it_announced() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        let announced = t.next_episode_path();
+        assert!(t.activate_mid_turn("reminder text".into()));
+        assert_eq!(t.plan_file_path(), announced);
+    }
+    /// Toggling off then back on while the turn is in flight is the same episode, so the file stays.
+    #[test]
+    fn reenter_from_exit_pending_keeps_the_same_file() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let active = t.plan_file_path().to_path_buf();
+        t.user_exit(true);
+        assert!(t.enter_pending());
+        assert_eq!(t.plan_file_path(), active);
+        assert_eq!(t.episode_files.len(), 1);
+    }
+    /// Request-changes keeps the episode `Active` and never re-activates, so it keeps its file.
+    #[test]
+    fn activating_an_active_episode_does_not_rotate_the_file() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let path = t.plan_file_path().to_path_buf();
+        assert!(!t.activate());
+        assert!(!t.activate_mid_turn("dup".into()));
+        assert_eq!(t.plan_file_path(), path);
+        assert_eq!(t.episode_files.len(), 1);
+    }
+    /// History still contains the previous episode's write path, so only the current file is writable.
+    #[test]
+    fn earlier_episode_file_is_not_writable() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let first = t.plan_file_path().to_path_buf();
+        t.deactivate_approved();
+        t.enter_pending();
+        t.activate();
+        assert!(t.should_auto_approve_edit(t.plan_file_path()));
+        assert!(!t.should_auto_approve_edit(&first));
+    }
+    #[test]
+    fn snapshot_round_trips_the_episode_file() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let expected = t.plan_file_path().to_path_buf();
+        let snap = t.snapshot();
+        assert!(
+            snap.plan_file.as_deref().unwrap_or_default().starts_with("plans/"),
+            "{:?}",
+            snap.plan_file
+        );
+
+        let restored = PlanModeTracker::from_snapshot(t.session_dir.clone(), snap);
+        assert_eq!(restored.plan_file_path(), expected);
+    }
+    #[test]
+    fn snapshot_without_plan_file_restores_the_legacy_path() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let mut snap = t.snapshot();
+        snap.plan_file = None;
+        let restored = PlanModeTracker::from_snapshot(t.session_dir.clone(), snap);
+        assert_eq!(restored.plan_file_path(), t.session_dir.join("plan.md"));
+    }
+    #[test]
+    fn unsafe_snapshot_plan_file_falls_back_to_the_legacy_path() {
+        let dir = PathBuf::from("/tmp/cook-plan-mode-unsafe");
+        for value in ["", "../outside.md", "/abs/outside.md", "plans/../../x.md", "./"] {
+            assert_eq!(
+                restore_plan_file_path(&dir, Some(value)),
+                dir.join("plan.md"),
+                "value {value:?} must not escape the session directory"
+            );
+        }
+    }
+    #[test]
+    fn safe_snapshot_plan_file_restores_under_the_session_dir() {
+        let dir = PathBuf::from("/tmp/cook-plan-mode-safe");
+        assert_eq!(
+            restore_plan_file_path(&dir, Some("plans/2026-09-19T14-30-22Z.md")),
+            dir.join("plans/2026-09-19T14-30-22Z.md")
         );
     }
     #[test]
@@ -695,6 +948,47 @@ mod tests {
         assert!(text.contains("AskUser"));
         assert!(!text.contains("exit_plan_mode"));
         assert!(!text.contains("ask_user_question"));
+    }
+    /// Reentry allocates a fresh file, so the reminder must not send the model back to the old plan.
+    #[test]
+    fn reentry_reminder_does_not_claim_a_previous_plan_exists() {
+        let r = test_renderer();
+        let text = render(
+            &r,
+            plan_mode_reentry_reminder_template(),
+            "/s/plans/2026-09-19T14-30-22Z.md",
+            false,
+        );
+        assert!(text.contains("/s/plans/2026-09-19T14-30-22Z.md"));
+        assert!(!text.contains("exists at"));
+        assert!(!text.contains("previous planning session"));
+        assert!(!text.contains("from your previous"));
+        assert!(text.contains("starts empty"));
+    }
+    /// The rendered reentry path is the NEW episode's file, never the one just finished.
+    #[test]
+    fn reentry_render_names_only_the_new_episode_file() {
+        let mut t = test_tracker();
+        t.enter_pending();
+        t.activate();
+        let previous = t.plan_file_path().to_path_buf();
+        t.deactivate_approved();
+
+        t.enter_pending();
+        assert!(t.is_reentry());
+        let next = t.next_episode_path();
+        t.activate();
+        assert_eq!(t.plan_file_path(), next);
+
+        let r = test_renderer();
+        let text = render(
+            &r,
+            plan_mode_reentry_reminder_template(),
+            &next.display().to_string(),
+            false,
+        );
+        assert!(text.contains(next.to_string_lossy().as_ref()));
+        assert!(!text.contains(previous.to_string_lossy().as_ref()));
     }
     #[test]
     fn exit_reminder_renders() {

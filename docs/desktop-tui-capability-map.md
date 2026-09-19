@@ -151,7 +151,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-t-r | `terminal/release` | A→C | — | not advertised | `ok` | protocol |
 | ACP-t-k | `terminal/kill` | A→C | — | not advertised | `ok` | protocol |
 
-Plan-mode `plan.md` is written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`). That allow-path is load-bearing.
+Plan-mode plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` before a session's first planning episode, then `<session>/plans/<utc>.md` per episode. That allow-path is load-bearing.
 
 ---
 
@@ -735,7 +735,7 @@ Two channels:
 | `x.ai/fs/{read_file,write_file,exists}` | C→A | Settings project files (`exists` unused) | `ok` / `partial` |
 | `x.ai/fs/{list,delete_file}` | C→A | missing | `gap` / `na` (Files panel is Tauri) |
 
-**Invariant:** plan-mode `plan.md` lives under the agent session store, outside the workspace. ACP-fs-w must keep that allow-path (`acp_host.rs` `agent_state_root`).
+**Invariant:** plan-mode plan files live under the agent session store, outside the workspace: `<session>/plan.md` until a session starts its first planning episode, then `<session>/plans/<utc>.md` per episode. ACP-fs-w must keep that allow-path (`acp_host.rs` `agent_state_root`).
 
 ---
 

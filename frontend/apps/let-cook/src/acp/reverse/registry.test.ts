@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { planDialogTitle } from "../../state/plan-review";
 import { useSessionStore } from "../../state/session";
 import * as host from "../host";
 import { dispatchReverseRequest, lookupReverse, unknownReverseAnswer } from "./index";
@@ -58,5 +59,36 @@ describe("reverse-request policy (C2)", () => {
     const answer = unknownReverseAnswer("x.ai/mcp/servers_updated");
     expect(answer.error).toBeUndefined();
     expect(answer.result).toEqual({ ok: false });
+  });
+
+  it("parks a plan review under the episode's plan filename from planFilePath", async () => {
+    vi.spyOn(host, "respond").mockResolvedValue();
+    const params = {
+      sessionId: "s1",
+      toolCallId: "tc-1",
+      planContent: "# Plan",
+      planFilePath: "/home/u/.cook/sessions/p/abc/plans/2026-09-19T14-30-22Z.md",
+    };
+    await dispatchReverseRequest(
+      { id: 11, method: "x.ai/exit_plan_mode", params },
+      "x.ai/exit_plan_mode",
+      params,
+    );
+    expect(useSessionStore.getState().planReview).toEqual({
+      body: "# Plan",
+      fileName: "2026-09-19T14-30-22Z.md",
+      pending: true,
+    });
+  });
+
+  it("falls back to the legacy plan name when the request carries no planFilePath", async () => {
+    vi.spyOn(host, "respond").mockResolvedValue();
+    const params = { sessionId: "s1", toolCallId: "tc-1", planContent: "# Plan" };
+    await dispatchReverseRequest(
+      { id: 12, method: "x.ai/exit_plan_mode", params },
+      "x.ai/exit_plan_mode",
+      params,
+    );
+    expect(planDialogTitle(useSessionStore.getState().planReview)).toBe("plan.md");
   });
 });

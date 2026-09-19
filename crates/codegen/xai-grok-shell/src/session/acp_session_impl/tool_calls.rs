@@ -333,9 +333,6 @@ fn external_tool_bodies(
         ),
     }
 }
-/// Model-facing turn injected after a resumed plan is approved.
-const PLAN_APPROVED_IMPLEMENT_MESSAGE: &str =
-    "The user approved the plan. Implement the plan in plan.md.";
 /// Shared "revise the plan" message for the request-changes outcome, used by both the mid-turn intercept and the resume re-park.
 fn revise_plan_message(feedback: &str) -> String {
     let feedback = feedback.trim();
@@ -1610,6 +1607,19 @@ impl SessionActor {
                 rewriting_hook = Some(rewrite.hook_name);
             }
         }
+        // Start the episode's plan file before the tool runs: `enter_plan_mode` resolves the
+        // `PlanFilePath` resource and seeds it inside its own call, so rotating afterwards would
+        // seed the previous episode's file and leave the new path empty.
+        if matches!(&tool_input, ToolInput::EnterPlanMode(_))
+            && matches!(
+                self.plan_mode.lock().state(),
+                crate::session::plan_mode::PlanModeState::Inactive
+            )
+        {
+            self.plan_mode.lock().begin_plan_episode();
+            self.sync_plan_file_path_resource().await;
+            self.persist_plan_mode_state();
+        }
         let access_kind = access_kind_for_resolved_tool(&resolved_tool_name, &tool_input);
         let plan_gate = plan_mode_edit_gate(&self.plan_mode.lock(), &tool_input, &access_kind);
         if plan_gate != PlanEditGate::Allow {
@@ -1972,7 +1982,7 @@ impl SessionActor {
                                         "The plan was approved, but goal mode is disabled in this \
                                          session, so it will be implemented here instead of as an \
                                          autonomous goal.\n\n{}",
-                                        PLAN_APPROVED_IMPLEMENT_MESSAGE
+                                        self.plan_approved_implement_message()
                                     ),
                                 )
                                 .await;
@@ -1986,7 +1996,7 @@ impl SessionActor {
                                         "The plan was approved, but it has no content to seed a \
                                          goal with, so it will be implemented here instead of an \
                                          autonomous goal.\n\n{}",
-                                        PLAN_APPROVED_IMPLEMENT_MESSAGE
+                                        self.plan_approved_implement_message()
                                     ),
                                 )
                                 .await;
@@ -2095,6 +2105,13 @@ impl SessionActor {
             session_id: self.session_id_string(),
             tool_call_id: tool_call_id.to_string(),
             plan_content,
+            plan_file_path: Some(
+                self.plan_mode
+                    .lock()
+                    .plan_file_path()
+                    .display()
+                    .to_string(),
+            ),
         };
         debug_assert!(
             !ext_req.session_id.is_empty(),
@@ -2135,6 +2152,15 @@ impl SessionActor {
                     feedback: None,
                 }
             }),
+        )
+    }
+    /// Model-facing turn injected after a plan is approved.
+    /// Names the episode's file rather than the literal `plan.md`: a later `/plan` allocates a new
+    /// file, so the literal would point the implement turn at a stale document.
+    fn plan_approved_implement_message(&self) -> String {
+        format!(
+            "The user approved the plan. Implement the plan in {}.",
+            self.plan_mode.lock().plan_file_path().display()
         )
     }
     /// Leave plan mode (approved/abandoned) and tell the client to show the Default mode.
@@ -2209,12 +2235,9 @@ impl SessionActor {
             ResumeAction::LeaveAndImplement => {
                 tracing::info!("[exit_plan_mode] resume: user approved plan");
                 self.leave_plan_mode_to_default();
-                self.start_resume_turn(
-                    PLAN_APPROVED_IMPLEMENT_MESSAGE.to_string(),
-                    PromptMode::Agent,
-                    completion_tx,
-                )
-                .await;
+                let message = self.plan_approved_implement_message();
+                self.start_resume_turn(message, PromptMode::Agent, completion_tx)
+                    .await;
             }
             ResumeAction::LeaveAndStartGoal(plan_body) => {
                 tracing::info!("[exit_plan_mode] resume: user approved plan as goal");
@@ -2223,7 +2246,7 @@ impl SessionActor {
                     let message = format!(
                         "The plan was approved, but goal mode is disabled in this session, \
                          so it will be implemented here instead of as an autonomous goal.\n\n{}",
-                        PLAN_APPROVED_IMPLEMENT_MESSAGE
+                        self.plan_approved_implement_message()
                     );
                     self.start_resume_turn(message, PromptMode::Agent, completion_tx)
                         .await;
@@ -3491,7 +3514,9 @@ mod plan_mode_edit_gate_tests {
     use crate::session::plan_mode::PlanModeTracker;
     use xai_grok_tools::types::ToolInput;
     use xai_grok_workspace::permission::AccessKind;
-    /// Tracker with plan mode Active and plan file at `/tmp/gate-session/plan.md`.
+    /// Tracker with plan mode Active on a freshly allocated episode file under
+    /// `/tmp/gate-session/plans/`. Activation allocates a timestamped file, so the editable path
+    /// must be read from the tracker rather than assumed to be `<session>/plan.md`.
     fn active_tracker() -> PlanModeTracker {
         let mut t = PlanModeTracker::new(std::path::PathBuf::from("/tmp/gate-session"));
         assert!(t.enter_pending());
@@ -3535,12 +3560,24 @@ mod plan_mode_edit_gate_tests {
     #[test]
     fn plan_file_edit_allowed() {
         let t = active_tracker();
+        let plan_file = t.plan_file_path().display().to_string();
+        assert_eq!(gate(&t, &search_replace(&plan_file)), PlanEditGate::Allow);
+        assert_eq!(gate(&t, &write(&plan_file)), PlanEditGate::Allow);
+    }
+    /// Every earlier episode's file stays read-only: conversation history still names it.
+    #[test]
+    fn earlier_episode_file_rejected() {
+        let mut t = active_tracker();
+        let first = t.plan_file_path().display().to_string();
+        assert!(t.deactivate_approved());
+        assert!(t.enter_pending());
+        assert!(t.activate());
         assert_eq!(
-            gate(&t, &search_replace("/tmp/gate-session/plan.md")),
-            PlanEditGate::Allow
+            gate(&t, &search_replace(&first)),
+            PlanEditGate::RejectNonPlanFile
         );
         assert_eq!(
-            gate(&t, &write("/tmp/gate-session/plan.md")),
+            gate(&t, &search_replace(&t.plan_file_path().display().to_string())),
             PlanEditGate::Allow
         );
     }

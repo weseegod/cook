@@ -1955,6 +1955,7 @@ fn plan_approval_ingress_displaces_feedback_modal() {
         session_id: "test-session".into(),
         tool_call_id: "tc-plan".into(),
         plan_content: Some("# Plan\nStep 1".into()),
+        plan_file_path: None,
     };
     let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
     crate::app::acp_handler::handle(

@@ -1,11 +1,12 @@
 /**
  * The plan review surface: the plan body, its line-anchored comments, and the popup's state.
  *
- * The shell raises `x.ai/exit_plan_mode` with the whole `plan.md` body in `planContent`, and the
- * pager's half of that contract — the `plan.md` / `plan.md (empty)` title, the line comments, and
- * the review footer's decision bar — lives in `views/plan_approval_view.rs` and
- * `views/file_search/line_viewer.rs`. ACP `Plan` updates carry the todo entries only, never the body,
- * so the request is the one source of the prose.
+ * The shell raises `x.ai/exit_plan_mode` with the whole plan body in `planContent` and the
+ * episode's plan file in `planFilePath`. The pager's half of that contract — the
+ * `<filename>` / `<filename> (empty)` title, the line comments, and the review footer's decision
+ * bar — lives in `views/plan_approval_view.rs` and `views/file_search/line_viewer.rs`. ACP `Plan`
+ * updates carry the todo entries only, never the body, so the request is the one source of the
+ * prose.
  */
 
 /** One review comment, anchored to 1-based plan lines as the TUI's `PlanComment.line_range` is. */
@@ -22,6 +23,11 @@ export type PlanFocus = "preview" | "prompt" | "commenting";
 export interface PlanReview {
   /** The `planContent` the shell sent; `null` when it parked with no body. */
   body: string | null;
+  /**
+   * Basename of the episode's plan file (`2026-09-19T14-30-22Z.md`) from `planFilePath`.
+   * Absent on payloads from agents that predate per-episode plan files → `plan.md`.
+   */
+  fileName?: string;
   /** True while the `exit_plan_mode` request is unanswered — the review is a blocking decision. */
   pending: boolean;
 }
@@ -58,10 +64,20 @@ export function planBodyIsEmpty(body: string | null | undefined): boolean {
   return body === null || body === undefined || body.trim() === "";
 }
 
-/** The line viewer's title: `plan.md`, or `plan.md (empty)` when the review carries no body. */
+/** Basename of an episode's plan file, mirroring the pager's `plan_file_name`.
+ *  `plan.md` when the payload carries no path — the filename agents used before plan files were
+ *  allocated per episode. */
+export function planFileName(path: string | null | undefined): string {
+  if (typeof path !== "string") return "plan.md";
+  const name = path.split(/[/\\]/).pop();
+  return name !== undefined && name.length > 0 ? name : "plan.md";
+}
+
+/** The line viewer's title: the episode's plan filename, or `<name> (empty)` when the review carries no body. */
 export function planDialogTitle(review: PlanReview | null): string {
   if (!review) return "plan.md";
-  return planBodyIsEmpty(review.body) ? "plan.md (empty)" : "plan.md";
+  const name = review.fileName ?? "plan.md";
+  return planBodyIsEmpty(review.body) ? `${name} (empty)` : name;
 }
 
 /** `EMPTY_PLAN_PLACEHOLDER`: the body the viewer shows when the review parked with no plan. */

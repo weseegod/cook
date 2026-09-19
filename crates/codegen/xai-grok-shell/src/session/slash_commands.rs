@@ -358,7 +358,8 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
 pub(crate) enum GoalPlanSource {
     /// Read the plan from this path (resolved relative to the session cwd).
     Path(String),
-    /// Read the session's plan-mode plan file (`<session_dir>/plan.md`).
+    /// Read the session's plan-mode plan file: the current planning episode's file, or the legacy
+    /// `<session_dir>/plan.md` for a session that has not started one.
     SessionPlan,
     /// Inline plan body (already obtained; e.g. the approved plan content).
     Content(String),

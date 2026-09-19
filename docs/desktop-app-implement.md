@@ -30,8 +30,9 @@ Shipped and usable as a local ACP chat shell:
   overlay (hidden by default) with todo-pane status glyphs, and copy actions
   ([`docs/tui-presentation.md`](tui-presentation.md); there is no pinned tool
   rail and no in-transcript rerun)
-- Plan review popup behind a `plan` chip: the whole `plan.md` as numbered lines
-  with line-anchored comments, and the TUI's decision bar — approve, run as
+- Plan review popup behind a `plan` chip: the current episode's plan file
+  (its basename is the popup title; `plan.md` on legacy payloads) as numbered
+  lines with line-anchored comments, and the TUI's decision bar — approve, run as
   goal, request changes, comment, copy plan, quit plan
 - Goal meter in the agent status bar and a click-through goal detail (status, budget
   bar, progress list, subagent rounds and per-model tokens, completion review,

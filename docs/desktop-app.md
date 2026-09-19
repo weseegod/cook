@@ -243,7 +243,8 @@ tag is ignored, never rendered as a row.
 Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
 to the session cwd plus one allow-path: the agent's own session store
 (`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`).
-Without it plan mode cannot write `<session>/plan.md`, which lives outside
+Without it plan mode cannot write its plan file (`<session>/plan.md`, or
+`<session>/plans/<utc>.md` per planning episode), which lives outside
 every workspace. That allow-path is load-bearing.
 
 ### 5.3 `x.ai/*` groups

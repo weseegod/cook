@@ -56,7 +56,7 @@ async fn plan_mode_rejects_grok_edit_outside_plan_file_despite_allow_all_permiss
             );
             let text = tool_result_text(&actor, "call_gate").await;
             assert!(
-                text.contains("/tmp/test-session/plan.md"),
+                text.contains(&plan_file_path(&actor)),
                 "must name the plan file so the model knows the one editable path: {text}"
             );
         })
@@ -69,9 +69,10 @@ async fn plan_mode_allows_plan_file_edit() {
         .run_until(async {
             let actor = build_gate_actor().await;
             activate_plan_mode(&actor);
+            let plan_path = plan_file_path(&actor);
             let result = prepare(
                 &actor,
-                search_replace_call_at("call_plan_file", "/tmp/test-session/plan.md"),
+                search_replace_call_at("call_plan_file", &plan_path),
             )
             .await;
             assert!(
@@ -118,7 +119,7 @@ async fn plan_gate_sees_hook_rewritten_path() {
             activate_plan_mode(&actor);
             let result = prepare(
                     &actor,
-                    search_replace_call_at("call_hook_gate", "/tmp/test-session/plan.md"),
+                    search_replace_call_at("call_hook_gate", &plan_file_path(&actor)),
                 )
                 .await;
             assert!(

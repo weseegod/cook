@@ -174,7 +174,7 @@ interface SessionState {
   set: (patch: Partial<SessionState>) => void;
   setComposerDraft: (draft: string) => void;
   /** Stash the plan body an `exit_plan_mode` request carried; comments are per-review, so they reset. */
-  beginPlanReview: (body: string | null) => void;
+  beginPlanReview: (body: string | null, fileName?: string) => void;
   /** The review was answered: it stops blocking, but the body stays viewable for the session. */
   endPlanReview: () => void;
   setPlanDialogOpen: (open: boolean) => void;
@@ -278,9 +278,9 @@ export const useSessionStore = create<SessionState>((set) => ({
       return next;
     }),
   setComposerDraft: (composerDraft) => set({ composerDraft }),
-  beginPlanReview: (body) =>
+  beginPlanReview: (body, fileName) =>
     set({
-      planReview: { body, pending: true },
+      planReview: { body, fileName, pending: true },
       // A new review owns its own comments: `acp_handler/interactions.rs` resets both on arrival.
       planComments: [],
       planNextCommentId: 0,

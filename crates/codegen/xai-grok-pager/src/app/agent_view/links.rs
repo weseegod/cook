@@ -1572,6 +1572,7 @@ mod link_click_tests {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\nStep one\nStep two".into()),
+            plan_file_path: None,
         };
         agent.plan_approval_view = Some(
             crate::views::plan_approval_view::PlanApprovalViewState::new(

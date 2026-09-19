@@ -9,6 +9,7 @@ import {
   planCommentBadge,
   planDecisionBar,
   planDialogTitle,
+  planFileName,
   planFeedback,
   type PlanComment,
 } from "./plan-review";
@@ -31,6 +32,26 @@ describe("planDialogTitle", () => {
     expect(planDialogTitle({ body: null, pending: true })).toBe("plan.md (empty)");
     expect(planDialogTitle({ body: "  ", pending: false })).toBe("plan.md (empty)");
     expect(planDialogTitle({ body: "# Plan", pending: true })).toBe("plan.md");
+  });
+
+  it("shows the episode's plan filename when the request carried one", () => {
+    const fileName = "2026-09-19T14-30-22Z.md";
+    expect(planDialogTitle({ body: "# Plan", fileName, pending: true })).toBe(fileName);
+    expect(planDialogTitle({ body: " ", fileName, pending: true })).toBe(`${fileName} (empty)`);
+  });
+});
+
+describe("planFileName", () => {
+  it("takes the basename of the plan path and falls back to the legacy name", () => {
+    expect(planFileName("/home/u/.cook/sessions/p/abc/plans/2026-09-19T14-30-22Z.md"))
+      .toBe("2026-09-19T14-30-22Z.md");
+    expect(planFileName("/home/u/.cook/sessions/p/abc/plan.md")).toBe("plan.md");
+    expect(planFileName("C:\\sessions\\abc\\plans\\2026-09-19T14-30-22Z.md"))
+      .toBe("2026-09-19T14-30-22Z.md");
+    expect(planFileName(null)).toBe("plan.md");
+    expect(planFileName(undefined)).toBe("plan.md");
+    expect(planFileName("")).toBe("plan.md");
+    expect(planFileName("/trailing/slash/")).toBe("plan.md");
   });
 });
 

@@ -13,7 +13,7 @@ When plan mode is active, the agent:
 3. May use `ask_user_question` to clarify specific questions
 4. Calls `exit_plan_mode` to present the plan for your approval
 
-Plan mode is read-only except for the plan file: plan-file edits (`plan.md` in the session directory) are auto-approved, and edits to any other file are rejected outright — the tool call fails with a short message naming the plan file as the only editable path. This holds in every permission mode, including always-approve. Separating planning from implementation lets you review and correct the approach before any code is written.
+Plan mode is read-only except for the plan file: edits to the current episode's plan file are auto-approved, and edits to any other file are rejected outright — the tool call fails with a short message naming the plan file as the only editable path. That includes plan files from earlier episodes: only the current one is writable. This holds in every permission mode, including always-approve. Separating planning from implementation lets you review and correct the approach before any code is written.
 
 ---
 
@@ -44,13 +44,18 @@ You can enter plan mode yourself in two ways:
 - **`/plan`** -- Enter plan mode. Plan mode activates when you send your next prompt. Run `/plan <description>` to enter plan mode and start a turn with that description in one step.
 - **Shift+Tab** -- Cycle the session mode: Normal, then Plan, then Always-approve, then back to Normal. From Normal, a single press lands on Plan.
 
-After a plan exists, run **`/view-plan`** (aliases `/show-plan`, `/plan-view`) to reopen its saved preview.
+After a plan exists, run **`/view-plan`** (aliases `/show-plan`, `/plan-view`) to reopen the preview of the **current** episode's plan.
 
 ---
 
 ## The Plan File
 
-The plan is written to `plan.md` inside the session directory (`~/.cook/sessions/<cwd>/<session-id>/plan.md`, where `<cwd>` is an encoded directory name, not the literal path).
+Each planning episode gets its own file, so a later plan never overwrites an earlier one and the creation time is visible in the filename: `~/.cook/sessions/<cwd>/<session-id>/plans/<UTC timestamp>.md`, where `<cwd>` is an encoded directory name, not the literal path. A session that has not started a planning episode yet (and one saved before episodes were separate files) uses `~/.cook/sessions/<cwd>/<session-id>/plan.md`.
+
+A new file is allocated when plan mode **activates** — your first prompt after `/plan` or Shift+Tab, or the agent's `enter_plan_mode`. Everything inside one episode keeps working on the same file:
+
+- Requesting changes (and inline comments) revises the current file in place.
+- Approving, quitting, or toggling plan mode off ends the episode; the file stays on disk as the record of that plan, and the next `/plan` starts a new one.
 
 The plan file contains:
 
@@ -66,7 +71,7 @@ The plan file contains:
 
 When the agent finishes planning, it calls the `exit_plan_mode` tool. The tool reads the plan file from disk, and the TUI opens a scrollable preview of the plan with an action bar along the bottom.
 
-If the agent exits without writing a plan (empty or missing `plan.md`), the same approval surface still opens with a clear empty-state message so you can approve and start implementing, request changes (send the agent back to planning), or quit. In minimal mode the empty notice is committed into scrollback and the controls strip header reads **No plan written yet**.
+If the agent exits without writing a plan (empty or missing plan file), the same approval surface still opens with a clear empty-state message so you can approve and start implementing, request changes (send the agent back to planning), or quit. In minimal mode the empty notice is committed into scrollback and the controls strip header reads **No plan written yet**.
 
 ### Reviewing the Plan
 

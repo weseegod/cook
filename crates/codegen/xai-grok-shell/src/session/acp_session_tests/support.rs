@@ -885,6 +885,12 @@ pub(crate) fn activate_plan_mode(actor: &SessionActor) {
     assert!(tracker.enter_pending());
     assert!(tracker.activate());
 }
+/// The plan file the actor's tracker currently points at. Activation allocates a timestamped file
+/// per episode, so tests must read the path instead of assuming `<session>/plan.md`.
+#[cfg(test)]
+pub(crate) fn plan_file_path(actor: &SessionActor) -> String {
+    actor.plan_mode.lock().plan_file_path().display().to_string()
+}
 #[cfg(test)]
 pub(crate) async fn tool_result_text(actor: &SessionActor, call_id: &str) -> String {
     let conversation = actor.chat_state_handle.get_conversation().await;

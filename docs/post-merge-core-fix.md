@@ -126,7 +126,7 @@ Restore:
 ```rust
 pub(crate) enum GoalPlanSource {
     Path(String),      // --plan <path>
-    SessionPlan,       // --from-plan  → <session_dir>/plan.md
+    SessionPlan,       // --from-plan  → the plan tracker's current episode file
     Content(String),   // approved plan body from the pager
 }
 
