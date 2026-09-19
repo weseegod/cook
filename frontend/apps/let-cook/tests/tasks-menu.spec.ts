@@ -60,6 +60,7 @@ test.describe("tasks list", () => {
     const row = page.getByTestId("task-row-bg-1");
     await expect(row).toContainText("Wait for server");
     await expect(row).toHaveAttribute("data-status", "running");
+    await expect(row.locator(".activity-status")).toBeHidden();
     // The list is rows only, like the plans list: no summary line, no close button of its own.
     await expect(page.locator(".tasks-menu .activity-list")).toBeVisible();
     // The row's ✕ is the list's only button; each task closes through its own.

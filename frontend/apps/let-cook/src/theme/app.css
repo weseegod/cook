@@ -1373,6 +1373,16 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 /* Three classes deep: the header's own `.agent-header .icon-button` sizes every icon in the bar. */
 .tasks-menu .activity-row .activity-kill,
 .tasks-menu .activity-row .activity-kill-spacer { width: 20px; height: 20px; min-height: 20px; }
+.tasks-menu .activity-row .activity-kill { color: color-mix(in srgb, var(--danger-light, var(--danger)), var(--muted) 36%); }
+.tasks-menu .activity-row .activity-kill:hover:not(:disabled) {
+  color: var(--danger-light, var(--danger));
+  background: color-mix(in srgb, var(--danger-light, var(--danger)), transparent 88%);
+}
+.tasks-menu .activity-row .activity-kill:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--danger-light, var(--danger)), transparent 35%);
+  outline-offset: 1px;
+}
+.tasks-menu .activity-row .activity-status { display: none; }
 .tasks-menu .activity-group { padding: 4px 2px 1px; }
 .tasks-menu .utility-state { min-height: 0; padding: 8px; }
 /* Section header inside the row list (`views/tasks_pane.rs`: Workflows / Subagents / Tasks / Watchers). */
