@@ -4,6 +4,7 @@ import {
   assistantTextForTurn,
   computeTps,
   DecodeWindowTracker,
+  decodeTextForTurn,
   estimateTokens,
   formatTps,
   resolveMetricsTurnId,
@@ -57,6 +58,19 @@ describe("assistantTextForTurn", () => {
     ];
     expect(assistantTextForTurn(blocks, "turn-1")).toBe("abcd");
     expect(assistantTextForTurn(blocks, null)).toBe("");
+  });
+});
+
+describe("decodeTextForTurn", () => {
+  it("counts thinking alongside the prose, and nothing else", () => {
+    const blocks: TranscriptBlock[] = [
+      message("user", "hello"),
+      message("thought", "planning…"),
+      message("assistant", "abcd"),
+      message("thought", "more", "turn-2"),
+    ];
+    expect(decodeTextForTurn(blocks, "turn-1")).toBe("planning…abcd");
+    expect(decodeTextForTurn(blocks, null)).toBe("");
   });
 });
 

@@ -1,18 +1,13 @@
 import { useEffect, useRef } from "react";
 import { acpClient } from "../../acp/client";
-import { turnElapsedMs, useSessionStore } from "../../state/session";
+import { useSessionStore } from "../../state/session";
+import { COMPOSER_SHOW_TPS_KEY, useBooleanPref } from "../preferences";
 import {
-  COMPOSER_SHOW_DIFFSTAT_KEY,
-  COMPOSER_SHOW_TPS_KEY,
-  useBooleanPref,
-} from "../preferences";
-import {
-  ComposerDiffstatRail,
   ComposerMetricsHost,
   ComposerTpsRail,
   useComposerMetricsStore,
 } from "./composer-rails";
-import { formatDuration, formatTokensShort } from "./format-duration";
+import { formatDuration } from "./format-duration";
 import {
   BRAILLE_FRAMES,
   activityParts,
@@ -23,25 +18,19 @@ import {
 import { useSpinFrame } from "./use-spin-frame";
 
 /**
- * The live activity row between the transcript and the prompt (`views/turn_status.rs`).
- * Hidden while idle unless frozen TPS / diffstat metrics remain from the last turn.
+ * The live activity row between the transcript and the prompt (`views/turn_status.rs`), reading
+ * left to right: what the turn is doing and its phase timer, then tokens/sec at the right. Working
+ * tree line changes live in the header beside the git chip and context usage on the header chip,
+ * so neither is repeated here. Hidden while idle unless a frozen t/s reading remains.
  */
 export function TurnStatus() {
   const derived = useSessionStore((state) => state.activity);
   const turnRunning = useSessionStore((state) => state.turnRunning);
-  const turnStartedAt = useSessionStore((state) => state.turnStartedAt);
-  const turnPausedMs = useSessionStore((state) => state.turnPausedMs);
-  const questionOpenedAt = useSessionStore((state) => state.questionOpenedAt);
-  const usage = useSessionStore((state) => state.usage);
   const queued = useSessionStore((state) => state.queuedPromptCount);
   const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const pendingPermission = useSessionStore((state) => state.pendingPermission);
   const [showTps] = useBooleanPref(COMPOSER_SHOW_TPS_KEY);
-  const [showDiff] = useBooleanPref(COMPOSER_SHOW_DIFFSTAT_KEY);
   const tps = useComposerMetricsStore((state) => state.tps);
-  const hasDiffSnapshot = useComposerMetricsStore((state) => state.hasDiffSnapshot);
-  const additions = useComposerMetricsStore((state) => state.additions);
-  const deletions = useComposerMetricsStore((state) => state.deletions);
   const tick = useSpinFrame(turnRunning);
   const phase = useRef<{ key: string | null; startedAt: number }>({ key: null, startedAt: Date.now() });
 
@@ -62,20 +51,16 @@ export function TurnStatus() {
   }, [key]);
 
   const hasTps = showTps && tps != null && tps > 0;
-  const hasDiff = showDiff && hasDiffSnapshot && (additions > 0 || deletions > 0);
-  const hasMetrics = hasTps || hasDiff;
 
   const now = Date.now();
   const parts = resolved ? activityParts(resolved) : null;
-  const turnElapsed = turnStartedAt === null ? null : turnElapsedMs({ turnStartedAt, turnPausedMs, questionOpenedAt }, now);
   const phaseElapsed = !resolved || key === null || resolved.kind === "ask" ? null : Math.max(0, now - phase.current.startedAt);
   const blocked = Boolean(pendingPermission || pendingQuestion);
   const queuedHint = !resolved || queued === 0
     ? null
     : isSendableWait(resolved) ? ` · ${queued} queued, Enter to send now` : ` · ${queued} queued`;
-  const tokens = tokenCount(usage);
 
-  if (!resolved && !hasMetrics) {
+  if (!resolved && !hasTps) {
     return <ComposerMetricsHost />;
   }
 
@@ -108,10 +93,7 @@ export function TurnStatus() {
           </>
         ) : null}
         <span className="turn-status-spacer" />
-        {turnElapsed !== null && resolved && <span className="turn-status-timer">{formatDuration(turnElapsed)}</span>}
-        {tokens !== null && resolved && <span className="turn-status-tokens">⇣{formatTokensShort(tokens)}</span>}
         <ComposerTpsRail />
-        <ComposerDiffstatRail />
         {turnRunning && (
           <button type="button" className="stop-button turn-status-stop" onClick={() => void acpClient.cancel()}>
             [stop]
@@ -120,9 +102,4 @@ export function TurnStatus() {
       </div>
     </>
   );
-}
-
-function tokenCount(usage: Record<string, unknown> | null): number | null {
-  const used = Number(usage?.used ?? usage?.totalTokens ?? 0);
-  return Number.isFinite(used) && used > 0 ? used : null;
 }

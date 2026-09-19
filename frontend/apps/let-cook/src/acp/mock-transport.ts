@@ -156,6 +156,17 @@ export interface MockWorkspaceState {
   entries: Record<string, WorkspaceEntry[]>;
   files: Record<string, FilePreview>;
   review: ReviewSnapshot;
+  /**
+   * Folder the workspace commands answer for, as the agent's host tracks it: `session/new` and
+   * `session/load` set it, because a conversation can live in another project than the one the
+   * window connected to. `null` (or unset) means "no conversation opened yet".
+   */
+  cwd?: string | null;
+  /**
+   * Working trees that differ from {@link review}, keyed by that folder, for the tests that drive a
+   * window across two projects — a repository here, a folder with no git there.
+   */
+  byCwd?: Record<string, ReviewSnapshot>;
 }
 
 /**
@@ -645,6 +656,7 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       if (typeof meta.modelId === "string" && modelCatalog().availableModels.some((model) => model.id === meta.modelId)) {
         state.defaultModel = meta.modelId;
       }
+      openWorkspaceAt(p.cwd);
       notify("session/update", availableCommandsUpdate());
       return respond({
         sessionId,
@@ -663,6 +675,9 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
       });
     }
     case "session/load":
+      // Opening a conversation is what moves the workspace the host answers for: the list can point
+      // at another project than the one the window connected to.
+      openWorkspaceAt(p.cwd);
       notify("session/update", { ...availableCommandsUpdate(), sessionId: String(p.sessionId ?? sessionId) });
       for (const update of state.historyUpdates) {
         notify("session/update", { sessionId: String(p.sessionId ?? sessionId), update });
@@ -1266,12 +1281,36 @@ export function mockWorkspaceReadFile(relativePath: string): FilePreview {
 }
 
 export function mockWorkspaceReview(): ReviewSnapshot {
-  return structuredClone(state.workspace.review);
+  return activeReview();
+}
+
+/**
+ * The working tree the workspace commands answer for. The open conversation's folder selects a
+ * seeded tree of its own when the test gave one; otherwise the default review stands in.
+ */
+function activeReview(): ReviewSnapshot {
+  const cwd = state.workspace.cwd ?? null;
+  const scoped = cwd ? state.workspace.byCwd?.[cwd] : undefined;
+  return structuredClone(scoped ?? state.workspace.review);
+}
+
+/** Follow a conversation into its folder, as `session/new` and `session/load` make the host do. */
+function openWorkspaceAt(cwd: unknown): void {
+  if (typeof cwd === "string" && cwd.length > 0) state.workspace.cwd = cwd;
+}
+
+/**
+ * Move the mocked working tree mid-turn. The header chip and the status rail re-probe on their own
+ * timers, so a test can watch a live `+N −M` follow the edit instead of only seeing the turn-end
+ * snapshot.
+ */
+export function mockPatchWorkspaceReview(overrides: Partial<ReviewSnapshot>): void {
+  state.workspace.review = { ...state.workspace.review, ...overrides };
 }
 
 /** Dirty-tree summary derived from the seeded review, so the git chip matches the Review panel. */
 export function mockGitStatus(): GitStatusSummary {
-  const review = state.workspace.review;
+  const review = activeReview();
   return {
     isGitRepo: review.isGitRepo,
     branch: review.branch,
@@ -1445,6 +1484,8 @@ export interface MockControl {
   question(overrides?: Record<string, unknown>): number;
   plan(overrides?: Record<string, unknown>): number;
   sessionNotification(update: Record<string, unknown>, sessionId?: string): void;
+  /** Patch the mocked working tree so a running turn's diffstat can be seen to move. */
+  workspaceReview(overrides: Partial<ReviewSnapshot>): void;
   taskBackgrounded(overrides?: Record<string, unknown>): void;
   taskCompleted(overrides?: Record<string, unknown>): void;
   goalUpdate(overrides?: Record<string, unknown>): Record<string, unknown>;
@@ -1468,6 +1509,7 @@ if (typeof window !== "undefined") {
     question: mockQuestion,
     plan: mockPlan,
     sessionNotification: mockSessionNotification,
+    workspaceReview: mockPatchWorkspaceReview,
     taskBackgrounded: mockTaskBackgrounded,
     taskCompleted: mockTaskCompleted,
     goalUpdate,

@@ -96,9 +96,13 @@ test.describe("visual audit", () => {
     await page.getByLabel("Close tools panel").click();
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
-    // Turn end writes the TUI marker and the live row goes away.
+    // Turn end writes the TUI marker. The row carries only the tokens/sec rate now (line changes
+    // moved to the header), and this mock turn decodes too briefly to measure one, so it leaves the
+    // screen; the header keeps showing the workspace's changes.
     await expect(page.locator(".session-event").last()).toContainText("Worked for");
     await expect(page.getByTestId("turn-status")).toHaveCount(0);
+    await expect(page.getByTestId("header-diffstat")).toBeVisible();
+    await expect(page.getByTestId("git-chip")).toBeVisible();
     await capture(page, "chat-transcript");
     await page.getByText("Read 2 files").click();
     await capture(page, "chat-activity-expanded");
@@ -282,6 +286,15 @@ test.describe("visual audit", () => {
     await page.getByTestId("plan-chip").click();
     await expect(page.getByTestId("plan-menu")).toBeVisible();
     await expect(page.getByTestId("plan-file-current")).toHaveCount(1);
+    // The chip sits in the header's left cluster, so the list hangs off its left edge and grows
+    // right: it opens over the transcript, clear of the conversation list beside it.
+    const [chipBox, menuBox, sidebarBox] = await Promise.all([
+      page.getByTestId("plan-chip").boundingBox(),
+      page.getByTestId("plan-menu").boundingBox(),
+      page.locator(".sidebar").boundingBox(),
+    ]);
+    expect(Math.abs(menuBox!.x - chipBox!.x)).toBeLessThanOrEqual(2);
+    expect(menuBox!.x).toBeGreaterThanOrEqual(sidebarBox!.x + sidebarBox!.width);
     await capture(page, "chat-plan-list");
     await page.getByTestId(`plan-file-open-${PLAN_FILE}`).click();
     await expect(page.getByTestId("plan-lines")).toBeVisible();
@@ -546,7 +559,7 @@ test.describe("visual audit", () => {
     await background.locator(".session-open").click();
     await expect(background).toHaveClass(/active/);
     await expect(page.getByTestId("turn-status")).toContainText("Responding…");
-    await expect(page.getByTestId("turn-status").locator(".turn-status-timer")).toBeVisible();
+    await expect(page.getByTestId("turn-status").locator(".turn-status-phase")).toBeVisible();
     await expectNoHorizontalOverflow(page);
 
     // A carried row paints its drop line inside the sidebar, and the source dims.

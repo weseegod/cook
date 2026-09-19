@@ -1,56 +1,25 @@
 import { ArrowUpFromLine, ChevronDown, GitBranch, GitCommitHorizontal, LoaderCircle } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
-import { loadGitStatus, type GitStatusSummary } from "../../acp/workspace";
-import { GIT_HEAD_CHANGED_EVENT } from "../../state/artifacts";
 import { useSessionStore } from "../../state/session";
-
-/** How often the dirty-tree probe re-runs while the header is mounted. */
-const POLL_INTERVAL_MS = 4_000;
+import { useGitStatus, useGitStatusPoll } from "./git-status";
 
 /**
- * Header git chip: appears once the workspace has uncommitted changes and opens a
- * `/commit` / `/commit-and-push` menu on hover or click. Detection is a counts-only
- * `git status` probe — the per-file diff stays in the Review panel's on-demand snapshot.
+ * Header git chip: the branch name, the changed-file count when the tree is dirty, and a `/commit`
+ * / `/commit-and-push` menu on hover or click. Detection is the shared counts-only `git status`
+ * probe behind {@link useGitStatusPoll} — the per-file diff stays in the Review panel's on-demand
+ * snapshot. A clean tree keeps the menu but disables the commands that would have nothing to do,
+ * and a workspace outside a repository says so rather than vanishing from the header.
  */
 export function GitChip() {
-  const [status, setStatus] = useState<GitStatusSummary | null>(null);
+  useGitStatusPoll();
+  const cwd = useSessionStore((state) => state.cwd);
+  const status = useGitStatus(cwd);
   const [menuOpen, setMenuOpen] = useState(false);
   const [hovered, setHovered] = useState(false);
   const [sending, setSending] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const cwd = useSessionStore((state) => state.cwd);
-  const turnRunning = useSessionStore((state) => state.turnRunning);
-
-  const refresh = useCallback(async () => {
-    try {
-      setStatus(await loadGitStatus());
-    } catch {
-      // No workspace sidecar (a plain browser without the mock transport): keep the chip hidden.
-      setStatus(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh, cwd]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => void refresh(), POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
-
-  // A commit moves HEAD; a finished turn is when the edits themselves land.
-  useEffect(() => {
-    const onGitHead = () => void refresh();
-    window.addEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
-    return () => window.removeEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
-  }, [refresh]);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh, turnRunning]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -91,20 +60,28 @@ export function GitChip() {
     }
   }
 
-  const dirty = Boolean(status?.isGitRepo) && (status!.changedFiles > 0 || status!.operationInProgress);
-  const open = menuOpen || hovered;
-  if (!dirty) return null;
+  // No workspace, or the probe has not answered yet: nothing to name.
+  if (!cwd || !status) return null;
 
-  const changed = status!.changedFiles === 1 ? "1 changed file" : `${status!.changedFiles} changed files`;
-  const counts = status!.additions > 0 || status!.deletions > 0 ? ` · +${status!.additions} −${status!.deletions}` : "";
-  const branch = status!.branch ? ` on ${status!.branch}` : "";
-  const label = status!.operationInProgress
-    ? `Git operation in progress${branch}`
-    : `${changed}${branch}${counts}`;
+  const inRepo = status.isGitRepo;
+  const dirty = inRepo && (status.changedFiles > 0 || status.operationInProgress);
+  // Hover opens the menu inside a repository; outside one it opens on click, so the reason it is
+  // disabled is available without the pointer passing over the chip on the way elsewhere.
+  const open = inRepo ? menuOpen || hovered : menuOpen;
+
+  const changed = status.changedFiles === 1 ? "1 changed file" : `${status.changedFiles} changed files`;
+  const counts = status.additions > 0 || status.deletions > 0 ? ` · +${status.additions} −${status.deletions}` : "";
+  const branch = status.branch ? ` on ${status.branch}` : "";
+  const label = !inRepo
+    ? "This folder is not a git repository"
+    : status.operationInProgress
+      ? `Git operation in progress${branch}`
+      : dirty ? `${changed}${branch}${counts}` : `Clean tree${branch}`;
+  const hint = !inRepo ? "This folder is not a git repository" : dirty ? null : "Nothing to commit";
 
   return (
     <div
-      className="git-chip"
+      className={`git-chip${inRepo ? "" : " git-chip-no-repo"}`}
       ref={root}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -116,11 +93,13 @@ export function GitChip() {
         onClick={() => setMenuOpen((value) => !value)}
         aria-expanded={open}
         aria-haspopup="menu"
-        aria-label="Workspace changes"
+        aria-label={!inRepo ? "No git repository" : dirty ? "Workspace changes" : "Working tree clean"}
         title={label}
       >
         {sending ? <LoaderCircle className="spin" size={14} /> : <GitBranch size={14} />}
-        <span className="git-chip-count" data-testid="git-chip-count">{status!.changedFiles}</span>
+        {!inRepo && <span className="git-chip-branch">No git</span>}
+        {inRepo && status.branch && <span className="git-chip-branch">{status.branch}</span>}
+        {dirty && <span className="git-chip-count" data-testid="git-chip-count">{status.changedFiles}</span>}
         <ChevronDown size={11} aria-hidden="true" />
       </button>
       {open && (
@@ -129,26 +108,26 @@ export function GitChip() {
             type="button"
             role="menuitem"
             data-testid="git-commit"
-            disabled={sending}
+            disabled={sending || !dirty}
             onClick={() => void run("/commit")}
           >
             <GitCommitHorizontal size={13} />
             <span>
               <strong>Commit</strong>
-              <small>Write a message and commit the changes</small>
+              <small>{hint ?? "Write a message and commit the changes"}</small>
             </span>
           </button>
           <button
             type="button"
             role="menuitem"
             data-testid="git-commit-and-push"
-            disabled={sending}
+            disabled={sending || !dirty}
             onClick={() => void run("/commit-and-push")}
           >
             <ArrowUpFromLine size={13} />
             <span>
               <strong>Commit and push</strong>
-              <small>Commit, merge the upstream branch, then push</small>
+              <small>{hint ?? "Commit, merge the upstream branch, then push"}</small>
             </span>
           </button>
         </div>

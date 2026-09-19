@@ -5,11 +5,14 @@ import { useSessionStore } from "../../state/session";
 import { ContextChip } from "./context-chip";
 import { GitChip } from "./git-chip";
 import { GoalStatus } from "./goal-status";
+import { HeaderDiffstat } from "./header-diffstat";
 import { PlanChip } from "./plan-chip";
 
 /**
- * Agent status bar (catalog §3.3): cwd left, chips right. One `margin-left: auto` on the right
- * cluster — no ProcessStatus, no competing auto margins.
+ * Agent status bar (catalog §3.3): the workspace and its plans left, chips right. One
+ * `margin-left: auto` on the right cluster — no ProcessStatus, no competing auto margins. The
+ * right cluster reads left to right as workspace git state — working-tree line changes, then the
+ * branch chip that carries the commit commands.
  */
 export function AgentHeader({
   sidebarOpen,
@@ -51,9 +54,10 @@ export function AgentHeader({
         >
           <span>{cwdLabel}</span>
         </button>
+        <PlanChip />
       </div>
       <div className="agent-header-right">
-        <PlanChip />
+        <HeaderDiffstat />
         <GitChip />
         {hasPlanEntries && (
           <button

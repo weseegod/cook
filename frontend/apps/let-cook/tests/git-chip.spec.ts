@@ -45,6 +45,27 @@ const CLEAN_SEED = {
     review: { ...WORKSPACE.review, files: [], additions: 0, deletions: 0 },
   },
 };
+/** Two projects in one conversation list: the one the window connected to, and one with no git. */
+const TWO_PROJECTS_SEED = {
+  ...CONNECTED_SEED,
+  sessions: [
+    { id: "s-here", title: "Here", cwd: "/tmp/cook-demo", updatedAt: "2026-09-18T10:00:00Z" },
+    { id: "s-elsewhere", title: "Elsewhere", cwd: "/Users/demo/work/api-server", updatedAt: "2026-09-17T10:00:00Z" },
+  ],
+  workspace: {
+    ...WORKSPACE,
+    byCwd: {
+      "/Users/demo/work/api-server": {
+        base: "HEAD",
+        isGitRepo: false,
+        branch: null,
+        files: [],
+        additions: 0,
+        deletions: 0,
+      },
+    },
+  },
+};
 
 type Recorded = { method: string; params: Record<string, unknown>; at: number };
 
@@ -110,11 +131,20 @@ test.describe("header git chip", () => {
     await expect.poll(async () => (await prompts(page)).at(-1)).toBe("/commit-and-push");
   });
 
-  test("stays hidden while the tree is clean", async ({ page }) => {
+  test("names the branch and disables the commands while the tree is clean", async ({ page }) => {
     await openWorkspace(page, CLEAN_SEED);
 
-    await expect(page.getByTestId("composer-input")).toBeVisible();
-    await expect(page.getByTestId("git-chip")).toHaveCount(0);
+    const chip = page.getByTestId("git-chip");
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText("main");
+    await expect(page.getByTestId("git-chip-count")).toHaveCount(0);
+    await expect(chip).toHaveAttribute("title", "Clean tree on main");
+
+    await chip.click();
+    await expect(page.getByTestId("git-commit")).toBeDisabled();
+    await expect(page.getByTestId("git-commit-and-push")).toBeDisabled();
+    await capture(page, "git-chip-clean");
+
     // The rest of the header is untouched.
     await expect(page.getByTestId("agent-header")).toBeVisible();
     await expect(page.getByTestId("context-chip")).toBeVisible();
@@ -133,5 +163,22 @@ test.describe("header git chip", () => {
     expect(menu!.x).toBeGreaterThanOrEqual(0);
     expect(menu!.x + menu!.width).toBeLessThanOrEqual(390);
     await capture(page, "git-chip-narrow");
+  });
+
+  test("re-reads the workspace when a conversation from another project is opened", async ({ page }) => {
+    await openWorkspace(page, TWO_PROJECTS_SEED);
+
+    const chip = page.getByTestId("git-chip");
+    await expect(chip).toContainText("main");
+
+    // The conversation lives in a folder with no repository, so the chip has to describe that tree
+    // rather than the one the window connected to.
+    await page.getByTestId("session-row-s-elsewhere").locator(".session-open").click();
+    await expect(chip).toContainText("No git");
+    await expect(page.getByTestId("header-diffstat")).toHaveCount(0);
+
+    // And back: the branch of the first project returns with the conversation.
+    await page.getByTestId("session-row-s-here").locator(".session-open").click();
+    await expect(chip).toContainText("main");
   });
 });

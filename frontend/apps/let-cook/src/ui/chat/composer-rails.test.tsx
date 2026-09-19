@@ -1,27 +1,19 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../acp/workspace", () => ({
-  loadGitStatus: vi.fn(),
-}));
-
-import { loadGitStatus, type GitStatusSummary } from "../../acp/workspace";
-import { emitGitHeadChanged } from "../../state/artifacts";
-import { useSessionStore, type MessageBlock } from "../../state/session";
+import type { GitStatusSummary } from "../../acp/workspace";
+import { useSessionStore, type MessageBlock, type ToolBlock } from "../../state/session";
 import { writeLocal } from "../storage";
+import { COMPOSER_SHOW_DIFFSTAT_KEY, COMPOSER_SHOW_TPS_KEY } from "../preferences";
 import {
-  COMPOSER_SHOW_DIFFSTAT_KEY,
-  COMPOSER_SHOW_TPS_KEY,
-} from "../preferences";
-import {
-  ComposerDiffstatRail,
   ComposerMetricsHost,
   ComposerTpsRail,
   resetComposerMetricsRuntime,
   useComposerMetricsStore,
 } from "./composer-rails";
+import { useGitStatusStore } from "./git-status";
 
-const dirty: GitStatusSummary = {
+const repo: GitStatusSummary = {
   isGitRepo: true,
   branch: "main",
   changedFiles: 2,
@@ -54,24 +46,44 @@ function thought(text: string, turnId = "turn-1"): MessageBlock {
   };
 }
 
+/** One write tool call carrying the ACP `diff` content the shell sends for an edit: +3 −1. */
+function editedFile(turnId: string): ToolBlock {
+  return {
+    type: "tool",
+    id: `tool-${turnId}`,
+    turnId,
+    title: "Edit src/main.tsx",
+    status: "completed",
+    content: [{ type: "diff", path: "src/main.tsx", oldText: "a\nb\nc", newText: "a\nX\nY\nZ\nc" }],
+    locations: [],
+    startedAt: Date.now(),
+    elapsedMs: 5,
+    paths: ["/workspace/src/main.tsx"],
+  };
+}
+
 function renderRails() {
   return render(
     <>
       <ComposerMetricsHost />
       <ComposerTpsRail />
-      <ComposerDiffstatRail />
     </>,
   );
+}
+
+/** Publish a probe answer for the workspace these tests keep open. */
+function publishGitStatus(status: GitStatusSummary | null, cwd = "/workspace") {
+  useGitStatusStore.setState({ snapshot: status ? { cwd, status } : null });
 }
 
 beforeEach(() => {
   localStorage.clear();
   resetComposerMetricsRuntime();
-  vi.mocked(loadGitStatus).mockReset();
-  vi.mocked(loadGitStatus).mockResolvedValue(dirty);
+  publishGitStatus(repo);
   useComposerMetricsStore.getState().clear();
   useSessionStore.setState({
     sessionId: "sess-1",
+    cwd: "/workspace",
     blocks: [],
     turnRunning: false,
     activity: null,
@@ -90,17 +102,17 @@ afterEach(async () => {
   resetComposerMetricsRuntime();
   vi.useRealTimers();
   localStorage.clear();
+  publishGitStatus(null);
   useComposerMetricsStore.getState().clear();
 });
 
 describe("composer rails", () => {
-  it("shows dirty-tree diffstat before a turn once snapshotted, but not TPS", async () => {
+  it("shows no t/s before a turn", () => {
     renderRails();
     expect(screen.queryByTestId("turn-status-tps")).toBeNull();
-    expect(await screen.findByTestId("turn-status-diffstat")).toHaveTextContent("12");
   });
 
-  it("hides when prefs are false", async () => {
+  it("hides when the pref is off", async () => {
     writeLocal(COMPOSER_SHOW_TPS_KEY, "false");
     writeLocal(COMPOSER_SHOW_DIFFSTAT_KEY, "false");
     renderRails();
@@ -120,9 +132,12 @@ describe("composer rails", () => {
       });
     });
 
-    await waitFor(() => expect(loadGitStatus).not.toHaveBeenCalled());
+    await act(async () => {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    });
     expect(screen.queryByTestId("turn-status-tps")).toBeNull();
-    expect(screen.queryByTestId("turn-status-diffstat")).toBeNull();
+    // Nothing measured, so the header's fallback line changes stay empty too.
+    expect(useComposerMetricsStore.getState().diffSource).toBeNull();
   });
 
   it("shows t/s after finishTurn with assistant text and a decode window", async () => {
@@ -157,106 +172,89 @@ describe("composer rails", () => {
     );
   });
 
-  it("fetches git on mount and again at turn end, then renders +N −M", async () => {
+  it("shows a live t/s one sample into the turn, counting thinking as well as prose", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     renderRails();
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalledTimes(1));
 
     act(() => {
       useSessionStore.setState({
         turnRunning: true,
-        transcriptCursor: { turnId: "turn-1", assistantId: "a1", thoughtId: null, optimisticUserId: null },
+        transcriptCursor: { turnId: "turn-1", assistantId: null, thoughtId: "t1", optimisticUserId: null },
+        activity: { kind: "thinking" },
+        blocks: [thought("t".repeat(200))],
       });
     });
+
+    // The reading lands on the sample interval, not on the spinner frame.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(screen.queryByTestId("turn-status-tps")).toBeNull();
+
     act(() => {
-      useSessionStore.setState({ turnRunning: false, blocks: [assistant("abcd")] });
+      useSessionStore.setState({ blocks: [thought("t".repeat(200)), assistant("a".repeat(200))] });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
     });
 
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalledTimes(2));
-    const rail = await screen.findByTestId("turn-status-diffstat");
-    expect(rail).toHaveTextContent("12");
-    expect(rail).toHaveTextContent("4");
-    expect(rail).toHaveAttribute("aria-label", "12 lines added, 4 lines removed");
+    // 50 more tokens decoded across the 1.5s sample window: 200 thinking + 200 prose chars at the
+    // 4-chars-per-token estimate.
+    expect(screen.getByTestId("turn-status-tps")).toHaveTextContent("33.3");
   });
 
-  it("hides +0 −0", async () => {
-    vi.mocked(loadGitStatus).mockResolvedValue({ ...dirty, additions: 0, deletions: 0, changedFiles: 0 });
+  it("leaves the edit fallback alone in a repository, where the header probe owns the numbers", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     renderRails();
 
     act(() => {
       useSessionStore.setState({
         turnRunning: true,
-        transcriptCursor: { turnId: "turn-1", assistantId: "a1", thoughtId: null, optimisticUserId: null },
+        transcriptCursor: { turnId: "turn-1", assistantId: null, thoughtId: null, optimisticUserId: null },
+        blocks: [editedFile("turn-1")],
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    act(() => {
+      useSessionStore.setState({ turnRunning: false });
+    });
+
+    expect(useComposerMetricsStore.getState().diffSource).toBeNull();
+  });
+
+  it("counts the agent's own edits when the workspace has no git", async () => {
+    publishGitStatus({ ...repo, isGitRepo: false, branch: null });
+    renderRails();
+
+    act(() => {
+      useSessionStore.setState({
+        turnRunning: true,
+        transcriptCursor: { turnId: "turn-1", assistantId: null, thoughtId: null, optimisticUserId: null },
+        blocks: [editedFile("turn-1")],
       });
     });
     act(() => {
       useSessionStore.setState({ turnRunning: false });
     });
 
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalled());
-    expect(screen.queryByTestId("turn-status-diffstat")).toBeNull();
+    await waitFor(() => expect(useComposerMetricsStore.getState().diffSource).toBe("edits"));
+    expect(useComposerMetricsStore.getState()).toMatchObject({ additions: 3, deletions: 1 });
   });
 
-  it("freezes displayed numbers while the turn is running", async () => {
+  it("clears the rate on session reset", async () => {
     renderRails();
-    await screen.findByTestId("turn-status-diffstat");
-    const callsAfterMount = vi.mocked(loadGitStatus).mock.calls.length;
-
     act(() => {
-      useSessionStore.setState({
-        turnRunning: true,
-        transcriptCursor: { turnId: "turn-1", assistantId: "a1", thoughtId: null, optimisticUserId: null },
-      });
+      useComposerMetricsStore.getState().setTps(42);
     });
-    act(() => {
-      useSessionStore.setState({ turnRunning: false });
-    });
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalledTimes(callsAfterMount + 1));
-
-    vi.mocked(loadGitStatus).mockResolvedValue({ ...dirty, additions: 99, deletions: 88 });
-    act(() => {
-      useSessionStore.setState({
-        turnRunning: true,
-        transcriptCursor: { turnId: "turn-2", assistantId: "a2", thoughtId: null, optimisticUserId: null },
-      });
-    });
-
-    expect(screen.getByTestId("turn-status-diffstat")).toHaveTextContent("12");
-    expect(screen.getByTestId("turn-status-diffstat")).toHaveTextContent("4");
-    expect(loadGitStatus).toHaveBeenCalledTimes(callsAfterMount + 1);
-  });
-
-  it("clears both rails on session reset", async () => {
-    renderRails();
-
-    act(() => {
-      useSessionStore.setState({
-        turnRunning: true,
-        transcriptCursor: { turnId: "turn-1", assistantId: "a1", thoughtId: null, optimisticUserId: null },
-      });
-    });
-    act(() => {
-      useSessionStore.setState({ turnRunning: false, blocks: [assistant("abcdefghij")] });
-    });
-    await screen.findByTestId("turn-status-diffstat");
+    expect(screen.getByTestId("turn-status-tps")).toHaveTextContent("42.0");
 
     act(() => {
       useSessionStore.getState().resetConversation("sess-2");
     });
 
-    await waitFor(() => {
-      expect(screen.queryByTestId("turn-status-tps")).toBeNull();
-      expect(screen.queryByTestId("turn-status-diffstat")).toBeNull();
-    });
-  });
-
-  it("refreshes diffstat on HEAD change", async () => {
-    renderRails();
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalledTimes(1));
-    act(() => {
-      emitGitHeadChanged();
-    });
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalledTimes(2));
-    expect(await screen.findByTestId("turn-status-diffstat")).toHaveTextContent("12");
+    await waitFor(() => expect(screen.queryByTestId("turn-status-tps")).toBeNull());
   });
 
   it("shows t/s when the model only streams thinking then a short reply", async () => {

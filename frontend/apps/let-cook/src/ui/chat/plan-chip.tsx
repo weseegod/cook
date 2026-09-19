@@ -48,18 +48,19 @@ export function PlanChip() {
     const node = menu.current;
     const parent = root.current;
     if (!node || !parent) return;
-    node.style.left = "";
-    node.style.right = "0px";
+    // The chip sits in the header's left cluster, so the list hangs off its left edge and grows
+    // right — over the transcript, never over the conversation list beside it.
+    node.style.right = "auto";
+    node.style.left = "0px";
     node.style.width = "";
     const rect = node.getBoundingClientRect();
     const parentRect = parent.getBoundingClientRect();
     const gutter = 6;
     const width = Math.min(rect.width, window.innerWidth - gutter * 2);
     node.style.width = `${width}px`;
-    if (rect.left < gutter) {
-      node.style.right = "auto";
-      node.style.left = `${gutter - parentRect.left}px`;
-    }
+    // Only a window too narrow for a left-anchored list shifts it, and never past the left gutter.
+    const shift = Math.min(0, window.innerWidth - gutter - (parentRect.left + width));
+    node.style.left = `${Math.max(gutter - parentRect.left, shift)}px`;
   }, [listOpen, files]);
 
   useEffect(() => {

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../acp/client", () => ({
@@ -14,6 +14,7 @@ import { loadGitStatus, type GitStatusSummary } from "../../acp/workspace";
 import { emitGitHeadChanged } from "../../state/artifacts";
 import { useSessionStore } from "../../state/session";
 import { GitChip } from "./git-chip";
+import { useGitStatusStore } from "./git-status";
 
 const dirty: GitStatusSummary = {
   isGitRepo: true,
@@ -26,7 +27,13 @@ const dirty: GitStatusSummary = {
 
 const clean: GitStatusSummary = { ...dirty, changedFiles: 0, additions: 0, deletions: 0 };
 
+/** Publish a probe answer for the workspace these tests keep open. */
+function publishGitStatus(status: GitStatusSummary | null, cwd = "/workspace") {
+  useGitStatusStore.setState({ snapshot: status ? { cwd, status } : null });
+}
+
 beforeEach(() => {
+  publishGitStatus(null);
   vi.mocked(loadGitStatus).mockResolvedValue(dirty);
   vi.mocked(acpClient.prompt).mockClear();
   vi.mocked(acpClient.queuePrompt).mockClear();
@@ -35,15 +42,47 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  publishGitStatus(null);
   useSessionStore.setState({ cwd: null, turnRunning: false, notice: null, error: null });
 });
 
 describe("GitChip", () => {
-  it("stays hidden while the tree is clean or not a git repo", async () => {
+  it("stays on the header for a clean tree, naming the branch and disabling both commands", async () => {
     vi.mocked(loadGitStatus).mockResolvedValue(clean);
+    render(<GitChip />);
+
+    const trigger = await screen.findByTestId("git-chip");
+    expect(trigger).toHaveTextContent("main");
+    expect(trigger).toHaveAttribute("title", "Clean tree on main");
+    expect(screen.queryByTestId("git-chip-count")).toBeNull();
+
+    fireEvent.click(trigger);
+    expect(screen.getByTestId("git-commit")).toBeDisabled();
+    expect(screen.getByTestId("git-commit-and-push")).toBeDisabled();
+  });
+
+  it("says so, with both commands disabled, outside a git repository", async () => {
+    vi.mocked(loadGitStatus).mockResolvedValue({ ...clean, isGitRepo: false, branch: null });
+    render(<GitChip />);
+
+    const trigger = await screen.findByTestId("git-chip");
+    expect(trigger).toHaveTextContent("No git");
+    expect(trigger).toHaveAttribute("aria-label", "No git repository");
+    expect(trigger).toHaveAttribute("title", "This folder is not a git repository");
+
+    fireEvent.click(trigger);
+    expect(screen.getByTestId("git-commit")).toBeDisabled();
+    expect(screen.getByTestId("git-commit")).toHaveTextContent("This folder is not a git repository");
+    expect(screen.getByTestId("git-commit-and-push")).toBeDisabled();
+  });
+
+  it("waits for a workspace before showing anything", async () => {
+    useSessionStore.setState({ cwd: null });
     const { container } = render(<GitChip />);
 
-    await waitFor(() => expect(loadGitStatus).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    });
     expect(container.querySelector(".git-chip")).toBeNull();
   });
 
@@ -121,5 +160,28 @@ describe("GitChip", () => {
     const calls = vi.mocked(loadGitStatus).mock.calls.length;
     emitGitHeadChanged();
     await waitFor(() => expect(loadGitStatus).toHaveBeenCalledTimes(calls + 1));
+  });
+
+  it("answers for the workspace on screen, not the one the window just left", async () => {
+    const elsewhere: GitStatusSummary = { ...dirty, branch: "feature/elsewhere" };
+    const waiting: Array<(status: GitStatusSummary) => void> = [];
+    vi.mocked(loadGitStatus).mockImplementation(
+      () => new Promise<GitStatusSummary>((resolve) => waiting.push(resolve)),
+    );
+    render(<GitChip />);
+
+    await waitFor(() => expect(waiting).toHaveLength(1));
+    await act(async () => waiting.shift()!(dirty));
+    expect(await screen.findByTestId("git-chip")).toHaveTextContent("main");
+
+    // The conversation list opens a conversation in another project.
+    act(() => useSessionStore.setState({ cwd: "/other" }));
+
+    // The branch probed for the folder the window left must not stand in for the new one.
+    await waitFor(() => expect(screen.queryByTestId("git-chip")).toBeNull());
+    await waitFor(() => expect(waiting).toHaveLength(1));
+    await act(async () => waiting.shift()!(elsewhere));
+
+    expect(await screen.findByTestId("git-chip")).toHaveTextContent("feature/elsewhere");
   });
 });

@@ -1467,7 +1467,9 @@ test.describe("goal and plan presentation", () => {
     });
     await composer(page).fill("finish the goal");
     await page.getByTestId("send-button").click();
-    await expect(page.getByTestId("turn-status")).toBeVisible();
+    // Wait for the streaming phase itself: an update sent while no turn is up leaves the row
+    // hidden, which would be read as "no label" rather than "label replaced".
+    await expect(page.getByTestId("turn-status")).toContainText("Responding…");
 
     await page.evaluate(() => window.__cookMock!.sessionNotification(window.__cookMock!.goalUpdate({
       verifying_completion: true,
@@ -1903,11 +1905,13 @@ test.describe("conversation list", () => {
     await waitForCalls(page, "session/prompt");
 
     const row = page.getByTestId("session-row-s-alpha-new");
-    const chatTimer = page.getByTestId("turn-status").locator(".turn-status-timer");
+    const chatStatus = page.getByTestId("turn-status");
     const rowTimer = row.locator(".session-turn-timer");
-    await expect(chatTimer).toBeVisible();
-    // The list and the chat's own row time the same turn from the same start.
-    expect(Math.abs(await seconds(chatTimer) - await seconds(rowTimer))).toBeLessThanOrEqual(0.3);
+    // The conversation row owns the turn clock; the chat's own row shows only the phase timer.
+    await expect(rowTimer).toBeVisible();
+    await expect(chatStatus.locator(".turn-status-phase")).toBeVisible();
+    await expect(chatStatus.locator(".turn-status-timer")).toHaveCount(0);
+    const started = await seconds(rowTimer);
 
     // In the background the list keeps counting on its own.
     await page.getByTestId("session-row-s-beta").locator(".session-open").click();
@@ -1919,10 +1923,11 @@ test.describe("conversation list", () => {
     // a turn that is still running.
     await row.locator(".session-open").click();
     await waitForCalls(page, "session/load", 3);
-    await expect(chatTimer).toBeVisible();
+    await expect(chatStatus.locator(".turn-status-phase")).toBeVisible();
     await expect(page.getByTestId("turn-status")).toContainText("Responding…");
     await expect(row.getByTestId("session-turn-status")).toContainText("Responding…");
-    expect(Math.abs(await seconds(chatTimer) - await seconds(rowTimer))).toBeLessThanOrEqual(0.3);
+    // One clock, never restarted: the row resumed past the time it showed before the switch away.
+    expect(await seconds(rowTimer)).toBeGreaterThan(started + 0.5);
     await expect(page.locator(".session-event")).toHaveCount(0);
     expect(errors).toEqual([]);
   });

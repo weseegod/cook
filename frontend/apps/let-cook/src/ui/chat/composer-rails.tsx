@@ -1,8 +1,6 @@
-import { Gauge, Minus, Plus } from "lucide-react";
+import { Gauge } from "lucide-react";
 import { memo, useEffect } from "react";
 import { create } from "zustand";
-import { loadGitStatus } from "../../acp/workspace";
-import { GIT_HEAD_CHANGED_EVENT } from "../../state/artifacts";
 import { useSessionStore } from "../../state/session";
 import {
   COMPOSER_SHOW_DIFFSTAT_KEY,
@@ -10,36 +8,70 @@ import {
   useBooleanPref,
 } from "../preferences";
 import {
-  assistantTextForTurn,
   computeTps,
+  decodeTextForTurn,
   DecodeWindowTracker,
   estimateTokens,
   formatTps,
   resolveMetricsTurnId,
 } from "./composer-metrics";
+import { editLineCounts } from "./edit-lines";
+import { gitStatusFor } from "./git-status";
+
+/** Where the `+N −M` numbers came from; null until the first snapshot lands. */
+export type DiffSource = "git" | "edits";
 
 interface ComposerMetricsSnapshot {
   tps: number | null;
   additions: number;
   deletions: number;
-  /** True once we have taken at least one git snapshot this session. */
-  hasDiffSnapshot: boolean;
+  diffSource: DiffSource | null;
   setTps: (tps: number | null) => void;
-  setDiff: (additions: number, deletions: number) => void;
+  setDiff: (additions: number, deletions: number, source: DiffSource) => void;
   clear: () => void;
 }
 
+/**
+ * Turn metrics read by the header's line-change rail and the status row's tokens/sec: the live rate
+ * plus, where git cannot describe the workspace, the `+N −M` of the agent's own edits.
+ */
 export const useComposerMetricsStore = create<ComposerMetricsSnapshot>((set) => ({
   tps: null,
   additions: 0,
   deletions: 0,
-  hasDiffSnapshot: false,
+  diffSource: null,
   setTps: (tps) => set({ tps }),
-  setDiff: (additions, deletions) => set({ additions, deletions, hasDiffSnapshot: true }),
-  clear: () => set({ tps: null, additions: 0, deletions: 0, hasDiffSnapshot: false }),
+  setDiff: (additions, deletions, diffSource) => set({ additions, deletions, diffSource }),
+  clear: () => set({ tps: null, additions: 0, deletions: 0, diffSource: null }),
 }));
 
+/** How often a running turn re-measures tokens/sec and the agent's own edits. */
+export const SAMPLE_INTERVAL_MS = 1_500;
+
 const decodeTracker = new DecodeWindowTracker();
+
+/**
+ * Rolling tokens/sec: each sample reports what the model decoded since the previous sample, so the
+ * rail tracks the speed of the phase in flight instead of a whole-turn average. A sample taken while
+ * the model is busy with tools measures no decode time and returns null, which holds the last
+ * reading rather than blanking the rail mid-turn.
+ */
+const tpsSampler = {
+  previous: null as { tokens: number; decodeMs: number } | null,
+  reset(): void {
+    this.previous = null;
+  },
+  sample(
+    state: ReturnType<typeof useSessionStore.getState>,
+    now = Date.now(),
+  ): number | null {
+    const tokens = estimateTokens(decodeTextForTurn(state.blocks, state.transcriptCursor.turnId));
+    const decodeMs = decodeTracker.liveMs(now);
+    const base = this.previous ?? { tokens: 0, decodeMs: 0 };
+    this.previous = { tokens, decodeMs };
+    return computeTps(tokens - base.tokens, decodeMs - base.decodeMs);
+  },
+};
 
 type TrackFlags = { trackTps: boolean; trackDiffstat: boolean };
 
@@ -53,10 +85,6 @@ const watcher = {
   unsubTurn: null as (() => void) | null,
   unsubReset: null as (() => void) | null,
 };
-
-function onGitHead(): void {
-  if (watcher.flags.trackDiffstat) void snapshotGit();
-}
 
 function ensureWatchers(): void {
   if (!watcher.unsubTurn) {
@@ -98,6 +126,9 @@ function beginTurn(turnId: string | null): void {
   watcher.turnId = turnId;
   watcher.wasRunning = true;
   const state = useSessionStore.getState();
+  // The previous turn's rate must not linger into this one: the first sample lands 1.5s in.
+  useComposerMetricsStore.getState().setTps(null);
+  tpsSampler.reset();
   if (watcher.flags.trackTps) {
     decodeTracker.sync(state.activity?.kind ?? null, true);
   }
@@ -110,20 +141,20 @@ function finishOpenTurn(state: ReturnType<typeof useSessionStore.getState>): voi
 
   if (watcher.flags.trackTps) {
     const decodeMs = decodeTracker.finish();
-    const text = assistantTextForTurn(state.blocks, turnId);
+    const text = decodeTextForTurn(state.blocks, turnId);
     useComposerMetricsStore.getState().setTps(computeTps(estimateTokens(text), decodeMs));
   } else {
     decodeTracker.reset();
   }
+  tpsSampler.reset();
 
-  if (watcher.flags.trackDiffstat) {
-    void snapshotGit();
-  }
+  if (watcher.flags.trackDiffstat && gitCannotAnswer()) setEditDiff(state, turnId);
 }
 
 function clearMetricsRuntime(): void {
   useComposerMetricsStore.getState().clear();
   decodeTracker.reset();
+  tpsSampler.reset();
   watcher.turnId = null;
   watcher.wasRunning = false;
 }
@@ -145,26 +176,15 @@ function syncWithLiveTurn(): void {
 }
 
 function setTrackFlags(flags: TrackFlags): void {
-  const wasDiff = watcher.flags.trackDiffstat;
   watcher.flags = flags;
   if (flags.trackTps || flags.trackDiffstat) {
     ensureWatchers();
     syncWithLiveTurn();
   }
-
-  if (flags.trackDiffstat && !wasDiff) {
-    window.addEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
-    void snapshotGit();
-  } else if (!flags.trackDiffstat && wasDiff) {
-    window.removeEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
-  }
 }
 
-/** Test helper: drop subscriptions and prefs-driven listeners. */
+/** Test helper: drop subscriptions. */
 export function resetComposerMetricsRuntime(): void {
-  if (watcher.flags.trackDiffstat) {
-    window.removeEventListener(GIT_HEAD_CHANGED_EVENT, onGitHead);
-  }
   watcher.unsubTurn?.();
   watcher.unsubReset?.();
   watcher.unsubTurn = null;
@@ -174,25 +194,45 @@ export function resetComposerMetricsRuntime(): void {
   clearMetricsRuntime();
 }
 
-async function snapshotGit(): Promise<void> {
-  try {
-    const status = await loadGitStatus();
-    if (!status.isGitRepo) {
-      useComposerMetricsStore.getState().setDiff(0, 0);
-      return;
-    }
-    useComposerMetricsStore.getState().setDiff(status.additions, status.deletions);
-  } catch {
-    // Browser without mock/Tauri: keep the rail hidden (no snapshot).
-  }
+/** True when the shared git snapshot says this workspace has no repository to describe. */
+function gitCannotAnswer(): boolean {
+  const { cwd } = useSessionStore.getState();
+  const status = gitStatusFor(cwd);
+  return status !== null && !status.isGitRepo;
 }
 
 /**
- * Owns the decode-window accumulator and turn-end / HEAD-change snapshots.
- * Mount once from the turn status row. Rails subscribe only to frozen store fields.
+ * One sample of the live rate and — where git cannot describe the workspace — of the agent's own
+ * edits; the host runs it every {@link SAMPLE_INTERVAL_MS} while a turn is up. In a repository the
+ * header's own probe already publishes the working-tree totals, so no sampling happens here.
+ */
+function sampleMetrics(): void {
+  const state = useSessionStore.getState();
+  if (watcher.flags.trackTps) {
+    const next = tpsSampler.sample(state);
+    if (next !== null) useComposerMetricsStore.getState().setTps(next);
+  }
+  if (watcher.flags.trackDiffstat && gitCannotAnswer()) setEditDiff(state, null);
+}
+
+function setEditDiff(
+  state: ReturnType<typeof useSessionStore.getState>,
+  turnId: string | null,
+): void {
+  const { additions, deletions } = editLineCounts(state.blocks, turnId ?? state.transcriptCursor.turnId);
+  const store = useComposerMetricsStore.getState();
+  // Sampled on a timer: only move the store when the numbers actually moved.
+  if (store.diffSource === "edits" && store.additions === additions && store.deletions === deletions) return;
+  store.setDiff(additions, deletions, "edits");
+}
+
+/**
+ * Owns the decode-window accumulator, the 1.5s metric sampler, and the turn-end snapshot of the
+ * agent's own edits. Mount once from the turn status row; the rails only read the store.
  */
 export function useComposerMetrics(opts: { trackTps: boolean; trackDiffstat: boolean }): void {
   const { trackTps, trackDiffstat } = opts;
+  const turnRunning = useSessionStore((state) => state.turnRunning);
 
   useEffect(() => {
     watcher.hostCount += 1;
@@ -208,6 +248,13 @@ export function useComposerMetrics(opts: { trackTps: boolean; trackDiffstat: boo
       }, 0);
     };
   }, [trackTps, trackDiffstat]);
+
+  useEffect(() => {
+    if (!turnRunning || (!trackTps && !trackDiffstat)) return;
+    sampleMetrics();
+    const timer = window.setInterval(sampleMetrics, SAMPLE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [trackTps, trackDiffstat, turnRunning]);
 }
 
 export const ComposerTpsRail = memo(function ComposerTpsRail() {
@@ -225,34 +272,6 @@ export const ComposerTpsRail = memo(function ComposerTpsRail() {
     >
       <Gauge size={13} aria-hidden="true" />
       <span className="turn-status-metric-value">{label} t/s</span>
-    </span>
-  );
-});
-
-export const ComposerDiffstatRail = memo(function ComposerDiffstatRail() {
-  const [show] = useBooleanPref(COMPOSER_SHOW_DIFFSTAT_KEY);
-  const additions = useComposerMetricsStore((state) => state.additions);
-  const deletions = useComposerMetricsStore((state) => state.deletions);
-  const hasDiffSnapshot = useComposerMetricsStore((state) => state.hasDiffSnapshot);
-  if (!show || !hasDiffSnapshot) return null;
-  if (additions === 0 && deletions === 0) return null;
-  const aria = `${additions} lines added, ${deletions} lines removed`;
-  const title = `+${additions} −${deletions} in the working tree`;
-  return (
-    <span
-      className="turn-status-metric turn-status-diffstat"
-      data-testid="turn-status-diffstat"
-      aria-label={aria}
-      title={title}
-    >
-      <span className="turn-status-diff-add">
-        <Plus size={11} aria-hidden="true" />
-        <span className="turn-status-metric-value">{additions}</span>
-      </span>
-      <span className="turn-status-diff-del">
-        <Minus size={11} aria-hidden="true" />
-        <span className="turn-status-metric-value">{deletions}</span>
-      </span>
     </span>
   );
 });

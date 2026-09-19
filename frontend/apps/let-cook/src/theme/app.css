@@ -819,10 +819,24 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 /* Inline, not inline-flex: flex-item whitespace trimming would eat the `$ ` / `Run ` trailing space. */
 .row-prefix { display: inline; color: #858585; font-family: var(--font-mono); }
 .verb-group, .tool-row, .thinking-row { max-width: var(--content-max); margin: 0 auto; color: var(--muted); font-size: 12px; }
-.verb-group > summary, .tool-row > summary, .thinking-row > summary { display: flex; align-items: center; gap: 6px; min-height: 24px; padding: 2px 4px; list-style: none; cursor: pointer; }
-.verb-group > summary::-webkit-details-marker, .tool-row > summary::-webkit-details-marker, .thinking-row > summary::-webkit-details-marker { display: none; }
-.verb-group > summary:hover, .tool-row > summary:hover, .thinking-row > summary:hover { color: var(--text); background: #2a2d2e; }
+.verb-group > summary, .tool-row > summary, .thinking-summary { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 24px; padding: 2px 4px; border: 0; background: none; color: inherit; font: inherit; text-align: left; list-style: none; cursor: pointer; }
+.verb-group > summary::-webkit-details-marker, .tool-row > summary::-webkit-details-marker { display: none; }
+.verb-group > summary:hover, .tool-row > summary:hover, .thinking-summary:hover { color: var(--text); background: #2a2d2e; }
 .verb-group strong, .tool-row strong, .thinking-row strong { min-width: 0; overflow: hidden; color: var(--text-soft); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+/* Edit one-liner suffix: ` +N/-M` or ` ({n} edits)` (`edit.rs::header_line`). */
+.row-suffix { flex: 0 0 auto; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row-diffstat { display: inline-flex; align-items: center; }
+.row-diff-add { color: var(--success); }
+.row-diff-sep { color: #858585; }
+.row-diff-del { color: var(--danger); }
+.row-edits { color: #858585; }
+.thinking-row[data-expanded="true"] > .thinking-summary > .row-chevron { transform: rotate(90deg); }
+/* Running thinking keeps the tail of the block inside a 3-line box (`render_truncated`). */
+.thinking-preview { padding: 0 4px 2px 22px; color: var(--muted); }
+.thinking-preview-clip { display: flex; flex-direction: column; justify-content: flex-end; max-height: 4.5em; overflow: hidden; }
+/* Inherits the row's size so `4.5em` on the clip is exactly three lines. */
+.thinking-preview-text { color: #bdbdbd; line-height: 1.5; overflow-wrap: anywhere; white-space: pre-wrap; }
+.thinking-ellipsis { color: #858585; }
 .verb-failed strong, .tool-failed strong { color: #f48771; }
 .verb-group-body, .thinking-body { padding: 2px 0 4px 22px; }
 .tool-detail { margin-left: 22px; border-left: 1px solid var(--border); }
@@ -1125,13 +1139,14 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 }
 .turn-status-spinner { flex: 0 0 auto; width: 12px; color: #75beff; text-align: center; }
 .turn-status-spinner.blocked { color: #cca700; animation: pulse 1.2s ease-in-out infinite; }
-.turn-status-label { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.turn-status-label { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
 .turn-status-prefix { color: #858585; }
 .turn-status-subject.accent { color: #dcdcaa; }
 .turn-status-phase { flex: 0 0 auto; color: #858585; }
 .turn-status-queued { min-width: 0; max-width: min(260px, 30%); flex: 0 1 auto; overflow: hidden; color: #858585; text-overflow: ellipsis; }
-.turn-status-spacer { flex: 1 1 auto; }
-.turn-status-timer, .turn-status-tokens { flex: 0 0 auto; color: #858585; }
+/* The spacer parks the tokens/sec rail at the right end of the row; working-tree line changes live
+   on the header, not here. */
+.turn-status-spacer { flex: 1 1 0; }
 .turn-status-stop { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; }
 .prompt-slot { flex: 0 0 auto; width: min(var(--content-max), calc(100% - 24px)); margin: 0 auto 8px; }
 .prompt-composer.stashed { display: none; }
@@ -1145,15 +1160,29 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
   opacity: 0.9;
   white-space: nowrap;
 }
-.turn-status-diffstat { gap: 8px; }
-.turn-status-diff-add,
-.turn-status-diff-del {
+/* Line changes beside the git chip — the way into the Review panel, so it is a button and gets the
+   chip treatment on hover. */
+.header-diffstat {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 24px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.turn-status-diff-add { color: color-mix(in srgb, var(--success) 45%, var(--muted)); }
-.turn-status-diff-del { color: color-mix(in srgb, var(--danger) 45%, var(--muted)); }
+.header-diffstat:hover { color: var(--text-soft); background: var(--raised-2); }
+.header-diffstat > span { display: inline-flex; align-items: center; gap: 2px; }
+.header-diffstat-add { color: color-mix(in srgb, var(--success) 45%, var(--muted)); }
+.header-diffstat-del { color: color-mix(in srgb, var(--danger) 45%, var(--muted)); }
 .turn-status.idle-metrics { border-top-color: transparent; }
 .inline-interaction { border: 1px solid #4b4b4b; border-left: 2px solid #0078d4; background: #252526; color: #cccccc; padding: 10px 12px; font-size: 12px; }
 .inline-permission { border-left-color: #cca700; }
@@ -1196,7 +1225,9 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 
 :root[data-theme="light"] .inline-interaction { border-color: #c8c8c8; background: #f3f3f3; color: #3b3b3b; }
 :root[data-theme="light"] .turn-status { border-color: #d6d6d6; color: #5a5a5a; }
-:root[data-theme="light"] .verb-group > summary:hover, :root[data-theme="light"] .tool-row > summary:hover, :root[data-theme="light"] .thinking-row > summary:hover { background: #e8e8e8; }
+:root[data-theme="light"] .verb-group > summary:hover, :root[data-theme="light"] .tool-row > summary:hover, :root[data-theme="light"] .thinking-summary:hover { background: #e8e8e8; }
+:root[data-theme="light"] .thinking-preview-text { color: #4b4b4b; }
+:root[data-theme="light"] .row-diff-sep, :root[data-theme="light"] .row-edits, :root[data-theme="light"] .thinking-ellipsis { color: #6b6b6b; }
 :root[data-theme="light"] .verb-group strong, :root[data-theme="light"] .tool-row strong, :root[data-theme="light"] .thinking-row strong, :root[data-theme="light"] .inline-interaction-header strong { color: #2d2d2d; }
 :root[data-theme="light"] .question-options > button { border-color: #d6d6d6; background: #ffffff; color: #3b3b3b; }
 :root[data-theme="light"] .question-options > button:hover, :root[data-theme="light"] .question-options > button.selected { border-color: #0078d4; background: #e5f1fb; }
@@ -1354,12 +1385,12 @@ body { font-size: 14px; }
 
 /* Agent status bar: cwd left, chips right — one margin-left:auto. */
 .agent-header {
-  height: 38px;
-  flex: 0 0 38px;
+  height: 40px;
+  flex: 0 0 40px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 10px;
+  gap: 10px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
   overflow: visible;
@@ -1368,16 +1399,21 @@ body { font-size: 14px; }
 .agent-header-left {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 1 1 auto;
   min-width: 0;
   position: relative;
-  z-index: 0;
+  /* The plan chip lives here and its list drops over the transcript, so this cluster needs the
+     same z-index the right one carries for its menus. */
+  z-index: 6;
 }
+/* A little air between the folder name and the plan chip, so a shrinking folder label never reads
+   as part of the chip. */
+.agent-header-left .plan-chip-root { margin-left: 2px; }
 .agent-header-right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   flex: 0 1 auto;
   min-width: 0;
   margin-left: auto;
@@ -1517,6 +1553,7 @@ body { font-size: 14px; }
   white-space: nowrap;
 }
 .git-chip-trigger:hover, .git-chip-trigger[aria-expanded="true"] { color: var(--text); background: var(--raised-2); }
+.git-chip-branch { max-width: 120px; overflow: hidden; color: var(--text-soft); text-overflow: ellipsis; white-space: nowrap; }
 .git-chip-count { color: var(--text-soft); font-variant-numeric: tabular-nums; }
 .git-chip-menu {
   position: absolute;
@@ -1913,7 +1950,9 @@ body { font-size: 14px; }
 .plan-menu {
   position: absolute;
   top: calc(100% + 3px);
-  right: 0;
+  /* Hangs off the chip's left edge and grows right; the chip script re-anchors it in narrow
+     windows, where that would run past the viewport. */
+  left: 0;
   z-index: 100;
   display: flex;
   flex-direction: column;
