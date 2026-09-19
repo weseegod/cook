@@ -5,6 +5,7 @@ import { useSessionStore, type MessageBlock, type SessionEventBlock } from "../.
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
 import { PlanDialog } from "./plan-dialog";
+import { PlanFileDialog } from "./plan-file-dialog";
 import { PromptSlot } from "./prompt-slot";
 import { RecapDialog } from "./recap-dialog";
 import { RewindDialog } from "./rewind-dialog";
@@ -290,6 +291,7 @@ export function ChatView() {
         <PromptSlot />
         <RewindDialog />
         <RecapDialog />
+        <PlanFileDialog />
       </div>
     </TranscriptActionsContext.Provider>
   );

@@ -30,6 +30,9 @@ pub use xai_grok_session_search::fts as search_fts;
 pub(crate) const SUMMARY_FILE: &str = "summary.json";
 pub(crate) const PLAN_FILE: &str = "plan.json";
 pub(crate) const PLAN_MODE_FILE: &str = "plan_mode.json";
+/// Per-episode plan files (`plans/<utc>.md`) and the legacy `<session>/plan.md` live outside this
+/// list because plan mode owns them rather than the storage adapter.
+pub(crate) const PLANS_DIR: &str = "plans";
 pub(crate) const SIGNALS_FILE: &str = "signals.json";
 pub(crate) const USAGE_FILE: &str = "usage.json";
 pub(crate) const GOAL_STATE_FILE: &str = "goal/state.json";

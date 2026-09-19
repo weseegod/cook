@@ -151,7 +151,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-t-r | `terminal/release` | A→C | — | not advertised | `ok` | protocol |
 | ACP-t-k | `terminal/kill` | A→C | — | not advertised | `ok` | protocol |
 
-Plan-mode plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` before a session's first planning episode, then `<session>/plans/<utc>.md` per episode. That allow-path is load-bearing.
+Plan-mode plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` before a session's first planning episode, then `<session>/plans/<utc>.md` per episode. That allow-path is load-bearing. The desktop reads and prunes them through C-plans rather than the filesystem, so the list also works for a session loaded from disk.
 
 ---
 
@@ -297,6 +297,7 @@ Agent match: `acp_agent.rs` L1966–2342. Desktop wrappers: `xai.ts`, `extension
 | C-sess-usage | `x.ai/session/usage` | C→A | `/usage` | — | `gap` | surface |
 | C-sess-upd | `x.ai/session/updates` | C→A | reconnect | — | `gap` | protocol |
 | C-sess-state | `x.ai/session/state` / `import` / `repair` | C→A | debug/import | — | `na` | chrome |
+| C-plans | `x.ai/session/plans` / `plans/delete` | C→A | `/view-plan` shows the current episode only | `plan-files.ts`; header plan list (`plan-chip.tsx`) with Copy / Copy file path / Delete | `ok` | surface |
 | C-sess-mcp | `x.ai/session/update_mcp_servers` | C→A | MCP modal | — (uses `x.ai/mcp/*`) | `partial` | protocol |
 | C-sess-wt | `x.ai/session/resolve_local_for_worktree_resume` / `rehydrate` | C→A | worktree resume | — | `na` | chrome |
 | C-sess-sum | `x.ai/session_summaries/*` | C→A | dashboard roster | — | `na` | chrome |
@@ -718,6 +719,8 @@ Wire is mostly `ok` on this branch. Presentation issues stay in the Chat UI plan
 | Id | Item | Status | Must |
 |---|---|---|---|
 | P-mode | `session/set_mode` | `ok` | protocol |
+| P-list | `x.ai/session/plans` | header plan list, current episode marked, per-row Copy / Copy file path / Delete | surface |
+| P-del | `x.ai/session/plans/delete` | deletes one plan file; the running episode's file is refused agent-side | surface |
 | P-acp | ACP `plan` / `plan_update` / `plan_removed` | `ok` | protocol |
 | P-exit | `x.ai/exit_plan_mode` | `ok` | protocol |
 | P-goal | `goal_updated` on `x.ai/session_notification` | `ok` | surface |

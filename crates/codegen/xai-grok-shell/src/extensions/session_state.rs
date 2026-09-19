@@ -35,7 +35,7 @@ struct StateRequest {
 }
 
 /// A session id is a UUID (see acp_agent's new_session); requiring that keeps it safe to join into a filesystem path.
-fn validate_session_uuid(session_id: &str) -> Result<(), acp::Error> {
+pub(crate) fn validate_session_uuid(session_id: &str) -> Result<(), acp::Error> {
     uuid::Uuid::try_parse(session_id)
         .map(|_| ())
         .map_err(|_| acp::Error::invalid_params().data("sessionId must be a UUID"))
@@ -219,7 +219,7 @@ fn write_column(dir: &Path, rel: &str, value: &Value) -> std::io::Result<()> {
 /// The session's directory, or `None` when it isn't found on this host.
 /// Falls back to an id scan when `(id, cwd)` has no summary (subagents use their own cwd).
 /// Both branches require summary.json so a bare directory doesn't count as present.
-fn resolve_session_dir(session_id: &str, cwd: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_session_dir(session_id: &str, cwd: &str) -> Option<PathBuf> {
     let info = crate::session::info::Info {
         id: acp::SessionId::new(session_id.to_string()),
         cwd: cwd.to_string(),

@@ -12,6 +12,9 @@ import { CONNECTED_SEED, seedAgent } from "./seed";
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
+/** The plan file name the mock agent reports for the episode it reviews. */
+const PLAN_FILE = "2026-09-19T14-30-22Z.md";
+
 type Recorded = { method: string; params: Record<string, unknown>; at: number };
 
 function api(page: Page) {
@@ -1294,12 +1297,19 @@ test.describe("goal and plan presentation", () => {
   test("supports pane hide, chip reopen, and focus-only Escape", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
+    // Plan files belong to a session, and the session is created by the first prompt.
+    await composer(page).fill("plan something");
+    await composer(page).press("Enter");
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
     const requestId = await page.evaluate(() => window.__cookMock!.plan());
-    await expect(page.getByTestId("plan-pane")).toContainText("plan.md");
+    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_FILE);
     await page.getByTestId("dialog-hide").click();
     await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();
+    // The chip opens the session's plan list; the current episode's row reopens the review pane.
     await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-menu")).toBeVisible();
+    await page.getByTestId(`plan-file-open-${PLAN_FILE}`).click();
     await expect(page.getByTestId("plan-pane")).toBeVisible();
 
     const input = page.getByTestId("composer-input");
@@ -1375,7 +1385,7 @@ test.describe("goal and plan presentation", () => {
     const requestId = await page.evaluate(() => window.__cookMock!.plan({ planContent: null }));
     await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
     const pane = page.getByTestId("plan-pane");
-    await expect(pane).toContainText("plan.md (empty)");
+    await expect(pane).toContainText(`${PLAN_FILE} (empty)`);
     await expect(pane).toContainText("No plan written yet");
     await page.getByTestId("plan-quit").click();
     await expect(page.getByTestId("plan-pane")).toHaveCount(0);

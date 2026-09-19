@@ -57,6 +57,8 @@ A new file is allocated when plan mode **activates** — your first prompt after
 - Requesting changes (and inline comments) revises the current file in place.
 - Approving, quitting, or toggling plan mode off ends the episode; the file stays on disk as the record of that plan, and the next `/plan` starts a new one.
 
+The TUI shows one plan at a time — the current episode. The desktop app lists every plan file of the session under the header chip, marks the current episode, and can copy a plan or its path and delete a plan it is no longer using (never the one a running episode holds).
+
 The plan file contains:
 
 - A **Context** section explaining why the change is being made

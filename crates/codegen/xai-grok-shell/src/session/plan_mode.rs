@@ -148,7 +148,7 @@ impl PlanModeTracker {
     /// Deterministic for unchanged state so a caller can render the activation reminder with the
     /// path the subsequent [`Self::activate`] / [`Self::activate_mid_turn`] will install.
     pub(crate) fn next_episode_path(&self) -> PathBuf {
-        let plans_dir = self.session_dir.join("plans");
+        let plans_dir = self.session_dir.join(crate::session::storage::PLANS_DIR);
         let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
         let mut candidate = plans_dir.join(format!("{stamp}.md"));
         let mut suffix = 2u32;
@@ -400,11 +400,20 @@ pub(crate) fn legacy_plan_file_path(session_dir: &Path) -> PathBuf {
     session_dir.join("plan.md")
 }
 
+/// The persisted snapshot for a session directory, for readers that are not holding a tracker
+/// (the plan-file listing extension). A missing or malformed file is `None`, and callers fall back
+/// to the legacy `plan.md` default exactly as [`restore_plan_file_path`] does.
+pub(crate) fn read_plan_mode_snapshot(session_dir: &Path) -> Option<PlanModeSnapshot> {
+    let text =
+        std::fs::read_to_string(session_dir.join(crate::session::storage::PLAN_MODE_FILE)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
 /// Resolve a persisted `plan_file` against the session directory.
 /// Falls back to [`legacy_plan_file_path`] for `None`, empty, or unsafe values: an absolute path
 /// or any `..` component would escape the session directory the edit gate and ACP allow-path are
 /// anchored to.
-fn restore_plan_file_path(session_dir: &Path, plan_file: Option<&str>) -> PathBuf {
+pub(crate) fn restore_plan_file_path(session_dir: &Path, plan_file: Option<&str>) -> PathBuf {
     use std::path::Component;
     let fallback = legacy_plan_file_path(session_dir);
     let Some(plan_file) = plan_file else {

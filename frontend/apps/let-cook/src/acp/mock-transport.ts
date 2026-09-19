@@ -94,6 +94,38 @@ export interface MockSession {
   updatedAt: string;
 }
 
+/** One plan file as `x.ai/session/plans` reports it, in the agent's camelCase wire shape. */
+export interface MockPlanFile {
+  name: string;
+  path: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedMs: number;
+  active: boolean;
+  deletable: boolean;
+  content: string | null;
+}
+
+const MOCK_PLAN_DIR = "/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/mock-session/plans";
+const MOCK_PLAN_NAME = "2026-09-19T14-30-22Z.md";
+const MOCK_PLAN_BODY = "# Implementation plan\n\n1. Update the transcript renderer\n2. Verify the desktop flow";
+
+/** The plan file a mocked review belongs to, as the shell's per-episode allocation creates it. */
+function seededPlanFile(overrides: Partial<MockPlanFile> = {}): MockPlanFile {
+  return {
+    name: MOCK_PLAN_NAME,
+    path: `${MOCK_PLAN_DIR}/${MOCK_PLAN_NAME}`,
+    relativePath: `plans/${MOCK_PLAN_NAME}`,
+    sizeBytes: MOCK_PLAN_BODY.length,
+    modifiedMs: Date.parse("2026-09-19T14:30:22Z"),
+    active: true,
+    // The tracked episode is held while plan mode is on, exactly as the agent reports it.
+    deletable: false,
+    content: MOCK_PLAN_BODY,
+    ...overrides,
+  };
+}
+
 export interface MockPlugin {
   name: string;
   id?: string;
@@ -140,6 +172,8 @@ export interface MockState {
   providers: MockProvider[];
   discoverable: MockSeedModel[];
   sessions: MockSession[];
+  /** Plan files of the loaded session, newest first, as `x.ai/session/plans` reports them. */
+  planFiles: MockPlanFile[];
   mcpServers: MockMcpServer[];
   skills: MockSkill[];
   plugins: MockPlugin[];
@@ -153,6 +187,8 @@ export interface MockState {
   probeFails: boolean;
   /** Model a build that predates `x.ai/models/set_default`, which answers -32601. */
   setDefaultUnsupported: boolean;
+  /** Model a build that predates the plan list, which answers -32601 to `x.ai/session/plans`. */
+  planListUnsupported: boolean;
   /** Assistant text streamed back for each prompt. */
   reply: string;
   /** Optional exact ACP update sequence for transcript and visual tests. */
@@ -202,6 +238,7 @@ function defaultState(): MockState {
       { id: "session-login", title: "Fix login bug", cwd: "/tmp/cook-demo", updatedAt: "2026-09-15T10:00:00Z" },
       { id: "session-providers", title: "Provider settings", cwd: "/tmp/cook-demo", updatedAt: "2026-09-14T10:00:00Z" },
     ],
+    planFiles: [],
     mcpServers: [
       {
         name: "managed_gateway:cursor",
@@ -293,6 +330,7 @@ function defaultState(): MockState {
     testFails: false,
     probeFails: false,
     setDefaultUnsupported: false,
+    planListUnsupported: false,
     reply: "Mock assistant reply.",
     promptUpdates: [],
     historyUpdates: [],
@@ -693,6 +731,22 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
     }
     case "x.ai/session/list":
       return respond({ sessions: state.sessions });
+    case "x.ai/session/plans":
+      if (state.planListUnsupported) {
+        return respond({ error: { code: -32601, message: "Method not found", data: "unknown ACP extension method: x.ai/session/plans" } });
+      }
+      return respond({ plans: state.planFiles });
+    case "x.ai/session/plans/delete": {
+      const path = String(p.path ?? "");
+      const file = state.planFiles.find((plan) => plan.path === path);
+      // The agent refuses the file its running episode is holding; mirror that refusal here.
+      if (!file) return respond({ error: `${path} no longer exists` });
+      if (!file.deletable) {
+        return respond({ error: `${file.name} is the current plan and cannot be deleted while plan mode is on` });
+      }
+      state.planFiles = state.planFiles.filter((plan) => plan.path !== path);
+      return respond({ deleted: true });
+    }
     case "x.ai/session/fork": {
       // Map id `C-sess-fork`: camelCase ForkSessionRequest → new peer session.
       const sourceSessionId = String(p.sourceSessionId ?? "");
@@ -1260,9 +1314,16 @@ export function mockQuestion(overrides: Record<string, unknown> = {}): number {
 
 export function mockPlan(overrides: Record<string, unknown> = {}): number {
   const id = nextServerRequestId++;
+  // A review belongs to a file on disk: the shell allocates one per episode before it parks the
+  // request, so the plan list has to carry it too.
+  const current = state.planFiles.find((file) => file.active) ?? seededPlanFile();
+  if (!state.planFiles.some((file) => file.path === current.path)) {
+    state.planFiles = [...state.planFiles, current];
+  }
   request("x.ai/exit_plan_mode", {
     sessionId: "mock-session",
-    planContent: "# Implementation plan\n\n1. Update the transcript renderer\n2. Verify the desktop flow",
+    planContent: MOCK_PLAN_BODY,
+    planFilePath: current.path,
     ...overrides,
   }, id);
   return id;

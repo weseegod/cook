@@ -16,6 +16,7 @@ import { desktopTrace } from "./trace";
 import { buildInitializeRequest, CAPABILITIES } from "./handshake";
 import { dispatchNotification } from "./notifications";
 import { dispatchReverseRequest, elicitInteraction } from "./reverse";
+import { listPlanFiles } from "./plan-files";
 import { useCatalogStore } from "../state/catalog";
 import { useSessionStore, type TurnOutcome } from "../state/session";
 import {
@@ -140,6 +141,7 @@ export class CookAcpClient {
     }
     await this.refreshCommands();
     void this.refreshUsage();
+    void this.refreshPlanFiles();
     return response.sessionId;
   }
 
@@ -190,6 +192,7 @@ export class CookAcpClient {
     }
     await this.refreshCommands();
     void this.refreshUsage();
+    void this.refreshPlanFiles();
   }
 
   /**
@@ -465,6 +468,23 @@ export class CookAcpClient {
     });
   }
 
+  /**
+   * Feed the header's plan list from `x.ai/session/plans`.
+   *
+   * Agents that predate the method answer -32601; the header then keeps its older single-chip
+   * behavior, so a failure here must never surface as an error.
+   */
+  async refreshPlanFiles(): Promise<void> {
+    const { sessionId, cwd } = useSessionStore.getState();
+    const workspace = cwd ?? this.cwd;
+    if (!sessionId || !workspace) return;
+    try {
+      useSessionStore.getState().set({ planFiles: await listPlanFiles({ sessionId, cwd: workspace }) });
+    } catch {
+      // Keep the last known list.
+    }
+  }
+
   private async refreshCatalogs() {
     await Promise.allSettled([this.refreshSessions(), this.refreshModels(), this.refreshCommands()]);
   }
@@ -499,6 +519,12 @@ export class CookAcpClient {
         ) {
           await dispatchNotification(message, sessionKind, update ?? {});
         }
+        // `PlanModeEntered` arrives as a mode update, and it is the moment the episode's plan file
+        // appears (`enter_plan_mode` rotates the file before seeding it); list again so the header
+        // shows the new episode.
+        if (sessionKind === "current_mode_update" && this.planModeIsOn(update)) {
+          void this.refreshPlanFiles();
+        }
         if (this.shouldApplyToActiveSession(params, update)) {
           this.sessionUpdates.enqueue(params as unknown as SessionNotification);
         } else {
@@ -512,6 +538,12 @@ export class CookAcpClient {
       if (method === "x.ai/session/prompt_complete" && !this.promptCorrelation.accept(params)) continue;
       await this.handleMessage(message, method, params);
     }
+  }
+
+  /** Whether a `current_mode_update` reports plan mode, matching the store's own reduction. */
+  private planModeIsOn(update: Record<string, unknown> | undefined): boolean {
+    const mode = update?.currentModeId ?? update?.modeId;
+    return typeof mode === "string" && mode.toLowerCase().includes("plan");
   }
 
   private shouldApplyToActiveSession(
@@ -540,6 +572,9 @@ export class CookAcpClient {
     // Layer 2 — reverse requests (message has id).
     if (message.id !== undefined) {
       await dispatchReverseRequest(message, method, params);
+      // A parked review means the episode's plan file exists, even when the mode update that would
+      // otherwise reveal it was missed (a session loaded mid-plan, for instance).
+      if (method === "x.ai/exit_plan_mode") void this.refreshPlanFiles();
       return;
     }
 

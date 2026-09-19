@@ -20,6 +20,29 @@ describe("session defaults", () => {
   });
 });
 
+describe("session conversation reset", () => {
+  it("drops the previous session's plan files and its open plan view", () => {
+    useSessionStore.setState({
+      planFiles: [{
+        name: "2026-09-19T14-30-22Z.md",
+        path: "/p/plans/2026-09-19T14-30-22Z.md",
+        relativePath: "plans/2026-09-19T14-30-22Z.md",
+        sizeBytes: 10,
+        modifiedMs: 1,
+        active: true,
+        deletable: false,
+        content: "# Plan",
+      }],
+      planFileView: null,
+    });
+
+    useSessionStore.getState().resetConversation("sess-2");
+
+    expect(useSessionStore.getState().planFiles).toEqual([]);
+    expect(useSessionStore.getState().planFileView).toBeNull();
+  });
+});
+
 describe("session transcript reducer", () => {
   it("coalesces streamed assistant chunks without a message id", () => {
     let transcript = reduceTranscript(empty(), {

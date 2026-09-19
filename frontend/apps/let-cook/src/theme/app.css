@@ -347,6 +347,8 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+  /* Keep intentional busy spinners visible; duration:0 makes .spin look frozen. */
+  .spin, .async-state-spinner { animation-duration: .8s !important; }
 }
 
 /* Settings workspace */
@@ -630,6 +632,8 @@ img.brand-mark { padding: 0; object-fit: contain; background: transparent; }
 .async-state { display: flex; align-items: center; gap: 7px; min-height: 40px; margin: 7px 0; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: var(--panel-elevated); font-size: 11px; }
 .async-state strong { color: var(--text-soft); font-size: 11px; }
 .async-state span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.async-state-loading { justify-content: center; min-height: 72px; gap: 10px; color: var(--text-soft); font-size: 12px; }
+.async-state-spinner { flex: 0 0 auto; width: 1.1em; color: var(--accent); font-family: var(--font-mono); font-size: 14px; line-height: 1; text-align: center; }
 .async-state-empty { flex-wrap: wrap; }
 .async-state-empty svg { color: var(--accent); }
 .async-state-empty span { flex-basis: 100%; margin-left: 23px; font-size: 10px; }
@@ -1349,7 +1353,9 @@ body { font-size: 14px; }
   min-width: 0;
   margin-left: auto;
   position: relative;
-  z-index: 2;
+  /* Above the plan review pane (z-index 4 in `.chat-main`, which sets no stacking context of its
+     own): a menu opened from the status bar drops over the transcript and must stay clickable. */
+  z-index: 6;
 }
 .agent-header-right > * { flex: 0 1 auto; min-width: 0; }
 .agent-cwd {
@@ -1791,6 +1797,139 @@ body { font-size: 14px; }
   cursor: pointer;
 }
 .plan-chip:hover { border-color: var(--plan-accent); font-weight: 600; }
+.plan-chip-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plan-chip:focus-visible { outline: 2px solid color-mix(in srgb, var(--plan-accent), transparent 45%); outline-offset: 1px; }
+
+/* The plan list: one row per episode file, newest first, current one marked. */
+.plan-chip-root { position: relative; flex: 0 0 auto; min-width: 0; }
+.plan-chip { gap: 4px; }
+.plan-menu {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 290px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-elevated);
+  box-shadow: var(--shadow);
+}
+/* The header always lists the conversation's plans, so the popover has to read as "none yet"
+   rather than as a failed load. */
+.plan-menu-empty {
+  padding: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.plan-menu-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 4px;
+}.plan-menu-row:hover, .plan-menu-row:focus-within { background: var(--raised-2); }
+.plan-menu-row.active { background: var(--plan-accent-soft); }
+.plan-menu-open {
+  display: grid;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-soft);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-menu-open:hover { color: var(--text); }
+.plan-menu-row.active .plan-menu-open { color: var(--plan-accent); }
+.plan-menu-name {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-menu-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.plan-menu-badge {
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--plan-accent), var(--border) 50%);
+  border-radius: 999px;
+  color: var(--plan-accent);
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+/* Hidden until the row is hovered, like the conversation sidebar's row menu. */
+.plan-menu-dots {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 24px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  visibility: hidden;
+  cursor: pointer;
+}
+.plan-menu-row:hover .plan-menu-dots,
+.plan-menu-row:focus-within .plan-menu-dots,
+.plan-menu-dots[aria-expanded="true"] { visibility: visible; }
+.plan-menu-dots:hover { color: var(--text); background: var(--raised-2); }
+.plan-row-menu {
+  position: absolute;
+  top: calc(100% - 2px);
+  right: 4px;
+  z-index: 10;
+  width: 170px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-elevated);
+  box-shadow: var(--shadow);
+}
+.plan-row-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-soft);
+  background: transparent;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-row-menu button:hover:not(:disabled) { color: var(--text); background: var(--raised-2); }
+.plan-row-menu button > svg { flex: 0 0 auto; color: var(--muted); }
+.plan-row-menu button:hover:not(:disabled) > svg { color: var(--accent); }
+.plan-row-menu button:disabled { color: var(--muted); cursor: not-allowed; opacity: .55; }
+.plan-row-menu button.plan-row-menu-danger { color: var(--danger-light); }
+.plan-row-menu button.plan-row-menu-danger:hover:not(:disabled) {
+  color: var(--danger-light);
+  background: color-mix(in srgb, var(--danger-light), transparent 88%);
+}
+.plan-row-menu button.plan-row-menu-danger > svg,
+.plan-row-menu button.plan-row-menu-danger:hover:not(:disabled) > svg { color: var(--danger-light); }
+.plan-row-menu-separator { height: 1px; margin: 4px 2px; background: var(--border); }
+.plan-file-body { max-height: 60vh; overflow-y: auto; }
+.plan-file-empty { color: var(--muted); font-size: 12px; }
 
 .plan-pane {
   position: absolute;

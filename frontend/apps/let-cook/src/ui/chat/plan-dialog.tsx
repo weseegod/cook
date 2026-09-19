@@ -55,6 +55,10 @@ function PlanDialogContent() {
       const typing = target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement;
 
       if (event.key === "Escape") {
+        // A modal above this pane — the read-only plan viewer, a delete confirmation — owns Escape
+        // while it is open: this handler runs on capture, and its `stopPropagation` would otherwise
+        // make those dialogs undismissable from the keyboard.
+        if (document.querySelector(".dialog-backdrop")) return;
         event.preventDefault();
         event.stopPropagation();
         if (planFocus === "commenting") {

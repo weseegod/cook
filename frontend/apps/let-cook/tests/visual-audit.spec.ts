@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { CONNECTED_SEED, seedAgent } from "./seed";
 
+/** The plan file name the mock agent reports for the episode it reviews. */
+const PLAN_FILE = "2026-09-19T14-30-22Z.md";
+
 const VISUAL_SEED = {
   ...CONNECTED_SEED,
   sessions: [
@@ -266,19 +269,24 @@ test.describe("visual audit", () => {
     }));
 
     await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByTestId("plan-pane")).toContainText("plan.md");
+    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_FILE);
     await expectNoHorizontalOverflow(page);
     await capture(page, "chat-plan-chip");
 
     await page.getByTestId("dialog-hide").click();
     await expect(page.getByTestId("plan-pane")).toHaveCount(0);
+    // The header chip now opens the session's plan list; the current row reopens the review.
     await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-menu")).toBeVisible();
+    await expect(page.getByTestId("plan-file-current")).toHaveCount(1);
+    await capture(page, "chat-plan-list");
+    await page.getByTestId(`plan-file-open-${PLAN_FILE}`).click();
     await expect(page.getByTestId("plan-lines")).toBeVisible();
     expect(await page.locator(".plan-pane").evaluate((node) => node.scrollWidth - node.clientWidth)).toBeLessThanOrEqual(1);
     await capture(page, "chat-plan-popup");
     await page.keyboard.press("Escape");
 
-    // Light theme keeps the chip, the gutter and the decision bar readable.
+    // Light theme keeps the chip, the plan list, the gutter and the decision bar readable.
     await page.getByLabel("Settings").click();
     await page.getByTestId("theme-option-light").click();
     await page.keyboard.press("Escape");
@@ -286,6 +294,9 @@ test.describe("visual audit", () => {
     await expectNoHorizontalOverflow(page);
     await capture(page, "chat-plan-chip-light");
     await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-menu")).toBeVisible();
+    await capture(page, "chat-plan-list-light");
+    await page.getByTestId(`plan-file-open-${PLAN_FILE}`).click();
     await expect(page.getByTestId("plan-lines")).toBeVisible();
     await capture(page, "chat-plan-popup-light");
     await page.keyboard.press("Escape");
@@ -418,7 +429,7 @@ test.describe("visual audit", () => {
     await page.evaluate(() => window.__cookMock?.plan());
     // Plan review auto-opens the transcript pane; no inline interaction card; composer stays live
     // underneath it rather than only reappearing after Hide.
-    await expect(page.getByTestId("plan-pane")).toContainText("plan.md");
+    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_FILE);
     await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
     await expect(page.getByTestId("plan-chip")).toBeVisible();
     await expect(page.getByTestId("composer-input")).toBeVisible();

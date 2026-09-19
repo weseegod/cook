@@ -348,6 +348,17 @@ The transcript machine lives in `src/state/session.ts` (`reduceTranscript` /
 `reduceNotifications`) plus `goal.ts` / `plan-review.ts`. Replay and live
 updates use the same reducer.
 
+Plan files are the one part of plan state that is not in the transcript: a
+session's history of them comes from the agent (`x.ai/session/plans`), is held
+in `planFiles`, and is painted by the header chip (`plan-chip.tsx`) as a list —
+newest first, current episode marked, each row's three-dot menu offering Copy,
+Copy file path and Delete (`x.ai/session/plans/delete`). The chip belongs to the
+conversation rather than to a plan: it sits in the header from the moment a
+workspace is open and reports an empty list before the first episode is written.
+An agent that predates those methods leaves the list empty too, and keeps its
+older single-plan behavior for a parked review, so the feature degrades instead
+of erroring.
+
 **Forbidden chrome** (the TUI does not have these): a pinned live-tool
 activity rail, per-tool elapsed on collapsed rows, in-transcript command
 rerun/Execute, a `Waiting…` row inside the transcript, a 1 s timer tick,

@@ -1,6 +1,7 @@
 import type { RequestPermissionRequest, SessionNotification, SessionUpdate } from "@agentclientprotocol/sdk";
 import { create } from "zustand";
 import { normalizeError } from "../acp/errors";
+import type { PlanFileSummary } from "../acp/plan-files";
 import { formatDuration } from "../ui/chat/format-duration";
 import { applySubagentSessionUpdate, applyWorkflowUpdated } from "./activity";
 import { reduceGoalUpdate, type GoalState } from "./goal";
@@ -151,6 +152,10 @@ interface SessionState {
   planStashedDraft: PlanSlice["planStashedDraft"];
   /** User-toggled ACP Plan checklist under the header; closed by default. */
   todoOverlayOpen: boolean;
+  /** The session's plan files, newest first, from `x.ai/session/plans`; empty before the first fetch. */
+  planFiles: PlanFileSummary[];
+  /** The file a read-only plan viewer is showing; the review pane owns the current episode. */
+  planFileView: PlanFileSummary | null;
   /** `/rewind` picker dialog. */
   rewindDialogOpen: boolean;
   /** `/recap` result dialog. */
@@ -184,6 +189,7 @@ interface SessionState {
   beginPlanComment: (lineRange: [number, number], id?: number | null) => void;
   cancelPlanComment: () => void;
   setTodoOverlayOpen: (open: boolean) => void;
+  setPlanFileView: (file: PlanFileSummary | null) => void;
   setRewindDialogOpen: (open: boolean) => void;
   beginRecap: () => void;
   failRecap: (error: string) => void;
@@ -248,6 +254,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   goalClearedId: null,
   ...emptyPlanSlice,
   todoOverlayOpen: false,
+  planFiles: [],
+  planFileView: null,
   rewindDialogOpen: false,
   recapDialogOpen: false,
   recapPending: false,
@@ -322,6 +330,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       planStashedDraft: null,
     })),
   setTodoOverlayOpen: (todoOverlayOpen) => set({ todoOverlayOpen }),
+  setPlanFileView: (planFileView) => set({ planFileView }),
   setRewindDialogOpen: (rewindDialogOpen) => set({ rewindDialogOpen }),
   beginRecap: () =>
     set({
@@ -404,6 +413,8 @@ export const useSessionStore = create<SessionState>((set) => ({
       goalClearedId: null,
       ...emptyPlanSlice,
       todoOverlayOpen: false,
+      planFiles: [],
+      planFileView: null,
       rewindDialogOpen: false,
       recapDialogOpen: false,
       recapPending: false,
