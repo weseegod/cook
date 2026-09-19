@@ -55,18 +55,28 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   // annotate `session.tools`.
   useEffect(() => {
     if (!connected || !cwd || sessionId) return;
+    let cancelled = false;
     setSessionLoading(true);
     void acpClient.ensureSession()
-      .catch((caught) => setError(normalizeError(caught, "Could not start a session for connectors")))
-      .finally(() => setSessionLoading(false));
+      .catch((caught) => {
+        if (!cancelled) setError(normalizeError(caught, "Could not start a session for connectors"));
+      })
+      .finally(() => {
+        if (!cancelled) setSessionLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [connected, cwd, sessionId]);
 
   // Read uncached: a cached catalog can arrive before the handshake and `tools/list` finish, which
-  // is exactly the empty-tools row the user came here to toggle.
+  // is exactly the empty-tools row the user came here to toggle. staleTime 0 so opening the tab
+  // always refetches — the agent call is slow and a fresh 15s cache would skip the loading cue.
   const servers = useQuery({
     queryKey: ["connectors", sessionId],
     queryFn: () => listConnectors(sessionId ?? undefined, false),
     enabled: connected && Boolean(sessionId),
+    staleTime: 0,
     retry: 0,
   });
 
@@ -195,7 +205,9 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   }
 
   const list = mcpServers;
-  const showLoading = sessionLoading || (Boolean(sessionId) && servers.isFetching);
+  // Session bootstrap + the uncached mcp/list both leave the panel empty for a long time.
+  const awaitingSession = connected && Boolean(cwd) && !sessionId;
+  const showLoading = sessionLoading || awaitingSession || (connected && Boolean(sessionId) && servers.isFetching);
   const connectorSections = groupConnectors(list);
 
   function renderGroup(group: ConnectorServerGroup) {
@@ -372,16 +384,17 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
-      {!sessionId && !sessionLoading ? (
-        <EmptyState label="No active session" detail="Start a conversation to manage its connectors." />
-      ) : showLoading ? (
+      {showLoading && list.length === 0 ? (
         <LoadingState label="Loading connectors" />
+      ) : !sessionId ? (
+        <EmptyState label="No active session" detail="Start a conversation to manage its connectors." />
       ) : servers.isError && list.length === 0 ? (
         <ErrorState label="Could not load connectors." />
       ) : list.length === 0 ? (
         <EmptyState label="No connectors" detail="Add an MCP server for this session." />
       ) : null}
-      {connectorSections.map((section) => (
+      {showLoading && list.length > 0 && <LoadingState label="Refreshing connectors" />}
+      {list.length > 0 && connectorSections.map((section) => (
         <section className="connector-section" key={section.caption}>
           <span className="connector-origin-caption">{section.caption}</span>
           <ul className="connector-list">{section.groups.map(renderGroup)}</ul>

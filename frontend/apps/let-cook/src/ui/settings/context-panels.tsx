@@ -126,6 +126,7 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
     queryKey: ["skills", cwd],
     queryFn: () => listSkills(cwd ?? undefined),
     enabled: connected,
+    staleTime: 0,
     retry: 0,
   });
   const plugins = useQuery({
@@ -134,12 +135,14 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
     // `x.ai/plugins/list` requires a session id. Without one the U-plug notification still fills
     // the catalog, so there is nothing useful to ask for.
     enabled: connected && Boolean(sessionId),
+    staleTime: 0,
     retry: 0,
   });
   const workflows = useQuery({
     queryKey: ["workflows", sessionId],
     queryFn: () => listWorkflows(sessionId!),
     enabled: connected && Boolean(sessionId),
+    staleTime: 0,
     retry: 0,
   });
 
@@ -147,6 +150,10 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   const pluginList = plugins.data?.plugins ?? plugins.data?.items ?? (catalogPlugins.length > 0 ? catalogPlugins : []);
   const workflowList = workflows.data?.workflows ?? [];
   const groups = groupSkills(skillList, query);
+  const skillsBusy = connected && skills.isFetching;
+  const blockSkills = skillsBusy && skillList.length === 0;
+  const pluginsBusy = connected && Boolean(sessionId) && plugins.isFetching;
+  const workflowsBusy = connected && Boolean(sessionId) && workflows.isFetching;
 
   const toggle = useMutation({
     // Row and group both fan out `{ name, enabled, cwd }` — the installed CLI has no `names[]`.
@@ -223,11 +230,12 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   return (
     <div className="skills-panel">
       <h3>Skills</h3>
-      {skills.isFetching && <LoadingState label="Loading skills" />}
+      {blockSkills && <LoadingState label="Loading skills" />}
+      {skillsBusy && skillList.length > 0 && <LoadingState label="Refreshing skills" />}
       {skills.isError && (
         <ErrorState label={normalizeError(skills.error, "Could not load skills from the agent.")} />
       )}
-      {!skills.isLoading && !skills.isError && (
+      {!blockSkills && !skills.isError && (
         <>
           <label className="field skill-search">
             <span>Search</span>
@@ -243,7 +251,7 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
             {skillList.length} skill{skillList.length === 1 ? "" : "s"} found
             {query && ` · ${groups.reduce((count, group) => count + group.skills.length, 0)} matching`}
           </p>
-          {skillList.length === 0 && (
+          {skillList.length === 0 && !skillsBusy && (
             <EmptyState
               label="No skills"
               detail={cwd
@@ -254,21 +262,22 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           {skillList.length > 0 && groups.length === 0 && (
             <EmptyState label="No matching skills" detail="Clear the search to see every discovered skill." />
           )}
+          {status && <p className="settings-note security-warning" data-testid="skills-status">{status}</p>}
           {groups.map((group) => {
             const enabledCount = groupEnabledCount(group.skills);
             // A search is a question about every match, so it opens the groups holding one.
             const expanded = Boolean(query.trim()) || !collapsedGroups.has(group.label);
-            const toggling = toggle.isPending
-              && (toggle.variables?.names ?? []).some((name) => group.skills.some((skill) => skill.name === name));
             return (
-              <section className="skill-group" key={group.label}>
+              <div className="skill-group" key={group.label}>
                 <SettingsGroupHeader
                   label={group.label}
                   count={group.skills.length}
                   eligible={group.skills.length}
                   enabledCount={enabledCount}
                   expanded={expanded}
-                  busy={toggling}
+                  // Any in-flight fan-out must freeze every group switch — parallel
+                  // read-modify-writes tear `[skills].disabled`.
+                  busy={toggle.isPending}
                   testId={`skill-group-${group.label}`}
                   onToggleExpanded={() => setCollapsedGroups((current) => {
                     const next = new Set(current);
@@ -277,6 +286,7 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
                     return next;
                   })}
                   onToggleEnabled={(enabled) => {
+                    if (toggle.isPending) return;
                     const names = groupToggleTargets(group.skills, enabled);
                     if (names.length > 0) toggle.mutate({ names, enabled });
                   }}
@@ -309,7 +319,10 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
                             <ToggleSwitch
                               checked={skill.enabled !== false}
                               ariaLabel={`Toggle skill ${skill.name}`}
-                              onChange={(enabled) => toggle.mutate({ names: [skill.name], enabled })}
+                              onChange={(enabled) => {
+                                if (toggle.isPending) return;
+                                toggle.mutate({ names: [skill.name], enabled });
+                              }}
                               disabled={toggle.isPending}
                             />
                           </div>
@@ -318,7 +331,7 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
                     })}
                   </ul>
                 )}
-              </section>
+              </div>
             );
           })}
         </>
@@ -362,8 +375,9 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           <RefreshCw size={15} /> Reload plugins
         </button>
       </div>
-      {plugins.isFetching && <LoadingState label="Loading plugins" />}
-      {pluginList.length === 0 && !plugins.isFetching && <EmptyState label="No plugins" />}
+      {pluginsBusy && pluginList.length === 0 && <LoadingState label="Loading plugins" />}
+      {pluginsBusy && pluginList.length > 0 && <LoadingState label="Refreshing plugins" />}
+      {pluginList.length === 0 && !pluginsBusy && <EmptyState label="No plugins" />}
       <ul className="skill-list">
         {pluginList.map((plugin) => {
           const id = plugin.id ?? plugin.name;
@@ -391,8 +405,9 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
 
       <section className="workflows-section" data-testid="workflow-list">
         <h3>Workflows</h3>
-        {workflows.isFetching && <LoadingState label="Loading workflows" />}
-        {workflowList.length === 0 && !workflows.isFetching && (
+        {workflowsBusy && workflowList.length === 0 && <LoadingState label="Loading workflows" />}
+        {workflowsBusy && workflowList.length > 0 && <LoadingState label="Refreshing workflows" />}
+        {workflowList.length === 0 && !workflowsBusy && (
           <EmptyState label="No workflows" detail="/workflow stays a prompt; this list is browse-only." />
         )}
         <ul className="skill-list">
@@ -410,7 +425,9 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
         </ul>
       </section>
 
-      {status && <p className="settings-note" data-testid="skills-status">{status}</p>}
+      {status && skillList.length === 0 && (
+        <p className="settings-note security-warning" data-testid="skills-status">{status}</p>
+      )}
     </div>
   );
 }

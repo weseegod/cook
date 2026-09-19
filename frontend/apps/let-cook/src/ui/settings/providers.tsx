@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CheckCircle2, Cpu, LoaderCircle, LogIn, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { isVisibleProviderPreset, mergedProviderStatus, PROVIDER_PRESETS } from "../../acp/provider-presets";
 import { normalizeError } from "../../acp/errors";
 import { request } from "../../acp/host";
@@ -39,6 +39,8 @@ export function useProviders(connected: boolean) {
     queryKey: ["providers"],
     queryFn: listProviders,
     enabled: connected,
+    // App shell already caches this; settings must refetch so the long models load shows a spinner.
+    staleTime: 0,
     retry: 0,
   });
 }
@@ -80,11 +82,34 @@ export function ProvidersPanel({
   const [deletingProvider, setDeletingProvider] = useState<ProviderRow | null>(null);
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
   const [replacement, setReplacement] = useState<{ provider: ProviderSummary; modelId: string } | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+
+  // Models arrive via a host call react-query does not track. Track that refresh so the panel
+  // still shows a spinner when the providers query is already warm from the app shell.
+  useEffect(() => {
+    if (!connected) {
+      setCatalogLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCatalogLoading(true);
+    void acpClient.refreshModels()
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connected]);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["providers"] });
     void queryClient.invalidateQueries({ queryKey: ["models"] });
-    void acpClient.refreshModels();
+    setCatalogLoading(true);
+    void Promise.all([providers.refetch(), acpClient.refreshModels()])
+      .catch(() => undefined)
+      .finally(() => setCatalogLoading(false));
   };
 
   /**
@@ -202,6 +227,12 @@ export function ProvidersPanel({
     onDirtyChange?.(true);
   }
 
+  const modelsBusy = catalogLoading || presetsFetching || providers.isFetching;
+  const hasAnyModels = rows.some((row) => row.models.length > 0);
+  // Hide the preset shells while the first catalog load is in flight — otherwise the panel
+  // looks empty/laggy with "none configured" on every card.
+  const blockModels = modelsBusy && !hasAnyModels;
+
   return (
     <div className="providers-panel unified-provider-panel">
       <div className="provider-catalog-toolbar">
@@ -209,17 +240,20 @@ export function ProvidersPanel({
           <button className="primary-button" onClick={() => { setAdding(true); setNotice(null); }} data-testid="provider-add">
             <Plus size={15} /> Add provider
           </button>
-          <button className="ghost-button" onClick={() => void providers.refetch()}>
+          <button className="ghost-button" onClick={() => void refresh()} disabled={modelsBusy}>
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
       </div>
 
       {notice && <div className="settings-note security-warning" data-testid="provider-notice" role="alert">{notice}</div>}
-      {(presetsFetching || providers.isFetching) && <LoadingState label="Loading models and providers" />}
-
-      <div className="provider-model-list">
-        {rows.map((row) => {
+      {blockModels ? (
+        <LoadingState label="Loading models and providers" />
+      ) : (
+        <>
+          {modelsBusy && <LoadingState label={hasAnyModels ? "Refreshing models and providers" : "Loading models and providers"} />}
+          <div className="provider-model-list">
+            {rows.map((row) => {
           const status = mergedProviderStatus(row.provider, row.oauthConnected);
           const label = row.provider?.name ?? row.preset.label;
           const configure = () => openEditor(row.preset, row.provider);
@@ -317,6 +351,8 @@ export function ProvidersPanel({
           );
         })}
       </div>
+        </>
+      )}
 
       {deletingProvider && (
         <Dialog

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ChangeEvent } from "react";
+import { useEffect, useRef, type ChangeEvent, type MouseEvent } from "react";
 
 interface ToggleSwitchProps {
   checked: boolean;
@@ -22,8 +22,15 @@ export function ToggleSwitch({ checked, onChange, ariaLabel, disabled = false, c
   }, [indeterminate]);
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
-    if (event.target.disabled) return;
+    if (event.target.disabled || indeterminate) return;
     onChange(event.target.checked);
+  }
+
+  // WKWebView sometimes skips `change` for indeterminate checkboxes; drive mixed clicks from `click`.
+  function handleClick(event: MouseEvent<HTMLInputElement>) {
+    if (event.currentTarget.disabled || !indeterminate) return;
+    event.preventDefault();
+    onChange(true);
   }
 
   return (
@@ -37,6 +44,7 @@ export function ToggleSwitch({ checked, onChange, ariaLabel, disabled = false, c
         aria-label={ariaLabel}
         aria-checked={indeterminate ? "mixed" : checked}
         onChange={handleChange}
+        onClick={handleClick}
       />
       <span className="toggle-switch-track" aria-hidden="true">
         <span className="toggle-switch-thumb" />
