@@ -232,6 +232,9 @@ const emptyCursor = (): TranscriptCursor => ({
   optimisticUserId: null,
 });
 
+/** A fresh cursor, for callers outside this module that reduce a transcript of their own. */
+export const emptyTranscriptCursor = emptyCursor;
+
 export const useSessionStore = create<SessionState>((set) => ({
   connection: "idle",
   cwd: null,

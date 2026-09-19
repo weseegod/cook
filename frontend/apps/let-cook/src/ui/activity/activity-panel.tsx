@@ -19,6 +19,7 @@ export function ActivityPanel() {
   const lastError = useActivityStore((state) => state.lastError);
   const refreshFromAgent = useActivityStore((state) => state.refreshFromAgent);
   const killActivity = useActivityStore((state) => state.killActivity);
+  const setViewing = useActivityStore((state) => state.setViewing);
   const now = useNowTick();
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -81,6 +82,7 @@ export function ActivityPanel() {
           now={now}
           busyId={busyId}
           onKill={(item) => void onKill(item)}
+          onOpen={setViewing}
           testIdPrefix="activity"
           label="Activity"
         />

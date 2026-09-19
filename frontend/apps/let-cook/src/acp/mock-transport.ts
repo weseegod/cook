@@ -1411,40 +1411,59 @@ export function mockSessionNotification(update: Record<string, unknown>, session
 
 /** Ext notif helpers for activity panel tests (SessionNotification envelope). */
 export function mockTaskBackgrounded(overrides: Record<string, unknown> = {}): void {
+  const snapshot = {
+    task_id: "task-1",
+    command: "sleep 30",
+    cwd: "/tmp",
+    output: "",
+    output_file: "/tmp/out.log",
+    completed: false,
+    description: "Wait for server",
+    ...overrides,
+  };
+  // `x.ai/task/list` reads this, so an open viewer's polling sees the same task the notif announced.
+  state.tasks = [...(state.tasks ?? []).filter((task) => task.task_id !== snapshot.task_id), snapshot];
   notify("_x.ai/task_backgrounded", {
     sessionId: "mock-session",
     update: {
       sessionUpdate: "task_backgrounded",
       tool_call_id: "tc-1",
-      task_id: "task-1",
-      command: "sleep 30",
-      cwd: "/tmp",
-      output_file: "/tmp/out.log",
-      description: "Wait for server",
-      ...overrides,
+      ...snapshot,
     },
   });
 }
 
+/** Grow a mocked background task's stdout, the way the shell's live terminal/output does. */
+export function mockTaskOutput(taskId: string, output: string): void {
+  state.tasks = (state.tasks ?? []).map((task) =>
+    task.task_id === taskId ? { ...task, output } : task,
+  );
+}
+
 export function mockTaskCompleted(overrides: Record<string, unknown> = {}): void {
+  const snapshot = {
+    task_id: "task-1",
+    command: "sleep 30",
+    cwd: "/tmp",
+    output: "",
+    output_file: "/tmp/out.log",
+    truncated: false,
+    completed: true,
+    exit_code: 0,
+    description: "Wait for server",
+    is_backgrounded: true,
+    ...(isRecord(overrides.task_snapshot) ? overrides.task_snapshot : {}),
+  };
+  // The real agent lists a finished task too, so a later `x.ai/task/list` must not resurrect it.
+  state.tasks = (state.tasks ?? []).map((task) =>
+    task.task_id === snapshot.task_id ? { ...task, ...snapshot } : task,
+  );
   notify("_x.ai/task_completed", {
     sessionId: "mock-session",
     update: {
       sessionUpdate: "task_completed",
       will_wake: false,
-      task_snapshot: {
-        task_id: "task-1",
-        command: "sleep 30",
-        cwd: "/tmp",
-        output: "",
-        output_file: "/tmp/out.log",
-        truncated: false,
-        completed: true,
-        exit_code: 0,
-        description: "Wait for server",
-        is_backgrounded: true,
-        ...(isRecord(overrides.task_snapshot) ? overrides.task_snapshot : {}),
-      },
+      task_snapshot: snapshot,
       ...Object.fromEntries(Object.entries(overrides).filter(([key]) => key !== "task_snapshot")),
     },
   });
@@ -1488,6 +1507,8 @@ export interface MockControl {
   workspaceReview(overrides: Partial<ReviewSnapshot>): void;
   taskBackgrounded(overrides?: Record<string, unknown>): void;
   taskCompleted(overrides?: Record<string, unknown>): void;
+  /** Grow a mocked background task's stdout, so an open viewer can be seen to follow it. */
+  taskOutput(taskId: string, output: string): void;
   goalUpdate(overrides?: Record<string, unknown>): Record<string, unknown>;
   modelsUpdate(params?: Record<string, unknown>): void;
 }
@@ -1512,6 +1533,7 @@ if (typeof window !== "undefined") {
     workspaceReview: mockPatchWorkspaceReview,
     taskBackgrounded: mockTaskBackgrounded,
     taskCompleted: mockTaskCompleted,
+    taskOutput: mockTaskOutput,
     goalUpdate,
     modelsUpdate: mockModelsUpdate,
   };

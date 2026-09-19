@@ -14,6 +14,7 @@ import {
   type SubagentListItem,
   type TaskListItem,
 } from "../acp/activity";
+import type { TranscriptState } from "./session";
 
 export type ActivityKind = "task" | "subagent" | "schedule" | "workflow";
 
@@ -34,6 +35,24 @@ export interface ActivityItem {
    * (`shouldApplyToActiveSession` deliberately lets background subagents and workflows through).
    */
   sessionId?: string;
+  /**
+   * What the job is doing right now, as the TUI paints it after the row label
+   * (`tasks_pane.rs` ` · {activity}` → `app/subagent.rs::format_activity_label`): `Thinking`,
+   * `Running: cargo build`, `Wait 5 seconds…`. Running rows only.
+   */
+  activityLabel?: string;
+  /**
+   * Session the agent streams a subagent's own updates under. Child `session/update` traffic is
+   * dropped from the parent transcript (`shouldApplyToActiveSession`), so this is the key that
+   * routes it to the row and to the viewer instead.
+   */
+  childSessionId?: string;
+  /** A background command's captured stdout, as `x.ai/task/list` / `task_completed` report it. */
+  output?: string;
+  /** Path the shell writes the full stdout to, when it outgrew the snapshot's own copy. */
+  outputFile?: string;
+  /** `output` is a prefix of the real thing (`TaskSnapshot::truncated`). */
+  truncated?: boolean;
 }
 
 interface ActivityState {
@@ -41,16 +60,22 @@ interface ActivityState {
   subagents: Record<string, ActivityItem>;
   schedules: Record<string, ActivityItem>;
   workflows: Record<string, ActivityItem>;
+  /** Per-child transcript, fed by the child's own `session/update` stream. */
+  childTranscripts: Record<string, TranscriptState>;
   /** Incremented when `/tasks` or `/dashboard` asks the shell to open the Activity tab. */
   panelNonce: number;
   panelTarget: "activity" | null;
   /** Whether the header's tasks strip is showing (`ToggleTasks`, Ctrl-G). */
   overlayOpen: boolean;
+  /** The job whose read-only viewer is open (`tasks_pane.rs` `[view]`), or `null`. */
+  viewing: ActivityItem | null;
   lastError: string | null;
   requestOpenPanel: () => void;
   clearPanelTarget: () => void;
   setOverlayOpen: (open: boolean) => void;
   toggleOverlay: () => void;
+  setViewing: (item: ActivityItem) => void;
+  clearViewing: () => void;
   reset: () => void;
   upsertTask: (item: ActivityItem) => void;
   completeTask: (taskId: string, patch?: Partial<ActivityItem>) => void;
@@ -58,6 +83,8 @@ interface ActivityState {
   upsertSchedule: (item: ActivityItem) => void;
   removeSchedule: (taskId: string) => void;
   upsertWorkflow: (item: ActivityItem) => void;
+  setActivityLabel: (id: string, label: string) => void;
+  setChildTranscript: (childSessionId: string, transcript: TranscriptState) => void;
   refreshFromAgent: (sessionId: string) => Promise<void>;
   killActivity: (sessionId: string, item: ActivityItem) => Promise<void>;
 }
@@ -67,7 +94,9 @@ const empty = () => ({
   subagents: {} as Record<string, ActivityItem>,
   schedules: {} as Record<string, ActivityItem>,
   workflows: {} as Record<string, ActivityItem>,
+  childTranscripts: {} as Record<string, TranscriptState>,
   overlayOpen: false,
+  viewing: null as ActivityItem | null,
 });
 
 /** The maps a row list is derived from, so a component can subscribe to exactly those. */
@@ -82,6 +111,8 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
   clearPanelTarget: () => set({ panelTarget: null }),
   setOverlayOpen: (overlayOpen) => set({ overlayOpen }),
   toggleOverlay: () => set((state) => ({ overlayOpen: !state.overlayOpen })),
+  setViewing: (viewing) => set({ viewing }),
+  clearViewing: () => set({ viewing: null }),
   reset: () => set({ ...empty(), lastError: null }),
   upsertTask: (item) => set((state) => ({ tasks: { ...state.tasks, [item.id]: mergeItem(state.tasks[item.id], item) } })),
   completeTask: (taskId, patch) =>
@@ -124,6 +155,18 @@ export const useActivityStore = create<ActivityState>((set, get) => ({
     }),
   upsertWorkflow: (item) =>
     set((state) => ({ workflows: { ...state.workflows, [item.id]: mergeItem(state.workflows[item.id], item) } })),
+  setActivityLabel: (id, label) =>
+    set((state) => {
+      const row = state.subagents[id] ?? state.workflows[id] ?? state.tasks[id] ?? state.schedules[id];
+      if (!row || row.activityLabel === label) return state;
+      const updated = { ...row, activityLabel: label };
+      if (row.kind === "subagent") return { subagents: { ...state.subagents, [id]: updated } };
+      if (row.kind === "workflow") return { workflows: { ...state.workflows, [id]: updated } };
+      if (row.kind === "schedule") return { schedules: { ...state.schedules, [id]: updated } };
+      return { tasks: { ...state.tasks, [id]: updated } };
+    }),
+  setChildTranscript: (childSessionId, transcript) =>
+    set((state) => ({ childTranscripts: { ...state.childTranscripts, [childSessionId]: transcript } })),
   refreshFromAgent: async (sessionId) => {
     try {
       const [tasks, subagents] = await Promise.all([listTasks(sessionId), listRunningSubagents(sessionId)]);
@@ -191,6 +234,18 @@ export function runningCount(rows: readonly ActivityItem[]): number {
   return rows.filter((row) => isLive(row.status)).length;
 }
 
+/**
+ * The subagent a session id belongs to. A child runs its own ACP session, so `session/update`
+ * from that id is the only stream that says what the child is doing (`tasks_pane.rs` row `·`
+ * suffix, `app/subagent.rs::format_activity_label`).
+ */
+export function rowForChildSession(
+  childSessionId: string,
+  state: ActivityRowsSource = useActivityStore.getState(),
+): ActivityItem | null {
+  return Object.values(state.subagents).find((row) => row.childSessionId === childSessionId) ?? null;
+}
+
 /** Workflow statuses that will not move again (`views/workflows.rs::is_terminal`). */
 const TERMINAL_WORKFLOW_STATUSES = new Set(["interrupted", "complete", "completed", "failed", "cancelled", "canceled", "error", "killed"]);
 
@@ -238,6 +293,7 @@ export function applyTaskBackgrounded(params: Record<string, unknown>): void {
     status: "running",
     startedAt: Date.now(),
     detail: stringOr(update.command) ?? undefined,
+    outputFile: stringOr(update.output_file ?? update.outputFile) ?? undefined,
     isMonitor: monitor,
     sessionId: envelopeSession(params),
   });
@@ -267,6 +323,9 @@ export function applyTaskCompleted(params: Record<string, unknown>): void {
     name,
     status: killed ? "killed" : success ? "completed" : "failed",
     detail: stringOr(snap.command) ?? undefined,
+    output: stringOr(snap.output) ?? undefined,
+    outputFile: stringOr(snap.output_file ?? snap.outputFile) ?? undefined,
+    truncated: snap.truncated === true,
     endedAt: Date.now(),
     sessionId: envelopeSession(params),
   });
@@ -332,6 +391,8 @@ export function applySubagentSessionUpdate(raw: Record<string, unknown>, session
       status: "running",
       startedAt: Date.now(),
       detail: stringOr(raw.subagent_type ?? raw.subagentType) ?? undefined,
+      // The child's own updates stream under its session id; without it the viewer has no feed.
+      childSessionId: stringOr(raw.child_session_id ?? raw.childSessionId) ?? id,
       sessionId,
     });
     return;
@@ -389,6 +450,9 @@ function fromTaskList(task: TaskListItem, sessionId: string): ActivityItem {
     endedAt: task.completed ? Date.now() : undefined,
     detail: task.command,
     isMonitor: task.kind === "monitor",
+    output: task.output,
+    outputFile: task.outputFile,
+    truncated: task.truncated,
     sessionId,
   };
 }
@@ -401,6 +465,7 @@ function fromSubagentList(sub: SubagentListItem, sessionId: string): ActivityIte
     status: sub.status ?? "running",
     startedAt: sub.startedAtEpochMs ?? Date.now() - (sub.durationMs ?? 0),
     detail: sub.subagentType,
+    childSessionId: sub.childSessionId,
     sessionId,
   };
 }
@@ -417,6 +482,11 @@ function mergeItem(prev: ActivityItem | undefined, next: ActivityItem): Activity
     nextFireAt: next.nextFireAt !== undefined ? next.nextFireAt : prev.nextFireAt,
     isMonitor: next.isMonitor ?? prev.isMonitor,
     sessionId: next.sessionId ?? prev.sessionId,
+    activityLabel: next.activityLabel ?? prev.activityLabel,
+    childSessionId: next.childSessionId ?? prev.childSessionId,
+    output: next.output ?? prev.output,
+    outputFile: next.outputFile ?? prev.outputFile,
+    truncated: next.truncated ?? prev.truncated,
   };
 }
 

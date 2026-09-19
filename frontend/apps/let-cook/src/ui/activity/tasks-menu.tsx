@@ -19,6 +19,8 @@ export function TasksMenu({ menuRef }: { menuRef: RefObject<HTMLDivElement | nul
   const lastError = useActivityStore((state) => state.lastError);
   const refreshFromAgent = useActivityStore((state) => state.refreshFromAgent);
   const killActivity = useActivityStore((state) => state.killActivity);
+  const setViewing = useActivityStore((state) => state.setViewing);
+  const setOverlayOpen = useActivityStore((state) => state.setOverlayOpen);
   const now = useNowTick();
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -29,6 +31,12 @@ export function TasksMenu({ menuRef }: { menuRef: RefObject<HTMLDivElement | nul
   }, [sessionId, refreshFromAgent]);
 
   const visible = activeRows(rows);
+
+  // The viewer replaces the popover: a dialog over the chip would otherwise fight its outside click.
+  function onOpen(item: ActivityItem) {
+    setOverlayOpen(false);
+    setViewing(item);
+  }
 
   async function onKill(item: ActivityItem) {
     if (!sessionId) return;
@@ -59,6 +67,7 @@ export function TasksMenu({ menuRef }: { menuRef: RefObject<HTMLDivElement | nul
           now={now}
           busyId={busyId}
           onKill={(item) => void onKill(item)}
+          onOpen={onOpen}
           testIdPrefix="task"
           label="Background tasks"
         />

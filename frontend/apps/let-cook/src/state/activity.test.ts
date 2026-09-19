@@ -8,6 +8,7 @@ import {
   applyTaskCompleted,
   conversationRows,
   pausedWorkflowCount,
+  rowForChildSession,
   runningCount,
   useActivityStore,
 } from "./activity";
@@ -119,6 +120,54 @@ describe("activity store (P4)", () => {
       task_snapshot: { task_id: "flat-1", exit_code: 1, command: "echo hi" },
     });
     expect(useActivityStore.getState().tasks["flat-1"].status).toBe("failed");
+  });
+
+  it("keeps the stdout a task snapshot carries, so its viewer has a body", () => {
+    applyTaskBackgrounded({
+      sessionId: "s1",
+      update: { task_id: "t-1", command: "pnpm test", description: "Run tests", output_file: "/tmp/out.log" },
+    });
+    expect(useActivityStore.getState().tasks["t-1"].outputFile).toBe("/tmp/out.log");
+
+    applyTaskCompleted({
+      sessionId: "s1",
+      update: { task_snapshot: { task_id: "t-1", exit_code: 0, output: "1 passed", truncated: true } },
+    });
+    expect(useActivityStore.getState().tasks["t-1"]).toMatchObject({
+      output: "1 passed",
+      truncated: true,
+    });
+  });
+
+  it("stamps the child session a subagent streams under", () => {
+    applySubagentSessionUpdate(
+      {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "sa-1",
+        child_session_id: "child-1",
+        description: "Explore the repository",
+      },
+      "s1",
+    );
+    expect(rowForChildSession("child-1")?.id).toBe("sa-1");
+    expect(rowForChildSession("someone-else")).toBeNull();
+  });
+
+  it("falls back to the subagent id when the spawn omits a child session", () => {
+    applySubagentSessionUpdate({ sessionUpdate: "subagent_spawned", subagent_id: "sa-9" }, "s1");
+    expect(useActivityStore.getState().subagents["sa-9"].childSessionId).toBe("sa-9");
+  });
+
+  it("carries the live activity label and opens a viewer on request", () => {
+    applySubagentSessionUpdate({ sessionUpdate: "subagent_spawned", subagent_id: "sa-1" }, "s1");
+    useActivityStore.getState().setActivityLabel("sa-1", "Running: cargo build");
+    expect(conversationRows("s1")[0].activityLabel).toBe("Running: cargo build");
+
+    useActivityStore.getState().setViewing(useActivityStore.getState().subagents["sa-1"]);
+    expect(useActivityStore.getState().viewing?.id).toBe("sa-1");
+    useActivityStore.getState().reset();
+    expect(useActivityStore.getState().viewing).toBeNull();
+    expect(useActivityStore.getState().childTranscripts).toEqual({});
   });
 });
 

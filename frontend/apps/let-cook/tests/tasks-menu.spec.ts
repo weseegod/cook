@@ -63,8 +63,9 @@ test.describe("tasks list", () => {
     await expect(row.locator(".activity-status")).toBeHidden();
     // The list is rows only, like the plans list: no summary line, no close button of its own.
     await expect(page.locator(".tasks-menu .activity-list")).toBeVisible();
-    // The row's ✕ is the list's only button; each task closes through its own.
-    await expect(page.locator(".tasks-menu button")).toHaveCount(1);
+    // Each row carries the pane's two controls: [view] then [✕].
+    await expect(page.locator(".tasks-menu button")).toHaveCount(2);
+    await expect(page.getByRole("button", { name: "Open Wait for server" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Close Wait for server" })).toBeVisible();
     const transcriptAfter = (await page.locator(".transcript").boundingBox())!;
     expect(transcriptAfter.y).toBe(transcriptBefore.y);
@@ -141,6 +142,37 @@ test.describe("tasks list", () => {
     expect(Math.abs(tasksMenu.height - plansMenu.height)).toBeLessThanOrEqual(2);
   });
 
+  test("opens a background command's stdout from its view control and from the row", async ({ page }) => {
+    await openWorkspace(page);
+    await background(page, { task_id: "bg-1", description: "Wait for server", command: "sleep 30" });
+    await page.evaluate(() => window.__cookMock!.taskOutput("bg-1", "listening on :1420\n"));
+    await page.getByTestId("tasks-chip").click();
+
+    const row = page.getByTestId("task-row-bg-1");
+    await expect(row.locator(".activity-row-detail")).toHaveText("sleep 30");
+
+    await page.getByTestId("task-open-bg-1").click();
+    // The dialog replaces the popover, and shows the command with the stdout the agent holds.
+    await expect(page.getByTestId("tasks-menu")).toHaveCount(0);
+    await expect(page.getByTestId("task-viewer")).toBeVisible();
+    await expect(page.getByTestId("task-viewer-command")).toHaveText("sleep 30");
+    await expect(page.getByTestId("task-viewer-output")).toHaveText(/listening on :1420/);
+    await expect(page.getByTestId("task-viewer-meta")).toContainText("running");
+
+    // A running command's stdout keeps growing while the viewer is open.
+    await page.evaluate(() => window.__cookMock!.taskOutput("bg-1", "listening on :1420\nready\n"));
+    await expect(page.getByTestId("task-viewer-output")).toHaveText(/ready/);
+
+    await page.getByTestId("dialog-close").click();
+    await expect(page.getByTestId("task-viewer")).toHaveCount(0);
+
+    // The row body opens the same viewer, without the ✕ being involved.
+    await page.getByTestId("tasks-chip").click();
+    await row.click();
+    await expect(page.getByTestId("task-viewer")).toBeVisible();
+    await expect(page.getByTestId("task-row-bg-1")).toHaveCount(0);
+  });
+
   test("stops a live task through x.ai/task/kill", async ({ page }) => {
     await openWorkspace(page);
     await background(page, { task_id: "bg-2", description: "Long sleep", command: "sleep 90" });
@@ -154,6 +186,44 @@ test.describe("tasks list", () => {
     // Stopping settles the row, so it leaves the list.
     await expect(page.getByTestId("task-row-bg-2")).toHaveCount(0);
     await expect(page.getByTestId("tasks-chip-count")).toHaveText("0");
+    // The ✕ stops the job; it must not also open the viewer.
+    await expect(page.getByTestId("task-viewer")).toHaveCount(0);
+  });
+
+  test("says what a subagent is running and opens its own transcript", async ({ page }) => {
+    await openWorkspace(page);
+    await page.evaluate(() => window.__cookMock!.sessionNotification({
+      sessionUpdate: "subagent_spawned",
+      subagent_id: "sa-1",
+      child_session_id: "child-1",
+      description: "Explore the repository",
+      subagent_type: "explore",
+    }));
+    // The child runs its own ACP session, so its work arrives under the child's id.
+    await page.evaluate(() => window.__cookMock!.sessionNotification({
+      sessionUpdate: "tool_call",
+      toolCallId: "tc-1",
+      title: "cargo build",
+      kind: "execute",
+      status: "in_progress",
+      rawInput: { command: "cargo build" },
+    }, "child-1"));
+
+    await page.getByTestId("tasks-chip").click();
+    const row = page.getByTestId("task-row-sa-1");
+    // The pane's ` · {activity}` suffix: what the row is doing right now.
+    await expect(row.locator(".activity-doing")).toHaveText("· Running: cargo build");
+
+    // A phase change moves the suffix with it.
+    await page.evaluate(() => window.__cookMock!.sessionNotification({
+      sessionUpdate: "agent_thought_chunk",
+      content: { type: "text", text: "planning" },
+    }, "child-1"));
+    await expect(row.locator(".activity-doing")).toHaveText("· Thinking");
+
+    await page.getByTestId("task-open-sa-1").click();
+    await expect(page.getByTestId("task-viewer-transcript")).toContainText("cargo build");
+    await expect(page.getByTestId("task-viewer-meta")).toContainText("Thinking");
   });
 
   test("lists a spawned subagent beside background commands", async ({ page }) => {

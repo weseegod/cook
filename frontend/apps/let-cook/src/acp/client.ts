@@ -18,7 +18,8 @@ import { dispatchNotification } from "./notifications";
 import { dispatchReverseRequest, elicitInteraction } from "./reverse";
 import { listPlanFiles } from "./plan-files";
 import { useCatalogStore } from "../state/catalog";
-import { useSessionStore, type TurnOutcome } from "../state/session";
+import { useActivityStore, rowForChildSession } from "../state/activity";
+import { emptyTranscriptCursor, reduceTranscript, useSessionStore, type TurnOutcome } from "../state/session";
 import {
   notify,
   onLog,
@@ -32,6 +33,7 @@ import {
 } from "./host";
 import { setDefaultModel as setDefaultModelOnAgent } from "./providers";
 import { activityFromUpdate, phaseKey } from "../ui/chat/turn-activity";
+import { taskActivityLabel } from "../ui/chat/task-activity";
 import { commandsFromUpdate, modelCatalog, XaiClient, type SessionInfo } from "./xai";
 import { readLocal, writeLocal } from "../ui/storage";
 
@@ -326,6 +328,27 @@ export class CookAcpClient {
     useSessionStore.getState().set({ workingSessions: { ...working, [sessionId]: { ...turn, activity } } });
   }
 
+  /**
+   * A subagent runs its own ACP session, so its `session/update` traffic arrives under the child's
+   * session id and is dropped from the parent transcript. Route it to the row it belongs to: the
+   * ` · {activity}` suffix the tasks list paints, and the transcript its viewer reads
+   * (`views/tasks_pane.rs`, `app/subagent.rs::format_activity_label`).
+   */
+  private routeChildUpdate(params: Record<string, unknown>, update: Record<string, unknown> | undefined): void {
+    if (!update) return;
+    const childSessionId = typeof (params.sessionId ?? params.session_id) === "string"
+      ? String(params.sessionId ?? params.session_id)
+      : null;
+    if (!childSessionId) return;
+    const row = rowForChildSession(childSessionId);
+    if (!row) return;
+    const label = taskActivityLabel(activityFromUpdate(update));
+    if (label) useActivityStore.getState().setActivityLabel(row.id, label);
+    const store = useActivityStore.getState();
+    const prev = store.childTranscripts[childSessionId] ?? { blocks: [], cursor: emptyTranscriptCursor() };
+    store.setChildTranscript(childSessionId, reduceTranscript(prev, update));
+  }
+
   async cancel(): Promise<void> {
     const sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) return;
@@ -528,6 +551,10 @@ export class CookAcpClient {
         if (this.shouldApplyToActiveSession(params, update)) {
           this.sessionUpdates.enqueue(params as unknown as SessionNotification);
         } else {
+          // A child's first update can share a packet batch with its spawn, which the coalescer is
+          // still holding: apply what is pending so the row exists before the update is routed.
+          this.sessionUpdates.flushNow();
+          this.routeChildUpdate(params, update);
           this.noteBackgroundActivity(params, update);
         }
         continue;

@@ -31,6 +31,13 @@ export function clampMenuToViewport(node: HTMLElement, parent: HTMLElement, gutt
 /** Widest a popover grows on a very wide window, whatever its symmetric span measures. */
 const MAX_WIDTH = 720;
 
+/**
+ * Narrowest the popover may get. Half the chat is the target, but a window with the conversation
+ * list beside a small chat would otherwise leave the list too narrow for one row's own controls —
+ * the pane always has room for `[view]` and `[✕]` beside the label.
+ */
+const MIN_WIDTH = 280;
+
 /** Height cap the plans list uses; the tasks list matches it so the two read as one family. */
 export const MENU_MAX_HEIGHT = 320;
 
@@ -49,7 +56,11 @@ export function placeMenuOverChat(node: HTMLElement, parent: HTMLElement): void 
   const parentLeft = parent.getBoundingClientRect().left;
   const chatCentre = area.x + area.width / 2;
   const widthFromTrigger = Math.max(0, (chatCentre - parentLeft) * 2);
-  const width = Math.min(widthFromTrigger, MAX_WIDTH, window.innerWidth - GUTTER * 2);
+  const width = Math.min(
+    Math.max(widthFromTrigger, MIN_WIDTH),
+    MAX_WIDTH,
+    window.innerWidth - GUTTER * 2,
+  );
   const centred = chatCentre - width / 2 - parentLeft;
   const left = Math.max(
     GUTTER - parentLeft,

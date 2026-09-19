@@ -103,4 +103,48 @@ describe("TasksMenu", () => {
     renderMenu();
     expect(screen.getByText("No background tasks or subagents.")).toBeInTheDocument();
   });
+
+  it("opens a row's viewer from its button and from a click on the row", () => {
+    backgrounded("s1", "t-1", "Wait for server");
+    useActivityStore.getState().setOverlayOpen(true);
+    renderMenu();
+
+    fireEvent.click(screen.getByTestId("task-open-t-1"));
+    expect(useActivityStore.getState().viewing?.id).toBe("t-1");
+    // The dialog replaces the popover, so the chip's outside-click handler cannot fight it.
+    expect(useActivityStore.getState().overlayOpen).toBe(false);
+
+    useActivityStore.getState().clearViewing();
+    fireEvent.click(screen.getByTestId("task-row-t-1"));
+    expect(useActivityStore.getState().viewing?.id).toBe("t-1");
+  });
+
+  it("keeps the stop control from also opening the viewer", async () => {
+    backgrounded("s1", "t-1", "Wait for server");
+    renderMenu();
+    fireEvent.click(screen.getByTestId("task-kill-t-1"));
+    await waitFor(() => expect(requests.some((entry) => entry.method === "x.ai/task/kill")).toBe(true));
+    expect(useActivityStore.getState().viewing).toBeNull();
+  });
+
+  it("offers no viewer for a workflow, which has none in the pane", () => {
+    useActivityStore.getState().upsertWorkflow({
+      id: "wf-1",
+      kind: "workflow",
+      name: "audit",
+      status: "paused",
+      startedAt: Date.now(),
+      sessionId: "s1",
+    });
+    renderMenu();
+    expect(screen.getByTestId("task-row-wf-1")).toBeInTheDocument();
+    expect(screen.queryByTestId("task-open-wf-1")).toBeNull();
+  });
+
+  it("shows what the row is doing right now, beside the elapsed clock", () => {
+    backgrounded("s1", "t-1", "Wait for server");
+    useActivityStore.getState().setActivityLabel("t-1", "Running: cargo build");
+    renderMenu();
+    expect(screen.getByTestId("task-row-t-1").querySelector(".activity-doing")).toHaveTextContent("· Running: cargo build");
+  });
 });

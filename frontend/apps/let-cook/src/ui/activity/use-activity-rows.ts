@@ -11,7 +11,7 @@ import {
   type ActivityItem,
   type ActivityRowsSource,
 } from "../../state/activity";
-import { useSessionStore } from "../../state/session";
+import { useSessionStore, type TranscriptState } from "../../state/session";
 
 function useRowMaps(): ActivityRowsSource {
   const tasks = useActivityStore((state) => state.tasks);
@@ -32,4 +32,24 @@ export function useConversationRows(): ActivityItem[] {
   const sessionId = useSessionStore((state) => state.sessionId);
   const maps = useRowMaps();
   return useMemo(() => conversationRows(sessionId, maps), [sessionId, maps]);
+}
+
+/**
+ * The row whose viewer is open, read back from the store so the dialog follows the job it is
+ * showing (new stdout, a new ` · activity`, a terminal status) instead of freezing the snapshot
+ * that was taken when it opened.
+ */
+export function useViewingRow(): ActivityItem | null {
+  const viewing = useActivityStore((state) => state.viewing);
+  const maps = useRowMaps();
+  return useMemo(() => {
+    if (!viewing) return null;
+    const live = activityRows(maps).find((row) => row.kind === viewing.kind && row.id === viewing.id);
+    return live ?? viewing;
+  }, [viewing, maps]);
+}
+
+/** A subagent's own transcript, streamed under its child session id. */
+export function useChildTranscript(childSessionId: string | undefined): TranscriptState | null {
+  return useActivityStore((state) => (childSessionId ? state.childTranscripts[childSessionId] ?? null : null));
 }

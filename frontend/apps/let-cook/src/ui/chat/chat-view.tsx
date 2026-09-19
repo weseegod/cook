@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Bot, Brain, Copy, FileCode2, RefreshCw, X } from "lucide-react";
 import { acpClient } from "../../acp/client";
+import { TaskViewer } from "../activity/task-viewer";
 import { useSessionStore, type MessageBlock, type SessionEventBlock } from "../../state/session";
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
@@ -290,6 +291,7 @@ export function ChatView() {
         <RewindDialog />
         <RecapDialog />
         <PlanFileDialog />
+        <TaskViewer />
       </div>
     </TranscriptActionsContext.Provider>
   );

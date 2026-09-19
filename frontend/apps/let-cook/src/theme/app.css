@@ -1336,6 +1336,8 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .activity-list { min-height: 0; flex: 1 1 auto; overflow: auto; border-top: 1px solid var(--border); }
 .activity-row { display: grid; gap: 2px; padding: 7px 6px; border-bottom: 1px solid color-mix(in srgb, var(--border), transparent 45%); }
 .activity-row-main { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-soft); font-size: 10px; }
+/* Label region: shrinks and clips so the row's controls beside it always stay on the row. */
+.activity-row-text { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 6px; overflow: hidden; }
 .activity-kind { flex: 0 0 auto; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: 0.02em; }
 .activity-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--text); }
 .activity-status { flex: 0 0 auto; color: var(--muted); font-size: 9px; }
@@ -1345,6 +1347,14 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .activity-elapsed { flex: 0 0 auto; font-family: var(--font-mono); font-size: 9px; color: var(--muted); }
 .activity-kill { width: 22px; height: 22px; flex: 0 0 auto; }
 .activity-kill-spacer { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; color: transparent; }
+/* The TUI's ` · {activity}` suffix (`views/tasks_pane.rs`); it yields before the clock and controls. */
+.activity-doing { min-width: 0; flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; }
+/* The row's `[view]`, beside `[✕]`. Named `activity-open`, not `activity-view`: that class is the
+   panel root, and a width rule shared with it collapses the whole panel. */
+.activity-open { width: 22px; height: 22px; flex: 0 0 auto; }
+/* Clicking anywhere on the row opens it, the way the TUI opens on a double-click. */
+.activity-row-openable { cursor: pointer; }
+.activity-row-openable:hover { background: var(--raised-2); }
 .activity-row-detail { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 9px; font-family: var(--font-mono); padding-left: 2px; }
 /* Tasks pane: the popover under the header's Tasks chip (`views/tasks_pane.rs`), centred on the
    chat, half as wide as it and capped like the plans list. The chip script measures the chat and
@@ -1372,7 +1382,8 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .tasks-menu .activity-row { padding: 4px 6px; }
 /* Three classes deep: the header's own `.agent-header .icon-button` sizes every icon in the bar. */
 .tasks-menu .activity-row .activity-kill,
-.tasks-menu .activity-row .activity-kill-spacer { width: 20px; height: 20px; min-height: 20px; }
+.tasks-menu .activity-row .activity-kill-spacer,
+.tasks-menu .activity-row .activity-open { width: 20px; height: 20px; min-height: 20px; }
 .tasks-menu .activity-row .activity-kill { color: color-mix(in srgb, var(--danger-light, var(--danger)), var(--muted) 36%); }
 .tasks-menu .activity-row .activity-kill:hover:not(:disabled) {
   color: var(--danger-light, var(--danger));
@@ -1382,6 +1393,12 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
   outline: 1px solid color-mix(in srgb, var(--danger-light, var(--danger)), transparent 35%);
   outline-offset: 1px;
 }
+.tasks-menu .activity-row .activity-open { color: var(--muted); }
+.tasks-menu .activity-row .activity-open:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text), transparent 88%);
+}
+.tasks-menu .activity-row .activity-open:focus-visible { outline: 1px solid var(--border-strong); outline-offset: 1px; }
 .tasks-menu .activity-row .activity-status { display: none; }
 .tasks-menu .activity-group { padding: 4px 2px 1px; }
 .tasks-menu .utility-state { min-height: 0; padding: 8px; }
@@ -1397,6 +1414,33 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 /* How many jobs are running, beside the label the Plans chip mirrors; parked work in warning. */
 .tasks-chip-count { color: color-mix(in srgb, currentColor, transparent 25%); font-variant-numeric: tabular-nums; }
 .tasks-chip-paused { color: var(--warning); font-variant-numeric: tabular-nums; }
+/* The row viewer (`views/tasks_pane.rs` `[view]` → block viewer): a command's stdout, or a
+   subagent's own transcript. Read-only, so it stays a plain scrolling body. */
+.task-viewer { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 6px; }
+.task-viewer-meta { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
+.task-viewer-status-running, .task-viewer-status-active, .task-viewer-status-scheduled, .task-viewer-status-fired { color: #75beff; }
+.task-viewer-status-completed, .task-viewer-status-done { color: var(--success); }
+.task-viewer-status-failed, .task-viewer-status-cancelled, .task-viewer-status-killed { color: var(--danger); }
+.task-viewer-command { margin: 0; overflow-wrap: anywhere; color: var(--text-soft); font: 10px/1.5 var(--font-mono); }
+.task-viewer-output {
+  min-height: 120px;
+  max-height: calc(100vh - 320px);
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  color: #d4d4d4;
+  background: #1e1e1e;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: 10px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.task-viewer-empty, .task-viewer-note { margin: 0; color: var(--muted); font-size: 10px; }
+.task-viewer-transcript { min-height: 120px; max-height: calc(100vh - 320px); overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
+.task-viewer-transcript .transcript-row { padding: 0 6px; }
+.task-viewer-snapshot { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 10px; }
+.task-viewer-snapshot p { margin: 0; }
 :root[data-theme="light"] .tasks-chip { border-color: color-mix(in srgb, #2f7dc4, var(--border) 60%); color: #1c5b96; background: #eaf3fd; }
 :root[data-theme="light"] .tasks-chip:hover { border-color: #2f7dc4; color: #14456f; }
 :root[data-theme="light"] .tasks-chip.active { border-color: #2f7dc4; color: #10395c; background: #dceafb; }

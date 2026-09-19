@@ -13,6 +13,7 @@ export function ActivityList({
   now,
   busyId,
   onKill,
+  onOpen,
   testIdPrefix,
   label,
 }: {
@@ -20,6 +21,7 @@ export function ActivityList({
   now: number;
   busyId: string | null;
   onKill: (item: ActivityItem) => void;
+  onOpen?: (item: ActivityItem) => void;
   testIdPrefix: string;
   label: string;
 }) {
@@ -42,6 +44,7 @@ export function ActivityList({
               now={now}
               busy={busyId === item.id}
               onKill={() => onKill(item)}
+              onOpen={onOpen}
               testIdPrefix={testIdPrefix}
             />
           ))}
