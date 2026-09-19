@@ -9,7 +9,7 @@ import {
   Search,
   Terminal,
 } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { openPath } from "../../acp/host";
 import { normalizeError } from "../../acp/errors";
 import { useArtifactStore } from "../../state/artifacts";
@@ -18,23 +18,59 @@ import { Markdown } from "./markdown";
 import { copyText, displayPath } from "./clipboard";
 import { formatThinkingDuration } from "./format-duration";
 import { isLiveTool, isTerminalToolStatus } from "./transcript-projection";
+import { thinkingPreview, type ThinkingPreview } from "./thinking-preview";
+import { toolLineCounts } from "./edit-lines";
 import { verbGroupLabel } from "./verb-group";
 
 /** Tall edit diffs open in the Preview dock instead of drowning the transcript. */
 const TALL_DIFF_LINES = 40;
 
+const EDIT_KINDS = ["edit", "write", "write_file"];
+
+/** The collapsed Edit suffix (`edit.rs::header_line`): a diffstat, else ` ({n} edits)`. */
+export type EditSuffix =
+  | { kind: "diff"; added: number; removed: number }
+  | { kind: "edits"; count: number };
+
 /** Header text for a collapsed tool row (`scrollback/blocks/tool/*`). */
-export function toolHeader(tool: ToolBlock): { prefix?: string; text: string } {
-  if (tool.description) return { text: tool.description };
+export function toolHeader(tool: ToolBlock): { prefix?: string; text: string; suffix?: EditSuffix } {
+  const suffix = editHeaderSuffix(tool);
+  const head = (text: string): { prefix?: string; text: string; suffix?: EditSuffix } => (suffix ? { text, suffix } : { text });
+  if (tool.description) return head(tool.description);
   if (isExecute(tool) && tool.command) return { prefix: "$ ", text: tool.command };
   const path = tool.paths[0] ? displayPath(tool.paths[0]) : null;
   const kind = (tool.kind ?? "").toLowerCase();
   if (path && isGenericTitle(tool.title, kind)) {
-    if (["edit", "write", "write_file"].includes(kind)) return { text: `${kind === "write" || kind === "write_file" ? "Creating" : "Edit"} ${path}` };
+    if (EDIT_KINDS.includes(kind)) return head(`${kind === "write" || kind === "write_file" ? "Creating" : "Edit"} ${path}`);
     if (["list", "list_dir", "list_directory"].includes(kind)) return { text: `List ${path}` };
     if (["read", "file"].includes(kind)) return { text: `Read ${path}` };
   }
-  return { text: tool.title };
+  return head(tool.title);
+}
+
+/**
+ * Counts for the collapsed Edit one-liner. A call that touched several files reports one diff per
+ * file, so counts describing only the first would lie and the row falls back to ` ({n} edits)`.
+ */
+export function editHeaderSuffix(tool: ToolBlock): EditSuffix | null {
+  if (!EDIT_KINDS.includes((tool.kind ?? "").toLowerCase())) return null;
+  const stats = toolLineCounts(tool.content);
+  if (tool.paths.length <= 1 && (stats.added > 0 || stats.removed > 0)) {
+    return { kind: "diff", added: stats.added, removed: stats.removed };
+  }
+  if (stats.hunks > 1) return { kind: "edits", count: stats.hunks };
+  return null;
+}
+
+function EditSuffixSpans({ suffix }: { suffix: EditSuffix }) {
+  if (suffix.kind === "edits") return <span className="row-suffix row-edits">({suffix.count} edits)</span>;
+  return (
+    <span className="row-suffix row-diffstat">
+      <span className="row-diff-add">+{suffix.added}</span>
+      <span className="row-diff-sep">/</span>
+      <span className="row-diff-del">-{suffix.removed}</span>
+    </span>
+  );
 }
 
 function isGenericTitle(title: string, kind: string): boolean {
@@ -97,8 +133,14 @@ export const VerbGroupRow = memo(function VerbGroupRow({ tools }: { tools: ToolB
 export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
   const header = toolHeader(tool);
   const running = isLiveTool(tool);
+  // The diffstat belongs to the one-liner: an expanded row shows the hunks themselves.
+  const [open, setOpen] = useState(false);
   return (
-    <details className={`tool-row tool-${running ? "running" : normalizedStatus(tool.status)}`} data-testid={`tool-row-${tool.id}`}>
+    <details
+      className={`tool-row tool-${running ? "running" : normalizedStatus(tool.status)}`}
+      data-testid={`tool-row-${tool.id}`}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
       <summary>
         <span className="row-chevron"><ChevronRight size={13} /></span>
         <span className={`row-bullet${running ? " animated" : ""}`} aria-hidden="true" />
@@ -107,25 +149,42 @@ export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
           {header.prefix && <span className="row-prefix">{header.prefix}</span>}
           {header.text}
         </strong>
+        {!open && header.suffix && <EditSuffixSpans suffix={header.suffix} />}
       </summary>
       <ToolDetail tool={tool} />
     </details>
   );
 }, toolPropsEqual);
 
-/** Thinking row: `Thinking…` while running, `Thought for 1.2s` once frozen. */
+/**
+ * Thinking row: `Thinking…` plus the last few lines while running, `Thought for 1.2s` with no body
+ * once frozen. A running block defaults to the truncated view and finish collapses it
+ * (`scrollback/blocks/thinking.rs::default_display_mode` / `finished_display_mode`).
+ */
 export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: string; text: string; streaming: boolean; elapsedMs?: number | null } }) {
   const time = block.elapsedMs ?? null;
   const header = block.streaming ? "Thinking…" : time === null ? "Thought" : `Thought for ${formatThinkingDuration(time)}`;
+  const streaming = block.streaming;
+  const [expanded, setExpanded] = useState(false);
+  // Finish collapses even a block the user had opened.
+  useEffect(() => {
+    if (!streaming) setExpanded(false);
+  }, [streaming]);
+  const preview = streaming && !expanded ? thinkingPreview(block.text) : null;
   return (
-    <details className="thinking-row" data-testid={`thinking-${block.id}`} open={block.streaming}>
-      <summary>
+    <div
+      className={`thinking-row thinking-${streaming ? "running" : "done"}`}
+      data-testid={`thinking-${block.id}`}
+      data-expanded={expanded ? "true" : "false"}
+    >
+      <button type="button" className="thinking-summary" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
         <span className="row-chevron"><ChevronRight size={13} /></span>
-        <span className={`row-bullet${block.streaming ? " animated" : ""}`} aria-hidden="true" />
+        <span className={`row-bullet${streaming ? " animated" : ""}`} aria-hidden="true" />
         <strong>{header}</strong>
-      </summary>
-      <div className="thinking-body"><Markdown text={block.text} streaming={block.streaming} /></div>
-    </details>
+      </button>
+      {expanded && <div className="thinking-body"><Markdown text={block.text} streaming={streaming} /></div>}
+      {preview && preview.text !== "" && <ThinkingPreviewBody preview={preview} />}
+    </div>
   );
 }, (previous, next) => (
   previous.block.id === next.block.id
@@ -134,13 +193,36 @@ export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: s
   && previous.block.elapsedMs === next.block.elapsedMs
 ));
 
+/**
+ * The running block's truncated tail: a muted `…` when lines were dropped, then the last lines the
+ * TUI keeps. Plain text, not markdown — half-finished markdown would repaint on every chunk.
+ */
+function ThinkingPreviewBody({ preview }: { preview: ThinkingPreview }) {
+  const textRef = useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = useState(false);
+  // A long unbroken line wraps past the 3-line box; flag that so the `…` cue stays honest.
+  useLayoutEffect(() => {
+    const node = textRef.current;
+    const clip = node?.parentElement;
+    if (node && clip) setClipped(node.offsetHeight - clip.clientHeight > 1);
+  }, [preview.text]);
+  return (
+    <div className="thinking-preview">
+      {(preview.truncated || clipped) && <div className="thinking-ellipsis" aria-hidden="true">…</div>}
+      <div className="thinking-preview-clip">
+        <div className="thinking-preview-text" ref={textRef}>{preview.text}</div>
+      </div>
+    </div>
+  );
+}
+
 export function ToolDetail({ tool }: { tool: ToolBlock }) {
   const [copied, setCopied] = useState<string | null>(null);
   const text = tool.content.map(contentText).filter(Boolean).join("\n");
   const images = tool.content.flatMap(contentImages);
   const pathText = tool.paths.map(displayPath).join("\n");
   const tallDiff = looksLikeDiff(text) && text.split("\n").length >= TALL_DIFF_LINES;
-  const isEdit = ["edit", "write", "write_file"].includes((tool.kind ?? "").toLowerCase()) || tallDiff;
+  const isEdit = EDIT_KINDS.includes((tool.kind ?? "").toLowerCase()) || tallDiff;
 
   async function copy(label: string, value: string) {
     if (!value) return;
