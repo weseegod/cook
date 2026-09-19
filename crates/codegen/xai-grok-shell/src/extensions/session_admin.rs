@@ -516,6 +516,9 @@ async fn handle_delete_all_sessions(agent: &MvpAgent, _args: &acp::ExtRequest) -
     for summary in &summaries {
         let session_id = summary.info.id.to_string();
         let session_dir = storage.session_dir(&summary.info);
+        // Counted before the delete: the session directory is what holds the plans, and it is gone
+        // once `delete_session_history` returns.
+        let plans = count_plan_files(&session_dir);
         // A session the agent still holds has to stop before its files go; a non-resident one is a no-op.
         agent.teardown_live_session_before_delete(&summary.info.id).await;
 
@@ -530,7 +533,7 @@ async fn handle_delete_all_sessions(agent: &MvpAgent, _args: &acp::ExtRequest) -
         {
             Ok(_) => {
                 deleted += 1;
-                plans_deleted += count_plan_files(&session_dir);
+                plans_deleted += plans;
             }
             Err(e) => {
                 failed += 1;

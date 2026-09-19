@@ -75,7 +75,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .ghost-button:hover { background: var(--raised-2); }
 .primary-button { padding: 8px 12px; background: var(--accent); color: #fff; font-weight: 700; box-shadow: 0 4px 12px color-mix(in srgb, var(--accent), transparent 72%); }
 .primary-button:hover { background: var(--accent-strong); }
-.danger-button { padding: 8px 12px; background: color-mix(in srgb, var(--danger), transparent 80%); color: #ffb2b8; }
+.danger-button { padding: 8px 12px; background: color-mix(in srgb, var(--danger), transparent 80%); color: var(--danger); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 .chat-error { padding: 8px 16px; color: #ffc3c7; background: #391b20; border-bottom: 1px solid #6b3039; font-size: 13px; }
 .eyebrow { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .12em; font-weight: 700; }
@@ -189,6 +189,13 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .settings-note { padding: 12px; border: 1px solid #343a47; border-radius: 8px; background: #171b21; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .settings-note + .settings-note { margin-top: 8px; }.security-warning { border-color: #6f5428; background: #2a2115; color: #edca87; }
 
+/* Data controls: one destructive action, marked off from the prose around it. */
+.data-control-danger { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: 10px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--danger), var(--border) 72%); border-radius: 8px; background: color-mix(in srgb, var(--danger), transparent 94%); }
+.data-control-copy { display: grid; gap: 3px; min-width: 0; }
+.data-control-copy strong { font-size: 12px; }
+.data-control-copy span { color: var(--muted); font-size: 11px; line-height: 1.5; max-width: 62ch; }
+.data-control-danger .danger-button { flex: 0 0 auto; }
+
 /* Providers, connectors, project context, skills */
 .badge { display: inline-flex; align-items: center; padding: 2px 7px; border: 1px solid #39414f; border-radius: 99px; font-size: 10px; font-weight: 650; color: #b7bec9; background: #181d24; }
 .badge-ok { border-color: #2e5c43; color: #9fe0ba; background: #14251d; }.badge-warn { border-color: #6b5326; color: #e7c483; background: #262012; }
@@ -285,6 +292,8 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 
 /* Light mode keeps the same hierarchy while swapping surfaces and contrast. */
 :root[data-theme="light"] .chat-error { color: #9e2638; background: #fff0f2; border-color: #f3c5cc; }
+/* The danger tint is pale here, so the label follows the same darker red as the error text. */
+:root[data-theme="light"] .danger-button { color: #9e2638; }
 :root[data-theme="light"] .welcome-mark { color: var(--accent); background: linear-gradient(145deg, #eef0ff, #e2e7ff); box-shadow: inset 0 0 0 1px #cbd2ff, 0 18px 50px #5266b21c; }
 :root[data-theme="light"] .message-user .message-avatar { color: var(--accent); background: var(--accent-soft); border-color: #cbd2ff; }
 :root[data-theme="light"] .message-user .message-body { color: var(--text); }

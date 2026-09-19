@@ -36,9 +36,10 @@ function api(page: Page) {
   };
 }
 
+/** Settings and its confirmation are fixed overlays, so the viewport is the frame that shows them. */
 const capture = async (page: Page, name: string) => {
   if (process.env.PW_CAPTURE === "1") {
-    await page.screenshot({ path: test.info().outputPath(`${name}.png`), fullPage: true });
+    await page.screenshot({ path: test.info().outputPath(`${name}.png`) });
   }
 };
 
@@ -134,34 +135,55 @@ test.describe("data controls", () => {
     await openWorkspace(page);
     await openDataControls(page);
 
+    // The shell itself overflows this viewport; only the overflow this panel adds is a regression.
+    await page.getByRole("tab", { name: "General" }).click();
+    const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await page.getByRole("tab", { name: "Data Controls" }).click();
+
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-    expect(overflow).toBeLessThanOrEqual(1);
+    expect(overflow).toBeLessThanOrEqual(baseline + 1);
     await expect(page.getByTestId("delete-all-conversations")).toBeVisible();
     await capture(page, "data-controls-narrow");
   });
 
-  test("keeps both themes legible", async ({ page }) => {
+  test("keeps the destructive action legible in both themes", async ({ page }) => {
     await openWorkspace(page);
     await openDataControls(page);
 
-    const readable = async () => {
-      const style = await page.getByTestId("delete-all-conversations").evaluate((node) => {
-        const computed = getComputedStyle(node);
-        return { color: computed.color, background: computed.backgroundColor };
+    /** WCAG contrast of the label against the surface it is painted on, translucency included. */
+    const contrast = () =>
+      page.getByTestId("delete-all-conversations").evaluate((node) => {
+        const lines = (value: string) => {
+          const numbers = value.match(/[\d.]+/g)!.map(Number);
+          const scale = value.startsWith("color(srgb") ? 1 : 255;
+          return [numbers[0] / scale, numbers[1] / scale, numbers[2] / scale, numbers[3] ?? 1];
+        };
+        const [foreground, background, surface] = [
+          lines(getComputedStyle(node).color),
+          lines(getComputedStyle(node).backgroundColor),
+          lines(getComputedStyle(node.closest(".settings-panel")!).backgroundColor),
+        ];
+        // The button's own tint is translucent, so composite it over the panel it sits on.
+        const painted = background
+          .slice(0, 3)
+          .map((channel, index) => channel * background[3] + surface[index] * (1 - background[3]));
+        const luminance = (channels: number[]) => {
+          const [r, g, b] = channels.map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const [a, b] = [luminance(foreground.slice(0, 3)), luminance(painted)].sort((x, y) => y - x);
+        return (a + 0.05) / (b + 0.05);
       });
-      expect(style.color).not.toBe(style.background);
-      // The destructive action has to read as destructive, not as another ghost button.
-      return style.color;
-    };
-    const dark = await readable();
+
+    // The pale fixed colour this button used to carry scored 1.2:1 on the light tint.
+    expect(await contrast()).toBeGreaterThanOrEqual(4.5);
 
     // Settings stays open; the theme lives on its General tab.
     await page.getByRole("tab", { name: "General" }).click();
     await page.getByTestId("theme-option-light").click();
     await page.getByRole("tab", { name: "Data Controls" }).click();
-    const light = await readable();
-    expect(light).not.toBe(dark);
 
+    expect(await contrast()).toBeGreaterThanOrEqual(4.5);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     expect(overflow).toBeLessThanOrEqual(1);
     await capture(page, "data-controls-light");

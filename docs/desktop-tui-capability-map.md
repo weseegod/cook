@@ -298,6 +298,7 @@ Agent match: `acp_agent.rs` L1966–2342. Desktop wrappers: `xai.ts`, `extension
 | C-sess-upd | `x.ai/session/updates` | C→A | reconnect | — | `gap` | protocol |
 | C-sess-state | `x.ai/session/state` / `import` / `repair` | C→A | debug/import | — | `na` | chrome |
 | C-plans | `x.ai/session/plans` / `plans/delete` | C→A | `/view-plan` shows the current episode only | `plan-files.ts`; header plan list (`plan-chip.tsx`) with Copy / Copy file path / Delete | `ok` | surface |
+| C-sess-del-all | `x.ai/sessions/delete_all` | C→A | — (delete one session at a time) | Settings → Data Controls (`data-controls.tsx`), behind a confirmation | `gap` in the TUI, `ok` on the desktop | surface |
 | C-sess-mcp | `x.ai/session/update_mcp_servers` | C→A | MCP modal | — (uses `x.ai/mcp/*`) | `partial` | protocol |
 | C-sess-wt | `x.ai/session/resolve_local_for_worktree_resume` / `rehydrate` | C→A | worktree resume | — | `na` | chrome |
 | C-sess-sum | `x.ai/session_summaries/*` | C→A | dashboard roster | — | `na` | chrome |
@@ -725,6 +726,8 @@ Wire is mostly `ok` on this branch. Presentation issues stay in the Chat UI plan
 | P-exit | `x.ai/exit_plan_mode` | `ok` | protocol |
 | P-goal | `goal_updated` on `x.ai/session_notification` | `ok` | surface |
 | P-slash | `/plan` `/view-plan` `/goal` | `ok` / `ok-prompt` | surface |
+
+A session's plan files are removed with the session: Settings → Data Controls (`x.ai/sessions/delete_all`) deletes every local session directory, and each directory carries its `plans/` and `plan_mode.json`.
 
 ---
 

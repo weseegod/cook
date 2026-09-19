@@ -359,6 +359,18 @@ An agent that predates those methods leaves the list empty too, and keeps its
 older single-plan behavior for a parked review, so the feature degrades instead
 of erroring.
 
+Erasing conversations is a Settings surface, not a sidebar action: **Data
+Controls** (`ui/settings/data-controls.tsx`) holds "Delete all conversations",
+which confirms first and then calls `x.ai/sessions/delete_all`. The agent walks
+its own session store and deletes each session through the same path as
+`x.ai/session/delete`, so a wipe takes the transcripts, the search-index rows,
+the plan files inside each session directory, and the cloud copy when writeback
+storage makes that authoritative. It reports how many conversations and plan
+files went, and how many could not be deleted, rather than assuming success; the
+renderer drops the open conversation and its sidebar preferences and reports
+those counts. Sessions that exist only in the cloud are outside this scope: the
+agent enumerates what its session store holds.
+
 **Forbidden chrome** (the TUI does not have these): a pinned live-tool
 activity rail, per-tool elapsed on collapsed rows, in-transcript command
 rerun/Execute, a `Waiting…` row inside the transcript, a 1 s timer tick,
