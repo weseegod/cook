@@ -271,11 +271,11 @@ fn status_alias_resolves_to_session_info() {
 
 #[test]
 fn resolve_model_authored_skill_requires_exact_child_catalog_name_and_loader() {
-    let skills = vec![make_skill("commit", true), make_skill("other", true)];
+    let skills = vec![make_skill("deploy", true), make_skill("other", true)];
 
     let outcome = super::resolve_model_authored_skill(
-        vec![text_block("/commit fix typo")],
-        "commit",
+        vec![text_block("/deploy fix typo")],
+        "deploy",
         "fix typo",
         &skills,
         all_gated(),
@@ -283,14 +283,14 @@ fn resolve_model_authored_skill_requires_exact_child_catalog_name_and_loader() {
     )
     .unwrap_err();
     let skill = first_skill(outcome);
-    assert_eq!(skill.name, "commit");
+    assert_eq!(skill.name, "deploy");
     assert_eq!(skill.args, "fix typo");
 
     for (name, has_skill_loader) in [
-        ("Commit", true),
-        ("local:commit", true),
+        ("Deploy", true),
+        ("local:deploy", true),
         ("missing", true),
-        ("commit", false),
+        ("deploy", false),
         ("always-approve", true),
     ] {
         assert!(
@@ -351,9 +351,9 @@ fn resolve_model_authored_skill_requires_exact_child_catalog_name_and_loader() {
 
 #[test]
 fn resolve_parses_skill_with_args() {
-    let skills = vec![make_skill("commit", true)];
+    let skills = vec![make_skill("deploy", true)];
     let outcome = resolve(
-        vec![text_block("/commit fix typo")],
+        vec![text_block("/deploy fix typo")],
         &skills,
         all_gated(),
         SkillSlashRewrite::default(),
@@ -361,11 +361,11 @@ fn resolve_parses_skill_with_args() {
     )
     .unwrap_err();
     let skill = first_skill(outcome);
-    assert_eq!(skill.name, "commit");
+    assert_eq!(skill.name, "deploy");
     assert_eq!(skill.args, "fix typo");
 
     let outcome = resolve(
-        vec![text_block("/commit")],
+        vec![text_block("/deploy")],
         &skills,
         all_gated(),
         SkillSlashRewrite::default(),
@@ -373,7 +373,7 @@ fn resolve_parses_skill_with_args() {
     )
     .unwrap_err();
     let skill = first_skill(outcome);
-    assert_eq!(skill.name, "commit");
+    assert_eq!(skill.name, "deploy");
     assert_eq!(skill.args, "");
 }
 
@@ -385,18 +385,18 @@ async fn build_skill_information_for_refs_loads_and_wraps() {
     let path = dir.path().join("SKILL.md");
     std::fs::write(&path, "Body with $ARGUMENTS").unwrap();
 
-    let mut skill = make_skill("commit", true);
+    let mut skill = make_skill("deploy", true);
     skill.path = path.to_string_lossy().to_string();
     let skills = vec![skill];
 
-    let parsed = parse_skill_references("/commit fix typo", &skills, all_gated())
+    let parsed = parse_skill_references("/deploy fix typo", &skills, all_gated())
         .expect("known skill must parse");
     let info = build_skill_information_for_refs(&parsed, &skills, "sid-1")
         .await
         .expect("skill body must load");
     assert!(info.starts_with("<skill_information>"), "got: {info}");
     assert!(
-        info.contains("<skill name=\"commit\" args=\"fix typo\">"),
+        info.contains("<skill name=\"deploy\" args=\"fix typo\">"),
         "got: {info}"
     );
     assert!(
@@ -505,30 +505,103 @@ fn resolve_loop_without_args_uses_bare_command_display_text() {
     );
 }
 
+/// Expanded wire text and `displayText` for a commit-family invocation.
+fn commit_prompt(invocation: &str) -> (String, Option<String>) {
+    let outcome = resolve(
+        vec![text_block(invocation)],
+        &[],
+        all_gated(),
+        SkillSlashRewrite::default(),
+        &[],
+    )
+    .unwrap_err();
+    let SlashCommandOutcome::InvokeSkill { blocks, skills } = outcome else {
+        panic!("expected InvokeSkill for {invocation}");
+    };
+    assert!(skills.is_empty(), "{invocation} is a prompt-only command");
+    let acp::ContentBlock::Text(tb) = blocks.first().expect("one block") else {
+        panic!("expected a text block");
+    };
+    let display = tb
+        .meta
+        .as_ref()
+        .and_then(|m| m.get("displayText"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    (tb.text.clone(), display)
+}
+
+#[test]
+fn resolve_commit_expands_to_the_instruction() {
+    let (text, display) = commit_prompt("/commit fix the parser");
+    assert!(text.contains("fix the parser"));
+    assert!(!text.contains("## Then push"));
+    assert_eq!(display.as_deref(), Some("/commit fix the parser"));
+}
+
+#[test]
+fn resolve_commit_push_flag_and_alias_match_the_pager_wording() {
+    use xai_grok_tools::implementations::grok_build::{commit_instruction, parse_commit_args};
+
+    let (flag_text, flag_display) = commit_prompt("/commit wire retries --push");
+    assert_eq!(flag_display.as_deref(), Some("/commit wire retries --push"));
+    let parsed = parse_commit_args("wire retries --push", false);
+    assert_eq!(flag_text, commit_instruction(parsed.hint, parsed.push));
+    assert!(flag_text.contains("## Then push"));
+
+    let (alias_text, alias_display) = commit_prompt("/commit-and-push");
+    assert_eq!(alias_display.as_deref(), Some("/commit-and-push"));
+    assert_eq!(alias_text, commit_instruction("", true));
+    assert!(alias_text.contains("## Then push"));
+}
+
+#[test]
+fn resolve_commit_help_shows_usage() {
+    let (text, _) = commit_prompt("/commit --help");
+    assert!(text.contains("Usage: /commit "));
+    let (push_text, _) = commit_prompt("/commit-and-push --help");
+    assert!(push_text.contains("Usage: /commit-and-push "));
+}
+
+#[test]
+fn commit_is_advertised_without_any_gate() {
+    // Both commands are AlwaysOn: a repo with nothing enabled still gets them in the session
+    // catalog. The pre-session `builtin_commands` list deliberately carries no prompt commands,
+    // so `/commit` advertises from the first turn onwards exactly like `/loop` does.
+    let names: Vec<String> = available_commands(&[], CommandAvailability::default(), &[])
+        .into_iter()
+        .map(|c| c.name)
+        .collect();
+    assert!(names.iter().any(|n| n == "commit"), "got: {names:?}");
+    assert!(
+        names.iter().any(|n| n == "commit-and-push"),
+        "got: {names:?}"
+    );
+}
+
 #[test]
 fn resolve_passthrough_preserves_original_blocks() {
-    // External-harness agents: blocks are passed through verbatim.
     // The prompt assembly layer decides how to format them.
-    let skills = vec![make_skill("commit", true)];
+    let skills = vec![make_skill("deploy", true)];
     let outcome = resolve(
-        vec![text_block("/commit fix typo")],
+        vec![text_block("/deploy fix typo")],
         &skills,
         all_gated(),
         SkillSlashRewrite::Passthrough,
         &[],
     )
     .unwrap_err();
-    assert_eq!(invoke_text(outcome), "/commit fix typo");
+    assert_eq!(invoke_text(outcome), "/deploy fix typo");
 
     let outcome = resolve(
-        vec![text_block("/commit")],
+        vec![text_block("/deploy")],
         &skills,
         all_gated(),
         SkillSlashRewrite::Passthrough,
         &[],
     )
     .unwrap_err();
-    assert_eq!(invoke_text(outcome), "/commit");
+    assert_eq!(invoke_text(outcome), "/deploy");
 }
 
 #[test]
@@ -589,7 +662,7 @@ fn resolve_builtin_shadows_same_named_skill() {
 
 #[test]
 fn available_commands_orders_builtins_first() {
-    let skills = vec![make_skill("commit", true), make_skill("deploy", true)];
+    let skills = vec![make_skill("audit", true), make_skill("deploy", true)];
     let commands = available_commands(&skills, all_gated(), &[]);
     let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(
@@ -615,6 +688,8 @@ fn available_commands_orders_builtins_first() {
             "goal",
             "loop",
             "commit",
+            "commit-and-push",
+            "audit",
             "deploy",
         ]
     );
@@ -864,7 +939,7 @@ fn pre_session_builtin_commands_advertises_goal_when_flag_enabled() {
 
 #[test]
 fn available_commands_populates_acp_fields() {
-    let skills = vec![make_skill("commit", true)];
+    let skills = vec![make_skill("deploy", true)];
     let commands = available_commands(&skills, all_gated(), &[]);
 
     let builtin = commands.iter().find(|c| c.name == "compact").unwrap();
@@ -873,14 +948,14 @@ fn available_commands_populates_acp_fields() {
     let flush = commands.iter().find(|c| c.name == "flush").unwrap();
     assert!(flush.input.is_none()); // no argument_hint
 
-    let skill = commands.iter().find(|c| c.name == "commit").unwrap();
-    assert_eq!(skill.description, "Short: commit");
+    let skill = commands.iter().find(|c| c.name == "deploy").unwrap();
+    assert_eq!(skill.description, "Short: deploy");
     let meta = skill.meta.as_ref().expect("skill meta");
     assert_eq!(meta.get("scope").and_then(|v| v.as_str()), Some("local"));
     assert!(meta.get("path").and_then(|v| v.as_str()).is_some());
     assert_eq!(
         meta.get("qualifiedName").and_then(|v| v.as_str()),
-        Some("local:commit")
+        Some("local:deploy")
     );
     assert!(meta.get("pluginName").is_none());
 }
@@ -1052,13 +1127,13 @@ fn make_scoped_skill(name: &str, scope: SkillScope) -> SkillInfo {
 #[test]
 fn resolve_ambiguous_bare_name_passes_through() {
     let skills = vec![
-        make_scoped_skill("commit", SkillScope::Local),
-        make_scoped_skill("commit", SkillScope::User),
+        make_scoped_skill("deploy", SkillScope::Local),
+        make_scoped_skill("deploy", SkillScope::User),
     ];
-    // Bare "/commit" is ambiguous and must not resolve to the first match
+    // Bare "/deploy" is ambiguous and must not resolve to the first match
     assert!(
         resolve(
-            vec![text_block("/commit")],
+            vec![text_block("/deploy")],
             &skills,
             all_gated(),
             SkillSlashRewrite::default(),
@@ -1133,22 +1208,22 @@ fn resolve_accepts_qualified_form_of_bare_advertised_skill() {
 #[test]
 fn available_commands_uses_qualified_names_for_duplicates() {
     let skills = vec![
-        make_scoped_skill("commit", SkillScope::Local),
-        make_scoped_skill("commit", SkillScope::User),
+        make_scoped_skill("audit", SkillScope::Local),
+        make_scoped_skill("audit", SkillScope::User),
         make_skill("deploy", true),
     ];
     let commands = available_commands(&skills, all_gated(), &[]);
     let names: Vec<&str> = commands.iter().map(|c| c.name.as_str()).collect();
-    // Duplicate "commit" skills should use qualified names.
-    assert!(names.contains(&"local:commit"));
-    assert!(names.contains(&"user:commit"));
+    // Duplicate "audit" skills should use qualified names.
+    assert!(names.contains(&"local:audit"));
+    assert!(names.contains(&"user:audit"));
     // Unique "deploy" keeps bare name only (no duplicate qualified form).
     assert!(names.contains(&"deploy"));
     assert!(
         !names.contains(&"local:deploy"),
         "non-colliding skill should NOT get a qualified duplicate, got: {names:?}"
     );
-    assert!(!names.contains(&"commit"));
+    assert!(!names.contains(&"audit"));
 }
 
 #[test]
@@ -1169,6 +1244,52 @@ fn available_commands_qualifies_builtin_colliding_skill() {
         "bare 'compact' should be the builtin (no meta)"
     );
     assert!(names.contains(&"deploy"));
+}
+
+/// A user skill named `commit` must survive the new builtin: it is advertised qualified and
+/// `/local:commit` still reaches it while the bare form stays with the shell command.
+#[test]
+fn prompt_command_colliding_skill_keeps_its_qualified_name() {
+    let skills = vec![
+        make_scoped_skill("commit", SkillScope::Local),
+        make_skill("deploy", true),
+    ];
+    let commands = available_commands(&skills, all_gated(), &[]);
+    let names: Vec<&str> = commands
+        .iter()
+        .map(|command| command.name.as_str())
+        .collect();
+    assert!(names.contains(&"local:commit"), "got: {names:?}");
+    let bare = commands
+        .iter()
+        .find(|command| command.name == "commit")
+        .expect("bare commit must be advertised");
+    assert!(bare.meta.is_none(), "bare 'commit' must be the builtin");
+
+    match resolve(
+        vec![text_block("/commit")],
+        &skills,
+        all_gated(),
+        SkillSlashRewrite::default(),
+        &[],
+    )
+    .unwrap_err()
+    {
+        // Prompt commands win the bare name and expand to an instruction, carrying no skill refs.
+        SlashCommandOutcome::InvokeSkill { skills: refs, .. } => {
+            assert!(refs.is_empty(), "bare /commit must not resolve to the skill");
+        }
+        _ => panic!("expected InvokeSkill for bare /commit"),
+    }
+    let outcome = resolve(
+        vec![text_block("/local:commit")],
+        &skills,
+        all_gated(),
+        SkillSlashRewrite::default(),
+        &[],
+    )
+    .unwrap_err();
+    assert_eq!(first_skill(outcome).name, "local:commit");
 }
 
 #[test]
@@ -1320,17 +1441,17 @@ fn resolve_mixed_case_builtin() {
 #[test]
 fn same_bare_name_differing_only_by_case_qualifies_both() {
     let skills = vec![
-        make_scoped_skill("Commit", SkillScope::Local),
-        make_scoped_skill("commit", SkillScope::User),
+        make_scoped_skill("Deploy", SkillScope::Local),
+        make_scoped_skill("deploy", SkillScope::User),
     ];
     let names: Vec<String> = available_commands(&skills, all_gated(), &[])
         .into_iter()
         .map(|c| c.name)
         .collect();
-    assert!(names.iter().any(|n| n == "local:commit"), "{names:?}");
-    assert!(names.iter().any(|n| n == "user:commit"), "{names:?}");
-    assert!(!names.iter().any(|n| n == "commit"));
-    assert!(!names.iter().any(|n| n == "Commit"));
+    assert!(names.iter().any(|n| n == "local:deploy"), "{names:?}");
+    assert!(names.iter().any(|n| n == "user:deploy"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "deploy"));
+    assert!(!names.iter().any(|n| n == "Deploy"));
 }
 
 #[test]
@@ -1551,23 +1672,23 @@ fn memory_not_resolved_when_not_configured() {
 
 #[test]
 fn parse_skill_refs_single_skill() {
-    let skills = vec![make_skill("commit", true)];
-    let refs = parse_skill_references("/commit fix typo", &skills, all_gated()).unwrap();
+    let skills = vec![make_skill("deploy", true)];
+    let refs = parse_skill_references("/deploy fix typo", &skills, all_gated()).unwrap();
     let [r0] = refs.as_slice() else {
         panic!("expected one skill ref: {refs:?}");
     };
-    assert_eq!(r0.name, "commit");
+    assert_eq!(r0.name, "deploy");
     assert_eq!(r0.args, "fix typo");
 }
 
 #[test]
 fn parse_skill_refs_single_no_args() {
-    let skills = vec![make_skill("commit", true)];
-    let refs = parse_skill_references("/commit", &skills, all_gated()).unwrap();
+    let skills = vec![make_skill("deploy", true)];
+    let refs = parse_skill_references("/deploy", &skills, all_gated()).unwrap();
     let [r0] = refs.as_slice() else {
         panic!("expected one skill ref: {refs:?}");
     };
-    assert_eq!(r0.name, "commit");
+    assert_eq!(r0.name, "deploy");
     assert_eq!(r0.args, "");
 }
 
@@ -1635,12 +1756,12 @@ fn parse_skill_refs_qualified_name() {
 #[test]
 fn parse_skill_refs_text_before_first_skill() {
     // Text before the first skill reference is part of user query, not consumed as args
-    let skills = vec![make_skill("commit", true)];
-    let refs = parse_skill_references("please do /commit fix typo", &skills, all_gated()).unwrap();
+    let skills = vec![make_skill("deploy", true)];
+    let refs = parse_skill_references("please do /deploy fix typo", &skills, all_gated()).unwrap();
     let [r0] = refs.as_slice() else {
         panic!("expected one skill ref: {refs:?}");
     };
-    assert_eq!(r0.name, "commit");
+    assert_eq!(r0.name, "deploy");
     assert_eq!(r0.args, "fix typo");
 }
 
@@ -1814,18 +1935,21 @@ fn workflow_collision_policy_includes_aliases_and_ambiguous_skills() {
         listing("commit"),
         listing("review"),
     ];
-    let names: Vec<_> = available_commands(&skills, all_gated(), &workflows)
-        .into_iter()
-        .map(|command| command.name)
-        .collect();
+    let commands = available_commands(&skills, all_gated(), &workflows);
+    let names: Vec<String> = commands.iter().map(|command| command.name.clone()).collect();
     assert!(!names.iter().any(|name| name == "status"));
     assert!(!names.iter().any(|name| name == "yolo"));
     assert!(!names.iter().any(|name| name == "sessions"));
-    assert!(!names.iter().any(|name| name == "commit"));
     assert!(names.iter().any(|name| name == "local:commit"));
     assert!(names.iter().any(|name| name == "user:commit"));
     assert!(names.iter().any(|name| name == "review"));
-
+    // Bare `commit` belongs to the shell builtin now, so the same-named workflow and both
+    // skills give way to it exactly like they do for `compact`.
+    let bare = commands
+        .iter()
+        .find(|command| command.name == "commit")
+        .expect("bare commit must be advertised");
+    assert!(bare.meta.is_none(), "bare 'commit' must be the builtin");
     assert!(matches!(
         resolve(
             vec![text_block("/status")],
@@ -1837,18 +1961,32 @@ fn workflow_collision_policy_includes_aliases_and_ambiguous_skills() {
         .unwrap_err(),
         SlashCommandOutcome::Builtin(BuiltinAction::SessionInfo)
     ));
-    for unavailable in ["sessions", "commit"] {
-        assert!(
-            resolve(
-                vec![text_block(&format!("/{unavailable}"))],
-                &skills,
-                all_gated(),
-                SkillSlashRewrite::default(),
-                &workflows,
-            )
-            .is_ok()
-        );
+    match resolve(
+        vec![text_block("/commit")],
+        &skills,
+        all_gated(),
+        SkillSlashRewrite::default(),
+        &workflows,
+    )
+    .unwrap_err()
+    {
+        // The builtin beats both same-named skills and never carries a skill ref.
+        SlashCommandOutcome::InvokeSkill { skills: refs, .. } => {
+            assert!(refs.is_empty(), "bare /commit must not resolve to a skill");
+        }
+        _ => panic!("expected InvokeSkill for bare /commit"),
     }
+    // `sessions` is a pager-only name with no shell builtin, so the bare form stays inert here.
+    assert!(
+        resolve(
+            vec![text_block("/sessions")],
+            &skills,
+            all_gated(),
+            SkillSlashRewrite::default(),
+            &workflows,
+        )
+        .is_ok()
+    );
 }
 
 #[test]

@@ -3,6 +3,7 @@ import { acpClient } from "../../acp/client";
 import { pickFolder } from "../../acp/host";
 import { useSessionStore } from "../../state/session";
 import { ContextChip } from "./context-chip";
+import { GitChip } from "./git-chip";
 import { GoalStatus } from "./goal-status";
 import { PlanChip } from "./plan-chip";
 
@@ -53,6 +54,7 @@ export function AgentHeader({
       </div>
       <div className="agent-header-right">
         <PlanChip />
+        <GitChip />
         {hasPlanEntries && (
           <button
             type="button"

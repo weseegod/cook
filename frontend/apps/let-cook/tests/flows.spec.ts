@@ -15,6 +15,9 @@ const PNG_BASE64 =
 /** The plan file name the mock agent reports for the episode it reviews. */
 const PLAN_FILE = "2026-09-19T14-30-22Z.md";
 
+/** The review pane is titled from the plan's H1, so that is what it renders for this episode. */
+const PLAN_TITLE = "Implementation plan";
+
 type Recorded = { method: string; params: Record<string, unknown>; at: number };
 
 function api(page: Page) {
@@ -1306,7 +1309,7 @@ test.describe("goal and plan presentation", () => {
     await composer(page).press("Enter");
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
     const requestId = await page.evaluate(() => window.__cookMock!.plan());
-    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_FILE);
+    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_TITLE);
     await page.getByTestId("dialog-hide").click();
     await expect(page.getByTestId("plan-pane")).toHaveCount(0);
     expect((await mock.responses()).find((entry) => entry.id === requestId)).toBeUndefined();

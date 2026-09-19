@@ -1481,6 +1481,56 @@ body { font-size: 14px; }
 .context-chip-menu button span { display: grid; gap: 2px; min-width: 0; }
 .context-chip-menu button strong { font-size: 11px; font-weight: 600; }
 .context-chip-menu button small { color: var(--muted); font-size: 10px; }
+.git-chip { position: relative; flex: 0 0 auto; }
+.git-chip-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 3px 5px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.git-chip-trigger:hover, .git-chip-trigger[aria-expanded="true"] { color: var(--text); background: var(--raised-2); }
+.git-chip-count { color: var(--text-soft); font-variant-numeric: tabular-nums; }
+.git-chip-menu {
+  position: absolute;
+  top: calc(100% + 3px);
+  right: 0;
+  z-index: 100;
+  width: 230px;
+  padding: 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--panel-elevated);
+  box-shadow: var(--shadow);
+}
+/* Hover opens this menu, so bridge the 3px gap: crossing it must not look like leaving the chip. */
+.git-chip-menu::before { content: ""; position: absolute; top: -4px; right: 0; left: 0; height: 4px; }
+.git-chip-menu button {
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text-soft);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.git-chip-menu button:hover { color: var(--text); background: var(--raised-2); }
+.git-chip-menu button:disabled { opacity: .6; cursor: default; }
+.git-chip-menu button > svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
+.git-chip-menu button span { display: grid; gap: 2px; min-width: 0; }
+.git-chip-menu button strong { font-size: 11px; font-weight: 600; }
+.git-chip-menu button small { color: var(--muted); font-size: 10px; }
 .composer-info { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1 1 auto; }
 .composer-flag {
   flex: 0 0 auto;

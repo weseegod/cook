@@ -4,6 +4,9 @@ import { CONNECTED_SEED, seedAgent } from "./seed";
 /** The plan file name the mock agent reports for the episode it reviews. */
 const PLAN_FILE = "2026-09-19T14-30-22Z.md";
 
+/** The review pane is titled from the plan's H1, so that is what it renders for this episode. */
+const PLAN_TITLE = "Implementation plan";
+
 const VISUAL_SEED = {
   ...CONNECTED_SEED,
   sessions: [
@@ -269,7 +272,7 @@ test.describe("visual audit", () => {
     }));
 
     await expect(page.getByTestId("plan-chip")).toBeVisible();
-    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_FILE);
+    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_TITLE);
     await expectNoHorizontalOverflow(page);
     await capture(page, "chat-plan-chip");
 
@@ -429,7 +432,7 @@ test.describe("visual audit", () => {
     await page.evaluate(() => window.__cookMock?.plan());
     // Plan review auto-opens the transcript pane; no inline interaction card; composer stays live
     // underneath it rather than only reappearing after Hide.
-    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_FILE);
+    await expect(page.getByTestId("plan-pane")).toContainText(PLAN_TITLE);
     await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
     await expect(page.getByTestId("plan-chip")).toBeVisible();
     await expect(page.getByTestId("composer-input")).toBeVisible();

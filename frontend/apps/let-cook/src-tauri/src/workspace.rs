@@ -140,6 +140,95 @@ pub fn open(root: PathBuf, relative: String) -> Result<(), String> {
     open_external(&path)
 }
 
+/// Cheap dirty-tree probe behind the header's git chip: one `git status` plus one `--numstat`
+/// diff, no per-file patches. The full `review` snapshot stays on demand for the Review panel.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusSummary {
+    pub is_git_repo: bool,
+    pub branch: Option<String>,
+    pub changed_files: usize,
+    pub additions: usize,
+    pub deletions: usize,
+    /// A merge, rebase, cherry-pick, or bisect is in progress: committing now would stack on it.
+    pub operation_in_progress: bool,
+}
+
+pub fn git_status(root: PathBuf) -> Result<GitStatusSummary, String> {
+    let not_a_repo = GitStatusSummary {
+        is_git_repo: false,
+        branch: None,
+        changed_files: 0,
+        additions: 0,
+        deletions: 0,
+        operation_in_progress: false,
+    };
+    let probe = git(&root, &["rev-parse", "--is-inside-work-tree"])?;
+    if !probe.status.success() || String::from_utf8_lossy(&probe.stdout).trim() != "true" {
+        return Ok(not_a_repo);
+    }
+
+    let status = git(&root, &["status", "--porcelain=v1", "-z", "--untracked-files=normal"])?;
+    if !status.status.success() {
+        return Err(git_error("git status", &status));
+    }
+    let changed_files = parse_status(&status.stdout).len();
+    let branch = git(&root, &["branch", "--show-current"])
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let (additions, deletions) = numstat_totals(&root)?;
+    let operation_in_progress = git(&root, &["rev-parse", "-q", "--verify", "MERGE_HEAD"])
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+        || [
+            "rebase-merge",
+            "rebase-apply",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "BISECT_LOG",
+        ]
+        .iter()
+        .any(|marker| {
+            git(&root, &["rev-parse", "--git-path", marker])
+                .ok()
+                .filter(|output| output.status.success())
+                .is_some_and(|output| {
+                    let path = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                    !path.is_empty() && root.join(path).exists()
+                })
+        });
+
+    Ok(GitStatusSummary {
+        is_git_repo: true,
+        branch,
+        changed_files,
+        additions,
+        deletions,
+        operation_in_progress,
+    })
+}
+
+/// Tracked-file line totals vs `HEAD`; untracked files are counted as changed files but add no
+/// lines, matching what `git diff HEAD` reports.
+fn numstat_totals(root: &Path) -> Result<(usize, usize), String> {
+    let output = git(root, &["diff", "--numstat", "HEAD"])?;
+    if !output.status.success() {
+        return Ok((0, 0));
+    }
+    let (mut additions, mut deletions) = (0, 0);
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let mut fields = line.split('\t');
+        let (Some(added), Some(removed)) = (fields.next(), fields.next()) else {
+            continue;
+        };
+        additions += added.trim().parse::<usize>().unwrap_or(0);
+        deletions += removed.trim().parse::<usize>().unwrap_or(0);
+    }
+    Ok((additions, deletions))
+}
+
 pub fn review(root: PathBuf) -> Result<ReviewSnapshot, String> {
     let probe = git(&root, &["rev-parse", "--is-inside-work-tree"])?;
     if !probe.status.success() || String::from_utf8_lossy(&probe.stdout).trim() != "true" {

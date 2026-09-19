@@ -51,6 +51,12 @@ pub use image_gen::{
     IMAGE_GEN_TOOL_NAME, IMAGINE_COMMAND_NAME, ImageGenTool, imagine_instruction,
     imagine_usage_message,
 };
+// Canonical `/commit` wording lives in the light API crate so the pager can link it without the
+// tools implementation crate; re-exported to keep the pager/shell import path stable.
+pub use xai_grok_tools_api::slash_commands::{
+    COMMIT_AND_PUSH_COMMAND_NAME, COMMIT_COMMAND_NAME, CommitArgs, commit_and_push_usage_message,
+    commit_instruction, commit_usage_message, parse_commit_args,
+};
 pub use init_or_update_app::INIT_OR_UPDATE_APP_TOOL_NAME;
 pub use kill_task::{KillTaskTool, KillTerminalCommandTool};
 pub use list_dir::ListDirTool;

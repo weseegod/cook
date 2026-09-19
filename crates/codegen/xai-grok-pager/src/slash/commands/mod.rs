@@ -7,6 +7,7 @@ pub mod cd;
 pub mod clear;
 pub mod compact;
 pub mod compact_mode;
+pub mod commit;
 pub mod config_agents;
 pub mod context;
 pub mod copy;
@@ -119,6 +120,9 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(find::FindCommand),
         Arc::new(usage::UsageCommand),
         Arc::new(tasks::TasksCommand),
+        // Handing the work back to git.
+        Arc::new(commit::CommitCommand),
+        Arc::new(commit::CommitAndPushCommand),
         // Extending the agent.
         Arc::new(plugin::SkillsCommand),
         Arc::new(mcps::McpsCommand),
@@ -234,6 +238,11 @@ mod tests {
             "/vim-mode should be registered"
         );
         assert!(reg.get("find").is_some(), "/find should be registered");
+        assert!(reg.get("commit").is_some(), "/commit should be registered");
+        assert!(
+            reg.get("commit-and-push").is_some(),
+            "/commit-and-push should be registered"
+        );
     }
     #[test]
     fn loop_command_declares_scheduler_tool_requirement() {

@@ -8,7 +8,7 @@
  */
 import { PROVIDER_PRESETS } from "./provider-presets";
 import type { ProviderPreset } from "./providers";
-import type { FilePreview, ReviewSnapshot, WorkspaceEntry } from "./workspace";
+import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry } from "./workspace";
 
 export interface RecordedRequest {
   method: string;
@@ -1267,6 +1267,19 @@ export function mockWorkspaceReadFile(relativePath: string): FilePreview {
 
 export function mockWorkspaceReview(): ReviewSnapshot {
   return structuredClone(state.workspace.review);
+}
+
+/** Dirty-tree summary derived from the seeded review, so the git chip matches the Review panel. */
+export function mockGitStatus(): GitStatusSummary {
+  const review = state.workspace.review;
+  return {
+    isGitRepo: review.isGitRepo,
+    branch: review.branch,
+    changedFiles: review.files.length,
+    additions: review.additions,
+    deletions: review.deletions,
+    operationInProgress: false,
+  };
 }
 
 /** Records what the renderer answered to a reverse request (permission / question / elicit). */

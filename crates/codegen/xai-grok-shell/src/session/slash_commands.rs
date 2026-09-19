@@ -460,16 +460,40 @@ fn trailing_flag_boolean<'a>(text: &'a str, flag: &str) -> Option<&'a str> {
     }
     Some(head)
 }
-const PROMPT_COMMANDS: &[BuiltinCommand] = &[BuiltinCommand {
-    name: "loop",
-    description: "Run a prompt on a recurring interval",
-    argument_hint: Some("[interval] <prompt>"),
-    aliases: &[],
-    model_authored_eligibility: ModelAuthoredEligibility::Denied,
-    gate: BuiltinGate::Scheduler,
-    workflow_projection: WorkflowProjection::None,
-    resolve: |_| unreachable!("/loop is dispatched via the PROMPT_COMMANDS path in resolve()"),
-}];
+const PROMPT_COMMANDS: &[BuiltinCommand] = &[
+    BuiltinCommand {
+        name: "loop",
+        description: "Run a prompt on a recurring interval",
+        argument_hint: Some("[interval] <prompt>"),
+        aliases: &[],
+        model_authored_eligibility: ModelAuthoredEligibility::Denied,
+        gate: BuiltinGate::Scheduler,
+        workflow_projection: WorkflowProjection::None,
+        resolve: |_| unreachable!("/loop is dispatched via the PROMPT_COMMANDS path in resolve()"),
+    },
+    BuiltinCommand {
+        name: "commit",
+        description: "Commit the current changes with a generated message",
+        argument_hint: Some("[message hint] [--push]"),
+        aliases: &[],
+        model_authored_eligibility: ModelAuthoredEligibility::Denied,
+        gate: BuiltinGate::AlwaysOn,
+        workflow_projection: WorkflowProjection::None,
+        resolve: |_| unreachable!("/commit is dispatched via the PROMPT_COMMANDS path in resolve()"),
+    },
+    BuiltinCommand {
+        name: "commit-and-push",
+        description: "Commit the current changes and push, resolving pull conflicts",
+        argument_hint: Some("[message hint]"),
+        aliases: &[],
+        model_authored_eligibility: ModelAuthoredEligibility::Denied,
+        gate: BuiltinGate::AlwaysOn,
+        workflow_projection: WorkflowProjection::None,
+        resolve: |_| {
+            unreachable!("/commit-and-push is dispatched via the PROMPT_COMMANDS path in resolve()")
+        },
+    },
+];
 /// Each field corresponds to a `BuiltinGate` variant.
 /// `Default` returns every gate disabled (fail-closed) so a forgotten initialization advertises only `BuiltinGate::AlwaysOn` commands.
 /// In test code, prefer `all_enabled()` when the gating itself isn't under test; otherwise the test silently loses coverage of any gated builtin.
@@ -545,6 +569,8 @@ pub const PAGER_COMMAND_KEYS: &[&str] = &[
     "cloud",
     "compact",
     "compact-mode",
+    "commit",
+    "commit-and-push",
     "config",
     "config-agents",
     "context",
@@ -1667,6 +1693,8 @@ pub(super) fn resolve_human_intent(
     {
         let mut blocks = match prompt_cmd.name {
             "loop" => build_loop_prompt_blocks(args),
+            "commit" => build_commit_prompt_blocks(args, false),
+            "commit-and-push" => build_commit_prompt_blocks(args, true),
             other => {
                 unreachable!("prompt-only command /{other} has no resolver wired in resolve()")
             }
@@ -1739,6 +1767,28 @@ fn build_loop_prompt_blocks(args: &str) -> Vec<acp::ContentBlock> {
         loop_usage_message().to_string()
     } else {
         loop_schedule_instruction(args)
+    };
+    vec![acp::ContentBlock::Text(acp::TextContent::new(text))]
+}
+
+/// The wording (usage hints, flag parsing, and instructions) is sourced from `xai-grok-tools`.
+/// It stays identical to the pager's `CommitCommand`, so the two front-ends can't drift.
+/// Empty args still expand to the instruction: whether there is anything to commit is a git
+/// question, not a usage error.
+fn build_commit_prompt_blocks(args: &str, push: bool) -> Vec<acp::ContentBlock> {
+    use xai_grok_tools::implementations::grok_build::{
+        commit_and_push_usage_message, commit_instruction, commit_usage_message,
+        parse_commit_args,
+    };
+    let parsed = parse_commit_args(args, push);
+    let text = if parsed.help {
+        if parsed.push {
+            commit_and_push_usage_message().to_string()
+        } else {
+            commit_usage_message().to_string()
+        }
+    } else {
+        commit_instruction(parsed.hint, parsed.push)
     };
     vec![acp::ContentBlock::Text(acp::TextContent::new(text))]
 }

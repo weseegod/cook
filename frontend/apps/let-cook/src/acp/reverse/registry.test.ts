@@ -81,7 +81,7 @@ describe("reverse-request policy (C2)", () => {
     });
   });
 
-  it("falls back to the legacy plan name when the request carries no planFilePath", async () => {
+  it("titles a planFilePath-less review from its H1", async () => {
     vi.spyOn(host, "respond").mockResolvedValue();
     const params = { sessionId: "s1", toolCallId: "tc-1", planContent: "# Plan" };
     await dispatchReverseRequest(
@@ -89,6 +89,18 @@ describe("reverse-request policy (C2)", () => {
       "x.ai/exit_plan_mode",
       params,
     );
-    expect(planDialogTitle(useSessionStore.getState().planReview)).toBe("plan.md");
+    // Agents that predate per-episode plan files send no planFilePath; the H1 still owns the title.
+    expect(planDialogTitle(useSessionStore.getState().planReview)).toBe("Plan");
+  });
+
+  it("falls back to the legacy plan name when the request carries no body", async () => {
+    vi.spyOn(host, "respond").mockResolvedValue();
+    const params = { sessionId: "s1", toolCallId: "tc-2", planContent: "   " };
+    await dispatchReverseRequest(
+      { id: 13, method: "x.ai/exit_plan_mode", params },
+      "x.ai/exit_plan_mode",
+      params,
+    );
+    expect(planDialogTitle(useSessionStore.getState().planReview)).toBe("plan.md (empty)");
   });
 });
