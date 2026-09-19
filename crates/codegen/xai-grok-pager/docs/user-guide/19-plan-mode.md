@@ -50,16 +50,20 @@ After a plan exists, run **`/view-plan`** (aliases `/show-plan`, `/plan-view`) t
 
 ## The Plan File
 
-Each planning episode gets its own file, so a later plan never overwrites an earlier one and the creation time is visible in the filename: `~/.cook/sessions/<cwd>/<session-id>/plans/<UTC timestamp>.md`, where `<cwd>` is an encoded directory name, not the literal path. A session that has not started a planning episode yet (and one saved before episodes were separate files) uses `~/.cook/sessions/<cwd>/<session-id>/plan.md`.
+Each planning episode gets its own file, so a later plan never overwrites an earlier one: `~/.cook/sessions/<cwd>/<session-id>/plans/<UTC timestamp>.md` while the episode is running, published to `plans/<slug>-<UTC timestamp>.md` when the episode ends (approve, abandon, or toggle plan mode off). `<cwd>` is an encoded directory name, not the literal path. A session that has not started a planning episode yet (and one saved before episodes were separate files) uses `~/.cook/sessions/<cwd>/<session-id>/plan.md`.
+
+The slug is a short kebab-case prefix taken from the plan's `# Plan: <title>` heading. The UTC token stays in the name so two plans remain distinct and the list can still sort newest first.
 
 A new file is allocated when plan mode **activates** — your first prompt after `/plan` or Shift+Tab, or the agent's `enter_plan_mode`. Everything inside one episode keeps working on the same file:
 
-- Requesting changes (and inline comments) revises the current file in place.
-- Approving, quitting, or toggling plan mode off ends the episode; the file stays on disk as the record of that plan, and the next `/plan` starts a new one.
+- Requesting changes (and inline comments) revises the current file in place (the UTC name, so the path the model was told stays valid).
+- Approving, quitting, or toggling plan mode off ends the episode; the file is renamed from its heading and stays on disk as the record of that plan, and the next `/plan` starts a new one.
 
-The TUI shows one plan at a time — the current episode. The desktop app lists every plan file of the session under the header chip, marks the current episode, and can copy a plan or its path and delete a plan it is no longer using (never the one a running episode holds).
+The TUI and the desktop header chip show the plan's heading, not the UTC filename. The TUI shows one plan at a time — the current episode. The desktop app lists every plan file of the session under the header chip, marks the current episode, and can copy a plan or its path and delete a plan it is no longer using (never the one a running episode holds).
 
 The plan file contains:
+
+- A short `# Plan: <title>` heading (5–10 words, no file paths) so the list can name the episode
 
 - A **Context** section explaining why the change is being made
 - The recommended approach (not every alternative)

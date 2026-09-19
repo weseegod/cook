@@ -1,7 +1,8 @@
 /**
  * The session's plan files, as `x.ai/session/plans` reports them.
  *
- * Plan mode allocates one file per planning episode (`<session>/plans/<utc>.md`) and keeps the
+ * Plan mode allocates one file per planning episode (`<session>/plans/<utc>.md`), publishes it to
+ * `<slug>-<utc>.md` when the episode ends, and keeps the
  * legacy `<session>/plan.md` for sessions written before that, so this list is the plan history the
  * desktop header paints. Deleting one goes back through the agent (`x.ai/session/plans/delete`):
  * the renderer never touches the filesystem itself.
@@ -10,8 +11,10 @@ import { request } from "./host";
 import { normalizeError } from "./errors";
 
 export interface PlanFileSummary {
-  /** File name with extension; an episode's name carries its UTC creation time. */
+  /** File name with extension; an episode starts as `<utc>.md` and is published to `<slug>-<utc>.md`. */
   name: string;
+  /** H1 from the plan body, or `"Untitled plan"` when the file has no heading. */
+  title: string;
   /** Absolute path, for "Copy file path". */
   path: string;
   /** Path relative to the session directory, as `plan_mode.json` records the current episode. */
@@ -49,13 +52,33 @@ function first(record: Record<string, unknown>, camel: string, snake: string): u
   return record[camel] ?? record[snake];
 }
 
+function headingFromContent(content: unknown): string | null {
+  if (typeof content !== "string") return null;
+  for (const line of content.split(/\n/)) {
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith("# ") || trimmed.length <= 2) continue;
+    let title = trimmed.slice(2).trim();
+    if (title.startsWith("Plan:")) {
+      const rest = title.slice("Plan:".length).trim();
+      if (rest) title = rest;
+    }
+    return title.length > 0 ? title : null;
+  }
+  return null;
+}
+
 function normalizePlanFile(value: unknown): PlanFileSummary | null {
   if (!isRecord(value)) return null;
   const name = stringOr(first(value, "name", "name"));
   if (name === "") return null;
   const content = first(value, "content", "content");
+  const title =
+    stringOr(first(value, "title", "title"))
+    || headingFromContent(content)
+    || "Untitled plan";
   return {
     name,
+    title,
     path: stringOr(value.path),
     relativePath: stringOr(first(value, "relativePath", "relative_path")),
     sizeBytes: numberOr(first(value, "sizeBytes", "size_bytes")),

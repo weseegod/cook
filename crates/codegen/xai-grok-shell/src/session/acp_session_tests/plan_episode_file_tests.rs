@@ -85,6 +85,11 @@ async fn enter_plan_mode_opens_a_new_episode_file_before_seeding() {
             let first = actor.plan_mode.lock().plan_file_path().to_path_buf();
             std::fs::write(&first, "# first plan\n").unwrap();
             assert!(actor.plan_mode.lock().deactivate_approved());
+            let published = actor.plan_mode.lock().plan_file_path().to_path_buf();
+            assert_ne!(
+                published, first,
+                "Inactive publishes the H1 into the filename"
+            );
 
             // Episode 2 arrives through the tool rather than the slash command.
             let prepared = prepare(&actor, enter_plan_mode_call("call_enter")).await;
@@ -95,7 +100,10 @@ async fn enter_plan_mode_opens_a_new_episode_file_before_seeding() {
             );
 
             let second = actor.plan_mode.lock().plan_file_path().to_path_buf();
-            assert_ne!(first, second, "a new episode must get its own plan file");
+            assert_ne!(
+                published, second,
+                "a new episode must get its own plan file"
+            );
             assert_eq!(
                 second.parent(),
                 Some(dir.path().join("plans").as_path()),
@@ -106,7 +114,7 @@ async fn enter_plan_mode_opens_a_new_episode_file_before_seeding() {
                 "plans/ must exist so the tool's seed write can create the file"
             );
             assert_eq!(
-                std::fs::read_to_string(&first).unwrap(),
+                std::fs::read_to_string(&published).unwrap(),
                 "# first plan\n",
                 "the previous episode's plan must be left intact"
             );
@@ -154,13 +162,17 @@ async fn slash_plan_after_an_approved_plan_opens_a_new_file() {
             let first = actor.plan_mode.lock().plan_file_path().to_path_buf();
             std::fs::write(&first, "# first plan\n").unwrap();
             actor.plan_mode.lock().deactivate_approved();
+            let published = actor.plan_mode.lock().plan_file_path().to_path_buf();
 
             // The user runs `/plan` again: Pending, then the first prompt activates.
             activate_plan_mode(&actor);
             let second = actor.plan_mode.lock().plan_file_path().to_path_buf();
 
-            assert_ne!(first, second);
-            assert_eq!(std::fs::read_to_string(&first).unwrap(), "# first plan\n");
+            assert_ne!(published, second);
+            assert_eq!(
+                std::fs::read_to_string(&published).unwrap(),
+                "# first plan\n"
+            );
         })
         .await;
 }

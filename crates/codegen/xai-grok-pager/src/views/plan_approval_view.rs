@@ -259,7 +259,7 @@ impl PlanApprovalViewState {
     }
 }
 
-/// Basename of an episode's plan file, for the review title and `@<name>:<line>` anchors.
+/// Basename of an episode's plan file, for `@<name>:<line>` anchors.
 /// `plan.md` when the path is absent or empty: that is the filename agents used before plan files
 /// were allocated per episode, so a legacy review keeps its familiar label.
 pub fn plan_file_name(path: Option<&str>) -> String {
@@ -267,6 +267,29 @@ pub fn plan_file_name(path: Option<&str>) -> String {
         .filter(|name| !name.is_empty())
         .unwrap_or("plan.md")
         .to_owned()
+}
+
+/// First markdown H1, with a leading `Plan:` stripped. Mirrors the shell's `plan_heading`.
+pub fn plan_heading(body: &str) -> Option<String> {
+    body.lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("# ") && line.len() > 2)
+        .map(|line| {
+            let title = line["# ".len()..].trim();
+            title
+                .strip_prefix("Plan:")
+                .map(str::trim)
+                .filter(|rest| !rest.is_empty())
+                .unwrap_or(title)
+                .to_owned()
+        })
+        .filter(|title| !title.is_empty())
+}
+
+/// Overlay title: the plan H1 when the body has one, otherwise the episode filename.
+pub fn plan_overlay_title(file_name: &str, body: Option<&str>) -> String {
+    body.and_then(plan_heading)
+        .unwrap_or_else(|| file_name.to_owned())
 }
 
 fn format_file_backed_plan_comment(comment: &PlanComment, plan_file_name: &str) -> String {
@@ -660,7 +683,8 @@ mod tests {
         );
     }
 
-    /// The review's title comes from the request's episode file, so the creation time shows.
+    /// The review stores the episode filename for `@<name>:<line>` anchors. The overlay title
+    /// prefers the plan H1.
     #[test]
     fn plan_approval_view_takes_the_episode_filename_from_the_request() {
         let (tx, _rx) = tokio::sync::oneshot::channel();

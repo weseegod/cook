@@ -10,6 +10,7 @@ import {
   planDecisionBar,
   planDialogTitle,
   planFileName,
+  planHeading,
   planFeedback,
   type PlanComment,
 } from "./plan-review";
@@ -31,13 +32,23 @@ describe("planDialogTitle", () => {
     expect(planDialogTitle(null)).toBe("plan.md");
     expect(planDialogTitle({ body: null, pending: true })).toBe("plan.md (empty)");
     expect(planDialogTitle({ body: "  ", pending: false })).toBe("plan.md (empty)");
-    expect(planDialogTitle({ body: "# Plan", pending: true })).toBe("plan.md");
+    expect(planDialogTitle({ body: "# Plan", pending: true })).toBe("Plan");
   });
 
-  it("shows the episode's plan filename when the request carried one", () => {
+  it("prefers the plan H1 over the episode filename", () => {
     const fileName = "2026-09-19T14-30-22Z.md";
-    expect(planDialogTitle({ body: "# Plan", fileName, pending: true })).toBe(fileName);
+    expect(planDialogTitle({ body: "# Plan: Clean all files", fileName, pending: true })).toBe("Clean all files");
+    expect(planDialogTitle({ body: "no heading", fileName, pending: true })).toBe(fileName);
     expect(planDialogTitle({ body: " ", fileName, pending: true })).toBe(`${fileName} (empty)`);
+  });
+});
+
+describe("planHeading", () => {
+  it("takes the first H1 and strips a Plan: prefix", () => {
+    expect(planHeading("# Plan: Ship it\n\nDo the thing")).toBe("Ship it");
+    expect(planHeading("  # Clean all files")).toBe("Clean all files");
+    expect(planHeading("## Not an h1")).toBeNull();
+    expect(planHeading(null)).toBeNull();
   });
 });
 

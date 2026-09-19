@@ -98,19 +98,28 @@ impl AgentView {
         let dir = self.plan_session_dir()?;
         Some(dir.join(current_plan_relative_path(&dir)))
     }
-    /// Basename shown in the plan overlay title: the parked review's episode file when a review is
-    /// open, else the session's current plan file.
+    /// Title shown in the plan overlay: the plan H1 when a review (or preview body) has one,
+    /// otherwise the episode filename.
     fn plan_display_name(&self) -> String {
-        if let Some(name) = self
+        let file_name = if let Some(name) = self
             .plan_approval_view
             .as_ref()
             .map(|pav| pav.plan_file_name.clone())
         {
-            return name;
-        }
-        crate::views::plan_approval_view::plan_file_name(
-            self.plan_file_path().as_deref().and_then(std::path::Path::to_str),
-        )
+            name
+        } else {
+            crate::views::plan_approval_view::plan_file_name(
+                self.plan_file_path()
+                    .as_deref()
+                    .and_then(std::path::Path::to_str),
+            )
+        };
+        let body = self
+            .plan_approval_view
+            .as_ref()
+            .and_then(|pav| pav.plan_content.clone())
+            .or_else(|| self.plan_body_for_preview());
+        crate::views::plan_approval_view::plan_overlay_title(file_name.as_str(), body.as_deref())
     }
     /// Whether the current line viewer is showing a plan preview.
     pub(super) fn is_plan_viewer(&self) -> bool {
@@ -3111,6 +3120,17 @@ mod plan_episode_file_tests {
         assert_eq!(
             crate::views::plan_approval_view::plan_file_name(None),
             "plan.md"
+        );
+        assert_eq!(
+            crate::views::plan_approval_view::plan_overlay_title(
+                "2026-09-19T14-30-22Z.md",
+                Some("# Plan: Clean all files\n")
+            ),
+            "Clean all files"
+        );
+        assert_eq!(
+            crate::views::plan_approval_view::plan_overlay_title("2026-09-19T14-30-22Z.md", None),
+            "2026-09-19T14-30-22Z.md"
         );
     }
 }

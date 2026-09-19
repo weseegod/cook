@@ -107,6 +107,7 @@ impl SessionActor {
             let turn_in_flight = self.state.lock().await.running_task.is_some();
             self.plan_mode.lock().user_exit(turn_in_flight);
             self.persist_plan_mode_state();
+            self.sync_plan_file_path_resource().await;
             self.enqueue_current_mode_update(session_mode_id.clone());
             tracing::info!(
                 session_id = %self.session_info.id.0,

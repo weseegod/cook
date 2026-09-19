@@ -97,6 +97,8 @@ export interface MockSession {
 /** One plan file as `x.ai/session/plans` reports it, in the agent's camelCase wire shape. */
 export interface MockPlanFile {
   name: string;
+  /** H1 shown in the chip. Derived from `content` on the client when omitted. */
+  title?: string;
   path: string;
   relativePath: string;
   sizeBytes: number;
@@ -114,6 +116,7 @@ const MOCK_PLAN_BODY = "# Implementation plan\n\n1. Update the transcript render
 function seededPlanFile(overrides: Partial<MockPlanFile> = {}): MockPlanFile {
   return {
     name: MOCK_PLAN_NAME,
+    title: "Implementation plan",
     path: `${MOCK_PLAN_DIR}/${MOCK_PLAN_NAME}`,
     relativePath: `plans/${MOCK_PLAN_NAME}`,
     sizeBytes: MOCK_PLAN_BODY.length,

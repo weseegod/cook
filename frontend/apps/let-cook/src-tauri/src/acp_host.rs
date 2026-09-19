@@ -520,7 +520,7 @@ fn exit_detail(
 /// Sessions-root allow-path: `fs/*` may touch the workspace cwd **and** the agent's
 /// session store (`$COOK_HOME/sessions` / `$GROK_HOME/sessions` / `~/.cook/sessions`)
 /// so plan mode can write its plan file (`<session>/plan.md`, or `<session>/plans/<utc>.md`
-/// for each planning episode) outside any workspace.
+/// / `<slug>-<utc>.md` for each planning episode) outside any workspace.
 fn handle_host_request(
     message: &Value,
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -563,7 +563,7 @@ fn host_native_outcome(
 }
 
 /// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file there
-/// (`<session>/plan.md`, or `<session>/plans/<utc>.md` per episode) through this client
+/// (`<session>/plan.md`, or `<session>/plans/<utc>.md` / `<slug>-<utc>.md` per episode) through this client
 /// filesystem, so that tree has to stay reachable even though it sits outside any workspace.
 fn agent_state_root() -> PathBuf {
     agent_state_root_from(

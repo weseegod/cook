@@ -21,6 +21,7 @@ const PLANS = "/home/u/.cook/sessions/p/sess-1/plans";
 function planFile(overrides: Partial<PlanFileSummary> = {}): PlanFileSummary {
   return {
     name: "2026-09-19T14-30-22Z.md",
+    title: "Current plan",
     path: `${PLANS}/2026-09-19T14-30-22Z.md`,
     relativePath: "plans/2026-09-19T14-30-22Z.md",
     sizeBytes: 1368,
@@ -34,6 +35,7 @@ function planFile(overrides: Partial<PlanFileSummary> = {}): PlanFileSummary {
 
 const OLDER = planFile({
   name: "2026-09-18T09-15-00Z.md",
+  title: "First plan",
   path: `${PLANS}/2026-09-18T09-15-00Z.md`,
   relativePath: "plans/2026-09-18T09-15-00Z.md",
   sizeBytes: 804,
@@ -83,7 +85,7 @@ describe("PlanChip", () => {
     useSessionStore.setState({ planFiles: [planFile(), OLDER] });
     render(<PlanChip />);
 
-    expect(screen.getByTestId("plan-chip")).toHaveTextContent("2026-09-19T14-30-22Z.md");
+    expect(screen.getByTestId("plan-chip")).toHaveTextContent("Current plan");
     fireEvent.click(screen.getByTestId("plan-chip"));
 
     expect(screen.getByTestId(`plan-file-row-${OLDER.name}`)).toHaveTextContent("804 B");

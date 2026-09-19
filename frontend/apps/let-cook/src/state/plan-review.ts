@@ -73,11 +73,28 @@ export function planFileName(path: string | null | undefined): string {
   return name !== undefined && name.length > 0 ? name : "plan.md";
 }
 
-/** The line viewer's title: the episode's plan filename, or `<name> (empty)` when the review carries no body. */
+/** First markdown H1, with a leading `Plan:` stripped. Mirrors the shell's `plan_heading`. */
+export function planHeading(body: string | null | undefined): string | null {
+  if (typeof body !== "string") return null;
+  for (const line of planBodyLines(body)) {
+    const trimmed = line.trimStart();
+    if (!trimmed.startsWith("# ") || trimmed.length <= 2) continue;
+    let title = trimmed.slice(2).trim();
+    if (title.startsWith("Plan:")) {
+      const rest = title.slice("Plan:".length).trim();
+      if (rest) title = rest;
+    }
+    return title.length > 0 ? title : null;
+  }
+  return null;
+}
+
+/** The line viewer's title: the plan H1 when the body has one, else the episode filename. */
 export function planDialogTitle(review: PlanReview | null): string {
   if (!review) return "plan.md";
   const name = review.fileName ?? "plan.md";
-  return planBodyIsEmpty(review.body) ? `${name} (empty)` : name;
+  if (planBodyIsEmpty(review.body)) return `${name} (empty)`;
+  return planHeading(review.body) ?? name;
 }
 
 /** `EMPTY_PLAN_PLACEHOLDER`: the body the viewer shows when the review parked with no plan. */

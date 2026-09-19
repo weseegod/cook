@@ -1,9 +1,10 @@
 //! `x.ai/session/plans` lists a session's plan files; `x.ai/session/plans/delete` removes one.
 //!
 //! Plan mode allocates one file per planning episode under `<session>/plans/<utc>.md`
-//! (`session/plan_mode.rs`), keeping the legacy `<session>/plan.md` for sessions written before
-//! that. The desktop client paints them under the header chip and drives Copy and Delete from this
-//! response, because the renderer may not read or unlink files itself.
+//! (`session/plan_mode.rs`), then publishes it to `<slug>-<utc>.md` when the episode becomes
+//! Inactive. The legacy `<session>/plan.md` is kept for sessions written before that. The desktop
+//! client paints them under the header chip and drives Copy and Delete from this response, because
+//! the renderer may not read or unlink files itself.
 
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
@@ -13,7 +14,8 @@ use serde::Deserialize;
 
 use super::{ExtResult, to_raw_response};
 use crate::session::plan_mode::{
-    PlanModeState, legacy_plan_file_path, read_plan_mode_snapshot, restore_plan_file_path,
+    PlanModeState, UNTITLED_PLAN, episode_list_sort_key, legacy_plan_file_path, plan_display_title,
+    plan_heading, read_plan_mode_snapshot, restore_plan_file_path,
 };
 use crate::session::storage as st;
 
@@ -27,8 +29,11 @@ const PLAN_EXTENSION: &str = "md";
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlanFileEntry {
-    /// File name with extension. An episode's name carries its UTC creation time.
+    /// File name with extension. An episode starts as `<utc>.md` and is published to
+    /// `<slug>-<utc>.md` when the episode ends.
     name: String,
+    /// H1 from the plan body (`# Plan: …`), or `"Untitled plan"` when the file has no heading.
+    title: String,
     /// Absolute path, for the client's "Copy file path".
     path: String,
     /// Path relative to the session directory, the form `plan_mode.json` records an episode in.
@@ -97,9 +102,9 @@ fn session_dir(session_id: &str, cwd: &str) -> Result<PathBuf, acp::Error> {
 
 /// The session's plan files, newest first.
 ///
-/// Episodes are named `plans/<utc>.md`, so filename order is creation order and survives the
-/// in-place edits a request-changes round makes. The legacy `<session>/plan.md` carries no
-/// timestamp and is reported last, as the oldest plan in the session.
+/// Newest first by the UTC token in the filename (`<utc>` or `<slug>-<utc>`), not by the slug
+/// prefix. Request-changes edits in place, so mtime is last write, not creation. The legacy
+/// `<session>/plan.md` carries no timestamp and is reported last.
 pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
     let snapshot = read_plan_mode_snapshot(session_dir);
     let active = restore_plan_file_path(
@@ -117,16 +122,14 @@ pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| {
-            path.is_file() && path.extension().is_some_and(|ext| ext == PLAN_EXTENSION)
-        })
+        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == PLAN_EXTENSION))
         .collect();
-    paths.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
 
     let legacy = legacy_plan_file_path(session_dir);
     if legacy.is_file() {
         paths.push(legacy);
     }
+    paths.sort_by(|a, b| episode_list_sort_key(b).cmp(&episode_list_sort_key(a)));
 
     paths
         .iter()
@@ -142,7 +145,12 @@ pub(crate) fn count_plan_files(session_dir: &Path) -> usize {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == PLAN_EXTENSION))
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == PLAN_EXTENSION)
+        })
         .count();
     episodes + usize::from(legacy_plan_file_path(session_dir).is_file())
 }
@@ -171,8 +179,7 @@ pub(crate) fn delete_plan(session_dir: &Path, target: &Path) -> Result<(), Strin
             target.display()
         ));
     }
-    std::fs::remove_file(target)
-        .map_err(|e| format!("could not delete {}: {e}", target.display()))
+    std::fs::remove_file(target).map_err(|e| format!("could not delete {}: {e}", target.display()))
 }
 
 fn is_active_held(session_dir: &Path, target: &Path) -> bool {
@@ -186,11 +193,18 @@ fn is_active_held(session_dir: &Path, target: &Path) -> bool {
 fn describe(session_dir: &Path, path: &Path, active: &Path, active_is_held: bool) -> PlanFileEntry {
     let metadata = std::fs::metadata(path).ok();
     let is_active = path == active;
+    let content = read_content(path);
+    let title = content
+        .as_deref()
+        .map(plan_display_title)
+        .or_else(|| heading_from_path(path))
+        .unwrap_or_else(|| UNTITLED_PLAN.to_string());
     PlanFileEntry {
         name: path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default(),
+        title,
         path: path.display().to_string(),
         relative_path: path
             .strip_prefix(session_dir)
@@ -204,7 +218,7 @@ fn describe(session_dir: &Path, path: &Path, active: &Path, active_is_held: bool
             .unwrap_or(0),
         active: is_active,
         deletable: !is_active || !active_is_held,
-        content: read_content(path),
+        content,
     }
 }
 
@@ -213,6 +227,16 @@ fn read_content(path: &Path) -> Option<String> {
         return None;
     }
     std::fs::read_to_string(path).ok()
+}
+
+/// First 8 KiB, enough to recover an H1 from a plan the list withheld as too large.
+fn heading_from_path(path: &Path) -> Option<String> {
+    use std::io::Read;
+    const HEAD: usize = 8 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; HEAD];
+    let n = file.read(&mut buf).ok()?;
+    plan_heading(std::str::from_utf8(&buf[..n]).ok()?)
 }
 
 #[cfg(test)]
@@ -317,6 +341,61 @@ mod tests {
         assert_eq!(plans[0].size_bytes, 7);
         assert!(plans[0].modified_ms > 0);
         assert_eq!(plans[0].content.as_deref(), Some("# plan\n"));
+        assert_eq!(plans[0].title, "plan");
+    }
+
+    #[test]
+    fn title_comes_from_the_h1_and_untitled_without_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plan(
+            tmp.path(),
+            &format!("plans/{EPISODE_A}"),
+            "# Plan: Clean all files\n\nDelete them.\n",
+        );
+        write_plan(tmp.path(), &format!("plans/{EPISODE_B}"), "no heading\n");
+
+        let plans = list_plans(tmp.path());
+        let by_name = |name: &str| plans.iter().find(|plan| plan.name == name).unwrap();
+        assert_eq!(by_name(EPISODE_A).title, "Clean all files");
+        assert_eq!(by_name(EPISODE_B).title, "Untitled plan");
+    }
+
+    #[test]
+    fn oversized_files_still_report_the_h1_from_the_head() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut body = "# Plan: Huge cleanup\n".to_string();
+        body.extend(std::iter::repeat_n('a', MAX_PLAN_BYTES as usize));
+        write_plan(tmp.path(), &format!("plans/{EPISODE_A}"), &body);
+
+        let plans = list_plans(tmp.path());
+        assert_eq!(plans[0].content, None);
+        assert_eq!(plans[0].title, "Huge cleanup");
+    }
+
+    #[test]
+    fn lists_slug_prefixed_files_by_utc_not_by_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_plan(
+            tmp.path(),
+            "plans/zebra-2026-09-19T04-44-27Z.md",
+            "# Zebra\n",
+        );
+        write_plan(
+            tmp.path(),
+            "plans/alpha-2026-09-19T04-44-42Z.md",
+            "# Alpha\n",
+        );
+        write_plan(tmp.path(), "plan.md", "# legacy");
+
+        let plans = list_plans(tmp.path());
+        assert_eq!(
+            names(&plans),
+            vec![
+                "alpha-2026-09-19T04-44-42Z.md",
+                "zebra-2026-09-19T04-44-27Z.md",
+                "plan.md"
+            ]
+        );
     }
 
     #[test]
@@ -393,11 +472,16 @@ mod tests {
             tmp.path().join(st::SUMMARY_FILE),
             tmp.path().join("plans/notes.txt"),
             tmp.path().join("plans/nested"),
-            tmp.path().join(format!("plans/{EPISODE_A}")).parent().unwrap().join("..").join("plan.json"),
+            tmp.path()
+                .join(format!("plans/{EPISODE_A}"))
+                .parent()
+                .unwrap()
+                .join("..")
+                .join("plan.json"),
             PathBuf::from("plan.md"),
         ] {
-            let error = delete_plan(tmp.path(), &target)
-                .expect_err(&format!("{target:?} must be refused"));
+            let error =
+                delete_plan(tmp.path(), &target).expect_err(&format!("{target:?} must be refused"));
             assert!(error.contains("is not a plan file"), "{error}");
         }
         std::fs::remove_file(&outside).unwrap();
@@ -416,7 +500,11 @@ mod tests {
     #[test]
     fn counts_episodes_and_the_legacy_plan() {
         let tmp = tempfile::tempdir().unwrap();
-        assert_eq!(count_plan_files(tmp.path()), 0, "an empty session has no plans");
+        assert_eq!(
+            count_plan_files(tmp.path()),
+            0,
+            "an empty session has no plans"
+        );
 
         write_plan(tmp.path(), &format!("plans/{EPISODE_A}"), "# one");
         write_plan(tmp.path(), &format!("plans/{EPISODE_B}"), "# two");

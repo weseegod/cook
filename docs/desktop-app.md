@@ -244,7 +244,8 @@ Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
 to the session cwd plus one allow-path: the agent's own session store
 (`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`).
 Without it plan mode cannot write its plan file (`<session>/plan.md`, or
-`<session>/plans/<utc>.md` per planning episode), which lives outside
+`<session>/plans/<utc>.md` per planning episode, published to
+`<slug>-<utc>.md` when the episode ends), which lives outside
 every workspace. That allow-path is load-bearing.
 
 ### 5.3 `x.ai/*` groups
@@ -351,7 +352,8 @@ updates use the same reducer.
 Plan files are the one part of plan state that is not in the transcript: a
 session's history of them comes from the agent (`x.ai/session/plans`), is held
 in `planFiles`, and is painted by the header chip (`plan-chip.tsx`) as a list —
-newest first, current episode marked, each row's three-dot menu offering Copy,
+newest first by the UTC token in the filename, each row labeled with the plan
+H1 (`title`), current episode marked, each row's three-dot menu offering Copy,
 Copy file path and Delete (`x.ai/session/plans/delete`). The chip belongs to the
 conversation rather than to a plan: it sits in the header from the moment a
 workspace is open and reports an empty list before the first episode is written.

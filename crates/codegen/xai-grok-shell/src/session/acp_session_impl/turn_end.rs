@@ -323,6 +323,7 @@ impl SessionActor {
             drop(tracker);
             if transitioned {
                 self.persist_plan_mode_state();
+                self.sync_plan_file_path_resource().await;
             }
         }
         // Drop the state guard before sends and async emits.

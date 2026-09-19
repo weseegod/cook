@@ -25,6 +25,7 @@ describe("session conversation reset", () => {
     useSessionStore.setState({
       planFiles: [{
         name: "2026-09-19T14-30-22Z.md",
+        title: "Plan",
         path: "/p/plans/2026-09-19T14-30-22Z.md",
         relativePath: "plans/2026-09-19T14-30-22Z.md",
         sizeBytes: 10,

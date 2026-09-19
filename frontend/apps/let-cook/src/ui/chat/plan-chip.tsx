@@ -7,10 +7,21 @@ import { useSessionStore } from "../../state/session";
 import { ConfirmDialog } from "../components/dialog";
 import { copyText } from "./clipboard";
 
+/** Room the three-item plan menu needs before it flips above its trigger. */
+const PLAN_ROW_MENU_HEIGHT = 116;
+
+interface PlanRowMenu {
+  path: string;
+  top: number | null;
+  bottom: number | null;
+  right: number;
+}
+
 /**
  * The header's `plan` chip, carrying the session's plan files.
  *
- * Plan mode allocates one file per planning episode (`<session>/plans/<utc>.md`), so the chip opens
+ * Plan mode allocates one file per planning episode (`<session>/plans/<utc>.md`, published to
+ * `<slug>-<utc>.md` when the episode ends), so the chip opens
  * a list rather than one document: the current episode is marked, and every row hides a
  * three-dot menu with Copy, Copy file path and Delete. Deleting goes through the agent
  * (`x.ai/session/plans/delete`) — the renderer never touches the filesystem.
@@ -25,18 +36,38 @@ export function PlanChip() {
   const review = useSessionStore((state) => state.planReview);
   const cwd = useSessionStore((state) => state.cwd);
   const [listOpen, setListOpen] = useState(false);
-  const [menuPath, setMenuPath] = useState<string | null>(null);
+  const [rowMenu, setRowMenu] = useState<PlanRowMenu | null>(null);
   const [pendingDelete, setPendingDelete] = useState<PlanFileSummary | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const root = useRef<HTMLDivElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!listOpen) return;
+    const node = menu.current;
+    const parent = root.current;
+    if (!node || !parent) return;
+    node.style.left = "";
+    node.style.right = "0px";
+    node.style.width = "";
+    const rect = node.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    const gutter = 6;
+    const width = Math.min(rect.width, window.innerWidth - gutter * 2);
+    node.style.width = `${width}px`;
+    if (rect.left < gutter) {
+      node.style.right = "auto";
+      node.style.left = `${gutter - parentRect.left}px`;
+    }
+  }, [listOpen, files]);
 
   useEffect(() => {
     if (!listOpen) return;
     function onPointerDown(event: MouseEvent) {
       if (event.target instanceof Node && !root.current?.contains(event.target)) {
         setListOpen(false);
-        setMenuPath(null);
+        setRowMenu(null);
       }
     }
     function onKeyDown(event: KeyboardEvent) {
@@ -48,8 +79,8 @@ export function PlanChip() {
         setDeleteError(null);
         return;
       }
-      if (menuPath) {
-        setMenuPath(null);
+      if (rowMenu) {
+        setRowMenu(null);
         return;
       }
       setListOpen(false);
@@ -60,7 +91,7 @@ export function PlanChip() {
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [listOpen, menuPath, pendingDelete]);
+  }, [listOpen, rowMenu, pendingDelete]);
 
   const current = files.find((file) => file.active) ?? null;
   // No workspace means no conversation to hang plans on; the welcome screen keeps its clean header.
@@ -72,7 +103,7 @@ export function PlanChip() {
   function toggleList() {
     const next = !listOpen;
     setListOpen(next);
-    setMenuPath(null);
+    setRowMenu(null);
     // The list is the only surface that knows a plan file appeared, so refresh on open.
     if (next) void acpClient.refreshPlanFiles();
   }
@@ -83,11 +114,11 @@ export function PlanChip() {
     if (file.active && state.planReview) state.setPlanDialogOpen(true);
     else state.setPlanFileView(file);
     setListOpen(false);
-    setMenuPath(null);
+    setRowMenu(null);
   }
 
   async function copyPlan(file: PlanFileSummary) {
-    setMenuPath(null);
+    setRowMenu(null);
     const state = useSessionStore.getState();
     if (file.content === null) {
       state.set({ notice: `${file.name} is too large to copy from here. Open it instead.` });
@@ -102,7 +133,7 @@ export function PlanChip() {
   }
 
   async function copyPlanPath(file: PlanFileSummary) {
-    setMenuPath(null);
+    setRowMenu(null);
     const state = useSessionStore.getState();
     try {
       await copyText(file.path);
@@ -110,6 +141,21 @@ export function PlanChip() {
     } catch (error) {
       state.set({ error: normalizeError(error, "Could not copy the path") });
     }
+  }
+
+  function openRowMenu(trigger: HTMLElement, path: string) {
+    if (rowMenu?.path === path) {
+      setRowMenu(null);
+      return;
+    }
+    const rect = trigger.getBoundingClientRect();
+    const openUp = rect.bottom + PLAN_ROW_MENU_HEIGHT > window.innerHeight;
+    setRowMenu({
+      path,
+      top: openUp ? null : rect.bottom + 4,
+      bottom: openUp ? window.innerHeight - rect.top + 4 : null,
+      right: Math.max(6, window.innerWidth - rect.right),
+    });
   }
 
   async function removePlan() {
@@ -142,11 +188,11 @@ export function PlanChip() {
         onClick={() => (opensList ? toggleList() : useSessionStore.getState().setPlanDialogOpen(true))}
       >
         <FileText size={12} aria-hidden="true" />
-        <span className="plan-chip-name">{current?.name ?? "plan"}</span>
+        <span className="plan-chip-name">{current ? planFileLabel(current) : "plan"}</span>
         {opensList && <ChevronDown size={12} aria-hidden="true" />}
       </button>
       {listOpen && (
-        <div className="plan-menu" role="menu" data-testid="plan-menu">
+        <div ref={menu} className="plan-menu" role="menu" data-testid="plan-menu">
           {files.length === 0 && (
             <div className="plan-menu-empty" data-testid="plan-menu-empty">
               No plans in this conversation yet
@@ -165,7 +211,7 @@ export function PlanChip() {
                 title={file.path}
                 onClick={() => openPlan(file)}
               >
-                <span className="plan-menu-name">{file.name}</span>
+                <span className="plan-menu-name">{planFileLabel(file)}</span>
                 <span className="plan-menu-meta">
                   {file.active && (
                     <span className="plan-menu-badge" data-testid="plan-file-current">
@@ -181,13 +227,18 @@ export function PlanChip() {
                 data-testid={`plan-file-actions-${file.name}`}
                 aria-label={`Actions for ${file.name}`}
                 aria-haspopup="menu"
-                aria-expanded={menuPath === file.path}
-                onClick={() => setMenuPath(menuPath === file.path ? null : file.path)}
+                aria-expanded={rowMenu?.path === file.path}
+                onClick={(event) => openRowMenu(event.currentTarget, file.path)}
               >
                 <MoreVertical size={14} />
               </button>
-              {menuPath === file.path && (
-                <div className="plan-row-menu" role="menu" data-testid={`plan-file-menu-${file.name}`}>
+              {rowMenu?.path === file.path && (
+                <div
+                  className="plan-row-menu"
+                  role="menu"
+                  data-testid={`plan-file-menu-${file.name}`}
+                  style={{ top: rowMenu.top ?? undefined, bottom: rowMenu.bottom ?? undefined, right: rowMenu.right }}
+                >
                   <button type="button" role="menuitem" data-testid="plan-file-copy" onClick={() => void copyPlan(file)}>
                     <Copy size={13} />
                     <span>Copy</span>
@@ -207,7 +258,7 @@ export function PlanChip() {
                       ? `Delete ${file.name}`
                       : "The current plan cannot be deleted while plan mode is on"}
                     onClick={() => {
-                      setMenuPath(null);
+                      setRowMenu(null);
                       setPendingDelete(file);
                     }}
                   >
@@ -238,6 +289,12 @@ export function PlanChip() {
       )}
     </div>
   );
+}
+
+/** H1 the list API sent, falling back to the filename while a plan is still empty. */
+function planFileLabel(file: PlanFileSummary): string {
+  const title = file.title.trim();
+  return title.length > 0 ? title : file.name;
 }
 
 /** Size and last write for the row's second line; the file name carries the creation time. */

@@ -36,6 +36,7 @@ describe("listPlanFiles", () => {
 
     expect(await listPlanFiles(params)).toEqual([{
       name: "2026-09-19T14-30-22Z.md",
+      title: "Current plan",
       path: "/home/u/.cook/sessions/p/sess-1/plans/2026-09-19T14-30-22Z.md",
       relativePath: "plans/2026-09-19T14-30-22Z.md",
       sizeBytes: 1368,
@@ -55,6 +56,7 @@ describe("listPlanFiles", () => {
 
     expect(file).toEqual({
       name: "plan.md",
+      title: "Untitled plan",
       path: "",
       relativePath: "plan.md",
       sizeBytes: 12,

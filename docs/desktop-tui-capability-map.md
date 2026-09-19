@@ -151,7 +151,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-t-r | `terminal/release` | A→C | — | not advertised | `ok` | protocol |
 | ACP-t-k | `terminal/kill` | A→C | — | not advertised | `ok` | protocol |
 
-Plan-mode plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` before a session's first planning episode, then `<session>/plans/<utc>.md` per episode. That allow-path is load-bearing. The desktop reads and prunes them through C-plans rather than the filesystem, so the list also works for a session loaded from disk.
+Plan-mode plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` before a session's first planning episode, then `<session>/plans/<utc>.md` per episode (published to `<slug>-<utc>.md` when the episode becomes Inactive). That allow-path is load-bearing. The desktop reads and prunes them through C-plans rather than the filesystem, so the list also works for a session loaded from disk. The list payload includes `title` (the plan H1) so the header chip can name the episode.
 
 ---
 
@@ -297,7 +297,7 @@ Agent match: `acp_agent.rs` L1966–2342. Desktop wrappers: `xai.ts`, `extension
 | C-sess-usage | `x.ai/session/usage` | C→A | `/usage` | — | `gap` | surface |
 | C-sess-upd | `x.ai/session/updates` | C→A | reconnect | — | `gap` | protocol |
 | C-sess-state | `x.ai/session/state` / `import` / `repair` | C→A | debug/import | — | `na` | chrome |
-| C-plans | `x.ai/session/plans` / `plans/delete` | C→A | `/view-plan` shows the current episode only | `plan-files.ts`; header plan list (`plan-chip.tsx`) with Copy / Copy file path / Delete | `ok` | surface |
+| C-plans | `x.ai/session/plans` / `plans/delete` | C→A | `/view-plan` shows the current episode only | `plan-files.ts`; header plan list (`plan-chip.tsx`) shows each episode's H1 `title`, with Copy / Copy file path / Delete | `ok` | surface |
 | C-sess-del-all | `x.ai/sessions/delete_all` | C→A | — (delete one session at a time) | Settings → Data Controls (`data-controls.tsx`), behind a confirmation | `gap` in the TUI, `ok` on the desktop | surface |
 | C-sess-mcp | `x.ai/session/update_mcp_servers` | C→A | MCP modal | — (uses `x.ai/mcp/*`) | `partial` | protocol |
 | C-sess-wt | `x.ai/session/resolve_local_for_worktree_resume` / `rehydrate` | C→A | worktree resume | — | `na` | chrome |
@@ -741,7 +741,7 @@ Two channels:
 | `x.ai/fs/{read_file,write_file,exists}` | C→A | Settings project files (`exists` unused) | `ok` / `partial` |
 | `x.ai/fs/{list,delete_file}` | C→A | missing | `gap` / `na` (Files panel is Tauri) |
 
-**Invariant:** plan-mode plan files live under the agent session store, outside the workspace: `<session>/plan.md` until a session starts its first planning episode, then `<session>/plans/<utc>.md` per episode. ACP-fs-w must keep that allow-path (`acp_host.rs` `agent_state_root`).
+**Invariant:** plan-mode plan files live under the agent session store, outside the workspace: `<session>/plan.md` until a session starts its first planning episode, then `<session>/plans/<utc>.md` per episode, published to `<slug>-<utc>.md` when the episode ends. ACP-fs-w must keep that allow-path (`acp_host.rs` `agent_state_root`).
 
 ---
 

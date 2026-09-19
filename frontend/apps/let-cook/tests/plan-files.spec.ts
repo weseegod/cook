@@ -29,9 +29,9 @@ function api(page: Page) {
 const PLAN_SEED = {
   ...CONNECTED_SEED,
   planFiles: [
-    { name: NEWEST, path: `${PLAN_DIR}/${NEWEST}`, relativePath: `plans/${NEWEST}`, sizeBytes: 1368, modifiedMs: Date.parse("2026-09-19T14:30:22Z"), active: true, deletable: false, content: "# Current plan\n\n1. Add the plan list" },
-    { name: MIDDLE, path: `${PLAN_DIR}/${MIDDLE}`, relativePath: `plans/${MIDDLE}`, sizeBytes: 828, modifiedMs: Date.parse("2026-09-19T11:02:05Z"), active: false, deletable: true, content: "# Middle plan\n\n1. Ship the chip" },
-    { name: OLDEST, path: `${PLAN_DIR}/${OLDEST}`, relativePath: `plans/${OLDEST}`, sizeBytes: 804, modifiedMs: Date.parse("2026-09-18T09:15:00Z"), active: false, deletable: true, content: "# First plan\n\n1. Allocate one file per episode" },
+    { name: NEWEST, title: "Current plan", path: `${PLAN_DIR}/${NEWEST}`, relativePath: `plans/${NEWEST}`, sizeBytes: 1368, modifiedMs: Date.parse("2026-09-19T14:30:22Z"), active: true, deletable: false, content: "# Current plan\n\n1. Add the plan list" },
+    { name: MIDDLE, title: "Middle plan", path: `${PLAN_DIR}/${MIDDLE}`, relativePath: `plans/${MIDDLE}`, sizeBytes: 828, modifiedMs: Date.parse("2026-09-19T11:02:05Z"), active: false, deletable: true, content: "# Middle plan\n\n1. Ship the chip" },
+    { name: OLDEST, title: "First plan", path: `${PLAN_DIR}/${OLDEST}`, relativePath: `plans/${OLDEST}`, sizeBytes: 804, modifiedMs: Date.parse("2026-09-18T09:15:00Z"), active: false, deletable: true, content: "# First plan\n\n1. Allocate one file per episode" },
   ],
 };
 
@@ -88,16 +88,16 @@ test.describe("plan list", () => {
     await startSession(page);
     await expect(page.getByTestId("plan-chip")).toBeVisible();
 
-    // The chip names the episode the session is planning in, not the first or the last file seen.
-    await expect(page.getByTestId("plan-chip")).toContainText(NEWEST);
+    // The chip names the episode by its H1, not the UTC filename.
+    await expect(page.getByTestId("plan-chip")).toContainText("Current plan");
 
     await page.getByTestId("plan-chip").click();
 
     const rows = page.locator(".plan-menu-row");
     await expect(rows).toHaveCount(3);
-    await expect(rows.nth(0)).toContainText(NEWEST);
-    await expect(rows.nth(1)).toContainText(MIDDLE);
-    await expect(rows.nth(2)).toContainText(OLDEST);
+    await expect(rows.nth(0)).toContainText("Current plan");
+    await expect(rows.nth(1)).toContainText("Middle plan");
+    await expect(rows.nth(2)).toContainText("First plan");
     // Newest first is the creation order the file names carry; exactly one row is current.
     await expect(page.getByTestId("plan-file-current")).toHaveCount(1);
     await expect(page.getByTestId(`plan-file-row-${NEWEST}`)).toHaveClass(/active/);
@@ -132,6 +132,15 @@ test.describe("plan list", () => {
     // Delete is the danger action, and it stays enabled for an earlier episode.
     await expect(page.getByTestId("plan-file-delete")).toHaveClass(/plan-row-menu-danger/);
     await expect(page.getByTestId("plan-file-delete")).toBeEnabled();
+
+    // The row menu is positioned outside the scroll-clipped plan list, so its last item remains
+    // hit-testable instead of being visually present only in the DOM.
+    const deleteBox = (await page.getByTestId("plan-file-delete").boundingBox())!;
+    const deleteHit = await page.evaluate(({ x, y }) => {
+      const target = document.elementFromPoint(x, y);
+      return Boolean(target?.closest('[data-testid="plan-file-delete"]'));
+    }, { x: deleteBox.x + deleteBox.width / 2, y: deleteBox.y + deleteBox.height / 2 });
+    expect(deleteHit).toBe(true);
   });
 
   test("copies the plan body and the absolute path", async ({ page }) => {
