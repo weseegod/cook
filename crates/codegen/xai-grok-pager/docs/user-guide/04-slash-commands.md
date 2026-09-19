@@ -272,6 +272,32 @@ Intervals are `Ns` (seconds, minimum 60), `Nm` (minutes), `Nh` (hours), or `Nd` 
 
 ---
 
+## Git
+
+### `/commit`
+
+Commit the current changes with a message Grok writes from the conversation so far.
+
+```
+/commit
+/commit fix the flaky retry test
+/commit --push
+```
+
+The message follows the style of recent history (`git log -5 --oneline`), so conventional-commit prefixes are used only when the log already uses them. An optional argument steers the subject; when it already reads as a complete subject line it is used as-is. `--push` is shorthand for `/commit-and-push`.
+
+Grok probes the tree with `git status --porcelain` and `git diff --stat HEAD` rather than reading every diff again, stages the changes that belong in the commit, and leaves secrets, dependencies, and build output out of it. Nothing staged or modified reports "nothing to commit" and stops. An in-progress merge, rebase, cherry-pick, or bisect stops the command instead of committing on top of it.
+
+### `/commit-and-push [message hint]`
+
+Commit as above, then integrate the upstream branch and push.
+
+Grok fetches the tracked upstream, runs a plain `git pull` so your `pull.rebase` / `pull.ff` setting is honored, and pushes. If the pull conflicts, it does **not** abort: it lists the unmerged paths (`git diff --name-only --diff-filter=U`), reads only those files, resolves each so both your commit's intent and the incoming changes hold, stages them, and continues the merge (`git commit --no-edit`) or rebase (`git rebase --continue`) before pushing. A push that fails on auth or network leaves the commit in place and reports the error.
+
+Neither command ever force-pushes, rewrites published history, or uses `--no-verify`, `--amend`, or `--allow-empty` unless you ask.
+
+---
+
 ## Workflows and Goals
 
 ### `/goal`

@@ -716,13 +716,6 @@ impl GoalTracker {
         self.goal_dir().join("plan.baseline.md")
     }
 
-    /// Path of the plan-mode plan file for this session
-    /// (`<session_dir>/plan.md`); may not exist. Reading it is the
-    /// `/goal --from-plan` source.
-    pub(crate) fn plan_mode_plan_path(&self) -> PathBuf {
-        self.session_dir.join("plan.md")
-    }
-
     /// Path to the strategist's advisory note (`<session_dir>/goal/strategy.md`).
     /// Whole-file restore is safe because the strategist runs synchronously as the sole writer (the goal turn is blocked awaiting it).
     /// May not exist until the strategist first runs.

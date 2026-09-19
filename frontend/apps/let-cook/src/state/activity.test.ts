@@ -3,10 +3,16 @@ import { dispatchNotification, lookupNotification } from "../acp/notifications";
 import { killTask } from "../acp/activity";
 import {
   activityRows,
+  applySubagentSessionUpdate,
   applyTaskBackgrounded,
   applyTaskCompleted,
+  conversationRows,
+  pausedWorkflowCount,
+  rowForChildSession,
+  runningCount,
   useActivityStore,
 } from "./activity";
+import { useSessionStore } from "./session";
 
 vi.mock("../acp/host", () => ({
   request: vi.fn(async (method: string, params: unknown) => {
@@ -114,5 +120,126 @@ describe("activity store (P4)", () => {
       task_snapshot: { task_id: "flat-1", exit_code: 1, command: "echo hi" },
     });
     expect(useActivityStore.getState().tasks["flat-1"].status).toBe("failed");
+  });
+
+  it("keeps the stdout a task snapshot carries, so its viewer has a body", () => {
+    applyTaskBackgrounded({
+      sessionId: "s1",
+      update: { task_id: "t-1", command: "pnpm test", description: "Run tests", output_file: "/tmp/out.log" },
+    });
+    expect(useActivityStore.getState().tasks["t-1"].outputFile).toBe("/tmp/out.log");
+
+    applyTaskCompleted({
+      sessionId: "s1",
+      update: { task_snapshot: { task_id: "t-1", exit_code: 0, output: "1 passed", truncated: true } },
+    });
+    expect(useActivityStore.getState().tasks["t-1"]).toMatchObject({
+      output: "1 passed",
+      truncated: true,
+    });
+  });
+
+  it("stamps the child session a subagent streams under", () => {
+    applySubagentSessionUpdate(
+      {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "sa-1",
+        child_session_id: "child-1",
+        description: "Explore the repository",
+      },
+      "s1",
+    );
+    expect(rowForChildSession("child-1")?.id).toBe("sa-1");
+    expect(rowForChildSession("someone-else")).toBeNull();
+  });
+
+  it("falls back to the subagent id when the spawn omits a child session", () => {
+    applySubagentSessionUpdate({ sessionUpdate: "subagent_spawned", subagent_id: "sa-9" }, "s1");
+    expect(useActivityStore.getState().subagents["sa-9"].childSessionId).toBe("sa-9");
+  });
+
+  it("carries the live activity label and opens a viewer on request", () => {
+    applySubagentSessionUpdate({ sessionUpdate: "subagent_spawned", subagent_id: "sa-1" }, "s1");
+    useActivityStore.getState().setActivityLabel("sa-1", "Running: cargo build");
+    expect(conversationRows("s1")[0].activityLabel).toBe("Running: cargo build");
+
+    useActivityStore.getState().setViewing(useActivityStore.getState().subagents["sa-1"]);
+    expect(useActivityStore.getState().viewing?.id).toBe("sa-1");
+    useActivityStore.getState().reset();
+    expect(useActivityStore.getState().viewing).toBeNull();
+    expect(useActivityStore.getState().childTranscripts).toEqual({});
+  });
+});
+
+describe("activity rows belong to a conversation", () => {
+  const backgrounded = (sessionId: string, taskId: string, description: string) =>
+    applyTaskBackgrounded({ sessionId, update: { task_id: taskId, command: "sleep 30", description } });
+
+  beforeEach(() => {
+    useActivityStore.getState().reset();
+  });
+
+  it("stamps the envelope's session and keeps other conversations out of the list", () => {
+    backgrounded("s1", "t-1", "Mine");
+    backgrounded("s2", "t-2", "Theirs");
+    expect(useActivityStore.getState().tasks["t-1"].sessionId).toBe("s1");
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["t-1"]);
+    expect(conversationRows("s2").map((row) => row.id)).toEqual(["t-2"]);
+  });
+
+  it("survives a completion that carries no session of its own", () => {
+    backgrounded("s1", "t-1", "Mine");
+    applyTaskCompleted({ update: { task_snapshot: { task_id: "t-1", exit_code: 0 } } });
+    expect(useActivityStore.getState().tasks["t-1"]).toMatchObject({ sessionId: "s1", status: "completed" });
+  });
+
+  it("stamps subagent updates from the session envelope", () => {
+    applySubagentSessionUpdate(
+      { sessionUpdate: "subagent_spawned", subagent_id: "sa-1", description: "scan src/" },
+      "s1",
+    );
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["sa-1"]);
+    expect(conversationRows("s2")).toEqual([]);
+  });
+
+  it("keeps a legacy row with no owner visible, and lists nothing without a conversation", () => {
+    applyTaskBackgrounded({ task_id: "flat-1", command: "echo hi", description: "Echo" });
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["flat-1"]);
+    expect(conversationRows(null)).toEqual([]);
+  });
+
+  it("counts only the rows still in flight", () => {
+    backgrounded("s1", "t-1", "Mine");
+    backgrounded("s1", "t-2", "Also mine");
+    expect(runningCount(conversationRows("s1"))).toBe(2);
+    applyTaskCompleted({ sessionId: "s1", update: { task_snapshot: { task_id: "t-1", exit_code: 0 } } });
+    expect(runningCount(conversationRows("s1"))).toBe(1);
+  });
+
+  it("counts workflows parked mid-run, not the active or terminal ones", () => {
+    const workflow = (id: string, status: string) =>
+      useActivityStore.getState().upsertWorkflow({ id, kind: "workflow", name: id, status, startedAt: 0, sessionId: "s1" });
+    workflow("wf-active", "active");
+    workflow("wf-paused", "paused");
+    workflow("wf-parked", "budget");
+    workflow("wf-done", "complete");
+    expect(pausedWorkflowCount(conversationRows("s1"))).toBe(2);
+  });
+
+  it("reset drops the rows and closes the strip", () => {
+    backgrounded("s1", "t-1", "Mine");
+    useActivityStore.getState().setOverlayOpen(true);
+    useActivityStore.getState().reset();
+    expect(activityRows()).toEqual([]);
+    expect(useActivityStore.getState().overlayOpen).toBe(false);
+  });
+
+  it("hides a previous conversation's rows without dropping them", () => {
+    backgrounded("s1", "t-1", "Mine");
+    useSessionStore.getState().resetConversation("s2");
+    expect(conversationRows("s2")).toEqual([]);
+    // Switching back still finds the work the first conversation left behind.
+    useSessionStore.getState().resetConversation("s1");
+    expect(conversationRows("s1").map((row) => row.id)).toEqual(["t-1"]);
   });
 });

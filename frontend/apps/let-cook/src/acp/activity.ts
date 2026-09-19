@@ -21,6 +21,11 @@ export interface TaskListItem {
   isBackgrounded?: boolean;
   startedAt?: number;
   durationMs?: number;
+  /** Live stdout while the task runs, or the final buffer once it settles (`TaskSnapshot::output`). */
+  output?: string;
+  outputFile?: string;
+  /** `output` is a prefix of the real thing. */
+  truncated?: boolean;
 }
 
 export interface SubagentListItem {
@@ -35,6 +40,10 @@ export interface SubagentListItem {
   turnCount?: number;
   toolCallCount?: number;
   tokensUsed?: number;
+  toolsUsed?: string[];
+  errorCount?: number;
+  /** Final report of a finished child (`SubagentSnapshotDto::output`). */
+  output?: string;
 }
 
 export function listTasks(sessionId: string) {
@@ -114,6 +123,9 @@ function normalizeTask(item: UnknownRecord): TaskListItem {
     isBackgrounded: item.is_backgrounded === true || item.isBackgrounded === true,
     startedAt: epochMs(start),
     durationMs: numberValue(item.duration_ms ?? item.durationMs),
+    output: stringValue(item.output),
+    outputFile: stringValue(item.output_file ?? item.outputFile),
+    truncated: item.truncated === true,
   };
 }
 
@@ -130,6 +142,9 @@ function normalizeSubagent(item: UnknownRecord): SubagentListItem {
     turnCount: numberValue(item.turn_count ?? item.turnCount),
     toolCallCount: numberValue(item.tool_call_count ?? item.toolCallCount),
     tokensUsed: numberValue(item.tokens_used ?? item.tokensUsed),
+    toolsUsed: stringArray(item.tools_used ?? item.toolsUsed),
+    errorCount: numberValue(item.error_count ?? item.errorCount),
+    output: stringValue(item.output),
   };
 }
 
@@ -139,6 +154,11 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function stringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 function numberValue(value: unknown): number | undefined {

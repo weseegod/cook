@@ -2120,6 +2120,7 @@ pub(crate) mod test_fixtures {
             session_id: "test-session".into(),
             tool_call_id: "call-1".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            plan_file_path: None,
         };
         crate::views::plan_approval_view::PlanApprovalViewState::new(
             request,

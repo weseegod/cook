@@ -14,6 +14,36 @@ const empty = (): TranscriptState => ({
   cursor: { turnId: "turn-1", assistantId: null, thoughtId: null, optimisticUserId: null },
 });
 
+describe("session defaults", () => {
+  it("starts with Always approve enabled", () => {
+    expect(useSessionStore.getState().alwaysApprove).toBe(true);
+  });
+});
+
+describe("session conversation reset", () => {
+  it("drops the previous session's plan files and its open plan view", () => {
+    useSessionStore.setState({
+      planFiles: [{
+        name: "2026-09-19T14-30-22Z.md",
+        title: "Plan",
+        path: "/p/plans/2026-09-19T14-30-22Z.md",
+        relativePath: "plans/2026-09-19T14-30-22Z.md",
+        sizeBytes: 10,
+        modifiedMs: 1,
+        active: true,
+        deletable: false,
+        content: "# Plan",
+      }],
+      planFileView: null,
+    });
+
+    useSessionStore.getState().resetConversation("sess-2");
+
+    expect(useSessionStore.getState().planFiles).toEqual([]);
+    expect(useSessionStore.getState().planFileView).toBeNull();
+  });
+});
+
 describe("session transcript reducer", () => {
   it("coalesces streamed assistant chunks without a message id", () => {
     let transcript = reduceTranscript(empty(), {

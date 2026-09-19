@@ -4,7 +4,7 @@
  * connector work can append there without merge conflict.
  */
 import { request } from "./host";
-import type { PluginView, SkillView } from "./extensions";
+import { skillCwd, type PluginView, type SkillView } from "./extensions";
 
 // ---------------------------------------------------------------------------
 // Memory files (U-memf / MEM-ui)
@@ -36,18 +36,18 @@ export function addSkill(path: string, cwd?: string) {
     path?: string;
     skills?: SkillView[];
     message?: string;
-  }>("x.ai/skills/add", { path, ...(cwd ? { cwd } : {}) });
+  }>("x.ai/skills/add", { path, cwd: skillCwd(cwd) });
 }
 
 export function removeSkill(path: string, cwd?: string) {
   return request<{ path?: string; skills?: SkillView[]; message?: string }>("x.ai/skills/remove", {
     path,
-    ...(cwd ? { cwd } : {}),
+    cwd: skillCwd(cwd),
   });
 }
 
 export function resetSkills(cwd?: string) {
-  return request<{ skills?: SkillView[]; message?: string }>("x.ai/skills/reset", cwd ? { cwd } : {});
+  return request<{ skills?: SkillView[]; message?: string }>("x.ai/skills/reset", { cwd: skillCwd(cwd) });
 }
 
 export function skillsConfig(cwd?: string) {
@@ -57,7 +57,7 @@ export function skillsConfig(cwd?: string) {
     totalSkills?: number;
     message?: string;
     skills?: SkillView[];
-  }>("x.ai/skills/config", cwd ? { cwd } : {});
+  }>("x.ai/skills/config", { cwd: skillCwd(cwd) });
 }
 
 // ---------------------------------------------------------------------------

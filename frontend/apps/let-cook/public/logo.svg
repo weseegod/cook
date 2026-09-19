@@ -1,86 +1,72 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Dock icon source (transparent — no plate / no background fill).
+    Artwork is centered with ~10% margin so macOS Dock squircle framing fits.
+  -->
   <defs>
-    <!-- White Toque Body Gradient -->
     <linearGradient id="toqueBody" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#FFFFFF"/>
       <stop offset="75%" stop-color="#F1F5F9"/>
       <stop offset="100%" stop-color="#E2E8F0"/>
     </linearGradient>
-
-    <!-- Sleek Band White Gradient -->
     <linearGradient id="bandWhite" x1="0%" y1="0%" x2="0%" y2="100%">
       <stop offset="0%" stop-color="#FFFFFF"/>
       <stop offset="100%" stop-color="#F8FAFC"/>
     </linearGradient>
-
-    <!-- Soft Drop Shadow -->
-    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#0F172A" flood-opacity="0.15"/>
-    </filter>
   </defs>
 
-  <g filter="url(#shadow)" transform="translate(0, 15)">
-    <!-- 1. TOQUE CROWN (Thân mũ Chef Toque) -->
-    <path d="M 152 285 
-             C 95 250, 100 160, 155 130 
-             C 165 75, 210 55, 256 55 
-             C 302 55, 347 75, 357 130 
-             C 412 160, 417 250, 360 285 Z" 
-          fill="url(#toqueBody)" 
-          stroke="#0F172A" 
-          stroke-width="9" 
+  <!--
+    Original art was ~330×310 in a 512 canvas (too much empty margin in Dock).
+    Scale 1.35 and center so the hat fills the Dock icon without clipping.
+  -->
+  <g transform="translate(256 268) scale(1.35) translate(-256 -205)">
+    <!-- Toque crown -->
+    <path d="M 152 285
+             C 95 250, 100 160, 155 130
+             C 165 75, 210 55, 256 55
+             C 302 55, 347 75, 357 130
+             C 412 160, 417 250, 360 285 Z"
+          fill="url(#toqueBody)"
+          stroke="#0F172A"
+          stroke-width="9"
           stroke-linejoin="round"/>
 
-    <!-- 2. TRADITIONAL PLEATS (Nếp gấp dọc truyền thống - Đã căn chỉnh vị trí rõ ràng) -->
+    <!-- Pleats -->
     <path d="M 188 120 C 180 170, 182 230, 185 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
     <path d="M 225 72 C 220 150, 222 220, 222 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
     <path d="M 287 72 C 292 150, 290 220, 290 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
     <path d="M 324 120 C 332 170, 330 230, 327 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
 
-    <!-- 3. CODE STREAMING EXACTLY BETWEEN THE PLEATS (Code nằm lọt lòng giữa các khe nếp gấp) -->
+    <!-- Code between pleats -->
     <g font-family="'JetBrains Mono', 'Fira Code', 'Courier New', monospace" font-size="10.5" font-weight="700" letter-spacing="0.5">
-      <!-- Khe 1: Mép trái -> Nếp 1 (X = 168) -->
       <text x="168" y="155" transform="rotate(90 168 155)" fill="#EA580C" opacity="0.8">
         const <tspan fill="#0284C7">app</tspan>;
       </text>
-
-      <!-- Khe 2: Nếp 1 -> Nếp 2 (X = 204) -->
       <text x="204" y="115" transform="rotate(90 204 115)" fill="#0F172A" opacity="0.85">
         <tspan fill="#EA580C">fn</tspan> cook() {
       </text>
-
-      <!-- Khe 3: Nếp 2 -> Nếp 3 (Khoang trung tâm mũ X = 256) -->
       <text x="256" y="70" transform="rotate(90 256 70)" fill="#0F172A" opacity="0.9">
         <tspan fill="#EA580C">import</tspan> { <tspan fill="#0284C7">Cook</tspan> } <tspan fill="#EA580C">from</tspan> <tspan fill="#10B981">'harness'</tspan>;
       </text>
-
-      <!-- Khe 4: Nếp 3 -> Nếp 4 (X = 307) -->
       <text x="307" y="115" transform="rotate(90 307 115)" fill="#0F172A" opacity="0.85">
         <tspan fill="#EA580C">yield*</tspan> stream;
       </text>
-
-      <!-- Khe 5: Nếp 4 -> Mép phải (X = 344) -->
       <text x="344" y="155" transform="rotate(90 344 155)" fill="#10B981" opacity="0.8">
         <tspan fill="#EA580C">return</tspan> ok;
       </text>
     </g>
 
-    <!-- 4. BAND (Chân mũ) -->
+    <!-- Band + terminal -->
     <rect x="150" y="280" width="212" height="70" rx="10" fill="url(#bandWhite)" stroke="#0F172A" stroke-width="9"/>
-
-    <!-- Màn hình Terminal chìm trong chân mũ -->
     <rect x="165" y="295" width="182" height="40" rx="6" fill="#0F172A"/>
-
-    <!-- Dòng chữ "Let Him Cook..._" -->
-    <text x="256" y="320" 
-          font-family="'JetBrains Mono', 'Fira Code', 'Courier New', monospace" 
-          font-size="13" 
-          font-weight="700" 
-          fill="#38BDF8" 
-          text-anchor="middle" 
+    <text x="256" y="320"
+          font-family="'JetBrains Mono', 'Fira Code', 'Courier New', monospace"
+          font-size="13"
+          font-weight="700"
+          fill="#38BDF8"
+          text-anchor="middle"
           letter-spacing="0.5">
       Let Him Cook...<tspan fill="#F97316">_</tspan>
     </text>
   </g>
 </svg>
-

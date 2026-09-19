@@ -6,6 +6,9 @@
 /** Max chars for wait/tool description subjects (`tracker.rs::MAX_ACTIVITY_SUBJECT_CHARS`). */
 export const MAX_ACTIVITY_SUBJECT_CHARS = 40;
 
+/** Spinner glyphs, one per frame (`views/turn_status.rs`). */
+export const BRAILLE_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /** First non-empty trimmed line, clamped to {@link MAX_ACTIVITY_SUBJECT_CHARS}. */
 export function clampActivitySubject(value: string): string {
   const line = value.split(/\r?\n/).map((part) => part.trim()).find((part) => part.length > 0) ?? value.trim();
@@ -91,6 +94,28 @@ export function activityParts(activity: TurnActivity): ActivityParts {
 export function activityText(activity: TurnActivity): string {
   const parts = activityParts(activity);
   return `${parts.prefix ?? ""}${parts.subject ?? ""}` || parts.text;
+}
+
+/** Everything the two status rows read out of the session store. */
+export interface TurnStatusInputs {
+  /** What the transcript is streaming (`deriveActivity`). */
+  derived: TurnActivity | null;
+  turnRunning: boolean;
+  /** Goal verification runs in-turn while the model is idle, so it outranks stale streaming. */
+  goalVerifying: boolean;
+  /** Title of an open ask card, which owns the row while it is up; `null` when none is open. */
+  askDetail: string | null;
+}
+
+/**
+ * Which activity a status row shows, in the TUI's priority order
+ * (`views/turn_status.rs::compute_activity`): an open ask card, else goal verification, else the
+ * transcript's activity, else a plain wait. `null` means nothing is running and the row hides.
+ */
+export function resolveTurnActivity(input: TurnStatusInputs): TurnActivity | null {
+  if (input.goalVerifying && input.turnRunning) return { kind: "verifying" };
+  if (input.askDetail !== null) return { kind: "ask", detail: input.askDetail };
+  return input.derived ?? (input.turnRunning ? { kind: "waiting", reason: { kind: "model" } } : null);
 }
 
 function waitingLabel(reason: WaitingReason): string {
@@ -228,6 +253,36 @@ export function deriveActivity(blocks: readonly ActivitySourceBlock[]): TurnActi
   const assistant = [...blocks].reverse().find((block) => block.type === "message" && block.role === "assistant" && block.streaming);
   if (assistant) return { kind: "responding" };
   return null;
+}
+
+/**
+ * Coarse phase of a single `session/update`. The agent streams a phase only for the conversation
+ * the window has loaded, so this is how a turn's phase keeps moving while the user reads another
+ * conversation: the update is folded into one pseudo-block and read by the same priority rules as
+ * a full transcript. `null` means this update says nothing about the phase.
+ */
+export function activityFromUpdate(update: Record<string, unknown>): TurnActivity | null {
+  const kind = typeof update.sessionUpdate === "string" ? update.sessionUpdate : "";
+  if (kind === "agent_thought_chunk") return deriveActivity([{ type: "message", role: "thought", streaming: true }]);
+  if (kind === "agent_message_chunk") return deriveActivity([{ type: "message", role: "assistant", streaming: true }]);
+  if (kind === "tool_call" || kind === "tool_call_update") {
+    // Tool arguments ride `rawInput` on the wire, as they do for the transcript's tool cards.
+    const input = (update.rawInput ?? update.input ?? update.arguments ?? {}) as Record<string, unknown>;
+    return deriveActivity([
+      {
+        type: "tool",
+        title: typeof update.title === "string" ? update.title : "",
+        status: typeof update.status === "string" ? update.status : "pending",
+        description: stringOr(update.description) ?? stringOr(input.description),
+        command: stringOr(update.command) ?? stringOr(input.command),
+      },
+    ]);
+  }
+  return null;
+}
+
+function stringOr(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function toolActivity(block: ActivitySourceBlock): TurnActivity {

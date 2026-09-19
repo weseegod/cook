@@ -6,6 +6,7 @@ import { pickFolder, request } from "../acp/host";
 import { shouldShowConnectProvider } from "../acp/provider-presets";
 import { listProviders } from "../acp/providers";
 import { useActivityStore } from "../state/activity";
+import { useToolsPanelStore } from "../state/tools-panel";
 import { useArtifactStore } from "../state/artifacts";
 import { useCatalogStore } from "../state/catalog";
 import { useSessionStore } from "../state/session";
@@ -62,11 +63,16 @@ export function AppShell() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [dismissed, setDismissed] = useState(() => localStorage.getItem(DISMISSED_KEY) === "true");
   const activityPanelNonce = useActivityStore((state) => state.panelNonce);
+  const toolsPanelNonce = useToolsPanelStore((state) => state.nonce);
   const artifactEpoch = useArtifactStore((state) => state.openEpoch);
 
   useEffect(() => {
     if (activityPanelNonce > 0) setUtilityPanelOpen(true);
   }, [activityPanelNonce]);
+
+  useEffect(() => {
+    if (toolsPanelNonce > 0) setUtilityPanelOpen(true);
+  }, [toolsPanelNonce]);
 
   useEffect(() => {
     if (artifactEpoch > 0) setUtilityPanelOpen(true);
@@ -116,6 +122,12 @@ export function AppShell() {
       if (event.metaKey && key === ",") {
         event.preventDefault();
         openSettings("general");
+        return;
+      }
+      // TUI `ToggleTasks`: the tasks strip opens and closes on Ctrl-G (`ActionId::ToggleTasks`).
+      if (event.ctrlKey && !event.shiftKey && key === "g") {
+        event.preventDefault();
+        useActivityStore.getState().toggleOverlay();
         return;
       }
       if (event.key === "?" && !commandKey && !event.altKey && !isTypingTarget(event.target)) {

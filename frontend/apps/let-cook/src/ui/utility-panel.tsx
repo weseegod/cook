@@ -15,6 +15,7 @@ import {
 import { normalizeError } from "../acp/errors";
 import { GIT_HEAD_CHANGED_EVENT, useArtifactStore } from "../state/artifacts";
 import { useActivityStore } from "../state/activity";
+import { useToolsPanelStore } from "../state/tools-panel";
 import { ActivityPanel } from "./activity/activity-panel";
 import { ArtifactsPanel } from "./artifacts-panel";
 import { copyText } from "./chat/clipboard";
@@ -33,6 +34,8 @@ export function UtilityPanel({ onClose, initialView }: { onClose: () => void; in
   const [view, setView] = useState<PanelView>(initialView ?? "launcher");
   const panelNonce = useActivityStore((state) => state.panelNonce);
   const panelTarget = useActivityStore((state) => state.panelTarget);
+  const toolsNonce = useToolsPanelStore((state) => state.nonce);
+  const toolsTarget = useToolsPanelStore((state) => state.target);
   const artifactEpoch = useArtifactStore((state) => state.openEpoch);
 
   useEffect(() => {
@@ -41,6 +44,12 @@ export function UtilityPanel({ onClose, initialView }: { onClose: () => void; in
       useActivityStore.getState().clearPanelTarget();
     }
   }, [panelNonce, panelTarget]);
+
+  useEffect(() => {
+    if (!toolsTarget) return;
+    setView(toolsTarget);
+    useToolsPanelStore.getState().clearTarget();
+  }, [toolsNonce, toolsTarget]);
 
   useEffect(() => {
     if (artifactEpoch > 0) setView("preview");

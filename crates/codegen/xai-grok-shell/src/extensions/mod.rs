@@ -24,6 +24,7 @@ pub mod mcp;
 pub mod memory;
 pub mod notification;
 pub mod plugins;
+pub(crate) mod plan_files;
 pub mod pr;
 pub mod privacy;
 pub mod prompt_history;

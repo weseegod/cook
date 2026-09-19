@@ -1,78 +1,41 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CheckCircle2, Cpu, LoaderCircle, LogIn, Pencil, Plus, RefreshCw, Star, Trash2, TriangleAlert } from "lucide-react";
-import { useMemo, useState } from "react";
-import { isVisibleProviderPreset, mergedProviderStatus, PROVIDER_PRESETS } from "../../acp/provider-presets";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Plus, RefreshCw } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { PROVIDER_PRESETS } from "../../acp/provider-presets";
 import { normalizeError } from "../../acp/errors";
-import { request } from "../../acp/host";
 import {
   deleteProvider,
   deleteModel,
-  listProviders,
-  providerPresets,
   type ProviderPreset,
   type ProviderSummary,
-  type ProviderModelLink,
 } from "../../acp/providers";
 import { acpClient } from "../../acp/client";
-import { groupByProvider, type ModelSummary } from "../../acp/xai";
+import type { ModelSummary } from "../../acp/xai";
 import { PresetGrid, ProviderEditor } from "./provider-form";
 import { ModelDialog } from "./model-dialog";
-import { Dialog, DialogActions } from "../components/dialog";
+import { Dialog } from "../components/dialog";
 import { LoadingState } from "../components/async-state";
+import { ProviderCard } from "./providers/provider-card";
+import { RemoveModelDialog, RemoveProviderDialog, ReplacementModelDialog } from "./providers/provider-dialogs";
+import { modelFromLink, type ProviderRow } from "./providers/provider-rows";
+import { useAuthInfo, useProviderPresets, useProviders } from "./providers/use-provider-queries";
 
-/** Agent presets win; the bundled mirror keeps the cards usable offline. */
-export function useProviderPresets() {
-  const query = useQuery({
-    queryKey: ["provider-presets"],
-    queryFn: providerPresets,
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: 0,
-  });
-  const bundled = PROVIDER_PRESETS.filter(isVisibleProviderPreset);
-  const live = new Map((query.data?.presets ?? []).filter(isVisibleProviderPreset).map((preset) => [preset.id, preset]));
-  const presets = bundled.map((preset) => live.get(preset.id) ?? preset);
-  return { presets, isLoading: query.isLoading };
-}
-
-export function useProviders(connected: boolean) {
-  return useQuery({
-    queryKey: ["providers"],
-    queryFn: listProviders,
-    enabled: connected,
-    retry: 0,
-  });
-}
-
-interface ProviderRow {
-  preset: ProviderPreset;
-  /** The `[model_providers.<id>]` table, absent until the provider is connected. */
-  provider?: ProviderSummary;
-  models: ModelSummary[];
-  oauthConnected: boolean;
-  oauthEmail?: string | null;
-}
+export { useProviderPresets, useProviders };
 
 export function ProvidersPanel({
   connected,
   models,
   selectedModel,
-  modelKnown,
   onDirtyChange,
 }: {
   connected: boolean;
   models: ModelSummary[];
   selectedModel: string;
-  modelKnown: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const { presets } = useProviderPresets();
+  const { presets, isFetching: presetsFetching } = useProviderPresets();
   const providers = useProviders(connected);
-  const auth = useQuery({
-    queryKey: ["auth-info", "settings"],
-    queryFn: () => request<{ methodId?: string | null; email?: string | null }>("x.ai/auth/info"),
-    enabled: connected,
-    retry: 0,
-  });
+  const auth = useAuthInfo(connected);
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<ProviderPreset | null>(null);
   const [editingProvider, setEditingProvider] = useState<ProviderSummary | null>(null);
@@ -82,11 +45,34 @@ export function ProvidersPanel({
   const [deletingProvider, setDeletingProvider] = useState<ProviderRow | null>(null);
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
   const [replacement, setReplacement] = useState<{ provider: ProviderSummary; modelId: string } | null>(null);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+
+  // Models arrive via a host call react-query does not track. Track that refresh so the panel
+  // still shows a spinner when the providers query is already warm from the app shell.
+  useEffect(() => {
+    if (!connected) {
+      setCatalogLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCatalogLoading(true);
+    void acpClient.refreshModels()
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setCatalogLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connected]);
 
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["providers"] });
     void queryClient.invalidateQueries({ queryKey: ["models"] });
-    void acpClient.refreshModels();
+    setCatalogLoading(true);
+    void Promise.all([providers.refetch(), acpClient.refreshModels()])
+      .catch(() => undefined)
+      .finally(() => setCatalogLoading(false));
   };
 
   /**
@@ -183,9 +169,6 @@ export function ProvidersPanel({
     }
     return [...byId.values()];
   }, [models, rows]);
-  const modelGroups = useMemo(() => groupByProvider(pickerModels), [pickerModels]);
-  const pickerKnown = modelKnown || pickerModels.some((model) => model.id === selectedModel);
-
   /** Models the default could move to if the removed provider owned the current one. */
   const replacementChoices = useMemo(() => {
     if (!replacement) return [];
@@ -207,232 +190,77 @@ export function ProvidersPanel({
     onDirtyChange?.(true);
   }
 
+  const modelsBusy = catalogLoading || presetsFetching || providers.isFetching;
+  const hasAnyModels = rows.some((row) => row.models.length > 0);
+  // Hide the preset shells while the first catalog load is in flight — otherwise the panel
+  // looks empty/laggy with "none configured" on every card.
+  const blockModels = modelsBusy && !hasAnyModels;
+
   return (
     <div className="providers-panel unified-provider-panel">
       <div className="provider-catalog-toolbar">
-        <label className="field default-model-field">
-          <span>Default model</span>
-          <select
-            value={selectedModel}
-            aria-label="Default model"
-            data-testid="settings-default-model"
-            disabled={pickerModels.length === 0}
-            onChange={(event) => void acpClient.setDefaultModel(event.target.value)}
-          >
-            {!pickerKnown && <option value={selectedModel} disabled>{pickerModels.length === 0 ? "Loading models…" : selectedModel || "Select model"}</option>}
-            {modelGroups.map(([providerId, entries]) => (
-              <optgroup key={providerId} label={providerId}>
-                {entries.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}
-              </optgroup>
-            ))}
-          </select>
-        </label>
         <div className="settings-actions">
           <button className="primary-button" onClick={() => { setAdding(true); setNotice(null); }} data-testid="provider-add">
             <Plus size={15} /> Add provider
           </button>
-          <button className="ghost-button" onClick={() => void providers.refetch()}>
+          <button className="ghost-button" onClick={() => void refresh()} disabled={modelsBusy}>
             <RefreshCw size={14} /> Refresh
           </button>
         </div>
       </div>
 
       {notice && <div className="settings-note security-warning" data-testid="provider-notice" role="alert">{notice}</div>}
-      {connected && providers.isLoading && <LoadingState label="Loading providers" />}
-
-      <div className="provider-model-list">
-        {rows.map((row) => {
-          const status = mergedProviderStatus(row.provider, row.oauthConnected);
-          const label = row.provider?.name ?? row.preset.label;
-          const configure = () => openEditor(row.preset, row.provider);
-          return (
-            <article className="provider-model-card" key={row.preset.id} data-testid={`provider-row-${row.preset.id}`}>
-              <header className="provider-model-heading">
-                <div className="provider-row-main">
-                  <div className="provider-title-line">
-                    <strong>{label}</strong>
-                    <span className={`badge badge-${status.tone}`}>
-                      {status.tone === "ok" ? <CheckCircle2 size={12} /> : <TriangleAlert size={12} />} {status.label}
-                    </span>
-                  </div>
-                  <small>{row.oauthConnected ? row.oauthEmail ?? "Cook account" : row.provider?.baseUrl ?? row.preset.baseUrl ?? "Provider endpoint"}</small>
-                </div>
-                <div className="provider-header-actions">
-                  {row.provider ? (
-                    <>
-                      <button
-                        className="ghost-button provider-header-model-button"
-                        aria-label={`Add model to ${row.preset.id}`}
-                        data-testid={`provider-add-model-${row.preset.id}`}
-                        onClick={() => { setNotice(null); setModelTarget({ provider: row.provider! }); }}
-                      >
-                        <Plus size={13} /> Add model
-                      </button>
-                      <button className="ghost-button provider-header-model-button" data-testid={`provider-edit-${row.preset.id}`} onClick={configure}>
-                        <Pencil size={13} /> Edit
-                      </button>
-                      <button
-                        className="ghost-button danger-ghost-button provider-header-model-button"
-                        data-testid={`provider-remove-${row.preset.id}`}
-                        onClick={() => { setNotice(null); setDeletingProvider(row); }}
-                      >
-                        <Trash2 size={13} /> Remove
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      className="primary-button provider-connect-button"
-                      data-testid={`provider-connect-${row.preset.id}`}
-                      onClick={configure}
-                    >
-                      <LogIn size={14} /> Connect
-                    </button>
-                  )}
-                </div>
-              </header>
-
-              <div className="provider-model-content">
-                <div className="provider-models-summary">
-                  <div className="provider-models-label">
-                    <Cpu size={14} /><strong>Models</strong>
-                    <small>{row.models.length === 0 ? "none configured" : `${row.models.length} configured`}</small>
-                  </div>
-                  {row.models.length > 0 ? (
-                    <ul className="model-list">
-                      {row.models.map((model) => (
-                        <li key={model.id} data-testid={`model-row-${model.id}`}>
-                          <div className="model-row-copy"><strong title={model.name ?? model.id}>{model.name ?? model.id}</strong><code title={model.id}>{model.id}</code></div>
-                          <div className="model-row-meta">
-                            <span title="Context window">Context {formatTokens(model.contextWindow)}</span>
-                            <span title="Maximum output tokens">Output {formatTokens(model.maxCompletionTokens)}</span>
-                            <span title="Accepted input">Input {model.inputModalities?.join(" + ") || "—"}</span>
-                            {(model.isDefault || model.id === selectedModel) && <span className="model-default" title="Default model"><Star size={12} /> Default</span>}
-                            {model.id === selectedModel && <Check className="model-selected-check" size={13} aria-label="Selected" />}
-                            <button
-                              className="icon-button model-edit-button"
-                              aria-label={`Edit model ${model.id}`}
-                              onClick={() => row.provider && setModelTarget({ provider: row.provider, model })}
-                            >
-                              <Pencil size={12} />
-                            </button>
-                            <button
-                              className="icon-button model-delete-button"
-                              aria-label={`Remove model ${model.id}`}
-                              data-testid={`model-remove-${model.id}`}
-                              onClick={() => { setNotice(null); setDeletingModel(model); }}
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="provider-no-models">
-                      {row.provider
-                        ? "No models yet. Add one to make it selectable in chat."
-                        : "Connect this provider to choose models."}
-                    </p>
-                  )}
-                </div>
-              </div>
-            </article>
-          );
-        })}
-      </div>
+      {blockModels ? (
+        <LoadingState label="Loading models and providers" />
+      ) : (
+        <>
+          {modelsBusy && <LoadingState label={hasAnyModels ? "Refreshing models and providers" : "Loading models and providers"} />}
+          <div className="provider-model-list">
+            {rows.map((row) => (
+              <ProviderCard
+                key={row.preset.id}
+                row={row}
+                selectedModel={selectedModel}
+                onAddModel={() => { setNotice(null); setModelTarget({ provider: row.provider! }); }}
+                onEdit={() => openEditor(row.preset, row.provider)}
+                onRemove={() => { setNotice(null); setDeletingProvider(row); }}
+                onEditModel={(model) => { if (row.provider) setModelTarget({ provider: row.provider, model }); }}
+                onRemoveModel={(model) => { setNotice(null); setDeletingModel(model); }}
+              />
+            ))}
+          </div>
+        </>
+      )}
 
       {deletingProvider && (
-        <Dialog
-          title={`Remove ${deletingProvider.provider?.name ?? deletingProvider.preset.label}?`}
-          tone="danger"
-          size="sm"
-          description="This deletes config, not just the saved key."
+        <RemoveProviderDialog
+          row={deletingProvider}
+          pending={removeProvider.isPending}
           onClose={() => setDeletingProvider(null)}
-        >
-          <p className="dialog-note">
-            <code>[model_providers.{deletingProvider.preset.id}]</code> and every model below are
-            removed from <code>~/.cook/config.toml</code>. The credential goes with them, and chat
-            can no longer use these models.
-          </p>
-          {deletingProvider.models.length > 0 && (
-            <ul className="dialog-model-chips">
-              {deletingProvider.models.map((model) => <li key={model.id}><code>{model.id}</code></li>)}
-            </ul>
-          )}
-          <DialogActions>
-            <button className="ghost-button" onClick={() => setDeletingProvider(null)} disabled={removeProvider.isPending}>Cancel</button>
-            <button
-              className="danger-button"
-              data-testid="provider-remove-confirm"
-              disabled={removeProvider.isPending}
-              onClick={() => removeProvider.mutate({ provider: deletingProvider.provider! })}
-            >
-              {removeProvider.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Remove provider
-            </button>
-          </DialogActions>
-        </Dialog>
+          onConfirm={() => removeProvider.mutate({ provider: deletingProvider.provider! })}
+        />
       )}
 
       {deletingModel && (
-        <Dialog
-          title={`Remove ${deletingModel.name ?? deletingModel.id}?`}
-          tone="danger"
-          size="sm"
-          description={`[model."${deletingModel.id}"] is deleted from ~/.cook/config.toml.`}
+        <RemoveModelDialog
+          model={deletingModel}
+          selected={deletingModel.id === selectedModel}
+          pending={removeModel.isPending}
           onClose={() => setDeletingModel(null)}
-        >
-          {deletingModel.id === selectedModel && (
-            <p className="dialog-note">This is the current default model; pick another default first.</p>
-          )}
-          <DialogActions>
-            <button className="ghost-button" onClick={() => setDeletingModel(null)} disabled={removeModel.isPending}>Cancel</button>
-            <button
-              className="danger-button"
-              data-testid="model-remove-confirm"
-              disabled={removeModel.isPending}
-              onClick={() => removeModel.mutate(deletingModel)}
-            >
-              {removeModel.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Remove model
-            </button>
-          </DialogActions>
-        </Dialog>
+          onConfirm={() => removeModel.mutate(deletingModel)}
+        />
       )}
 
       {replacement && (
-        <Dialog
-          title="Choose the new default model"
-          tone="warning"
-          description={`${replacement.provider.name ?? replacement.provider.id} owns the current default model, so removing it needs a replacement.`}
+        <ReplacementModelDialog
+          provider={replacement.provider}
+          modelId={replacement.modelId}
+          choices={replacementChoices}
+          pending={removeProvider.isPending}
+          onChange={(modelId) => setReplacement((current) => current && { ...current, modelId })}
           onClose={() => setReplacement(null)}
-        >
-          {replacementChoices.length > 0 ? (
-            <label className="dialog-field">
-              <span>New default model</span>
-              <select
-                autoFocus
-                value={replacement.modelId}
-                aria-label="Replacement model"
-                data-testid="replacement-model"
-                onChange={(event) => setReplacement((current) => current && { ...current, modelId: event.target.value })}
-              >
-                <option value="">Select a model…</option>
-                {replacementChoices.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}
-              </select>
-            </label>
-          ) : (
-            <p className="dialog-note">Add a model on another provider first, then remove this one.</p>
-          )}
-          <DialogActions>
-            <button className="ghost-button" onClick={() => setReplacement(null)} disabled={removeProvider.isPending}>Cancel</button>
-            <button
-              className="danger-button"
-              disabled={!replacement.modelId || removeProvider.isPending}
-              onClick={() => removeProvider.mutate({ provider: replacement.provider, replacement: replacement.modelId })}
-            >
-              {removeProvider.isPending ? <LoaderCircle className="spin" size={14} /> : <Trash2 size={14} />} Remove provider
-            </button>
-          </DialogActions>
-        </Dialog>
+          onConfirm={() => removeProvider.mutate({ provider: replacement.provider, replacement: replacement.modelId })}
+        />
       )}
 
       {modelTarget && (
@@ -479,26 +307,4 @@ export function ProvidersPanel({
       )}
     </div>
   );
-}
-
-function modelFromLink(model: ProviderModelLink, provider: string, selectedModel: string): ModelSummary {
-  return {
-    id: model.id,
-    apiModel: model.model,
-    name: model.name ?? model.id,
-    provider,
-    inputModalities: model.input,
-    contextWindow: model.contextWindow,
-    maxCompletionTokens: model.maxCompletionTokens,
-    supportsReasoningEffort: model.supportsReasoningEffort,
-    configured: true,
-    isDefault: model.id === selectedModel,
-  };
-}
-
-function formatTokens(value?: number): string {
-  if (!value) return "—";
-  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(1))}M`;
-  if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`;
-  return String(value);
 }

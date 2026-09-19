@@ -22,4 +22,24 @@ describe("ToggleSwitch", () => {
     fireEvent.click(control);
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("reports a partial group as mixed and clicking it enables the rest", () => {
+    const onChange = vi.fn();
+    const { getByRole } = render(<ToggleSwitch checked={false} indeterminate ariaLabel="Toggle all Bundled" onChange={onChange} />);
+
+    const control = getByRole("checkbox", { name: "Toggle all Bundled" });
+    expect(control).toHaveAttribute("aria-checked", "mixed");
+    expect((control as HTMLInputElement).indeterminate).toBe(true);
+    fireEvent.click(control);
+    expect(onChange).toHaveBeenCalledWith(true);
+  });
+
+  it("clears the indeterminate flag when the group becomes uniform", () => {
+    const { getByRole, rerender } = render(<ToggleSwitch checked={false} indeterminate ariaLabel="Toggle all Bundled" onChange={vi.fn()} />);
+    const control = getByRole("checkbox", { name: "Toggle all Bundled" });
+    expect((control as HTMLInputElement).indeterminate).toBe(true);
+
+    rerender(<ToggleSwitch checked={true} ariaLabel="Toggle all Bundled" onChange={vi.fn()} />);
+    expect((control as HTMLInputElement).indeterminate).toBe(false);
+  });
 });

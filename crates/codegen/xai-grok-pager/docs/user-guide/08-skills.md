@@ -210,6 +210,8 @@ The `--json` report includes the full detail for each skill: its `name`, `descri
 
 Grok distributes platform skills separately from your personal skills. Bundled skills are cached under `~/.cook/bundled/skills/`; Grok never writes them into `~/.cook/skills/`. A same-named local, repo, or user skill overrides the bundled copy. `cook inspect` labels each definition by its actual source. (A plugin skill of the same name does not override a native skill; it stays available under its qualified `plugin:name` form.)
 
+Built-in commands keep the bare name against a skill of the same name. `/commit` and `/commit-and-push` are built-ins, so a custom `commit` skill stays available as `/user:commit` (or `/local:commit` for a project skill) and both rows appear in the menu.
+
 Skills can also come from plugins. When you install a plugin that includes skills, they appear alongside your user and project skills. `cook inspect` labels each plugin-provided skill with its source as `plugin: <name>`.
 
 See the [Plugins guide](09-plugins.md) for more on installing plugins that provide skills.

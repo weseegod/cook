@@ -182,7 +182,9 @@ impl JsonlStorageAdapter {
         let chat_file = dir.join(super::CHAT_HISTORY_FILE);
         self.read_chat_history_sync_bounded(chat_file, CHAT_FORMAT_VERSION, max_bytes, max_items)
     }
-    fn session_dir(&self, info: &Info) -> PathBuf {
+    /// The directory this session owns. Also used to report what a session delete removes, so the
+    /// count and the removal cannot disagree about which root is in play.
+    pub(crate) fn session_dir(&self, info: &Info) -> PathBuf {
         match &self.dir_mode {
             SessionDirMode::FromRoot(root) => {
                 crate::util::grok_home::sessions_cwd_dir_in(root, &info.cwd)

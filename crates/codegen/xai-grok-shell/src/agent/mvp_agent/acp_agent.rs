@@ -1992,6 +1992,12 @@ impl acp::Agent for MvpAgent {
             "x.ai/session/state" => {
                 crate::extensions::session_state::handle_state(&args).await
             }
+            "x.ai/session/plans" => {
+                crate::extensions::plan_files::handle_list(&args).await
+            }
+            "x.ai/session/plans/delete" => {
+                crate::extensions::plan_files::handle_delete(&args).await
+            }
             "x.ai/session/import" => {
                 crate::extensions::session_state::handle_import(&args).await
             }
@@ -2011,6 +2017,7 @@ impl acp::Agent for MvpAgent {
                 crate::extensions::session_admin::handle(self, &args).await
             }
             "x.ai/session/rename" | "x.ai/session/delete"
+            | "x.ai/sessions/delete_all"
             | "x.ai/session/update_mcp_servers" | "x.ai/session/fork"
             | "x.ai/plugins/reload" | "x.ai/commands/list" => {
                 crate::extensions::session_admin::handle(self, &args).await

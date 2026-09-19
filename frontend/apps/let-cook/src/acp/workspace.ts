@@ -57,6 +57,22 @@ export async function loadWorkspaceReview(): Promise<ReviewSnapshot> {
   throw new Error("Workspace review requires the Let Cook app");
 }
 
+/** Dirty-tree summary for the header git chip: counts only, never per-file patches. */
+export interface GitStatusSummary {
+  isGitRepo: boolean;
+  branch: string | null;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  operationInProgress: boolean;
+}
+
+export async function loadGitStatus(): Promise<GitStatusSummary> {
+  if (isTauri()) return invoke<GitStatusSummary>("workspace_git_status");
+  if (isMock()) return (await import("./mock-transport")).mockGitStatus();
+  throw new Error("Git status requires the Let Cook app");
+}
+
 export async function openWorkspacePath(relativePath: string): Promise<void> {
   if (isTauri()) {
     await invoke("workspace_open", { relativePath });

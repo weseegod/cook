@@ -2165,15 +2165,7 @@ pub(crate) async fn spawn_session_actor(
                 .update_resource(client)
                 .await;
         }
-        {
-            let plan_path = session.plan_mode.lock().plan_file_path().to_path_buf();
-            session
-                .agent
-                .borrow()
-                .tool_bridge()
-                .update_resource(xai_grok_tools::types::resources::PlanFilePath(plan_path))
-                .await;
-        }
+        session.sync_plan_file_path_resource().await;
         session.inject_deny_read_globs().await;
         if session.permissions.is_auto_mode() {
             session.wire_permission_auto_llm_classifier().await;
