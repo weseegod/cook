@@ -118,11 +118,18 @@ test.describe("visual audit", () => {
         // Each server carries its tools, and each tool its own toggle.
         await expect(page.getByTestId("connector-tool-filesystem-read_file")).toBeVisible();
         await expect(page.getByLabel("Toggle tool list_dir")).toBeVisible();
+        await expect(page.getByTestId("mcp-section:managed:cursor")).toContainText("Cursor");
+        await expect(page.getByTestId("mcp-section:managed:gmail")).toContainText("Gmail");
+        // Dedup: Gmail tools stay off the Cursor card when both connectors are listed.
+        await expect(page.getByTestId("connector-tool-managed_gateway:cursor-gmail__search")).toHaveCount(0);
       }
       if (tab === "Skills") {
-        await expect(page.getByTestId("skill-help")).toBeVisible();
-        await expect(page.getByTestId("skill-group-Bundled")).toBeVisible();
-        await expect(page.getByLabel("Toggle skill help")).toBeVisible();
+        await expect(page.getByTestId("skill-game-tilesets")).toBeVisible();
+        await expect(page.getByTestId("skill-group-Game")).toBeVisible();
+        await expect(page.getByTestId("skill-group-Documents")).toBeVisible();
+        // Each topic group carries a switch that flips the whole category.
+        await expect(page.getByLabel("Toggle all Game")).toBeVisible();
+        await expect(page.getByLabel("Toggle skill game-tilesets")).toBeVisible();
       }
       await capture(page, `settings-${tab.toLowerCase().replaceAll(" ", "-")}`);
       await expectNoHorizontalOverflow(page);
@@ -152,11 +159,14 @@ test.describe("visual audit", () => {
     // content in Settings.
     await page.getByRole("tab", { name: "Connectors" }).click();
     await expect(page.getByTestId("connector-tool-filesystem-list_dir")).toBeVisible();
+    await expect(page.getByLabel("Toggle all filesystem")).toBeVisible();
+    await expect(page.getByLabel("Toggle all Cursor")).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await capture(page, "minimum-settings-connectors");
 
     await page.getByRole("tab", { name: "Skills" }).click();
-    await expect(page.getByTestId("skill-help")).toBeVisible();
+    await expect(page.getByTestId("skill-game-tilesets")).toBeVisible();
+    await expect(page.getByLabel("Toggle all Game")).toBeVisible();
     await expectNoHorizontalOverflow(page);
     await capture(page, "minimum-settings-skills");
   });

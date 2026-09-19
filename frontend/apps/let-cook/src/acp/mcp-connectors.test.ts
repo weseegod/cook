@@ -36,7 +36,11 @@ describe("MCP mock connectors (P2)", () => {
       serverName: "linear",
       server_name: "linear",
     });
-    expect(mockState().mcpServers.map((server) => server.name)).toEqual(["filesystem"]);
+    expect(mockState().mcpServers.map((server) => server.name)).toEqual([
+      "managed_gateway:cursor",
+      "managed_gateway:gmail",
+      "filesystem",
+    ]);
     expect(mockRequests().map((entry) => entry.method)).toEqual([
       "x.ai/mcp/toggle_tool",
       "x.ai/mcp/delete",

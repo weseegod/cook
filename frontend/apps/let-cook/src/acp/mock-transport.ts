@@ -40,6 +40,8 @@ export interface MockProvider {
 export interface MockMcpTool {
   name: string;
   enabled: boolean;
+  displayName?: string;
+  description?: string;
 }
 
 export interface MockMcpSetupField {
@@ -53,11 +55,17 @@ export interface MockMcpSetupField {
 
 export interface MockMcpServer {
   name: string;
-  transport: "stdio" | "http";
+  transport: "stdio" | "http" | "managedGateway";
+  /** Human title (`display_name` on the wire). */
+  displayName?: string;
   command?: string;
   args?: string[];
   url?: string;
   enabled: boolean;
+  /** Wire `source`: `"local"` or `"managed"`. Drives the Settings section grouping. */
+  source?: "local" | "managed";
+  /** Wire `source_label`; `"plugin: <name>"` puts the server in that plugin's section. */
+  sourceLabel?: string;
   /** Prefer `tools`; `toolCount` seeds anonymous tools when `tools` is omitted. */
   toolCount: number;
   tools?: MockMcpTool[];
@@ -196,6 +204,30 @@ function defaultState(): MockState {
     ],
     mcpServers: [
       {
+        name: "managed_gateway:cursor",
+        displayName: "Cursor",
+        transport: "managedGateway",
+        source: "managed",
+        enabled: true,
+        toolCount: 0,
+        tools: [
+          { name: "browser_navigate", enabled: true, displayName: "Navigate" },
+          { name: "gmail__search", enabled: true, displayName: "Search Gmail" },
+          { name: "mail", enabled: true, displayName: "Mail" },
+        ],
+      },
+      {
+        name: "managed_gateway:gmail",
+        displayName: "Gmail",
+        transport: "managedGateway",
+        source: "managed",
+        enabled: true,
+        toolCount: 0,
+        tools: [
+          { name: "gmail__search", enabled: true, displayName: "Search Gmail" },
+        ],
+      },
+      {
         name: "filesystem",
         transport: "stdio",
         command: "npx",
@@ -212,11 +244,35 @@ function defaultState(): MockState {
     ],
     skills: [
       {
-        name: "help",
-        display_name: "Help",
-        description: "Documentation help",
+        name: "game-tilesets",
+        display_name: "Game tilesets",
+        description: "Generate game tilesets",
         scope: "bundled",
-        path: "/home/demo/.cook/bundled/skills/help/SKILL.md",
+        path: "/home/demo/.cook/bundled/skills/game-tilesets/SKILL.md",
+        enabled: true,
+      },
+      {
+        name: "game-asset-core",
+        display_name: "Game asset core",
+        description: "Core game asset workflow",
+        scope: "bundled",
+        path: "/home/demo/.cook/bundled/skills/game-asset-core/SKILL.md",
+        enabled: false,
+      },
+      {
+        name: "pdf",
+        display_name: "PDF",
+        description: "Read and write PDFs",
+        scope: "bundled",
+        path: "/home/demo/.cook/bundled/skills/pdf/SKILL.md",
+        enabled: true,
+      },
+      {
+        name: "resume-claude",
+        display_name: "Resume Claude",
+        description: "Resume a Claude session",
+        scope: "bundled",
+        path: "/home/demo/.cook/bundled/skills/resume-claude/SKILL.md",
         enabled: true,
       },
       {
@@ -434,11 +490,15 @@ function mcpList() {
   return {
     servers: state.mcpServers.map((server) => ({
       name: server.name,
-      source: "local",
+      ...(server.displayName ? { display_name: server.displayName } : {}),
+      source: server.source ?? (server.transport === "managedGateway" ? "managed" : "local"),
+      ...(server.sourceLabel ? { source_label: server.sourceLabel } : {}),
       type: server.transport,
       ...(server.transport === "stdio"
         ? { command: server.command ?? "npx", args: server.args ?? [] }
-        : { url: server.url ?? "" }),
+        : server.transport === "http"
+          ? { url: server.url ?? "" }
+          : {}),
       ...(server.setup ? { setup: server.setup } : {}),
       ...(server.setupValues ? { setupValues: server.setupValues } : {}),
       session: {
@@ -450,7 +510,12 @@ function mcpList() {
             : server.enabled
               ? "ready"
               : "unavailable",
-        tools: mcpToolsFor(server).map((tool) => ({ name: tool.name, enabled: tool.enabled })),
+        tools: mcpToolsFor(server).map((tool) => ({
+          name: tool.name,
+          enabled: tool.enabled,
+          ...(tool.displayName ? { displayName: tool.displayName } : {}),
+          ...(tool.description ? { description: tool.description } : {}),
+        })),
         ...(server.authRequired ? { authRequired: true } : {}),
         ...(server.setupRequired ? { setupRequired: true } : {}),
       },
@@ -919,11 +984,13 @@ async function dispatch(method: string, params: unknown): Promise<unknown> {
     case "x.ai/skills/list":
       return respond({ result: { skills: state.skills } });
     case "x.ai/skills/toggle": {
+      // Installed CLI requires `name`; desktop fans out one call per skill.
       const name = String(p.name ?? "");
+      if (!name) return respond({ error: { code: -32602, message: "missing field `name`" } });
       state.skills = state.skills.map((skill) =>
         skill.name === name ? { ...skill, enabled: p.enabled !== false } : skill,
       );
-      return respond({ result: { ok: true } });
+      return respond({ result: { ok: true, skills: state.skills } });
     }
     case "x.ai/skills/add":
     case "x.ai/skills/remove":

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizeSkill } from "./extensions";
-import { mergeMcpCatalog, mcpServersFromParams } from "./notifications/handlers";
+import { mergeMcpCatalog, mcpServersFromParams } from "./mcp-servers";
 
 describe("normalizeSkill", () => {
   // `SkillInfo` has no `rename_all`, so the live agent sends snake_case for these fields.
@@ -36,6 +36,29 @@ describe("normalizeSkill", () => {
 });
 
 describe("mcpServersFromParams", () => {
+  it("keeps `source_label` so a plugin-owned server lands in its own section", () => {
+    const servers = mcpServersFromParams({
+      servers: [{ name: "acme-search", source: "local", source_label: "plugin: acme", type: "stdio", command: "npx" }],
+    });
+    expect(servers?.[0]).toMatchObject({ name: "acme-search", source: "local", sourceLabel: "plugin: acme" });
+  });
+
+  it("keeps `display_name` so a managed gateway card can title itself", () => {
+    const servers = mcpServersFromParams({
+      servers: [{
+        name: "managed_gateway:cursor",
+        display_name: "Cursor",
+        type: "managedGateway",
+        source: "managed",
+      }],
+    });
+    expect(servers?.[0]).toMatchObject({
+      name: "managed_gateway:cursor",
+      displayName: "Cursor",
+      type: "managedGateway",
+    });
+  });
+
   it("reads the live flattened shape (type + command + session.tools)", () => {
     const servers = mcpServersFromParams({
       servers: [
@@ -57,7 +80,9 @@ describe("mcpServersFromParams", () => {
     expect(servers).toEqual([
       {
         name: "filesystem",
+        displayName: undefined,
         source: "local",
+        sourceLabel: undefined,
         type: "stdio",
         url: undefined,
         command: "npx",

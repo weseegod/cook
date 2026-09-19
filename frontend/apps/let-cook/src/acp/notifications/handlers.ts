@@ -1,4 +1,5 @@
-import type { McpServerView, McpToolSummary, PluginView } from "../extensions";
+import type { McpToolSummary, PluginView } from "../extensions";
+import { mergeMcpCatalog, mcpServersFromParams } from "../mcp-servers";
 import type { HookView, MemoryFileView } from "../settings-ext";
 import { activityPayload } from "../activity";
 import { notifyTurnComplete, shouldNotifyTurnComplete, turnCompleteNotifyCopy } from "../os-notify";
@@ -78,70 +79,6 @@ function hookEventSummary(params: Record<string, unknown>): { event: string; sum
   return { event, summary: parts.join(" · ") };
 }
 
-/** Normalize `servers` / `mcpServers` notif payloads into catalog rows. */
-export function mcpServersFromParams(params: Record<string, unknown>): McpServerView[] | null {
-  const raw = params.servers ?? params.mcpServers;
-  if (!Array.isArray(raw)) return null;
-  return raw.filter(isRecord).map((server) => {
-    const session = isRecord(server.session) ? server.session : undefined;
-    const toolsRaw = session && Array.isArray(session.tools)
-      ? session.tools
-      : Array.isArray(server.tools)
-        ? server.tools
-        : [];
-    const tools: McpToolSummary[] = toolsRaw.filter(isRecord).map((tool) => ({
-      name: String(tool.name ?? "tool"),
-      enabled: tool.enabled !== false,
-      displayName: typeof tool.displayName === "string" ? tool.displayName : undefined,
-      description: typeof tool.description === "string" ? tool.description : undefined,
-    }));
-    const setup = isRecord(server.setup)
-      ? {
-          fields: Array.isArray(server.setup.fields)
-            ? server.setup.fields.filter(isRecord).map((field) => ({
-                id: String(field.id ?? ""),
-                label: String(field.label ?? field.id ?? ""),
-                type: typeof field.type === "string" ? field.type : undefined,
-                required: field.required === true,
-                default: typeof field.default === "string" ? field.default : undefined,
-                options: Array.isArray(field.options)
-                  ? field.options.filter(isRecord).map((option) => ({
-                      label: String(option.label ?? option.value ?? ""),
-                      value: String(option.value ?? ""),
-                    }))
-                  : undefined,
-              }))
-            : [],
-        }
-      : undefined;
-    const setupValues = isRecord(server.setupValues)
-      ? Object.fromEntries(Object.entries(server.setupValues).map(([key, value]) => [key, String(value)]))
-      : undefined;
-    return {
-      name: String(server.name ?? "server"),
-      source: typeof server.source === "string" ? server.source : undefined,
-      type: typeof server.type === "string" ? server.type : undefined,
-      url: typeof server.url === "string" ? server.url : undefined,
-      command: typeof server.command === "string" ? server.command : undefined,
-      args: Array.isArray(server.args) ? server.args.map(String) : undefined,
-      setup,
-      setupValues,
-      session: {
-        enabled: session?.enabled !== false && server.enabled !== false,
-        status: typeof session?.status === "string"
-          ? session.status
-          : typeof server.status === "string"
-            ? server.status
-            : undefined,
-        tools,
-        authRequired: session?.authRequired === true,
-        setupRequired: session?.setupRequired === true,
-        blockedReason: typeof session?.blockedReason === "string" ? session.blockedReason : undefined,
-      },
-    } satisfies McpServerView;
-  });
-}
-
 function outcomeFromPromptComplete(params: Record<string, unknown>): TurnOutcome {
   const stop = String(params.stopReason ?? params.stop_reason ?? params.agentResult ?? "");
   if (/cancel/i.test(stop)) return { kind: "cancelled" };
@@ -156,29 +93,6 @@ function outcomeFromPromptComplete(params: Record<string, unknown>): TurnOutcome
     };
   }
   return { kind: "completed" };
-}
-
-/**
- * Fold a freshly listed catalog into the one already on screen.
- *
- * `x.ai/mcp/list` answers from the agent-level catalog before the session's MCP pool has been
- * annotated, and those rows carry `session.status: undefined` with an empty tool list. Replacing
- * a list the user is looking at with that would blank every tool row mid-toggle, so an
- * unannotated incoming row keeps the tools already known.
- */
-export function mergeMcpCatalog(current: McpServerView[], incoming: McpServerView[]): McpServerView[] {
-  const previousByName = new Map(current.map((server) => [server.name, server]));
-  return incoming.map((server) => {
-    const previous = previousByName.get(server.name);
-    if (!previous) return server;
-    const previousTools = previous.session?.tools ?? [];
-    const incomingTools = server.session?.tools ?? [];
-    const unannotated = server.session?.status === undefined && incomingTools.length < previousTools.length;
-    return {
-      ...server,
-      session: { ...server.session, tools: unannotated ? previousTools : incomingTools },
-    };
-  });
 }
 
 function patchServerStatus(serverName: string, status: string): void {

@@ -51,7 +51,7 @@ Harvested 2026-09-18 from git `705f3572`. A string is in this map only if it app
 | Agent slash builtins | `crates/codegen/xai-grok-shell/src/session/slash_commands.rs` `BUILTIN_COMMANDS` |
 | Desktop reverse | `frontend/apps/let-cook/src/acp/client.ts` `handleMessage`; `src-tauri/src/acp_host.rs` `handle_host_request` |
 | Desktop forward | `frontend/apps/let-cook/src/acp/{xai,extensions,providers,client,host,wire-params}.ts` |
-| Desktop settings surfaces | `frontend/apps/let-cook/src/ui/settings/{connectors,context-panels,skills-groups}.tsx` |
+| Desktop settings surfaces | `frontend/apps/let-cook/src/ui/settings/{connectors,context-panels,hooks-panel}.tsx`; group headers `…/settings/group-header.tsx`; grouping `…/settings/{skills-groups,connectors-groups}.ts` |
 | Desktop transcript | `frontend/apps/let-cook/src/state/session.ts` `reduceNotifications` / `reduceTranscript` |
 | Tools | `crates/codegen/xai-grok-tools/src/types/tool.rs` `ToolKind`; pager `scrollback/blocks/tool/*`; Desktop `ui/chat/tool-card.tsx` |
 | User-facing names | `~/.cook/docs/user-guide/` (`04-slash-commands`, `07-mcp-servers`, `08-skills`, `09-plugins`, `10-hooks`, `13-memory`, `16-subagents`, `19-plan-mode`, `20-background-tasks`, `21-terminal-support`, `23-dashboard`) |
@@ -350,8 +350,8 @@ Desktop queues a second `session/prompt` (`queuePrompt`). That is not the TUI qu
 
 | Id | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
-| C-sk-list | `x.ai/skills/list` | `/skills` | Settings Skills, grouped by discovery source (Project / User / Plugin / Bundled / Server / Config) | `ok` | surface |
-| C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle, persists `[skills].disabled` | `ok` | surface |
+| C-sk-list | `x.ai/skills/list` | `/skills` | Settings Skills, topic groups (Game / Documents / …) with Project / User / Plugin wrappers when mixed | `ok` | surface |
+| C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle, persists `[skills].disabled`; group switch fans out sequential `{ name, enabled, cwd }` calls | `ok` | surface |
 | C-sk-add | `x.ai/skills/add` / `remove` / `reset` / `config` | modal | Settings Skills add/remove/reset/config | `ok` (`refresh-baseline` still `gap`) | surface |
 | C-wf-list | `x.ai/workflows/list` | `/workflows` | Settings Skills workflow list (browse-only) | `partial` | surface |
 | C-pl-list | `x.ai/plugins/list` | `/plugins` | Settings list with enable/disable | `ok` | surface |
@@ -369,7 +369,7 @@ Constants: `extensions/mcp.rs` `mcp_methods` + `xai-grok-mcp/src/wire.rs`.
 | Id | Wire | Dir | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|---|
 | C-mcp-list | `x.ai/mcp/list` | C→A | `/mcps` | `extensions.ts` Connectors, uncached first read so `session.tools` is annotated | `ok` | surface |
-| C-mcp-tog | `x.ai/mcp/toggle` | C→A | modal | Connectors server switch | `ok` | surface |
+| C-mcp-tog | `x.ai/mcp/toggle` | C→A | modal | Connectors per-connector header switch (`displayName` title); Managed / Plugin / Local are captions only | `ok` | surface |
 | C-mcp-up | `x.ai/mcp/upsert` | C→A | modal | Connectors add (stdio + HTTP) | `ok` | surface |
 | C-mcp-del | `x.ai/mcp/delete` | C→A | modal | Connectors delete (local servers only) | `ok` | surface |
 | C-mcp-tool | `x.ai/mcp/toggle_tool` | C→A | modal | Connectors per-tool switch | `ok` | surface |

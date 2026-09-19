@@ -914,6 +914,74 @@ test.describe("connectors", () => {
     expect(errors).toEqual([]);
   });
 
+  test("groups MCP servers per connector and hides cross-connector mail tools", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const mock = api(page);
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      mcpServers: [
+        {
+          name: "managed_gateway:cursor",
+          displayName: "Cursor",
+          transport: "managedGateway",
+          source: "managed",
+          enabled: true,
+          toolCount: 0,
+          tools: [
+            { name: "browser_navigate", enabled: true, displayName: "Navigate" },
+            { name: "gmail__search", enabled: true, displayName: "Search Gmail" },
+            { name: "mail", enabled: true, displayName: "Mail" },
+          ],
+        },
+        {
+          name: "managed_gateway:gmail",
+          displayName: "Gmail",
+          transport: "managedGateway",
+          source: "managed",
+          enabled: true,
+          toolCount: 0,
+          tools: [{ name: "gmail__search", enabled: true, displayName: "Search Gmail" }],
+        },
+        { name: "filesystem", transport: "stdio", command: "npx", args: ["-y", "fs"], enabled: true, toolCount: 1, tools: [{ name: "read_file", enabled: true }] },
+        { name: "acme-search", transport: "stdio", command: "npx", args: ["-y", "acme"], sourceLabel: "plugin: acme", enabled: true, toolCount: 0, tools: [] },
+      ],
+    });
+    await page.getByRole("button", { name: "New chat" }).click();
+    await waitForCalls(page, "session/new");
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Connectors" }).click();
+
+    // Per-connector headers use display names, never the raw managed_gateway: wire id.
+    await expect(page.getByTestId("mcp-section:managed:cursor")).toContainText("Cursor");
+    await expect(page.getByTestId("mcp-section:managed:gmail")).toContainText("Gmail");
+    await expect(page.getByText("managed_gateway:cursor")).toHaveCount(0);
+    await expect(page.getByText("Managed by grok.com")).toBeVisible();
+
+    // Mail tools that belong on Gmail are hidden under Cursor when both connectors are listed.
+    await expect(page.getByTestId("connector-tool-managed_gateway:cursor-browser_navigate")).toBeVisible();
+    await expect(page.getByTestId("connector-tool-managed_gateway:cursor-gmail__search")).toHaveCount(0);
+    await expect(page.getByTestId("connector-tool-managed_gateway:gmail-gmail__search")).toBeVisible();
+
+    // Connector header issues one mcp/toggle for that server.
+    await page.getByLabel("Toggle all Cursor").click();
+    const cursorToggle = await waitForCalls(page, "x.ai/mcp/toggle", 1);
+    expect(cursorToggle[0].params).toMatchObject({
+      server_name: "managed_gateway:cursor",
+      enabled: false,
+    });
+
+    const servers = (await mock.state()).mcpServers as Array<{ name: string; enabled: boolean }>;
+    expect(servers.find((server) => server.name === "managed_gateway:cursor")?.enabled).toBe(false);
+    expect(servers.find((server) => server.name === "managed_gateway:gmail")?.enabled).toBe(true);
+
+    // Folding a connector hides its tools without touching other groups.
+    await page.getByTestId("mcp-section:managed:cursor").getByRole("button", { name: /Cursor/ }).click();
+    await expect(page.getByTestId("connector-tools-managed_gateway:cursor")).toHaveCount(0);
+    await expect(page.getByTestId("connector-acme-search")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   test("toggles a tool and deletes a connector through the agent", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -951,7 +1019,7 @@ test.describe("connectors", () => {
     await expect.poll(async () => {
       const servers = (await mock.state()).mcpServers as Array<{ name: string }>;
       return servers.map((server) => server.name);
-    }).toEqual(["filesystem"]);
+    }).toEqual(["managed_gateway:cursor", "managed_gateway:gmail", "filesystem"]);
     expect(errors).toEqual([]);
   });
 
@@ -1064,33 +1132,65 @@ test.describe("agent-driven surfaces", () => {
     expect(Object.values(files).some((content) => content.includes("Be brief."))).toBe(true);
   });
 
-  test("lists and toggles skills, and browses memory", async ({ page }) => {
+  test("lists and toggles skills by topic, and browses memory", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
     await page.getByRole("button", { name: "New chat" }).click();
     await waitForCalls(page, "session/new");
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Skills" }).click();
-    // Rows are grouped by discovery source, the way the TUI's Skills tab groups them.
-    await expect(page.getByTestId("skill-group-Bundled")).toContainText("Bundled (1)");
+    // Topic groups for bundled skills; User still wraps user-scoped rows.
+    await expect(page.getByTestId("skill-group-Game")).toContainText("Game (2)");
+    await expect(page.getByTestId("skill-group-Documents")).toContainText("Documents (1)");
     await expect(page.getByTestId("skill-group-User")).toContainText("User (1)");
-    await expect(page.getByTestId("skill-help")).toContainText("Help");
+    await expect(page.getByTestId("skill-game-tilesets")).toContainText("Game tilesets");
     await expect(page.getByTestId("plugin-cook-core")).toContainText("1.0.0");
-    await page.getByLabel("Toggle skill help").click();
+    await page.getByLabel("Toggle skill game-tilesets").click();
     const skillToggles = await waitForCalls(page, "x.ai/skills/toggle");
     // `SkillsListRequest.cwd` is a required field on the shell side, so it must always travel.
-    expect(skillToggles[0].params).toMatchObject({ name: "help", enabled: false, cwd: "/tmp/cook-demo" });
-    const skillDescription = page.getByTestId("skill-help").locator(".skill-description");
+    expect(skillToggles[0].params).toMatchObject({ name: "game-tilesets", enabled: false, cwd: "/tmp/cook-demo" });
+    expect(skillToggles[0].params).not.toHaveProperty("names");
+
+    // Game is fully off; its switch enables every disabled member via sequential { name } calls.
+    await expect(page.getByLabel("Toggle all Game")).toHaveAttribute("aria-checked", "false");
+    await page.getByLabel("Toggle all Game").click();
+    const reenabled = await waitForCalls(page, "x.ai/skills/toggle", 3);
+    // Rows are label-sorted inside the group, so asset-core precedes tilesets.
+    expect(reenabled[1].params).toMatchObject({ name: "game-asset-core", enabled: true, cwd: "/tmp/cook-demo" });
+    expect(reenabled[1].params).not.toHaveProperty("names");
+    expect(reenabled[2].params).toMatchObject({ name: "game-tilesets", enabled: true, cwd: "/tmp/cook-demo" });
+    expect(reenabled[2].params).not.toHaveProperty("names");
+
+    // Uniform again, so the same switch turns the whole category off with one call per name.
+    await expect(page.getByLabel("Toggle all Game")).toHaveAttribute("aria-checked", "true");
+    await page.getByLabel("Toggle all Game").click();
+    const categoryOff = await waitForCalls(page, "x.ai/skills/toggle", 5);
+    expect(categoryOff[3].params).toMatchObject({ name: "game-asset-core", enabled: false, cwd: "/tmp/cook-demo" });
+    expect(categoryOff[4].params).toMatchObject({ name: "game-tilesets", enabled: false, cwd: "/tmp/cook-demo" });
+    expect(categoryOff.every((entry) => !("names" in entry.params))).toBe(true);
+
+    // The category header folds its rows without touching skill state.
+    await expect(page.getByTestId("skill-group-Game").getByRole("button", { name: "Game (2)" })).toHaveAttribute("aria-expanded", "true");
+    await page.getByTestId("skill-group-Game").getByRole("button", { name: "Game (2)" }).click();
+    await expect(page.getByTestId("skill-game-tilesets")).toHaveCount(0);
+    await page.getByTestId("skill-group-Game").getByRole("button", { name: "Game (2)" }).click();
+    await expect(page.getByTestId("skill-game-tilesets")).toBeVisible();
+
+    // Turn the category back on so the rest of this test starts from a known state.
+    await page.getByLabel("Toggle all Game").click();
+    await waitForCalls(page, "x.ai/skills/toggle", 7);
+
+    const skillDescription = page.getByTestId("skill-game-tilesets").locator(".skill-description");
     await expect(skillDescription).toHaveAttribute("aria-expanded", "false");
     await skillDescription.click();
     await expect(skillDescription).toHaveAttribute("aria-expanded", "true");
-    // The search box filters without dropping the source groups.
+    // The search box filters without dropping the topic groups that still match.
     await page.getByTestId("skill-search").fill("review");
-    await expect(page.getByTestId("skill-help")).toHaveCount(0);
+    await expect(page.getByTestId("skill-game-tilesets")).toHaveCount(0);
     await expect(page.getByTestId("skill-review")).toBeVisible();
-    await expect(page.getByTestId("skill-group-Bundled")).toHaveCount(0);
+    await expect(page.getByTestId("skill-group-Game")).toHaveCount(0);
     await page.getByTestId("skill-search").fill("");
-    await expect(page.getByTestId("skill-help")).toBeVisible();
+    await expect(page.getByTestId("skill-game-tilesets")).toBeVisible();
     await expect(page.getByTestId("plugins-reload")).toBeVisible();
     await expect(page.getByTestId("workflow-list")).toBeVisible();
 

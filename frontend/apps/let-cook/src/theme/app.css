@@ -200,6 +200,19 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .provider-list, .connector-list, .skill-list { display: flex; flex-direction: column; gap: 7px; margin: 0 0 12px; padding: 0; list-style: none; }
 .provider-list li, .connector-list > li, .skill-list li { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: #101318; }
 .connector-list > li { flex-direction: column; align-items: stretch; gap: 8px; }
+/* MCP sections: Managed / Plugin: X / Local, each with its own switch. */
+.connector-section { margin-bottom: 6px; }
+.connector-section:first-of-type .connector-origin-caption { margin-top: 4px; }
+.connector-section > .connector-list { margin-bottom: 8px; }
+.connector-origin-caption {
+  display: block;
+  margin: 8px 0 4px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.connector-group-meta { margin: 0 0 4px; padding-left: 2px; }
 .connector-row { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
 .connector-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
 .connector-auth-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
@@ -410,6 +423,9 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .toggle-switch-thumb { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0008; transition: transform .16s ease; }
 .toggle-switch-input:checked + .toggle-switch-track { background: #34c759; }
 .toggle-switch-input:checked + .toggle-switch-track .toggle-switch-thumb { transform: translateX(14px); }
+/* Group switch with a partial selection: distinct from both on (#34c759) and off (#39393d). */
+.toggle-switch-input:indeterminate + .toggle-switch-track { background: var(--accent); }
+.toggle-switch-input:indeterminate + .toggle-switch-track .toggle-switch-thumb { transform: translateX(7px); }
 .toggle-switch-input:focus-visible + .toggle-switch-track { outline: 2px solid var(--accent); outline-offset: 2px; }
 .toggle-switch-input:disabled { cursor: not-allowed; }
 .toggle-switch-input:disabled + .toggle-switch-track { opacity: .5; }
@@ -998,8 +1014,14 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .skill-list li { min-width: 0; }
 .skill-search { margin-bottom: 10px; }
 .skill-group { margin-bottom: 6px; }
-.skill-group-heading { margin: 14px 0 8px; color: var(--muted); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-.skill-group:first-of-type .skill-group-heading { margin-top: 4px; }
+/* Group header: disclosure on the left, tri-state switch on the right. Shared by Skills and Connectors. */
+.settings-group-header { display: flex; align-items: center; gap: 8px; margin: 14px 0 8px; }
+.skill-group:first-of-type .settings-group-header { margin-top: 4px; }
+.settings-group-disclosure { display: flex; flex: 1 1 auto; align-items: center; min-width: 0; gap: 4px; padding: 0; border: 0; color: var(--muted); background: transparent; cursor: pointer; text-align: left; }
+.settings-group-disclosure:hover { color: var(--text-soft); }
+.settings-group-label { overflow: hidden; color: inherit; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.settings-group-enable-count { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
+.settings-group-header > .toggle-switch { flex: 0 0 36px; }
 .connector-tools-empty > span { font-style: italic; }
 .skill-list li > div:first-child { min-width: 0; flex: 1 1 auto; overflow: hidden; }
 .skill-list li > div:first-child > strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

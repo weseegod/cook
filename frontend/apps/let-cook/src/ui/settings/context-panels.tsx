@@ -7,8 +7,9 @@ import {
   listSkills,
   normalizeSkill,
   readProjectFile,
-  toggleSkill,
+  toggleSkills,
   writeProjectFile,
+  type SkillView,
 } from "../../acp/extensions";
 import {
   addSkill,
@@ -25,7 +26,8 @@ import { useSessionStore } from "../../state/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
 import { InfoTip } from "../components/info-tip";
 import { ToggleSwitch } from "../components/toggle-switch";
-import { groupSkills } from "./skills-groups";
+import { SettingsGroupHeader } from "./group-header";
+import { groupEnabledCount, groupSkills, groupToggleTargets } from "./skills-groups";
 
 export { MemoryBrowserPanel as MemoryPanel } from "./memory-browser";
 
@@ -114,6 +116,8 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
+  /** Groups the user folded shut. Groups start expanded; a search opens every group with a match. */
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
   const [skillPath, setSkillPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [configMessage, setConfigMessage] = useState<string | null>(null);
@@ -145,7 +149,21 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   const groups = groupSkills(skillList, query);
 
   const toggle = useMutation({
-    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) => toggleSkill(name, enabled, cwd ?? undefined),
+    // Row and group both fan out `{ name, enabled, cwd }` — the installed CLI has no `names[]`.
+    mutationFn: ({ names, enabled }: { names: string[]; enabled: boolean }) =>
+      toggleSkills(names, enabled, cwd ?? undefined),
+    // The switch moves immediately; the agent's full list replaces it on success.
+    onMutate: async ({ names, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ["skills", cwd] });
+      const previous = queryClient.getQueryData<{ skills: SkillView[] }>(["skills", cwd]);
+      if (previous) {
+        const target = new Set(names);
+        queryClient.setQueryData(["skills", cwd], {
+          skills: previous.skills.map((skill) => (target.has(skill.name) ? { ...skill, enabled } : skill)),
+        });
+      }
+      return { previous };
+    },
     onSuccess: (result) => {
       setStatus(null);
       if (result?.skills?.length) {
@@ -153,7 +171,8 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
       }
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
     },
-    onError: (error) => {
+    onError: (error, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(["skills", cwd], context.previous);
       setStatus(normalizeError(error, "Could not update skills"));
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
     },
@@ -235,46 +254,73 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           {skillList.length > 0 && groups.length === 0 && (
             <EmptyState label="No matching skills" detail="Clear the search to see every discovered skill." />
           )}
-          {groups.map((group) => (
-            <section className="skill-group" key={group.label} data-testid={`skill-group-${group.label}`}>
-              <h4 className="skill-group-heading">{group.label} ({group.skills.length})</h4>
-              <ul className="skill-list">
-                {group.skills.map((skill) => {
-                  const label = skill.displayName ?? skill.name;
-                  return (
-                    <li key={skill.path ?? `${group.label}:${skill.name}`} data-testid={`skill-${skill.name}`}>
-                      <div>
-                        <strong title={skill.path}>{label}</strong>
-                        {skill.description && (
-                          <button
-                            type="button"
-                            className={`skill-description${expandedSkills.has(skill.name) ? " expanded" : ""}`}
-                            aria-expanded={expandedSkills.has(skill.name)}
-                            onClick={() => setExpandedSkills((current) => {
-                              const next = new Set(current);
-                              if (next.has(skill.name)) next.delete(skill.name);
-                              else next.add(skill.name);
-                              return next;
-                            })}
-                          >
-                            {skill.description}
-                          </button>
-                        )}
-                      </div>
-                      <div className="skill-toggle">
-                        <ToggleSwitch
-                          checked={skill.enabled !== false}
-                          ariaLabel={`Toggle skill ${skill.name}`}
-                          onChange={(enabled) => toggle.mutate({ name: skill.name, enabled })}
-                          disabled={toggle.isPending}
-                        />
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </section>
-          ))}
+          {groups.map((group) => {
+            const enabledCount = groupEnabledCount(group.skills);
+            // A search is a question about every match, so it opens the groups holding one.
+            const expanded = Boolean(query.trim()) || !collapsedGroups.has(group.label);
+            const toggling = toggle.isPending
+              && (toggle.variables?.names ?? []).some((name) => group.skills.some((skill) => skill.name === name));
+            return (
+              <section className="skill-group" key={group.label}>
+                <SettingsGroupHeader
+                  label={group.label}
+                  count={group.skills.length}
+                  eligible={group.skills.length}
+                  enabledCount={enabledCount}
+                  expanded={expanded}
+                  busy={toggling}
+                  testId={`skill-group-${group.label}`}
+                  onToggleExpanded={() => setCollapsedGroups((current) => {
+                    const next = new Set(current);
+                    if (next.has(group.label)) next.delete(group.label);
+                    else next.add(group.label);
+                    return next;
+                  })}
+                  onToggleEnabled={(enabled) => {
+                    const names = groupToggleTargets(group.skills, enabled);
+                    if (names.length > 0) toggle.mutate({ names, enabled });
+                  }}
+                />
+                {expanded && (
+                  <ul className="skill-list">
+                    {group.skills.map((skill) => {
+                      const label = skill.displayName ?? skill.name;
+                      return (
+                        <li key={skill.path ?? `${group.label}:${skill.name}`} data-testid={`skill-${skill.name}`}>
+                          <div>
+                            <strong title={skill.path}>{label}</strong>
+                            {skill.description && (
+                              <button
+                                type="button"
+                                className={`skill-description${expandedSkills.has(skill.name) ? " expanded" : ""}`}
+                                aria-expanded={expandedSkills.has(skill.name)}
+                                onClick={() => setExpandedSkills((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(skill.name)) next.delete(skill.name);
+                                  else next.add(skill.name);
+                                  return next;
+                                })}
+                              >
+                                {skill.description}
+                              </button>
+                            )}
+                          </div>
+                          <div className="skill-toggle">
+                            <ToggleSwitch
+                              checked={skill.enabled !== false}
+                              ariaLabel={`Toggle skill ${skill.name}`}
+                              onChange={(enabled) => toggle.mutate({ names: [skill.name], enabled })}
+                              disabled={toggle.isPending}
+                            />
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+            );
+          })}
         </>
       )}
 

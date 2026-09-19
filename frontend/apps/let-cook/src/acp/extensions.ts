@@ -4,6 +4,7 @@
  * the renderer never touches files or `config.toml` itself.
  */
 import { request } from "./host";
+import { normalizeMcpServer } from "./mcp-servers";
 import { mcpServerParams, mcpSessionParams, mcpToolParams } from "./wire-params";
 
 export interface McpToolSummary {
@@ -33,7 +34,11 @@ export interface McpSetupConfig {
 
 export interface McpServerView {
   name: string;
+  /** Human title from the agent (`display_name` / `displayName`); wire id stays in `name`. */
+  displayName?: string;
   source?: string;
+  /** Wire `source_label`; `"plugin: <name>"` marks a server a plugin owns. */
+  sourceLabel?: string;
   type?: "http" | "stdio" | "managedGateway" | string;
   url?: string;
   command?: string;
@@ -50,11 +55,16 @@ export interface McpServerView {
   };
 }
 
-export function listConnectors(sessionId?: string, cache = false) {
-  return request<{ servers: McpServerView[] }>("x.ai/mcp/list", {
+/**
+ * List the session's MCP servers. Rows go through the same normalizer the `mcp/servers_updated`
+ * notification uses, so section grouping sees `sourceLabel` on both paths.
+ */
+export async function listConnectors(sessionId?: string, cache = false) {
+  const result = await request<{ servers?: Record<string, unknown>[] }>("x.ai/mcp/list", {
     ...(sessionId ? { sessionId } : {}),
     cache,
   });
+  return { servers: (result?.servers ?? []).filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object").map(normalizeMcpServer) };
 }
 
 export function toggleConnector(sessionId: string, serverName: string, enabled: boolean) {
@@ -183,12 +193,31 @@ export async function listSkills(cwd?: string) {
   return { skills: raw.map(normalizeSkill) };
 }
 
+export interface SkillsToggleResult {
+  ok?: boolean;
+  skills?: Record<string, unknown>[];
+}
+
+/** Flip one skill, the way a row switch does. */
 export function toggleSkill(name: string, enabled: boolean, cwd?: string) {
-  return request<{ ok?: boolean; skills?: Record<string, unknown>[] }>("x.ai/skills/toggle", {
+  return request<SkillsToggleResult>("x.ai/skills/toggle", {
     name,
     enabled,
     cwd: skillCwd(cwd),
   });
+}
+
+/**
+ * Flip a whole group by fanning out the single-name call the installed CLI accepts.
+ * Each `skills/toggle` is a read-modify-write of `[skills].disabled`, so calls run sequentially
+ * to avoid tearing that list. Stops at the first rejection; earlier writes stay applied.
+ */
+export async function toggleSkills(names: string[], enabled: boolean, cwd?: string) {
+  let last: SkillsToggleResult | undefined;
+  for (const name of names) {
+    last = await toggleSkill(name, enabled, cwd);
+  }
+  return last ?? { ok: true };
 }
 
 export interface PluginView {
