@@ -14,6 +14,12 @@ const empty = (): TranscriptState => ({
   cursor: { turnId: "turn-1", assistantId: null, thoughtId: null, optimisticUserId: null },
 });
 
+describe("session defaults", () => {
+  it("starts with Always approve enabled", () => {
+    expect(useSessionStore.getState().alwaysApprove).toBe(true);
+  });
+});
+
 describe("session transcript reducer", () => {
   it("coalesces streamed assistant chunks without a message id", () => {
     let transcript = reduceTranscript(empty(), {

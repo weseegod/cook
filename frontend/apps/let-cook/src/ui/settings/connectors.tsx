@@ -47,13 +47,18 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [setupFor, setSetupFor] = useState<string | null>(null);
   const [setupValues, setSetupValues] = useState<Record<string, string>>({});
+  const [sessionLoading, setSessionLoading] = useState(false);
   /** Per-connector groups the user folded shut. Groups start expanded. */
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
 
   // Tool lists live on the session's MCP pool, so a session must exist before the agent can
-  // annotate `session.tools`. Plan mode creates one the same way.
+  // annotate `session.tools`.
   useEffect(() => {
-    if (connected && cwd && !sessionId) void acpClient.ensureSession();
+    if (!connected || !cwd || sessionId) return;
+    setSessionLoading(true);
+    void acpClient.ensureSession()
+      .catch((caught) => setError(normalizeError(caught, "Could not start a session for connectors")))
+      .finally(() => setSessionLoading(false));
   }, [connected, cwd, sessionId]);
 
   // Read uncached: a cached catalog can arrive before the handshake and `tools/list` finish, which
@@ -190,7 +195,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
   }
 
   const list = mcpServers;
-  const showLoading = Boolean(sessionId) && servers.isLoading && list.length === 0;
+  const showLoading = sessionLoading || (Boolean(sessionId) && servers.isFetching);
   const connectorSections = groupConnectors(list);
 
   function renderGroup(group: ConnectorServerGroup) {
@@ -367,7 +372,7 @@ export function ConnectorsPanel({ connected, onDirtyChange }: { connected: boole
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
-      {!sessionId ? (
+      {!sessionId && !sessionLoading ? (
         <EmptyState label="No active session" detail="Start a conversation to manage its connectors." />
       ) : showLoading ? (
         <LoadingState label="Loading connectors" />

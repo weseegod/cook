@@ -1056,8 +1056,6 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .provider-editor header h3 { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Complete model catalog. */
-.default-model-field { max-width: 520px; }
-.default-model-field .field { margin-bottom: 16px; }
 .model-provider-list { display: grid; gap: 12px; }
 .model-provider { min-width: 0; overflow: hidden; border: 1px solid var(--border); background: var(--panel-elevated); }
 .model-provider-heading { display: flex; align-items: center; min-height: 34px; padding: 6px 9px; border-bottom: 1px solid var(--border); background: var(--raised); }
@@ -1074,7 +1072,6 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .model-row-meta { display: flex; align-items: center; justify-content: flex-end; flex: 0 0 auto; gap: 7px; color: var(--muted); font-size: 9px; }
 .model-row-meta > span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .model-row-meta > span:first-child { color: var(--accent); }
-.model-default { color: var(--success) !important; }
 .model-selected-check { color: var(--accent); }
 
 @media (max-width: 760px) {
@@ -1586,7 +1583,6 @@ body { font-size: 14px; }
 .settings-tabs { padding-right: 10px; }
 .settings-body { padding-inline: 0; }
 .settings-panel .settings-section { padding-inline: 12px; }
-.default-model-field { max-width: none; }
 .settings-panel .field > span, .settings-panel .toggle-row strong { color: var(--settings-soft); }
 .settings-panel input, .settings-panel select, .settings-panel textarea { border-color: var(--settings-border); color: var(--settings-text); background: #2b2b2b; }
 .settings-panel input::placeholder, .settings-panel textarea::placeholder { color: #999; }
@@ -1607,7 +1603,7 @@ body { font-size: 14px; }
 .model-add-actions { display: flex; align-items: center; gap: 5px; padding-bottom: 8px; }
 .model-add-actions button { min-height: 27px; padding: 4px 8px; font-size: 10px; }
 .model-list li { border-bottom-color: #414141; }
-.model-provider-heading strong, .model-row-meta .model-default { color: var(--settings-text); }
+.model-provider-heading strong { color: var(--settings-text); }
 .theme-options button { border-color: var(--settings-border); background: #2b2b2b; }
 .theme-options button:hover { border-color: #707070; background: #363636; }
 .theme-options button.selected { border-color: #4daafc; background: #063b61; }
@@ -1641,7 +1637,6 @@ body { font-size: 14px; }
 /* Unified Models settings: every supported provider owns one compact model/credential row. */
 .unified-provider-panel { display: grid; min-width: 0; gap: 12px; }
 .provider-catalog-toolbar { display: flex; align-items: end; justify-content: space-between; min-width: 0; gap: 16px; }
-.provider-catalog-toolbar .default-model-field { min-width: 0; flex: 1 1 340px; }
 .provider-catalog-toolbar .settings-actions { flex: 0 0 auto; }
 .provider-model-list { display: grid; min-width: 0; gap: 8px; }
 .provider-model-card { min-width: 0; overflow: hidden; border: 1px solid var(--settings-border, var(--border)); background: var(--panel-elevated); }

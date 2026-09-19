@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, CheckCircle2, Cpu, LoaderCircle, LogIn, Pencil, Plus, RefreshCw, Star, Trash2, TriangleAlert } from "lucide-react";
+import { Check, CheckCircle2, Cpu, LoaderCircle, LogIn, Pencil, Plus, RefreshCw, Trash2, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { isVisibleProviderPreset, mergedProviderStatus, PROVIDER_PRESETS } from "../../acp/provider-presets";
 import { normalizeError } from "../../acp/errors";
@@ -14,7 +14,7 @@ import {
   type ProviderModelLink,
 } from "../../acp/providers";
 import { acpClient } from "../../acp/client";
-import { groupByProvider, type ModelSummary } from "../../acp/xai";
+import type { ModelSummary } from "../../acp/xai";
 import { PresetGrid, ProviderEditor } from "./provider-form";
 import { ModelDialog } from "./model-dialog";
 import { Dialog, DialogActions } from "../components/dialog";
@@ -31,7 +31,7 @@ export function useProviderPresets() {
   const bundled = PROVIDER_PRESETS.filter(isVisibleProviderPreset);
   const live = new Map((query.data?.presets ?? []).filter(isVisibleProviderPreset).map((preset) => [preset.id, preset]));
   const presets = bundled.map((preset) => live.get(preset.id) ?? preset);
-  return { presets, isLoading: query.isLoading };
+  return { presets, isLoading: query.isLoading, isFetching: query.isFetching };
 }
 
 export function useProviders(connected: boolean) {
@@ -56,16 +56,14 @@ export function ProvidersPanel({
   connected,
   models,
   selectedModel,
-  modelKnown,
   onDirtyChange,
 }: {
   connected: boolean;
   models: ModelSummary[];
   selectedModel: string;
-  modelKnown: boolean;
   onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const { presets } = useProviderPresets();
+  const { presets, isFetching: presetsFetching } = useProviderPresets();
   const providers = useProviders(connected);
   const auth = useQuery({
     queryKey: ["auth-info", "settings"],
@@ -183,9 +181,6 @@ export function ProvidersPanel({
     }
     return [...byId.values()];
   }, [models, rows]);
-  const modelGroups = useMemo(() => groupByProvider(pickerModels), [pickerModels]);
-  const pickerKnown = modelKnown || pickerModels.some((model) => model.id === selectedModel);
-
   /** Models the default could move to if the removed provider owned the current one. */
   const replacementChoices = useMemo(() => {
     if (!replacement) return [];
@@ -210,23 +205,6 @@ export function ProvidersPanel({
   return (
     <div className="providers-panel unified-provider-panel">
       <div className="provider-catalog-toolbar">
-        <label className="field default-model-field">
-          <span>Default model</span>
-          <select
-            value={selectedModel}
-            aria-label="Default model"
-            data-testid="settings-default-model"
-            disabled={pickerModels.length === 0}
-            onChange={(event) => void acpClient.setDefaultModel(event.target.value)}
-          >
-            {!pickerKnown && <option value={selectedModel} disabled>{pickerModels.length === 0 ? "Loading models…" : selectedModel || "Select model"}</option>}
-            {modelGroups.map(([providerId, entries]) => (
-              <optgroup key={providerId} label={providerId}>
-                {entries.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}
-              </optgroup>
-            ))}
-          </select>
-        </label>
         <div className="settings-actions">
           <button className="primary-button" onClick={() => { setAdding(true); setNotice(null); }} data-testid="provider-add">
             <Plus size={15} /> Add provider
@@ -238,7 +216,7 @@ export function ProvidersPanel({
       </div>
 
       {notice && <div className="settings-note security-warning" data-testid="provider-notice" role="alert">{notice}</div>}
-      {connected && providers.isLoading && <LoadingState label="Loading providers" />}
+      {(presetsFetching || providers.isFetching) && <LoadingState label="Loading models and providers" />}
 
       <div className="provider-model-list">
         {rows.map((row) => {
@@ -306,7 +284,6 @@ export function ProvidersPanel({
                             <span title="Context window">Context {formatTokens(model.contextWindow)}</span>
                             <span title="Maximum output tokens">Output {formatTokens(model.maxCompletionTokens)}</span>
                             <span title="Accepted input">Input {model.inputModalities?.join(" + ") || "—"}</span>
-                            {(model.isDefault || model.id === selectedModel) && <span className="model-default" title="Default model"><Star size={12} /> Default</span>}
                             {model.id === selectedModel && <Check className="model-selected-check" size={13} aria-label="Selected" />}
                             <button
                               className="icon-button model-edit-button"
@@ -382,7 +359,7 @@ export function ProvidersPanel({
           onClose={() => setDeletingModel(null)}
         >
           {deletingModel.id === selectedModel && (
-            <p className="dialog-note">This is the current default model; pick another default first.</p>
+            <p className="dialog-note">This model is currently selected; choose another model first.</p>
           )}
           <DialogActions>
             <button className="ghost-button" onClick={() => setDeletingModel(null)} disabled={removeModel.isPending}>Cancel</button>
@@ -400,14 +377,14 @@ export function ProvidersPanel({
 
       {replacement && (
         <Dialog
-          title="Choose the new default model"
+          title="Choose a replacement model"
           tone="warning"
-          description={`${replacement.provider.name ?? replacement.provider.id} owns the current default model, so removing it needs a replacement.`}
+          description={`${replacement.provider.name ?? replacement.provider.id} owns the currently selected model, so removing it needs a replacement.`}
           onClose={() => setReplacement(null)}
         >
           {replacementChoices.length > 0 ? (
             <label className="dialog-field">
-              <span>New default model</span>
+              <span>Replacement model</span>
               <select
                 autoFocus
                 value={replacement.modelId}

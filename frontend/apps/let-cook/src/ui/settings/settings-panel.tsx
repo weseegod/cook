@@ -35,7 +35,6 @@ const THEME_OPTIONS: Array<{ id: ThemePreference; label: string; icon: React.Rea
 
 export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 0 }: { onClose: () => void; initialTab?: Tab; closeRequest?: number }) {
   const sessionId = useSessionStore((state) => state.sessionId);
-  const planMode = useSessionStore((state) => state.planMode);
   const connection = useSessionStore((state) => state.connection);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
   const connected = connection === "ready";
@@ -44,7 +43,7 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const { preference, setPreference } = useTheme();
-  const { id: selectedModel, known: modelKnown, models } = useModelSelection();
+  const { id: selectedModel, models } = useModelSelection();
   const configSecurity = useQuery({ queryKey: ["config-security"], queryFn: getConfigSecurity });
 
   useEffect(() => {
@@ -135,14 +134,14 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
                   ))}
                 </div>
               </Section>
-              <Section title="Behavior" description="Control how Cook handles permissions and planning." icon={<SlidersHorizontal size={15} />}>
-                <BehaviorOptions sessionId={sessionId} planMode={planMode} alwaysApprove={alwaysApprove} />
+              <Section title="Behavior" description="Control how Cook handles permissions." icon={<SlidersHorizontal size={15} />}>
+                <BehaviorOptions sessionId={sessionId} alwaysApprove={alwaysApprove} />
               </Section>
             </>
           )}
           {tab === "models" && (
             <Section title="Models" description="Connect providers and manage the models available in chat." icon={<Cpu size={15} />}>
-              <ProvidersPanel connected={connected} models={models} selectedModel={selectedModel} modelKnown={modelKnown} onDirtyChange={setDirty} />
+              <ProvidersPanel connected={connected} models={models} selectedModel={selectedModel} onDirtyChange={setDirty} />
             </Section>
           )}
 
@@ -281,16 +280,12 @@ function AboutUpdates() {
   );
 }
 
-function BehaviorOptions({ sessionId, planMode, alwaysApprove }: { sessionId: string | null; planMode: boolean; alwaysApprove: boolean }) {
+function BehaviorOptions({ sessionId, alwaysApprove }: { sessionId: string | null; alwaysApprove: boolean }) {
   return (
     <>
       <div className="toggle-row">
         <span title="Run tools without permission prompts."><strong>Always approve</strong></span>
         <ToggleSwitch checked={alwaysApprove} ariaLabel="Always approve" onChange={(checked) => void acpClient.setYolo(checked)} />
-      </div>
-      <div className="toggle-row">
-        <span title="Inspect and propose before changing files."><strong>Plan mode</strong></span>
-        <ToggleSwitch checked={planMode} ariaLabel="Plan mode" onChange={(checked) => void acpClient.setPlanMode(checked)} />
       </div>
       <button className="ghost-button" disabled={!sessionId} onClick={() => sessionId && void acpClient.xai.resetPermissions(sessionId)}>
         <ShieldCheck size={15} /> Reset permissions

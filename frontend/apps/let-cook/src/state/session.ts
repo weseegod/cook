@@ -6,6 +6,7 @@ import { applySubagentSessionUpdate, applyWorkflowUpdated } from "./activity";
 import { reduceGoalUpdate, type GoalState } from "./goal";
 import { emptyPlanSlice, type PlanComment, type PlanFocus, type PlanSlice } from "./plan-review";
 import { deriveActivity, type TurnActivity } from "../ui/chat/turn-activity";
+import { readLocal } from "../ui/storage";
 
 export interface MessageBlock {
   type: "message";
@@ -253,7 +254,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   recapStatus: "idle",
   recapSummary: null,
   recapError: null,
-  alwaysApprove: localStorage.getItem("cook.alwaysApprove") === "true",
+  alwaysApprove: readLocal("alwaysApprove") !== "false",
   pendingPermission: null,
   pendingQuestion: null,
   queuedPromptCount: 0,

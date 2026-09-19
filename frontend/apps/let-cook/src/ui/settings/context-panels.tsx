@@ -223,7 +223,7 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   return (
     <div className="skills-panel">
       <h3>Skills</h3>
-      {skills.isLoading && <LoadingState label="Loading skills" />}
+      {skills.isFetching && <LoadingState label="Loading skills" />}
       {skills.isError && (
         <ErrorState label={normalizeError(skills.error, "Could not load skills from the agent.")} />
       )}
@@ -362,8 +362,8 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           <RefreshCw size={15} /> Reload plugins
         </button>
       </div>
-      {plugins.isLoading && <LoadingState label="Loading plugins" />}
-      {pluginList.length === 0 && !plugins.isLoading && <EmptyState label="No plugins" />}
+      {plugins.isFetching && <LoadingState label="Loading plugins" />}
+      {pluginList.length === 0 && !plugins.isFetching && <EmptyState label="No plugins" />}
       <ul className="skill-list">
         {pluginList.map((plugin) => {
           const id = plugin.id ?? plugin.name;
@@ -391,8 +391,8 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
 
       <section className="workflows-section" data-testid="workflow-list">
         <h3>Workflows</h3>
-        {workflows.isLoading && <LoadingState label="Loading workflows" />}
-        {workflowList.length === 0 && !workflows.isLoading && (
+        {workflows.isFetching && <LoadingState label="Loading workflows" />}
+        {workflowList.length === 0 && !workflows.isFetching && (
           <EmptyState label="No workflows" detail="/workflow stays a prompt; this list is browse-only." />
         )}
         <ul className="skill-list">

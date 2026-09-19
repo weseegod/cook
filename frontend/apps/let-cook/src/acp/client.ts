@@ -119,7 +119,7 @@ export class CookAcpClient {
   async newSession(): Promise<string> {
     if (!this.cwd) throw new Error("Choose a workspace first");
     const defaultModel = readLocal("defaultModel");
-    const yoloMode = readLocal("alwaysApprove") === "true";
+    const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: NewSessionRequest = {
       cwd: this.cwd,
       mcpServers: [],
@@ -147,7 +147,7 @@ export class CookAcpClient {
     const activeCwd = cwd ?? this.cwd;
     if (!activeCwd) throw new Error("Session has no workspace");
     const defaultModel = readLocal("defaultModel");
-    const yoloMode = readLocal("alwaysApprove") === "true";
+    const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: LoadSessionRequest = {
       sessionId,
       cwd: activeCwd,
@@ -575,7 +575,7 @@ export class CookAcpClient {
       await this.initialize();
       if (sessionId) {
         const defaultModel = readLocal("defaultModel");
-        const yoloMode = readLocal("alwaysApprove") === "true";
+        const yoloMode = readLocal("alwaysApprove") !== "false";
         await request("session/load", {
           sessionId,
           cwd: this.cwd,
