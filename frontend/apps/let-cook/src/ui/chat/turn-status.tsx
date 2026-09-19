@@ -20,7 +20,7 @@ import { useSpinFrame } from "./use-spin-frame";
 /**
  * The live activity row between the transcript and the prompt (`views/turn_status.rs`), reading
  * left to right: what the turn is doing and its phase timer, then tokens/sec at the right. Working
- * tree line changes live in the header beside the git chip and context usage on the header chip,
+ * tree line changes live in the header beside the git chip and context usage in the composer,
  * so neither is repeated here. Hidden while idle unless a frozen t/s reading remains.
  */
 export function TurnStatus() {

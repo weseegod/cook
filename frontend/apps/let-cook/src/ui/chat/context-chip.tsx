@@ -13,8 +13,8 @@ interface ContextUsage {
 }
 
 /**
- * Header context occupancy (`views/agent_status.rs`): compact `8.5K / 1.0M` with a `/compact` menu.
- * Lives on the status bar, not above the composer.
+ * Context occupancy (`views/agent_status.rs`): compact `8.5K / 1.0M` with a `/compact` menu.
+ * Lives beside the model selector in the composer footer.
  */
 export function ContextChip() {
   const usage = useSessionStore((state) => state.usage);

@@ -781,12 +781,12 @@ test.describe("slash commands", () => {
   test("reports context usage, and turns always-approve on where the agent can see it", async ({ page }) => {
     await openWorkspace(page, CONNECTED_SEED);
 
-    // A turn is what makes the agent report context usage; the header shows it from then on,
+    // A turn is what makes the agent report context usage; the composer shows it from then on,
     // out of `x.ai/session/info` — a real turn sends no `usage_update`.
     await composer(page).fill("hello");
     await page.getByTestId("send-button").click();
     await expect(page.getByText("Mock assistant reply.")).toBeVisible();
-    await expect(page.getByTestId("context-chip")).toBeVisible();
+    await expect(page.getByTestId("composer-info").getByTestId("context-chip")).toBeVisible();
     await waitForCalls(page, "x.ai/session/info");
 
     await page.getByLabel("Context status").hover();

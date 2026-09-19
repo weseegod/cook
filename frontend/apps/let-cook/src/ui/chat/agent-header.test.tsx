@@ -80,7 +80,7 @@ describe("AgentHeader git chip", () => {
     expect(screen.queryByTestId("git-chip-count")).toBeNull();
     // The rest of the header still renders: the chip is additive, not a replacement.
     expect(screen.getByTestId("agent-header")).toBeInTheDocument();
-    expect(screen.getByTestId("context-chip")).toBeInTheDocument();
+    expect(screen.queryByTestId("context-chip")).toBeNull();
   });
 
   it("keeps the chip, saying the folder has no repository, outside a git repository", async () => {
@@ -89,7 +89,7 @@ describe("AgentHeader git chip", () => {
 
     const chip = await screen.findByTestId("git-chip");
     expect(chip).toHaveTextContent("No git");
-    expect(screen.getByTestId("context-chip")).toBeInTheDocument();
+    expect(screen.queryByTestId("context-chip")).toBeNull();
   });
 });
 
@@ -104,6 +104,19 @@ describe("AgentHeader layout", () => {
     expect(rail.closest(".agent-header-right")).not.toBeNull();
     // The diffstat reads immediately before the chip that owns the commit commands.
     expect(rail.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("reserves stable slots for optional header controls", () => {
+    renderHeader();
+
+    const slots = Array.from(document.querySelectorAll(".agent-header-right > .agent-header-slot"));
+    expect(slots.map((slot) => slot.className)).toEqual([
+      "agent-header-slot agent-header-slot-todo",
+      "agent-header-slot agent-header-slot-goal",
+      "agent-header-slot agent-header-slot-diffstat",
+      "agent-header-slot agent-header-slot-git",
+      "agent-header-slot agent-header-slot-tools",
+    ]);
   });
 
   it("asks the shell for the Review panel when the line changes are clicked", async () => {

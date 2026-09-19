@@ -145,9 +145,9 @@ test.describe("header git chip", () => {
     await expect(page.getByTestId("git-commit-and-push")).toBeDisabled();
     await capture(page, "git-chip-clean");
 
-    // The rest of the header is untouched.
+    // The header remains intact; context usage now lives in the composer footer.
     await expect(page.getByTestId("agent-header")).toBeVisible();
-    await expect(page.getByTestId("context-chip")).toBeVisible();
+    await expect(page.getByTestId("composer-info").getByTestId("context-chip")).toBeVisible();
   });
 
   test("keeps the chip and its menu inside a narrow window", async ({ page }) => {

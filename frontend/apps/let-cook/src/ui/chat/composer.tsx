@@ -23,6 +23,7 @@ import { openRecap } from "./view-recap";
 import { openRewind } from "./view-rewind";
 import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "./export-transcript";
 import { useTranscriptActions } from "./transcript-context";
+import { ContextChip } from "./context-chip";
 
 /** The window's own half of the slash commands; the agent's half arrives as an ordinary prompt. */
 const SLASH_HOST: SlashCommandHost = {
@@ -487,7 +488,7 @@ export function Composer() {
               <ChevronDown size={12} aria-hidden="true" />
             </label>
             {planMode && <span className="composer-flag" data-testid="composer-plan-flag">plan</span>}
-            {alwaysApprove && <span className="composer-flag" data-testid="composer-yolo-flag">yolo</span>}
+            <ContextChip />
           </div>
           <div className="composer-submit">
             <button

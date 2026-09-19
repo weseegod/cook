@@ -87,7 +87,7 @@ test.describe("turn status metrics", () => {
     await expect(page.getByRole("button", { name: "[stop]" })).toBeVisible();
   });
 
-  test("keeps one time on the row and leaves context to the header chip", async ({ page }) => {
+  test("keeps one time on the row and places context usage in the composer", async ({ page }) => {
     await openWorkspace(page, { promptDelayMs: 12_000 });
     await page.getByTestId("composer-input").fill("Hold the turn open.");
     await page.getByTestId("send-button").click();
@@ -101,11 +101,11 @@ test.describe("turn status metrics", () => {
 
     const row = page.getByTestId("turn-status");
     await expect(row.locator(".turn-status-phase")).toHaveText(/\d/);
-    // The whole-turn clock lives on the conversation row in the sidebar, and the context count on
-    // the header chip — the row carries neither.
+    // The whole-turn clock lives on the conversation row in the sidebar, and context usage lives
+    // in the composer footer — the row carries neither.
     await expect(row.locator(".turn-status-timer")).toHaveCount(0);
     await expect(row.locator(".turn-status-tokens")).toHaveCount(0);
-    await expect(page.getByLabel("Context status")).toBeVisible();
+    await expect(page.getByTestId("composer-info").getByLabel("Context status")).toBeVisible();
 
     const [phaseBox, tpsBox] = await Promise.all([
       row.locator(".turn-status-phase").boundingBox(),

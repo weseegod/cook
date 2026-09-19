@@ -9,7 +9,6 @@ import { PlanFileDialog } from "./plan-file-dialog";
 import { PromptSlot } from "./prompt-slot";
 import { RecapDialog } from "./recap-dialog";
 import { RewindDialog } from "./rewind-dialog";
-import { TodoOverlay } from "./todo-overlay";
 import { TurnStatus } from "./turn-status";
 import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
 import { isLiveTool, projectTranscript, type DisplayBlock } from "./transcript-projection";
@@ -214,7 +213,6 @@ export function ChatView() {
   return (
     <TranscriptActionsContext.Provider value={actions}>
       <div className="chat-layout">
-        <TodoOverlay />
         <div className="chat-main">
           <div className="transcript-shell">
             <div
