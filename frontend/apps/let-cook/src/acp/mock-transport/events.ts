@@ -195,6 +195,18 @@ export function mockSessionNotification(update: Record<string, unknown>, session
   notify("_x.ai/session_notification", { sessionId, update });
 }
 
+/**
+ * A real `session/update` under an arbitrary session, `_meta` included — the shape a child session
+ * streams its own turn in (a subagent carries its own `promptId`, which is not the parent's).
+ */
+export function mockSessionUpdate(
+  sessionId: string,
+  update: Record<string, unknown>,
+  meta: Record<string, unknown> = {},
+): void {
+  notify("session/update", { sessionId, update, ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}) });
+}
+
 /** Ext notif helpers for activity panel tests (SessionNotification envelope). */
 export function mockTaskBackgrounded(overrides: Record<string, unknown> = {}): void {
   const snapshot = {

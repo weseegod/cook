@@ -220,6 +220,8 @@ export interface MockControl {
   question(overrides?: Record<string, unknown>): number;
   plan(overrides?: Record<string, unknown>): number;
   sessionNotification(update: Record<string, unknown>, sessionId?: string): void;
+  /** A plain `session/update` under any session, with `_meta` — how a child session streams. */
+  sessionUpdate(sessionId: string, update: Record<string, unknown>, meta?: Record<string, unknown>): void;
   /** Patch the mocked working tree so a running turn's diffstat can be seen to move. */
   workspaceReview(overrides: Partial<ReviewSnapshot>): void;
   taskBackgrounded(overrides?: Record<string, unknown>): void;

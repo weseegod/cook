@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { MessageBlock } from "../../state/session";
-import { messagePropsEqual } from "./chat-view";
+import { messagePropsEqual } from "./transcript-row";
 import { hasContentBelow, hasResponseTopAbove, stickyPromptIndex } from "./transcript-nav";
 
 const finished = (patch: Partial<MessageBlock> = {}): MessageBlock => ({

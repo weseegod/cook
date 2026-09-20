@@ -350,6 +350,21 @@ The transcript machine lives in `src/state/session.ts` (`reduceTranscript` /
 `reduceNotifications`) plus `goal.ts` / `plan-review.ts`. Replay and live
 updates use the same reducer.
 
+One surface reads a transcript that is not the open conversation's: a subagent
+runs its own ACP session, so its updates arrive under the child's session id and
+are routed to `childTranscripts` instead of the parent's scrollback
+(`acp/client/state.ts` `routeChildUpdate`), ahead of the parent's prompt
+correlation — a child's updates carry the child's own `promptId`, which no
+prompt this window sent would match. The tasks list row's `[view]` then replaces
+the chat column with that child's own view (`ui/chat/subagent-takeover.tsx`,
+`app/agent_view/subagent_takeover.rs`): the same `TranscriptPane` rows and a
+turn-status row derived from the child's blocks. The takeover has no prompt of
+its own — the TUI's does not either, and a child is addressed by the parent's
+`send_subagent_message` row, not from inside its view. A long prompt, in either
+transcript, folds to three lines (`scrollback/blocks/user.rs`
+`COLLAPSED_MAX_LINES`). A background command is not a conversation and keeps the
+stdout viewer (`ui/activity/task-viewer.tsx`, `show_bg_task_viewer`).
+
 Plan files are the one part of plan state that is not in the transcript: a
 session's history of them comes from the agent (`x.ai/session/plans`), is held
 in `planFiles`, and is painted by the header chip (`plan-chip.tsx`) as a list —

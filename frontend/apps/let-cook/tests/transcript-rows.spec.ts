@@ -112,4 +112,34 @@ test.describe("transcript rows", () => {
     await row.locator("summary").click();
     await expect(row.locator(".tool-detail")).toBeVisible();
   });
+
+  test("shows a long prompt three lines tall until the row is opened", async ({ page }) => {
+    await launch(page);
+    const prompt = Array.from({ length: 24 }, (_, index) => `Requirement ${index + 1}: check this surface.`).join("\n");
+    await page.getByTestId("composer-input").fill(prompt);
+    await page.getByTestId("send-button").click();
+
+    const row = page.locator(".message-user");
+    await expect(row).toContainText("Requirement 24: check this surface.");
+    const folded = (await row.boundingBox())!;
+    // `user.rs::COLLAPSED_MAX_LINES`: three lines with the ellipsis on the third.
+    expect(folded.height).toBeLessThan(140);
+    await expect(row.locator(".prompt-clip")).toHaveAttribute("data-folded", "true");
+
+    const toggle = page.getByTestId("prompt-fold-toggle");
+    await expect(toggle).toHaveText("Show more");
+    await toggle.click();
+    await expect(row.locator(".prompt-clip")).toHaveAttribute("data-folded", "false");
+    expect((await row.boundingBox())!.height).toBeGreaterThan(folded.height + 40);
+    await expect(toggle).toHaveText("Show less");
+  });
+
+  test("leaves a prompt that fits three lines alone", async ({ page }) => {
+    await launch(page);
+    await page.getByTestId("composer-input").fill("Create the file.");
+    await page.getByTestId("send-button").click();
+
+    await expect(page.locator(".message-user")).toContainText("Create the file.");
+    await expect(page.getByTestId("prompt-fold-toggle")).toHaveCount(0);
+  });
 });

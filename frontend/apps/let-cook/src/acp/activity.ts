@@ -66,24 +66,8 @@ export function listRunningSubagents(sessionId: string) {
   );
 }
 
-export function getSubagent(subagentId: string, opts?: { block?: boolean; timeoutMs?: number }) {
-  return request<{ snapshot?: unknown }>("x.ai/subagent/get", {
-    subagentId,
-    ...(opts?.block !== undefined ? { block: opts.block } : {}),
-    ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-  }).then((value) => {
-    const snap = isRecord(value) ? value.snapshot : null;
-    return isRecord(snap) ? normalizeSubagent(snap) : null;
-  });
-}
-
 export function cancelSubagent(subagentId: string) {
   return request("x.ai/subagent/cancel", { subagentId });
-}
-
-/** Optional dock reply (C-sub-msg). */
-export function messageSubagent(subagentId: string, message: string) {
-  return request("x.ai/subagent/message", { subagentId, message });
 }
 
 export function deleteScheduledTask(sessionId: string, taskId: string) {

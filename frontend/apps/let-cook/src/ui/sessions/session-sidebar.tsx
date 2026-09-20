@@ -27,6 +27,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
   const activeId = useSessionStore((state) => state.sessionId);
   const activeTitle = useSessionStore((state) => state.sessionTitle);
   const workspace = useSessionStore((state) => state.cwd);
+  const notice = useSessionStore((state) => state.notice);
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
   const [target, setTarget] = useState<SessionSummary | null>(null);
@@ -276,6 +277,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
             <button type="button" className="sidebar-footer-button" aria-label="Help" title="Help"><CircleHelp size={15} /></button>
           </div>
         </footer>
+        {notice && <div className="sidebar-notice" data-testid="notice-banner" role="status" aria-live="polite">{notice}</div>}
         <div
           className="sidebar-resizer"
           data-testid="sidebar-resizer"

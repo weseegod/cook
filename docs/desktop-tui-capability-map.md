@@ -385,13 +385,13 @@ Constants: `extensions/mcp.rs` `mcp_methods` + `xai-grok-mcp/src/wire.rs`.
 
 | Id | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
-| C-task-list | `x.ai/task/list` | dock / `/tasks` | — | `gap` | surface |
-| C-task-kill | `x.ai/task/kill` | dock | — | `gap` | surface |
-| C-sched-del | `x.ai/scheduler/delete` | `/loop` cancel | — | `gap` | surface |
-| C-sub-msg | `x.ai/subagent/message` | dock reply | — | `gap` | surface |
-| C-sub-can | `x.ai/subagent/cancel` | dock | — | `gap` | surface |
+| C-task-list | `x.ai/task/list` | dock / `/tasks` | row reconciliation when the tasks list opens (`state/activity/store.ts` `refreshFromAgent`) | `ok` | surface |
+| C-task-kill | `x.ai/task/kill` | dock | tasks row `✕` (`killActivity`) | `ok` | surface |
+| C-sched-del | `x.ai/scheduler/delete` | `/loop` cancel | loop row `✕` (`killActivity`) | `ok` | surface |
+| C-sub-msg | `x.ai/subagent/message` | — (the model's `send_subagent_message` tool carries it; the pager never sends it) | — | `na` | surface |
+| C-sub-can | `x.ai/subagent/cancel` | dock | subagent row `✕` (`killActivity`) | `ok` | surface |
 | C-sub-get | `x.ai/subagent/get` | dock | — | `gap` | surface |
-| C-sub-run | `x.ai/subagent/list_running` | dashboard | — | `gap` | surface |
+| C-sub-run | `x.ai/subagent/list_running` | dashboard | row reconciliation when the tasks list opens (`refreshFromAgent`) | `ok` | surface |
 
 Scheduler **create** is the `scheduler_create` tool / `/loop`, not a C→A `x.ai/scheduler/create`.
 
@@ -484,7 +484,7 @@ Internal kinds: `crates/codegen/xai-grok-tools/src/types/tool.rs` `ToolKind`. TU
 | T-mems | `MemorySearch` | `memory_search.rs` | verb-group | — | `ok` | surface |
 | T-memg | `MemoryGet` | `other.rs` | generic | — | `ok` | surface |
 | T-task | `Task` | subagent rows | verb-group `subagent`/`task` | U-sub-*, C-sub-* | `gap` | surface |
-| T-msg | `ActiveAgentMessage` | `sent_message.rs` | — | C-sub-msg | `gap` | surface |
+| T-msg | `ActiveAgentMessage` | `sent_message.rs` | generic tool row | — | `gap` | surface |
 | T-enter | `EnterPlan` | plan chrome | `/plan` + mode | ACP-mode | `ok` | surface |
 | T-exit | `ExitPlan` | plan review | R-plan | R-plan | `ok` | protocol |
 | T-ask | `AskUser` | question card | R-ask | R-ask | `ok` | protocol |

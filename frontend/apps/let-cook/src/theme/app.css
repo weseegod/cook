@@ -157,7 +157,6 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .tool-locations { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 10px; border-top: 1px solid var(--border); }
 .tool-images { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; border-top: 1px solid var(--border); }.tool-images img { max-width: 100%; max-height: 420px; border-radius: 7px; }
 
-.notice-banner { padding: 5px max(24px, calc((100% - 800px) / 2)); color: #cdd4e6; background: #1b1f2c; border-top: 1px solid #2c3345; font-size: 11px; }
 .composer-wrap { position: relative; padding: 0 max(24px, calc((100% - 800px) / 2)) 18px; }
 .composer { border: 1px solid #39414f; border-radius: 12px; background: #14181e; box-shadow: 0 4px 12px #0003; overflow: hidden; }
 .composer:focus-within { border-color: #5b6681; outline: 1px solid #333d60; }
@@ -327,7 +326,6 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 :root[data-theme="light"] .goal-budget-fill { background: #1e8a4d; }
 :root[data-theme="light"] .goal-budget-fill[data-level="medium"] { background: #a9741a; }
 :root[data-theme="light"] .goal-budget-fill[data-level="high"] { background: #b3392b; }
-:root[data-theme="light"] .notice-banner { color: #4b5870; background: #eef1f7; border-color: var(--border); }
 :root[data-theme="light"] .composer { background: var(--panel); }
 :root[data-theme="light"] .send-button { color: #fff; background: var(--accent); }
 :root[data-theme="light"] .stop-button { color: #a32f40; background: #ffecef; }
@@ -800,6 +798,12 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .message-body { padding: 0; color: var(--text); font-size: 13px; line-height: 1.55; }
 .message-user { padding: 8px 10px; border-left: 2px solid var(--accent); background: var(--panel-elevated); }
 .message-user .message-body { color: var(--text); }
+/* A prompt past three lines starts folded, ellipsis on the last visible one
+   (`scrollback/blocks/user.rs`: `COLLAPSED_MAX_LINES`). A block still arriving streams as a
+   `<pre>`, whose own scroll container is what stops the clamp from cutting it. */
+.prompt-clip[data-folded="true"] { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
+.prompt-clip[data-folded="true"] pre { overflow: visible; }
+.prompt-fold-toggle { display: block; margin-top: 2px; padding: 0; font-size: 11px; }
 .message-body > img { max-height: 420px; border-radius: 2px; }
 .markdown p, .markdown ul, .markdown ol { margin: .35em 0 .7em; }
 .markdown h1, .markdown h2, .markdown h3 { margin: 1em 0 .35em; font-weight: 600; letter-spacing: 0; }
@@ -938,8 +942,6 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .slash-menu { left: 20px; right: 20px; padding: 3px; border-radius: 3px; background: #252526; }
 .slash-menu button { min-height: 28px; padding: 4px 7px; border-radius: 2px; }
 .file-search-menu { max-height: calc(8 * 28px + 6px); }
-
-.notice-banner { padding: 4px 10px; background: #252526; }
 
 .settings-backdrop { background: #0008; backdrop-filter: none; }
 .settings-panel { width: min(960px, 100vw); padding: 18px 22px; border-left: 1px solid var(--border-strong); background: var(--bg); box-shadow: -8px 0 24px #0008; }
@@ -1416,8 +1418,9 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 /* How many jobs are running, beside the label the Plans chip mirrors; parked work in warning. */
 .tasks-chip-count { color: color-mix(in srgb, currentColor, transparent 25%); font-variant-numeric: tabular-nums; }
 .tasks-chip-paused { color: var(--warning); font-variant-numeric: tabular-nums; }
-/* The row viewer (`views/tasks_pane.rs` `[view]` → block viewer): a command's stdout, or a
-   subagent's own transcript. Read-only, so it stays a plain scrolling body. */
+/* The background-command viewer (`views/tasks_pane.rs` `[view]` → block viewer): a command's
+   stdout. Read-only, so it stays a plain scrolling body. A subagent is not a command and opens its
+   own session instead (`.subagent-takeover`). */
 .task-viewer { display: flex; min-height: 0; flex: 1 1 auto; flex-direction: column; gap: 6px; }
 .task-viewer-meta { display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
 .task-viewer-status-running, .task-viewer-status-active, .task-viewer-status-scheduled, .task-viewer-status-fired { color: #75beff; }
@@ -1439,10 +1442,22 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
   overflow-wrap: anywhere;
 }
 .task-viewer-empty, .task-viewer-note { margin: 0; color: var(--muted); font-size: 10px; }
-.task-viewer-transcript { min-height: 120px; max-height: calc(100vh - 320px); overflow: auto; border: 1px solid var(--border); border-radius: 4px; }
-.task-viewer-transcript .transcript-row { padding: 0 6px; }
-.task-viewer-snapshot { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 10px; }
-.task-viewer-snapshot p { margin: 0; }
+/* One subagent's own view (`app/agent_view/subagent_takeover.rs`): the framed child session
+   replaces the chat column, and its rows use the chat's own transcript classes. */
+.subagent-takeover { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; margin: 10px 12px 8px; overflow: hidden; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+.subagent-frame { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.subagent-frame-icon { display: inline-grid; place-items: center; width: 14px; height: 14px; flex: 0 0 auto; }
+.subagent-frame-icon-running { color: #75beff; }
+.subagent-frame-icon-completed { color: var(--success); }
+.subagent-frame-icon-failed { color: var(--danger); }
+.subagent-frame-type { flex: 0 0 auto; font-size: 11px; font-weight: 600; }
+.subagent-frame-type-running { color: #75beff; }
+.subagent-frame-type-completed { color: var(--success); }
+.subagent-frame-type-failed { color: var(--danger); }
+.subagent-frame-desc { min-width: 0; flex: 1 1 auto; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-frame-activity, .subagent-frame-elapsed { flex: 0 0 auto; color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.subagent-frame-close { flex: 0 0 auto; }
+.subagent-empty { margin: 0; color: var(--muted); font-size: 11px; }
 :root[data-theme="light"] .tasks-chip { border-color: color-mix(in srgb, #2f7dc4, var(--border) 60%); color: #1c5b96; background: #eaf3fd; }
 :root[data-theme="light"] .tasks-chip:hover { border-color: #2f7dc4; color: #14456f; }
 :root[data-theme="light"] .tasks-chip.active { border-color: #2f7dc4; color: #10395c; background: #dceafb; }
@@ -2471,6 +2486,7 @@ body { font-size: 14px; }
   display: flex;
   align-items: center;
   gap: 6px;
+  height: auto;
   padding: 0 8px 7px;
   font-size: 10px;
   letter-spacing: .08em;
@@ -2654,6 +2670,23 @@ body { font-size: 14px; }
 
 .sidebar-footer { padding: 9px 6px 0; border-top-color: var(--border); }
 .sidebar-footer-button { border-radius: 6px; }
+
+.sidebar-notice {
+  position: absolute;
+  z-index: 5;
+  right: 10px;
+  bottom: 44px;
+  left: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text-soft);
+  background: var(--panel-elevated);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
 
 /* Reordering, live turn status and the width handle for the conversation sidebar. */
 .sidebar { position: relative; }
