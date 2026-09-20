@@ -9,6 +9,12 @@ export interface WorkspaceEntry {
   size: number | null;
 }
 
+/** Flat path row from `workspace_index` — fuzzy ranking runs in the renderer. */
+export interface WorkspaceIndexEntry {
+  path: string;
+  kind: WorkspaceEntryKind;
+}
+
 export interface FilePreview {
   path: string;
   content: string;
@@ -43,6 +49,13 @@ export async function listWorkspace(relativePath = ""): Promise<WorkspaceEntry[]
   if (isTauri()) return invoke<WorkspaceEntry[]>("workspace_list", { relativePath });
   if (isMock()) return (await import("./mock-transport")).mockWorkspaceList(relativePath);
   throw new Error("Workspace browsing requires the Let Cook app");
+}
+
+/** Flat workspace inventory for `@` path search. `hidden` includes gitignored and dotfiles. */
+export async function indexWorkspace(hidden = false): Promise<WorkspaceIndexEntry[]> {
+  if (isTauri()) return invoke<WorkspaceIndexEntry[]>("workspace_index", { hidden });
+  if (isMock()) return (await import("./mock-transport")).mockWorkspaceIndex(hidden);
+  throw new Error("Workspace indexing requires the Let Cook app");
 }
 
 export async function readWorkspaceFile(relativePath: string): Promise<FilePreview> {

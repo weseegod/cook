@@ -19,6 +19,8 @@ import { useTranscriptActions } from "./transcript-context";
 import { ContextChip } from "./context-chip";
 import { SLASH_HOST } from "./composer/slash-host";
 import { useComposerAttachments } from "./composer/use-composer-attachments";
+import { useComposerFileSearch } from "./composer/use-composer-file-search";
+import { normalizeDisplayPath } from "./at-context";
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
@@ -72,6 +74,15 @@ export function Composer() {
     [typedName, typedArgs, commands, menuClosed, cancelRewindEnabled, sessionRecapEnabled],
   );
   useEffect(() => setActive(0), [typedName]);
+
+  const fileSearch = useComposerFileSearch({
+    text,
+    setText,
+    textarea,
+    slashOpen: matching.length > 0,
+    menuClosed,
+    setMenuClosed,
+  });
 
   useEffect(() => {
     const node = textarea.current;
@@ -239,6 +250,7 @@ export function Composer() {
   }
 
   function onComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (fileSearch.onKeyDown(event)) return;
     if (matching.length > 0) {
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -301,6 +313,27 @@ export function Composer() {
           ))}
         </div>
       )}
+      {fileSearch.visible && (
+        <div className="slash-menu file-search-menu" data-testid="file-search-menu">
+          {fileSearch.matches.map((match, index) => {
+            const label = match.kind === "directory" ? `${normalizeDisplayPath(match.path)}/` : normalizeDisplayPath(match.path);
+            return (
+              <button
+                type="button"
+                key={`${match.kind}:${match.path}`}
+                className={index === fileSearch.active ? "active" : ""}
+                data-testid="file-search-item"
+                data-path={match.path}
+                title={label}
+                onMouseEnter={() => fileSearch.setActive(index)}
+                onClick={() => fileSearch.accept(index)}
+              >
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div
         className={`composer${planMode ? " plan-mode" : ""}${dragging ? " dragging" : ""}`}
         data-testid="composer-drop"
@@ -334,6 +367,16 @@ export function Composer() {
           onChange={(event) => {
             setText(event.target.value);
             setMenuClosed(false);
+            fileSearch.onCursor(event.target.selectionStart ?? event.target.value.length);
+          }}
+          onSelect={(event) => {
+            fileSearch.onCursor(event.currentTarget.selectionStart ?? 0);
+          }}
+          onClick={(event) => {
+            fileSearch.onCursor(event.currentTarget.selectionStart ?? 0);
+          }}
+          onKeyUp={(event) => {
+            fileSearch.onCursor(event.currentTarget.selectionStart ?? 0);
           }}
           onPaste={(event) => {
             const files = Array.from(event.clipboardData?.files ?? []);

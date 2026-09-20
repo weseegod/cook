@@ -615,6 +615,7 @@ img.brand-mark { padding: 0; object-fit: contain; background: transparent; }
 .slash-menu button:hover, .slash-menu button.active { color: var(--text); background: var(--accent-soft); }
 .slash-menu button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slash-menu em { color: var(--muted); font-style: normal; }
+.file-search-menu { max-height: calc(8 * 34px + 10px); overflow-y: auto; }
 
 .settings-backdrop { background: color-mix(in srgb, #09101d, transparent 64%); }
 .settings-panel { width: min(980px, 100vw); padding: 26px 30px 28px; background: var(--panel-elevated); box-shadow: -20px 0 70px color-mix(in srgb, #000, transparent 70%); }
@@ -936,6 +937,7 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .attachment-chip { border-radius: 2px; background: var(--raised); }
 .slash-menu { left: 20px; right: 20px; padding: 3px; border-radius: 3px; background: #252526; }
 .slash-menu button { min-height: 28px; padding: 4px 7px; border-radius: 2px; }
+.file-search-menu { max-height: calc(8 * 28px + 6px); }
 
 .notice-banner { padding: 4px 10px; background: #252526; }
 

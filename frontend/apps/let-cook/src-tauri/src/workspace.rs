@@ -9,6 +9,7 @@ use std::process::{Command, Output};
 use serde::Serialize;
 
 const MAX_TREE_ENTRIES: usize = 5_000;
+const MAX_INDEX_ENTRIES: usize = 10_000;
 const MAX_PREVIEW_BYTES: usize = 512 * 1024;
 const MAX_DIFF_BYTES: usize = 256 * 1024;
 
@@ -19,6 +20,14 @@ pub struct WorkspaceEntry {
     pub path: String,
     pub kind: &'static str,
     pub size: Option<u64>,
+}
+
+/// Flat path inventory for `@` file search. Fuzzy ranking runs in the renderer.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceIndexEntry {
+    pub path: String,
+    pub kind: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +59,83 @@ pub struct ReviewSnapshot {
     pub files: Vec<ReviewFile>,
     pub additions: usize,
     pub deletions: usize,
+}
+
+/// Walk the workspace for `@` completion. When `hidden` is false, honor gitignore/hidden the same
+/// way the TUI walker does; when true, surface ignored and dotfiles (still never `.git` or symlinks).
+pub fn index(root: PathBuf, hidden: bool) -> Result<Vec<WorkspaceIndexEntry>, String> {
+    let root = root
+        .canonicalize()
+        .map_err(|error| format!("invalid workspace root: {error}"))?;
+
+    let mut builder = ignore::WalkBuilder::new(&root);
+    builder.follow_links(false).require_git(false);
+    if hidden {
+        builder.hidden(false).ignore(false).git_ignore(false);
+    } else {
+        builder
+            .hidden(true)
+            .ignore(true)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true);
+    }
+
+    let mut entries = Vec::new();
+    for item in builder.build() {
+        if entries.len() >= MAX_INDEX_ENTRIES {
+            break;
+        }
+        let item = match item {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let path = item.path();
+        if path == root {
+            continue;
+        }
+        let Some(file_type) = item.file_type() else {
+            continue;
+        };
+        // `file_type()` already reflects the symlink itself when `follow_links` is off.
+        if file_type.is_symlink() {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(&root) else {
+            continue;
+        };
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        if relative.is_empty() {
+            continue;
+        }
+        // Always drop `.git` (and anything under it), including when hidden mode disables ignore filters.
+        if relative == ".git" || relative.starts_with(".git/") {
+            continue;
+        }
+        let kind = if file_type.is_dir() {
+            "directory"
+        } else if file_type.is_file() {
+            "file"
+        } else {
+            continue;
+        };
+        entries.push(WorkspaceIndexEntry {
+            path: relative,
+            kind,
+        });
+    }
+
+    entries.sort_by(|left, right| {
+        (
+            left.kind != "directory",
+            left.path.to_ascii_lowercase().as_str(),
+        )
+            .cmp(&(
+                right.kind != "directory",
+                right.path.to_ascii_lowercase().as_str(),
+            ))
+    });
+    Ok(entries)
 }
 
 pub fn list(root: PathBuf, relative: String) -> Result<Vec<WorkspaceEntry>, String> {
@@ -561,6 +647,30 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         assert!(resolve_existing(root.path(), "../secret").is_err());
         assert!(resolve_existing(root.path(), "/tmp/secret").is_err());
+    }
+
+    #[test]
+    fn index_honors_gitignore_unless_hidden_and_never_lists_git() {
+        let root = tempfile::tempdir().unwrap();
+        git_run(root.path(), &["init"]);
+        fs::create_dir(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src").join("main.rs"), "fn main() {}").unwrap();
+        fs::write(root.path().join("README.md"), "readme").unwrap();
+        fs::write(root.path().join(".env"), "SECRET=1").unwrap();
+        fs::write(root.path().join(".gitignore"), ".env\n").unwrap();
+
+        let visible = index(root.path().to_path_buf(), false).unwrap();
+        let visible_paths: Vec<&str> = visible.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(visible_paths.contains(&"src"));
+        assert!(visible_paths.contains(&"src/main.rs"));
+        assert!(visible_paths.contains(&"README.md"));
+        assert!(!visible_paths.iter().any(|path| path.contains(".env")));
+        assert!(!visible_paths.iter().any(|path| *path == ".git" || path.starts_with(".git/")));
+
+        let all = index(root.path().to_path_buf(), true).unwrap();
+        let all_paths: Vec<&str> = all.iter().map(|entry| entry.path.as_str()).collect();
+        assert!(all_paths.contains(&".env"));
+        assert!(!all_paths.iter().any(|path| *path == ".git" || path.starts_with(".git/")));
     }
 
     #[test]

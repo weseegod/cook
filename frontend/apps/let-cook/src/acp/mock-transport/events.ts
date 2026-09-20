@@ -1,4 +1,4 @@
-import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry } from "../workspace";
+import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry, WorkspaceIndexEntry } from "../workspace";
 import { nextRequestId, notify, request, responses, state } from "./state";
 import type { MockPlanFile } from "./types";
 
@@ -39,6 +39,25 @@ export function mockWorkspaceList(relativePath = ""): WorkspaceEntry[] {
   const entries = state.workspace.entries[relativePath];
   if (!entries) throw new Error(`directory not found: ${relativePath || "."}`);
   return structuredClone(entries);
+}
+
+/** Flatten the seeded directory tree into the same shape `workspace_index` returns. */
+export function mockWorkspaceIndex(_hidden = false): WorkspaceIndexEntry[] {
+  const seen = new Set<string>();
+  const flat: WorkspaceIndexEntry[] = [];
+  for (const entries of Object.values(state.workspace.entries)) {
+    for (const entry of entries) {
+      if (seen.has(entry.path)) continue;
+      seen.add(entry.path);
+      flat.push({ path: entry.path, kind: entry.kind });
+    }
+  }
+  flat.sort((left, right) => {
+    const kind = Number(left.kind !== "directory") - Number(right.kind !== "directory");
+    if (kind !== 0) return kind;
+    return left.path.localeCompare(right.path, undefined, { sensitivity: "base" });
+  });
+  return structuredClone(flat);
 }
 
 export function mockWorkspaceReadFile(relativePath: string): FilePreview {
