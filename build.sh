@@ -20,6 +20,26 @@ MANAGED_BIN_DIR="$GROK_HOME_DIR/bin"
 
 cd "$REPO_DIR"
 
+# A release build can need several GiB for linking, especially after a clean
+# build or feature-set change. Refuse before Cargo starts rather than filling
+# the volume mid-build and leaving a large set of partial artifacts behind.
+# Set BUILD_MIN_FREE_GIB to a lower value only when the expected incremental
+# build size is known.
+BUILD_MIN_FREE_GIB="${BUILD_MIN_FREE_GIB:-8}"
+case "$BUILD_MIN_FREE_GIB" in
+  ''|*[!0-9]*)
+    echo "ERROR: BUILD_MIN_FREE_GIB must be a whole number of GiB" >&2
+    exit 2
+    ;;
+esac
+BUILD_AVAILABLE_KIB="$(df -Pk "$REPO_DIR" | awk 'NR == 2 { print $4 }')"
+BUILD_REQUIRED_KIB=$((BUILD_MIN_FREE_GIB * 1024 * 1024))
+if [ -z "$BUILD_AVAILABLE_KIB" ] || [ "$BUILD_AVAILABLE_KIB" -lt "$BUILD_REQUIRED_KIB" ]; then
+  echo "ERROR: need at least ${BUILD_MIN_FREE_GIB} GiB free to build safely; free disk space is too low." >&2
+  echo "       Free space or rerun only for a known-small incremental build with BUILD_MIN_FREE_GIB=<GiB>." >&2
+  exit 1
+fi
+
 # Cargo install (dotslash) cài vào ~/.cargo/bin; thêm vào PATH để script này
 # tự dùng được ngay cả khi shell của user chưa có sẵn.
 export PATH="$HOME/.cargo/bin:$PATH"
