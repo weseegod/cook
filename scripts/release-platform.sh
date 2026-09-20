@@ -99,16 +99,43 @@ fi
 mkdir -p "$OUT" "$DESKTOP_DIR/src-tauri/binaries"
 rm -rf "${OUT:?}/"*
 
+# Tauri CLI always inotify-watches src-tauri/Cargo.toml, even for `tauri build`.
+# VS Code Remote fileWatcher on this box can exhaust the default 65536 watches.
+if [[ -r /proc/sys/fs/inotify/max_user_watches ]]; then
+  watches="$(cat /proc/sys/fs/inotify/max_user_watches)"
+  if [[ "$watches" -lt 200000 ]] && command -v docker >/dev/null 2>&1; then
+    echo "==> Raising fs.inotify.max_user_watches (was $watches)"
+    docker run --privileged --rm alpine \
+      sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=1024 \
+      || echo "warning: could not raise inotify limits; tauri build may fail" >&2
+  fi
+fi
+
 echo "==> CLI cook $VERSION ($platform_arg / $rust_target)"
 cli_args=(build -p xai-grok-pager-bin --release)
 if [[ -n "$cli_triple" ]]; then
   rustup target add "$cli_triple"
   cli_args+=(--target "$cli_triple")
 fi
+windows_cflags_save=""
 if [[ "$platform_arg" == "windows" ]]; then
   cli_args+=(--no-default-features --features sandbox-enforce)
+  # Job env CFLAGS include gcc-style -fuse-ld=lld for CMake/Tauri. cc-rs then
+  # treats the compiler as GNU and emits ELF objects that llvm-lib rejects
+  # (libmimalloc-sys: "not a COFF object"). CLI cargo builds need clang-cl +
+  # xwin includes only.
+  windows_cflags_save="${CFLAGS_x86_64_pc_windows_msvc:-}"
+  export CC_x86_64_pc_windows_msvc="${CC_x86_64_pc_windows_msvc:-clang-cl}"
+  export CXX_x86_64_pc_windows_msvc="${CXX_x86_64_pc_windows_msvc:-clang-cl}"
+  export AR_x86_64_pc_windows_msvc="${AR_x86_64_pc_windows_msvc:-llvm-lib}"
+  export INCLUDE="${INCLUDE:-/opt/xwin/crt/include;/opt/xwin/sdk/include/ucrt;/opt/xwin/sdk/include/um;/opt/xwin/sdk/include/shared}"
+  export CFLAGS_x86_64_pc_windows_msvc="-imsvc /opt/xwin/crt/include -imsvc /opt/xwin/sdk/include/ucrt -imsvc /opt/xwin/sdk/include/um -imsvc /opt/xwin/sdk/include/shared"
+  unset CFLAGS
 fi
 (cd "$ROOT" && cargo "${cli_args[@]}")
+if [[ "$platform_arg" == "windows" && -n "$windows_cflags_save" ]]; then
+  export CFLAGS_x86_64_pc_windows_msvc="$windows_cflags_save"
+fi
 
 if [[ -n "$cli_triple" ]]; then
   cli_bin="$ROOT/target/${cli_triple}/release/xai-grok-pager"
