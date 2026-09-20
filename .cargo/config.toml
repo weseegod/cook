@@ -58,8 +58,17 @@ rustflags = [
     "-C", "link-arg=-Wl,-z,relro,-z,now,-z,noexecstack",
 ]
 
+# Windows NSIS / CLI cross from the Linux self-hosted runner (xwin + clang-cl).
+# Same layout as quac: MSVC CRT + SDK in /opt/xwin. Native Windows MSVC builds
+# should unset linker and the -Lnative flags.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"]
+linker = "rust-lld"
+rustflags = [
+    "-C", "force-unwind-tables=yes",
+    "-Lnative=/opt/xwin/crt/lib/x86_64",
+    "-Lnative=/opt/xwin/sdk/lib/um/x86_64",
+    "-Lnative=/opt/xwin/sdk/lib/ucrt/x86_64",
+]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"]
@@ -74,6 +83,7 @@ rustflags = ["-C", "force-unwind-tables=yes", "-C", "target-feature=+crt-static"
 # env vars below for those platforms.
 # See: https://github.com/tikv/jemallocator/issues/122
 [env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 SYSTEM_DEPS_DAV1D_BUILD_INTERNAL = "auto"
 # rusty_ffmpeg (rsmpeg): link the hermetic static FFmpeg staged by
 # third_party/ffmpeg/fetch_local.py and use the pregenerated bindings

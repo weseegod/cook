@@ -41,23 +41,21 @@ separate from `~/.grok`, so both can run side by side.
 | Desktop client-layering fold (honesty, registry) | [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md) |
 | Desktop production plan (providers, Claude Desktop–class) | [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md) |
 | Desktop ↔ TUI capability map | [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md) |
+| Desktop self-build / updater artifacts | [`docs/desktop-release.md`](docs/desktop-release.md) |
 | BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
 | Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
 | Restore core surfaces after a sync (implement + test) | [`docs/post-merge-core-fix.md`](docs/post-merge-core-fix.md) |
 
 ## Installing & updating
 
-Prebuilt binaries are published on this fork's
-[GitHub Releases](https://github.com/weseegod/thanh/releases) for **macOS
-(Apple Silicon)** and **Linux (x86_64)**, built locally by
-`scripts/publish_release.sh` (there is no CI).
+Prebuilt CLI + desktop installers are published to
+[download.letcook.dev](https://download.letcook.dev) (Cloudflare R2) for
+**macOS (Apple Silicon + Intel)**, **Linux x86_64**, and **Windows x86_64**.
+A tag `v*` starts the self-hosted GitHub Actions pipeline
+([`docs/desktop-release.md`](docs/desktop-release.md)).
 
 ```sh
-# Pick the latest version from the releases page:
-curl -fsSL -o ~/.local/bin/cook \
-  https://github.com/weseegod/thanh/releases/latest/download/cook-<version>-macos-aarch64
-chmod +x ~/.local/bin/cook
-# Linux (x86_64): replace the asset name with cook-<version>-linux-x86_64
+curl -fsSL https://download.letcook.dev/install.sh | bash
 ```
 
 A background updater keeps the binary fresh — the welcome screen shows

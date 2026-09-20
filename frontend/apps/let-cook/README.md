@@ -8,7 +8,8 @@ Architecture: [`docs/desktop-app.md`](../../../docs/desktop-app.md).
 Client-layering fold: [`docs/desktop-app-client-implement.md`](../../../docs/desktop-app-client-implement.md).  
 Production plan (providers, Claude Desktop–class features):
 [`docs/desktop-app-implement.md`](../../../docs/desktop-app-implement.md).  
-Wire map: [`docs/desktop-tui-capability-map.md`](../../../docs/desktop-tui-capability-map.md).
+Wire map: [`docs/desktop-tui-capability-map.md`](../../../docs/desktop-tui-capability-map.md).  
+Self-build / updater artifacts: [`docs/desktop-release.md`](../../../docs/desktop-release.md).
 
 ## Develop
 
@@ -64,19 +65,29 @@ Stable builds may ship a sidecar by placing
 ### App updater (shell only)
 
 `tauri-plugin-updater` updates the **desktop app binary** only. It must never
-write `~/.cook/bin/cook`. Dev/default config keeps
+write `~/.cook/bin/cook`. Dev/`pnpm tauri dev` keeps
 `bundle.createUpdaterArtifacts: false`, a placeholder `pubkey`, and empty
-`endpoints` so builds work without signing keys. Before shipping updates:
+`endpoints`. Release builds (tag `v*` → `.github/workflows/release.yml`) overlay
+`src-tauri/tauri.release.conf.json` with the committed minisign pubkey,
+`https://download.letcook.dev/latest.json`, and `VITE_COOK_UPDATER=1` so
+Settings → About can check / install.
 
-1. `pnpm tauri signer generate -w ~/.tauri/let-cook.key`
-2. Put the public key and HTTPS endpoints in `plugins.updater`
-3. Set `createUpdaterArtifacts: true` and export `TAURI_SIGNING_PRIVATE_KEY`
-4. Flip `UPDATER_CONFIGURED` in `src/updater.ts` so Settings → About enables
-   **Check for updates**
+First-time key (private key stays at `~/.tauri/let-cook.key`, never git):
 
-macOS packages for this fork are unsigned (same policy as the CLI).
+```sh
+pnpm tauri signer generate -w ~/.tauri/let-cook.key
+```
 
-See [`scripts/install.sh`](scripts/install.sh) for local artifact installation.
+The public half is `src-tauri/updater.pubkey`. macOS packages for this fork
+are unsigned for Apple codesign (same policy as the CLI); updater signatures
+are minisign and required.
+
+See [`docs/desktop-release.md`](../../../docs/desktop-release.md). One-click
+install (CLI + desktop):
+
+```sh
+curl -fsSL https://download.letcook.dev/install.sh | bash
+```
 
 Advanced BYOK model configuration remains in `~/.cook/config.toml`; the API
 key form uses `x.ai/setApiKey` rather than implementing another TOML writer.

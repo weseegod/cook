@@ -34,25 +34,23 @@ const MSG_RUN_UPDATE_MANUAL: &str = "Run `cook update` to get the latest version
 
 /// Manual-install hint for this platform.
 ///
-/// The fork ships from GitHub Releases (`weseegod/thanh`), not x.ai bootstrap
-/// installers, so the channel argument is accepted for API compatibility with
-/// upstream call sites and ignored.
+/// The fork ships from Cloudflare R2 (`download.letcook.dev`), not x.ai
+/// bootstrap installers, so the channel argument is accepted for API
+/// compatibility with upstream call sites and ignored.
 fn manual_install_cmd(_channel: &str) -> String {
     if cfg!(windows) {
         "Download the latest 'cook' asset from \
-         https://github.com/weseegod/thanh/releases/latest and put it on your PATH"
+         https://download.letcook.dev and put it on your PATH"
             .to_string()
     } else {
-        "Download the latest 'cook' binary for your platform from \
-         https://github.com/weseegod/thanh/releases/latest and put it on your PATH"
-            .to_string()
+        "curl -fsSL https://download.letcook.dev/install.sh | bash".to_string()
     }
 }
 
 fn reinstall_hint(installer: &str, channel: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
-        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/thanh --pattern 'cook-*' --output cook && chmod +x cook".to_string(),
+        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/cook --pattern 'cook-*' --output cook && chmod +x cook".to_string(),
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd(channel)),
     }
 }
@@ -2251,7 +2249,7 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
     Ok(())
 }
 
-/// Download and install cook from the fork's GitHub Releases (weseegod/thanh).
+/// Download and install cook from GitHub Releases (`weseegod/cook`) as a fallback.
 ///
 /// Uses `gh release download` to fetch the binary matching the current platform.
 /// This works anywhere the `gh` CLI is authenticated, without needing npm or internal network access.

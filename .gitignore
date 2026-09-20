@@ -1,7 +1,11 @@
 **/target/
 **/*.rs.bk
 .DS_Store
-
+.env
+.env.local
+release-artifacts/
+__pycache__/
+*.pyc
 
 # Local release artifacts produced by scripts/publish_release.sh
 /dist/

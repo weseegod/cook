@@ -936,7 +936,7 @@ fn test_reinstall_hint_gh_release_mentions_gh_command() {
         "should suggest gh release download: {hint}"
     );
     assert!(
-        hint.contains("weseegod/thanh"),
+        hint.contains("weseegod/cook"),
         "should name the fork repo: {hint}"
     );
     assert!(hint.contains("cook-*"), "should name cook assets: {hint}");
@@ -946,7 +946,7 @@ fn test_reinstall_hint_gh_release_mentions_gh_command() {
 fn test_reinstall_hint_internal_mentions_fork_release_page() {
     let hint = reinstall_hint("internal", "stable");
     assert!(
-        hint.contains("github.com/weseegod/thanh/releases"),
+        hint.contains("download.letcook.dev"),
         "should point at the fork release page: {hint}"
     );
     assert!(hint.contains("cook"), "should name the cook binary: {hint}");
@@ -954,17 +954,19 @@ fn test_reinstall_hint_internal_mentions_fork_release_page() {
 
 #[test]
 fn test_reinstall_hint_enterprise_uses_enterprise_script() {
-    // Enterprise ships via its own bootstrap script (channel hardcoded there), never install.sh with GROK_CHANNEL
+    // The fork has no separate enterprise bootstrap: every internal channel
+    // uses download.letcook.dev/install.sh and never sets GROK_CHANNEL.
     let hint = reinstall_hint("internal", "enterprise");
     assert!(
-        hint.contains("/enterprise-install."),
-        "enterprise must use the published enterprise-install script: {hint}"
+        hint.contains("download.letcook.dev/install.sh"),
+        "fork enterprise hint must use the same install.sh: {hint}"
+    );
+    assert!(
+        !hint.contains("GROK_CHANNEL"),
+        "fork hint must not set GROK_CHANNEL: {hint}"
     );
     let stable = reinstall_hint("internal", "stable");
-    assert!(
-        !stable.contains("GROK_CHANNEL"),
-        "fork hint must not set GROK_CHANNEL: {stable}"
-    );
+    assert_eq!(hint, stable, "channel is ignored for the fork install hint");
 }
 
 #[test]
@@ -1602,7 +1604,7 @@ fn test_user_facing_constants_are_stable() {
     );
     assert_eq!(
         MSG_RUN_UPDATE_MANUAL,
-        "Run `grok update` to get the latest version."
+        "Run `cook update` to get the latest version."
     );
 }
 

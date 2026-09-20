@@ -38,7 +38,7 @@ fn install_sh_path() -> Option<PathBuf> {
 }
 
 fn desktop_install_sh_path() -> Option<PathBuf> {
-    workspace_file("frontend/apps/cook-desktop/scripts/install.sh")
+    workspace_file("frontend/apps/let-cook/scripts/install.sh")
 }
 
 fn host_platform() -> String {

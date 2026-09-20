@@ -18,6 +18,7 @@ not here.
 | [`desktop-tui-capability-map.md`](desktop-tui-capability-map.md) | Method-level TUI ↔ Desktop status (cite row ids) |
 | [`desktop-app-client-implement.md`](desktop-app-client-implement.md) | Fold live client onto this contract (honesty, registry, host roles) |
 | [`desktop-app-implement.md`](desktop-app-implement.md) | Production product work (providers, Claude Desktop–class, packaging) |
+| [`desktop-release.md`](desktop-release.md) | Self-build installers, minisign, `latest.json` |
 | [`tui-presentation.md`](tui-presentation.md) | How the TUI paints — Desktop copies this, does not invent chrome |
 | [`byok-models.md`](byok-models.md) | BYOK TOML |
 | [`ARCHITECTURE.md`](../ARCHITECTURE.md) | Repo runtime map |
@@ -425,3 +426,7 @@ pnpm tauri dev
 
 Linux build deps: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
 `patchelf`, `libssl-dev`.
+
+Release packages (AppImage / deb / dmg + updater `latest.json`) are built on
+this machine by `scripts/publish_release.sh` → `scripts/desktop_release.sh`.
+See [`desktop-release.md`](desktop-release.md).
