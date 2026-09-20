@@ -47,7 +47,7 @@ To block specific files (e.g. `.env` or credential paths) on top of a profile, d
 
 ### Direct global write protection
 
-Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the kernel **write-denies** the Grok-owned direct disk paths used as user-global hook sources, plus its configuration and trust files (they stay readable when granted). Built-in `strict` can read `~/.grok` (they stay readable); writes are CWD + `~/.grok/sessions` + temp, not the whole tree. Write-deny still applies where the profile grants write:
+Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the kernel **write-denies** the Cook-owned direct disk paths used as user-global hook sources, plus its configuration and trust files (they stay readable when granted). Built-in `strict` can read `~/.grok` (they stay readable); writes are CWD + `~/.grok/sessions` + temp, not the whole tree. Write-deny still applies where the profile grants write:
 
 - `~/.cook/hooks/` (hook directory)
 - `~/.cook/hooks-paths` (registry file; not loaded as hook JSON — only its absolute targets are)
@@ -56,7 +56,7 @@ Under `workspace`, `read-only`, and `strict` (and custom profiles that extend th
 
 Because these files are read-only under these profiles, a change that would be saved to them applies to the current session only. Accepting a folder-trust prompt, switching the model with `/model`, and changing the permission mode (`/auto` or Shift+Tab) take effect for the session but are not saved. To save folder trust, run `grok --trust` in the directory before starting the sandbox. To change the default model or permission mode, edit `~/.grok/config.toml` directly.
 
-On first launch under these profiles, Grok creates a real empty `hooks/` directory and empty `hooks-paths` file when they are missing (never symlinks or wrong types). Claude/Cursor global settings are **not** covered by this write-deny; discovery of those vendors remains separately gated by compatibility settings.
+On first launch under these profiles, Cook creates a real empty `hooks/` directory and empty `hooks-paths` file when they are missing (never symlinks or wrong types). Claude/Cursor global settings are **not** covered by this write-deny; discovery of those vendors remains separately gated by compatibility settings.
 
 A symlinked `$GROK_HOME` or a `hooks-paths` entry with a symlink component is refused at sandbox start (prevents retargeting). Existing parent directories of protected paths are pinned so they cannot be renamed out from under the deny (siblings remain writable). On Linux, nested user namespaces are disabled inside bubblewrap so mount binds cannot be rearranged. Project hooks remain gated by folder trust. The `devbox` profile does not apply this protection (disposable VMs). Profiles that require it refuse to start if the kernel policy cannot be applied (including Linux without verified read-only mounts).
 
@@ -90,7 +90,7 @@ cook --sandbox project
 
 A custom profile can't reuse a built-in name. `--sandbox devbox` always runs the built-in `devbox` profile, shadowing any `[profiles.devbox]` you define.
 
-If the user and project files define the same custom profile differently, Grok uses the user profile and shows a startup warning. Run `/doctor` to see both file locations and how to resolve the conflict. Identical definitions do not produce a warning.
+If the user and project files define the same custom profile differently, Cook uses the user profile and shows a startup warning. Run `/doctor` to see both file locations and how to resolve the conflict. Identical definitions do not produce a warning.
 
 ### Custom Profile Fields
 
@@ -117,7 +117,7 @@ If the user and project files define the same custom profile differently, Grok u
 > bind-over on Linux, so a denied path can neither be read (via `bash`, `grep`, or
 > subagents) nor relocated out of the deny set and read elsewhere (the
 > `mv secret x && cat x` bypass is closed). On **Linux**, read-deny requires
-> `bubblewrap`: if it is missing (or any single deny path can't be bound), Grok
+> `bubblewrap`: if it is missing (or any single deny path can't be bound), Cook
 > refuses to start rather than run with denied paths exposed (`devbox`, which only
 > write-denies `/data`, still falls back to Landlock). Writes to paths **not** in
 > `deny` are controlled by what you grant in `read_write`.
@@ -139,7 +139,7 @@ If the user and project files define the same custom profile differently, Grok u
 > forms `[]…]` (literal `]` first) and POSIX `[[:…:]]` are **not** supported,
 > so the two platforms
 > can never interpret a glob differently. A glob using an unsupported
-> metacharacter, or one that is malformed, makes Grok **refuse to start** (fail
+> metacharacter, or one that is malformed, makes Cook **refuse to start** (fail
 > closed) on **both** platforms — write `*.pem` and `*.key` as separate entries
 > rather than `*.{pem,key}`.
 >
@@ -150,13 +150,13 @@ If the user and project files define the same custom profile differently, Grok u
 > differs by platform:
 >
 > - **macOS is airtight:** each glob becomes a Seatbelt regex applied at runtime,
->   so matching files are denied **even if created after Grok starts**.
+>   so matching files are denied **even if created after Cook starts**.
 > - **Linux is best-effort:** a mount namespace can't glob at runtime, so each
 >   glob is expanded to the files that **exist at launch** and those are bound
 >   over. Files created **later** that match a glob are **not** covered — name
 >   exact paths for anything that must be airtight on Linux. A matched symlink
 >   is masked together with its resolved target. A glob that matches too many
->   files, or whose tree is too deep or broad to scan, makes Grok **refuse to
+>   files, or whose tree is too deep or broad to scan, makes Cook **refuse to
 >   start** rather than under-enforce; the error names the globs and the
 >   directory where the scan stopped. The launch scan starts at each glob's
 >   literal prefix and includes gitignored and hidden files, so on very large
@@ -176,7 +176,7 @@ The sandbox is applied to the **entire grok process** at startup using kernel pr
 When a non-`off` sandbox profile is **requested** (CLI, `GROK_SANDBOX`, config, or a managed requirement):
 
 - The agent runs **in-process**, not through the shared leader, so tool calls stay in this process when the profile is enforced. If leader mode would otherwise have been on, a one-line note at startup says so
-- If a built-in profile fails to apply, Grok warns and continues without enforcement (see [Platform Support](#platform-support)), but still refuses the leader so tools are not delegated elsewhere
+- If a built-in profile fails to apply, Cook warns and continues without enforcement (see [Platform Support](#platform-support)), but still refuses the leader so tools are not delegated elsewhere
 - `cook workspace start`, `restart`, and `resume` are unavailable; `pause`, `stop`, and `status` still work
 
 Disable the profile at the source that selected it to use the refused commands.
@@ -189,7 +189,7 @@ The sandbox is **irreversible** once applied. The agent cannot relax restriction
 
 The profile a session was started with is saved with the session and is **fixed
 for the life of the session**. When you resume it (`cook --resume <id>`,
-`cook --continue`, or `cook -r`), Grok restores that same profile automatically —
+`cook --continue`, or `cook -r`), Cook restores that same profile automatically —
 so a session started with `--sandbox workspace` won't silently come back under a
 stricter default and break commands that previously worked.
 
@@ -218,7 +218,7 @@ Profile resolution order for a **new** session:
 | Linux    | Landlock  | Kernel 5.13 or later   |
 | macOS    | Seatbelt  | macOS (all versions)   |
 
-If the sandbox cannot be applied (e.g., unsupported kernel, missing entitlements), Grok logs a warning and continues without enforcement. The exception is an explicitly-requested **custom profile**: on **both macOS and Linux**, if it cannot be applied (unknown profile, malformed `sandbox.toml`, or — on Linux — `bubblewrap` unavailable for a non-empty `deny`), Grok refuses to start rather than run with its denied paths exposed.
+If the sandbox cannot be applied (e.g., unsupported kernel, missing entitlements), Cook logs a warning and continues without enforcement. The exception is an explicitly-requested **custom profile**: on **both macOS and Linux**, if it cannot be applied (unknown profile, malformed `sandbox.toml`, or — on Linux — `bubblewrap` unavailable for a non-empty `deny`), Cook refuses to start rather than run with its denied paths exposed.
 
 ---
 
@@ -246,7 +246,7 @@ include_only = ["PATH", "HOME"]  # if set, keep only these names
 set = { MY_FLAG = "1" }          # force these values
 ```
 
-Grok builds the child environment in order: it starts from `inherit` (`all` keeps everything, `core` keeps a small platform set such as `PATH` and `HOME`, `none` starts empty); drops the built-in secret patterns `*KEY*`, `*SECRET*`, and `*TOKEN*` unless `ignore_default_excludes = true`; drops any `exclude` matches; applies `set`; and, when `include_only` is non-empty, keeps only the matching names. Patterns are case-insensitive globs (`*`, `?`).
+Cook builds the child environment in order: it starts from `inherit` (`all` keeps everything, `core` keeps a small platform set such as `PATH` and `HOME`, `none` starts empty); drops the built-in secret patterns `*KEY*`, `*SECRET*`, and `*TOKEN*` unless `ignore_default_excludes = true`; drops any `exclude` matches; applies `set`; and, when `include_only` is non-empty, keeps only the matching names. Patterns are case-insensitive globs (`*`, `?`).
 
 The default (`inherit = "all"`, `ignore_default_excludes = true`) leaves the environment untouched, so nothing changes until you configure a policy. On the non-persistent backend the policy also filters variables captured from your login shell, so an `.rc` file export cannot slip a secret past `exclude` or `include_only`. The persistent shell is one exception: it applies the policy to its base environment, but variables that an `.rc` file exports during login are replayed from a snapshot and are not re-filtered, so keep secrets out of shell startup files there. Enforcement covers the bash tool and terminals on macOS, Linux, and Windows.
 

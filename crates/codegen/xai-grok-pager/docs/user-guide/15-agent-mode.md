@@ -1,6 +1,6 @@
 # Agent mode (ACP) and IDE integration
 
-Agent mode runs Grok as a long-lived server that clients talk to over [ACP](https://agentclientprotocol.com) (JSON-RPC). Use it from IDEs, SDKs, eval harnesses, and custom apps. For a one-shot prompt that prints and exits, use `cook -p` instead ([headless mode](14-headless-mode.md)).
+Agent mode runs Cook as a long-lived server that clients talk to over [ACP](https://agentclientprotocol.com) (JSON-RPC). Use it from IDEs, SDKs, eval harnesses, and custom apps. For a one-shot prompt that prints and exits, use `cook -p` instead ([headless mode](14-headless-mode.md)).
 
 ---
 
@@ -32,7 +32,7 @@ Interactive TUI users typically leave the default ask mode (or use auto). See [P
 
 ## What is ACP?
 
-The [Agent Client Protocol (ACP)](https://agentclientprotocol.com) defines how clients talk to coding agents over JSON-RPC. With Grok it covers:
+The [Agent Client Protocol (ACP)](https://agentclientprotocol.com) defines how clients talk to coding agents over JSON-RPC. With Cook it covers:
 
 - Sessions (create, load, resume)
 - Prompts and streamed replies
@@ -79,7 +79,7 @@ cook agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 
 Clients connect over WebSocket and authenticate with the secret token. If you omit `--secret`, the agent prints a generated token at startup, or set `GROK_AGENT_SECRET`. The process keeps state across client reconnects. Permissions match other entry points; see [Permissions and safety](22-permissions-and-safety.md).
 
-This is a server you run yourself — Grok's hosted cloud sandboxes do not run `grok agent serve`.
+This is a server you run yourself — Cook's hosted cloud sandboxes do not run `grok agent serve`.
 
 ---
 
@@ -141,7 +141,7 @@ Each update names its type, so a client can render distinct panels for reasoning
 
 ## Extension methods
 
-Beyond the base ACP protocol, Grok defines extension methods under the `x.ai/` prefix for SpaceXAI-specific functionality. These cover:
+Beyond the base ACP protocol, Cook defines extension methods under the `x.ai/` prefix for upstream provider-specific functionality. These cover:
 
 | Category                   | Prefix               | Examples                                         |
 | -------------------------- | -------------------- | ------------------------------------------------ |
@@ -155,7 +155,7 @@ Beyond the base ACP protocol, Grok defines extension methods under the `x.ai/` p
 | **Authentication**         | `x.ai/auth/*`        | `get_url`, `submit_code`                         |
 | **Feedback & Telemetry**   | `x.ai/*`             | `feedback`, `telemetry/*`                        |
 
-The tables here show representative methods in each category. The `x.ai/*` set is SpaceXAI-specific and may expand across releases, so treat it as non-exhaustive and discover the available methods from the agent's `initialize` response.
+The tables here show representative methods in each category. The `x.ai/*` set is upstream provider-specific and may expand across releases, so treat it as non-exhaustive and discover the available methods from the agent's `initialize` response.
 
 ### Notifications (agent to client)
 

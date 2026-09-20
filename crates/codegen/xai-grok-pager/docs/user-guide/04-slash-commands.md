@@ -30,14 +30,14 @@ Not `/config-agents` (alias `/agents`), which manages agent *definitions* and pe
 
 ### `/compact [context]`
 
-Compress conversation history to reclaim context-window space. Pass a note to tell Grok what to keep:
+Compress conversation history to reclaim context-window space. Pass a note to tell Cook what to keep:
 
 ```
 /compact
 /compact keep the auth implementation details
 ```
 
-Grok also auto-compacts once the context window hits 85% (tune it with `[session] auto_compact_threshold_percent`).
+Cook also auto-compacts once the context window hits 85% (tune it with `[session] auto_compact_threshold_percent`).
 
 ### `/context`
 
@@ -107,7 +107,7 @@ Switch models. Accepts a model ID or display name (case-insensitive), and for re
 
 ```
 /model grok-4.6
-/model Grok 4.6
+/model Cook 4.6
 /model Reasoning X high
 ```
 
@@ -150,7 +150,7 @@ Toggle vim-style scrollback keys (`j`/`k`, `h`/`l`, `g`/`G`, `y`/`Y`, and so on)
 
 ### `/edit-prompt`
 
-Open an external editor for the prompt, in either render mode. Grok resolves `$VISUAL`, then `$EDITOR`, then `vi`; command values may include quoted arguments. Saving replaces the draft without sending it, and saving an empty file clears it. Typing `/edit-prompt` necessarily replaces the composer's contents, so the editor starts from an empty draft; to edit an **existing** draft, choose **Edit Prompt in External Editor** from the command palette (or press `Ctrl+G` in minimal mode), which preserves the text and refuses pasted, file-reference, or image chips without flattening them.
+Open an external editor for the prompt, in either render mode. Cook resolves `$VISUAL`, then `$EDITOR`, then `vi`; command values may include quoted arguments. Saving replaces the draft without sending it, and saving an empty file clears it. Typing `/edit-prompt` necessarily replaces the composer's contents, so the editor starts from an empty draft; to edit an **existing** draft, choose **Edit Prompt in External Editor** from the command palette (or press `Ctrl+G` in minimal mode), which preserves the text and refuses pasted, file-reference, or image chips without flattening them.
 
 ```
 /edit-prompt
@@ -160,7 +160,7 @@ Open an external editor for the prompt, in either render mode. Grok resolves `$V
 
 Switch the current session to the other render mode, in place. `/minimal` (offered while you're in fullscreen) switches to the experimental scrollback-native mode; `/fullscreen` (offered while you're in minimal; alias `/full`) switches back to standard fullscreen mode. The switch happens inside the running process — nothing restarts, so a running turn keeps streaming and your composer draft, queued prompts, and permission mode all carry over; a marker (committed line in minimal, toast in fullscreen) reminds you how to switch back. Both are session-scoped — they don't touch `config.toml` — and the `--minimal` / `--fullscreen` CLI flags are session-scoped the same way. To make plain `grok` open in a given mode by default, use `/settings` → **Default screen mode** or set `[ui] screen_mode`. (If the in-place transition misbehaves in an exotic terminal, `GROK_SCREEN_MODE_SWITCH=exec` restores the old behavior of relaunching the pager onto the same session.)
 
-A handful of commands only work in one of the two modes, because the surface they drive doesn't exist in the other: `/find`, `/jump`, `/timeline`, `/theme`, `/tutorial`, and `/dashboard` are fullscreen-only, while `/expand` is minimal-only. (`/workflow runs` is different: it opens the run pane in fullscreen and degrades to a text overview in minimal rather than refusing.) Those are hidden from the command menu and the palette in the mode they can't run in. If you type one out anyway, Grok says why — and points you at whichever is actually useful. When the other mode is the only way to get it, that's the mode switch: `/theme isn't available in minimal mode (minimal renders with your terminal's own palette). Run /fullscreen to switch this session.` When this mode already does the job another way, it names that instead: `/expand isn't available in fullscreen mode: press Tab to focus the scrollback, then → on the block.` Everything else works in both. Note that `--no-alt-screen` still counts as fullscreen here, so it keeps the fullscreen-only commands.
+A handful of commands only work in one of the two modes, because the surface they drive doesn't exist in the other: `/find`, `/jump`, `/timeline`, `/theme`, `/tutorial`, and `/dashboard` are fullscreen-only, while `/expand` is minimal-only. (`/workflow runs` is different: it opens the run pane in fullscreen and degrades to a text overview in minimal rather than refusing.) Those are hidden from the command menu and the palette in the mode they can't run in. If you type one out anyway, Cook says why — and points you at whichever is actually useful. When the other mode is the only way to get it, that's the mode switch: `/theme isn't available in minimal mode (minimal renders with your terminal's own palette). Run /fullscreen to switch this session.` When this mode already does the job another way, it names that instead: `/expand isn't available in fullscreen mode: press Tab to focus the scrollback, then → on the block.` Everything else works in both. Note that `--no-alt-screen` still counts as fullscreen here, so it keeps the fullscreen-only commands.
 
 ### `/plan`
 
@@ -261,7 +261,7 @@ Generate a video from a text (or image) description. It plans shots, generates s
 
 ### `/loop [interval] <prompt>`
 
-Run a prompt on a recurring interval. Give the interval as `30m`, `1 hour`, or `every 2 days`; leave it out and Grok will ask.
+Run a prompt on a recurring interval. Give the interval as `30m`, `1 hour`, or `every 2 days`; leave it out and Cook will ask.
 
 ```
 /loop 30m check deploy status
@@ -276,7 +276,7 @@ Intervals are `Ns` (seconds, minimum 60), `Nm` (minutes), `Nh` (hours), or `Nd` 
 
 ### `/commit`
 
-Commit the current changes with a message Grok writes from the conversation so far.
+Commit the current changes with a message Cook writes from the conversation so far.
 
 ```
 /commit
@@ -286,13 +286,13 @@ Commit the current changes with a message Grok writes from the conversation so f
 
 The message follows the style of recent history (`git log -5 --oneline`), so conventional-commit prefixes are used only when the log already uses them. An optional argument steers the subject; when it already reads as a complete subject line it is used as-is. `--push` is shorthand for `/commit-and-push`.
 
-Grok probes the tree with `git status --porcelain` and `git diff --stat HEAD` rather than reading every diff again, stages the changes that belong in the commit, and leaves secrets, dependencies, and build output out of it. Nothing staged or modified reports "nothing to commit" and stops. An in-progress merge, rebase, cherry-pick, or bisect stops the command instead of committing on top of it.
+Cook probes the tree with `git status --porcelain` and `git diff --stat HEAD` rather than reading every diff again, stages the changes that belong in the commit, and leaves secrets, dependencies, and build output out of it. Nothing staged or modified reports "nothing to commit" and stops. An in-progress merge, rebase, cherry-pick, or bisect stops the command instead of committing on top of it.
 
 ### `/commit-and-push [message hint]`
 
 Commit as above, then integrate the upstream branch and push.
 
-Grok fetches the tracked upstream, runs a plain `git pull` so your `pull.rebase` / `pull.ff` setting is honored, and pushes. If the pull conflicts, it does **not** abort: it lists the unmerged paths (`git diff --name-only --diff-filter=U`), reads only those files, resolves each so both your commit's intent and the incoming changes hold, stages them, and continues the merge (`git commit --no-edit`) or rebase (`git rebase --continue`) before pushing. A push that fails on auth or network leaves the commit in place and reports the error.
+Cook fetches the tracked upstream, runs a plain `git pull` so your `pull.rebase` / `pull.ff` setting is honored, and pushes. If the pull conflicts, it does **not** abort: it lists the unmerged paths (`git diff --name-only --diff-filter=U`), reads only those files, resolves each so both your commit's intent and the incoming changes hold, stages them, and continues the merge (`git commit --no-edit`) or rebase (`git rebase --continue`) before pushing. A push that fails on auth or network leaves the commit in place and reports the error.
 
 Neither command ever force-pushes, rewrites published history, or uses `--no-verify`, `--amend`, or `--allow-empty` unless you ask.
 
@@ -302,7 +302,7 @@ Neither command ever force-pushes, rewrites published history, or uses `--no-ver
 
 ### `/goal`
 
-Set, manage, or check an autonomous goal. Grok works across rounds and only marks the goal complete after an independent evidence review confirms the claim; if that review can't reproduce the result or has no usable evidence, the goal stays active or pauses with concrete gaps.
+Set, manage, or check an autonomous goal. Cook works across rounds and only marks the goal complete after an independent evidence review confirms the claim; if that review can't reproduce the result or has no usable evidence, the goal stays active or pauses with concrete gaps.
 
 ```
 /goal Migrate the auth module to the new API
@@ -353,7 +353,7 @@ A budget-limited run is different: it only resumes through a model/tool resume r
 
 ### `/workflows`
 
-Open the extensions modal on the **Workflows** tab — a browse-only catalog of the saved workflows Grok discovered (built-ins, project `.grok/workflows/`, and user `~/.cook/workflows/`), with each entry's source, description, and path. The same catalog is listed for the model under the skill listing in the session preamble. Launch one with `/workflow <name>` (or its own slash command), then watch it in `/workflow runs`.
+Open the extensions modal on the **Workflows** tab — a browse-only catalog of the saved workflows Cook discovered (built-ins, project `.grok/workflows/`, and user `~/.cook/workflows/`), with each entry's source, description, and path. The same catalog is listed for the model under the skill listing in the session preamble. Launch one with `/workflow <name>` (or its own slash command), then watch it in `/workflow runs`.
 
 ---
 

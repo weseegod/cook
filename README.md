@@ -1,113 +1,105 @@
-<div align="center">
+# Cook
 
-<h1>
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://media.x.ai/v1/website/spacexai-symbol-white-transparent-0c31957f.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png">
-    <img alt="SpaceXAI logo" src="https://media.x.ai/v1/website/spacexai-symbol-black-transparent-6435cf42.png" width="96">
-  </picture>
-  <br>
-  Cook (<code>cook</code>) / Let Cook
-</h1>
+Cook is a local-first AI coding workspace for developers who want control over
+their models, keys, and source code.
 
-**Grok Build** is SpaceXAI's terminal-based AI coding agent. It runs as a
-full-screen TUI that understands your codebase, edits files, executes shell
-commands, searches the web, and manages long-running tasks — interactively,
-headlessly for scripting/CI, or embedded in editors via the Agent Client
-Protocol (ACP).
+- **Cook CLI** — a full-screen terminal agent, headless runner, and ACP server.
+- **Let Cook** — a chat-first desktop client built with Tauri and React.
+- **BYOK by default** — connect OpenAI-compatible APIs, Anthropic, DeepSeek,
+  OpenRouter, or another provider from `~/.cook/config.toml`.
+- **One home directory** — configuration, authentication, sessions, memory,
+  plugins, and updates live under `~/.cook`.
 
-![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
+Project website: **[letcook.dev](https://letcook.dev)**
 
-**Learn more at [x.ai/cli](https://x.ai/cli)**
+> Cook began as a focused fork of **Grok Build**. The product, documentation,
+> and public direction of this repository are maintained as Cook.
 
-</div>
+## What Cook can do
 
-## About this fork (Cook)
+Cook understands a codebase, reads and edits files, runs shell commands,
+searches the web, manages sessions, and handles long-running tasks. Use the
+same agent runtime through any of these entry points:
 
-This repository is a **BYOK-focused fork** of upstream
-[Grok Build](https://github.com/xai-org/grok-build), synced periodically from
-the SpaceXAI monorepo. It keeps the upstream agent/TUI core unchanged and
-customizes only what third-party models need — DeepSeek, OpenRouter, or any
-OpenAI-compatible API.
+- interactive TUI: `cook`
+- headless scripting and CI: `cook -p "<prompt>"`
+- editor integrations: `cook agent stdio`
+- desktop chat: the Let Cook app in `frontend/apps/let-cook/`
 
-The fork ships as a command named **`cook`** (not `grok`) with its own home
-directory **`~/.cook`** (config, auth, sessions, binaries, caches), completely
-separate from `~/.grok`, so both can run side by side.
+## Install
 
-| Topic | Link |
-|-------|------|
-| How the repo is organized (for engineers/AI) | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| Desktop app architecture | [`docs/desktop-app.md`](docs/desktop-app.md) |
-| Desktop client-layering fold (honesty, registry) | [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md) |
-| Desktop production plan (providers, Claude Desktop–class) | [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md) |
-| Desktop ↔ TUI capability map | [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md) |
-| BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
-| Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
-| Restore core surfaces after a sync (implement + test) | [`docs/post-merge-core-fix.md`](docs/post-merge-core-fix.md) |
-
-## Installing & updating
-
-Prebuilt binaries are published on this fork's
-[GitHub Releases](https://github.com/weseegod/thanh/releases) for **macOS
-(Apple Silicon)** and **Linux (x86_64)**, built locally by
-`scripts/publish_release.sh` (there is no CI).
+Prebuilt downloads and release notes are published on
+[letcook.dev](https://letcook.dev). To build the CLI locally, install Rust and
+[DotSlash](https://dotslash-cli.com), then run:
 
 ```sh
-# Pick the latest version from the releases page:
-curl -fsSL -o ~/.local/bin/cook \
-  https://github.com/weseegod/thanh/releases/latest/download/cook-<version>-macos-aarch64
-chmod +x ~/.local/bin/cook
-# Linux (x86_64): replace the asset name with cook-<version>-linux-x86_64
+./build.sh
 ```
 
-A background updater keeps the binary fresh — the welcome screen shows
-`Update: vX available — press ctrl+u to restart`, or run `cook update`
-manually. It only manages `~/.cook/bin/cook` and never touches `~/.grok`.
+The build installs `cook` into `~/.cook/bin` and creates a user-local command
+link when the platform supports it. Run `cook --version` to verify the install.
 
-## Building from source
+## Configure a model
 
-Requirements: **Rust** (toolchain pinned by
-[`rust-toolchain.toml`](rust-toolchain.toml)) and
-**[DotSlash](https://dotslash-cli.com)** on `PATH` (needed so the hermetic
-[`bin/protoc`](bin/protoc) wrapper can download and run `protoc`).
+Cook reads user configuration from `~/.cook/config.toml`. A minimal
+OpenAI-compatible setup looks like this:
+
+```toml
+[model_providers.local]
+name = "Local provider"
+base_url = "https://api.example.com/v1"
+env_key = "LOCAL_API_KEY"
+
+[model.coding]
+model = "your-model-id"
+model_provider = "local"
+```
+
+See [`docs/byok-models.md`](docs/byok-models.md) for provider examples,
+capability notes, and troubleshooting.
+
+## Develop
+
+Requirements: Rust (the toolchain is pinned in
+[`rust-toolchain.toml`](rust-toolchain.toml)), Node.js, pnpm, and DotSlash.
 
 ```sh
-./build.sh                              # builds and installs `cook` into ~/.cook/bin (+ ~/.local/bin symlink)
-cargo run -p xai-grok-pager-bin         # build + launch the TUI in one go
-cargo check -p xai-grok-pager-bin       # fast validation
+cargo check -p xai-grok-pager-bin
+cargo test -p xai-grok-config
+cargo clippy -p <crate>
+cargo fmt --all
 ```
 
-## Development
+To work on the desktop client:
 
 ```sh
-cargo check -p <crate>        # always target specific crates; full-workspace builds are slow
-cargo test -p xai-grok-config # per-crate tests
-cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
-cargo fmt --all               # rustfmt.toml at the repo root
+cd frontend/apps/let-cook
+pnpm install
+pnpm test
+pnpm tauri dev
 ```
-
-> [!IMPORTANT]
-> The root `Cargo.toml` (workspace members, dependency versions, lints,
-> profiles) is **generated** — treat it as read-only. Prefer editing per-crate
-> `Cargo.toml` files.
 
 ## Documentation
 
-User-facing docs ship with the pager crate:
-[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/)
-— getting started, keyboard shortcuts, slash commands, configuration, theming,
-MCP servers, skills, plugins, hooks, headless mode, and more. Full online
-documentation: [docs.x.ai/build/overview](https://docs.x.ai/build/overview).
+- [Architecture](ARCHITECTURE.md) — workspace layout and runtime boundaries
+- [Desktop app](docs/desktop-app.md) — Let Cook architecture
+- [BYOK models](docs/byok-models.md) — model and provider configuration
+- [User guide](crates/codegen/xai-grok-pager/docs/user-guide/) — CLI usage,
+  configuration, permissions, MCP, plugins, and integrations
+- [Upstream sync playbook](UPSTREAM-MERGE.md) — maintainer-only merge notes
 
 ## Contributing
 
-External contributions are not accepted. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+The public tree is available for transparency, local builds, and evaluation.
+External pull requests are not currently accepted; see
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the current policy.
+
+Please report security issues privately according to
+[`SECURITY.md`](SECURITY.md), never in a public issue.
 
 ## License
 
-First-party code in this repository is licensed under the **Apache License,
-Version 2.0** — see [`LICENSE`](LICENSE). Third-party and vendored code
-remains under its original licenses — see
-[`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) and
+First-party code is licensed under the **Apache License, Version 2.0** — see
+[`LICENSE`](LICENSE). Third-party and vendored code retains its original
+license; see [`THIRD-PARTY-NOTICES`](THIRD-PARTY-NOTICES) and
 [`third_party/NOTICE`](third_party/NOTICE).

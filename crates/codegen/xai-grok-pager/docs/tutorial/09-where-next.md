@@ -8,7 +8,7 @@ You know enough to be productive. When you want more:
 - **`/docs`** — the full How-to Guides inside the TUI (`/docs web` for the
   online docs). Covers sessions, headless mode, subagents, sandboxing,
   memory, and much more.
-- **Ask Grok itself** — it can read its own user guide and set itself up.
+- **Ask Cook itself** — it can read its own user guide and set itself up.
   Try: "How do I run you in CI?" or "add an MCP server for GitHub".
 
 ## Good habits

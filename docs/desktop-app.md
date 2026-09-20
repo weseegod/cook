@@ -36,7 +36,7 @@ Desktop is a presentation client, not an IDE and not a second agent.
 | Shared `~/.cook` with CLI | Separate auth/config/session store |
 | Linux + macOS first | Electron Chromium bundle |
 
-Upstream Grok Build already used this shape (`frontend/apps/grok-desktop`,
+The upstream implementation already used this shape (`frontend/apps/grok-desktop`,
 `clientIdentifier: grok-desktop`). This fork does not ship that tree. Thanh
 Desktop is a new app on the **same ACP contract**. If upstream lands
 `grok-desktop`, do not rename this tree; cherry-pick protocol patterns.

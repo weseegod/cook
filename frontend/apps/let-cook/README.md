@@ -4,6 +4,8 @@ Chat-first Tauri 2 + React ACP client for the existing Cook agent. It runs
 `cook agent stdio`, shares `~/.cook` with the CLI, and never calls models or
 tools from the renderer.
 
+Product website: [letcook.dev](https://letcook.dev).
+
 Architecture: [`docs/desktop-app.md`](../../../docs/desktop-app.md).  
 Client-layering fold: [`docs/desktop-app-client-implement.md`](../../../docs/desktop-app-client-implement.md).  
 Production plan (providers, Claude Desktop–class features):
