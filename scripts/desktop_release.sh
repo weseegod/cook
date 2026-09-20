@@ -116,7 +116,9 @@ case "$platform" in
   macos-aarch64|macos-x86_64)
     # --no-sign skips Apple codesign (no Developer ID). Tauri also skips
     # minisign when --no-sign is set; we re-sign updater archives below.
-    tauri_args+=(--bundles dmg --no-sign)
+    # `app` is required alongside `dmg`: the updater archive is only written
+    # for the app bundle target.
+    tauri_args+=(--bundles app,dmg --no-sign)
     ;;
 esac
 

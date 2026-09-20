@@ -169,7 +169,9 @@ if [[ -n "$desktop_target" ]]; then
 fi
 case "$platform_arg" in
   linux) tauri_args+=(--bundles appimage,deb) ;;
-  macos-arm|macos-x64) tauri_args+=(--bundles dmg --no-sign) ;;
+  # `app` is required alongside `dmg`: Tauri only writes the macOS updater
+  # archive (Let Cook.app.tar.gz) for the app bundle target.
+  macos-arm|macos-x64) tauri_args+=(--bundles app,dmg --no-sign) ;;
   windows) tauri_args+=(--bundles nsis) ;;
 esac
 (cd "$DESKTOP_DIR" && pnpm tauri "${tauri_args[@]}")
