@@ -140,6 +140,143 @@ pub fn open(root: PathBuf, relative: String) -> Result<(), String> {
     open_external(&path)
 }
 
+/// Dirty-tree probe behind the header's git chip and the status row's diffstat. Three short-lived
+/// git processes at most — repo/branch probe, status, shortstat diff — and the in-progress markers
+/// are read straight off the filesystem, because this runs on a timer while a turn streams.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusSummary {
+    pub is_git_repo: bool,
+    pub branch: Option<String>,
+    pub changed_files: usize,
+    pub additions: usize,
+    pub deletions: usize,
+    /// A merge, rebase, cherry-pick, or bisect is in progress: committing now would stack on it.
+    pub operation_in_progress: bool,
+}
+
+pub fn git_status(root: PathBuf) -> Result<GitStatusSummary, String> {
+    let not_a_repo = GitStatusSummary {
+        is_git_repo: false,
+        branch: None,
+        changed_files: 0,
+        additions: 0,
+        deletions: 0,
+        operation_in_progress: false,
+    };
+    // One process answers both "is this a work tree" and "where is the git dir", and the git dir is
+    // all the in-progress markers need — no per-marker `rev-parse --git-path` spawns.
+    let probe = git(&root, &["rev-parse", "--is-inside-work-tree", "--absolute-git-dir"])?;
+    let probe_stdout = String::from_utf8_lossy(&probe.stdout).to_owned();
+    let mut probe_lines = probe_stdout.lines().map(str::trim);
+    if !probe.status.success() || probe_lines.next() != Some("true") {
+        return Ok(not_a_repo);
+    }
+    let Some(git_dir) = probe_lines.next().filter(|dir| !dir.is_empty()) else {
+        return Ok(not_a_repo);
+    };
+
+    // `--porcelain=v2 --branch` carries the branch and the changed-file count in the same walk.
+    let status = git(
+        &root,
+        &[
+            "--no-optional-locks",
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=normal",
+        ],
+    )?;
+    if !status.status.success() {
+        return Err(git_error("git status", &status));
+    }
+    let (branch, changed_files) = parse_status_v2(&status.stdout);
+    let (additions, deletions) = shortstat(&root)?;
+
+    Ok(GitStatusSummary {
+        is_git_repo: true,
+        branch,
+        changed_files,
+        additions,
+        deletions,
+        operation_in_progress: operation_in_progress(&root, git_dir),
+    })
+}
+
+/// Branch and changed-file count from `git status --porcelain=v2 --branch -z`: `# branch.head`
+/// carries the branch (`(detached)` when there is none), and every other record is one changed
+/// path — `1`/`2` tracked, `u` unmerged, `?` untracked.
+fn parse_status_v2(stdout: &[u8]) -> (Option<String>, usize) {
+    let mut branch = None;
+    let mut changed_files = 0;
+    for record in stdout.split(|byte| *byte == b'\0') {
+        let record = String::from_utf8_lossy(record);
+        if let Some(head) = record.strip_prefix("# branch.head ") {
+            let head = head.trim();
+            if !head.is_empty() && head != "(detached)" {
+                branch = Some(head.to_owned());
+            }
+            continue;
+        }
+        if record.starts_with('#') {
+            continue;
+        }
+        if record.starts_with("1 ") || record.starts_with("2 ") || record.starts_with("u ") || record.starts_with("? ") {
+            changed_files += 1;
+        }
+    }
+    (branch, changed_files)
+}
+
+/// Tracked-file line totals vs `HEAD` from one `--shortstat` diff: the totals are all the status row
+/// shows, so the per-file `--numstat` rows never need to cross the pipe. Untracked files are counted
+/// as changed files but add no lines, matching what `git diff HEAD` reports. A repository without a
+/// commit yet has no `HEAD` to diff against, and reads as unchanged.
+fn shortstat(root: &Path) -> Result<(usize, usize), String> {
+    let output = git(root, &["--no-optional-locks", "diff", "--shortstat", "HEAD"])?;
+    if !output.status.success() {
+        return Ok((0, 0));
+    }
+    let summary = String::from_utf8_lossy(&output.stdout);
+    // ` 1 file changed, 2 insertions(+), 1 deletion(-)`; git drops each clause when it is zero and
+    // switches to the singular noun at one.
+    let number_before = |noun: &str, sign: char| -> usize {
+        let plural = format!("{noun}s({sign})");
+        let singular = format!("{noun}({sign})");
+        summary
+            .split(',')
+            .find_map(|part| {
+                let part = part.trim();
+                let count = part
+                    .strip_suffix(&plural)
+                    .or_else(|| part.strip_suffix(&singular))?;
+                count.trim().parse::<usize>().ok()
+            })
+            .unwrap_or(0)
+    };
+    Ok((number_before("insertion", '+'), number_before("deletion", '-')))
+}
+
+/// A merge, rebase, cherry-pick, or bisect is in progress. The markers are plain files under the
+/// git dir, so this is a handful of `stat` calls rather than five more `git` processes.
+fn operation_in_progress(root: &Path, git_dir: &str) -> bool {
+    let git_dir = {
+        let path = Path::new(git_dir);
+        if path.is_absolute() { path.to_path_buf() } else { root.join(path) }
+    };
+    [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+        "BISECT_LOG",
+        "rebase-merge",
+        "rebase-apply",
+    ]
+    .iter()
+    .any(|marker| git_dir.join(marker).exists())
+}
+
 pub fn review(root: PathBuf) -> Result<ReviewSnapshot, String> {
     let probe = git(&root, &["rev-parse", "--is-inside-work-tree"])?;
     if !probe.status.success() || String::from_utf8_lossy(&probe.stdout).trim() != "true" {
@@ -404,6 +541,21 @@ fn open_external(path: &Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
+    /// Run git in a scratch repository, failing the test on any non-zero exit.
+    fn git_run(root: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
     #[test]
     fn rejects_paths_outside_workspace() {
         let root = tempfile::tempdir().unwrap();
@@ -456,6 +608,57 @@ mod tests {
     #[test]
     fn counts_diff_lines_without_file_headers() {
         assert_eq!(diff_counts("--- a/x\n+++ b/x\n-old\n+new\n"), (1, 1));
+    }
+
+    #[test]
+    fn parses_branch_and_changed_files_from_porcelain_v2() {
+        let stdout = b"# branch.oid abc\0# branch.head work\0# branch.ab +0 -0\01 M. N... 100644 100644 100644 aaa bbb src/main.rs\0? notes.md\0";
+        assert_eq!(parse_status_v2(stdout), (Some("work".to_owned()), 2));
+    }
+
+    #[test]
+    fn parses_branch_less_and_unborn_status() {
+        assert_eq!(parse_status_v2(b"# branch.oid (initial)\0# branch.head main\0"), (Some("main".to_owned()), 0));
+        assert_eq!(parse_status_v2(b"# branch.head (detached)\0"), (None, 0));
+        assert_eq!(parse_status_v2(b""), (None, 0));
+    }
+
+    #[test]
+    fn git_status_reports_the_working_tree_in_three_processes() {
+        let root = tempfile::tempdir().unwrap();
+        git_run(root.path(), &["init"]);
+        git_run(root.path(), &["config", "user.email", "test@example.com"]);
+        git_run(root.path(), &["config", "user.name", "Test"]);
+        fs::write(root.path().join("tracked.txt"), "one\ntwo\n").unwrap();
+        git_run(root.path(), &["add", "tracked.txt"]);
+        git_run(root.path(), &["commit", "-m", "initial"]);
+        fs::write(root.path().join("tracked.txt"), "one\nTWO\nthree\n").unwrap();
+        fs::write(root.path().join("new.txt"), "new\n").unwrap();
+
+        let status = git_status(root.path().to_path_buf()).unwrap();
+        assert!(status.is_git_repo);
+        assert!(status.branch.is_some());
+        // One modified file plus one untracked file, and the line totals of `git diff HEAD`.
+        assert_eq!(status.changed_files, 2);
+        assert_eq!((status.additions, status.deletions), (2, 1));
+        assert!(!status.operation_in_progress);
+    }
+
+    #[test]
+    fn git_status_reads_an_in_progress_operation_from_the_git_dir() {
+        let root = tempfile::tempdir().unwrap();
+        git_run(root.path(), &["init"]);
+        fs::write(root.path().join(".git").join("MERGE_HEAD"), "deadbeef\n").unwrap();
+
+        assert!(git_status(root.path().to_path_buf()).unwrap().operation_in_progress);
+    }
+
+    #[test]
+    fn git_status_reports_a_workspace_without_git() {
+        let root = tempfile::tempdir().unwrap();
+        let status = git_status(root.path().to_path_buf()).unwrap();
+        assert!(!status.is_git_repo);
+        assert_eq!(status.changed_files, 0);
     }
 
     #[test]

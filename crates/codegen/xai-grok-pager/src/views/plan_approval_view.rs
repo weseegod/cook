@@ -69,6 +69,9 @@ pub struct PlanApprovalViewState {
     pub tool_call_id: String,
     pub has_plan: bool,
     pub plan_content: Option<String>,
+    /// Basename of the episode's plan file (`2026-09-19T14-30-22Z.md`), shown as the review title
+    /// and used for `@<name>:<line>` comment anchors. `plan.md` when the request carried no path.
+    pub plan_file_name: String,
     pub source: PlanReviewSource,
     pub stashed_prompt: StashedPrompt,
     pub origin: ReviewOrigin,
@@ -104,10 +107,12 @@ impl PlanApprovalViewState {
     ) -> Self {
         let plan_content = request.plan_content.filter(|s| !s.trim().is_empty());
         let has_plan = plan_content.is_some();
+        let plan_file_name = plan_file_name(request.plan_file_path.as_deref());
         Self {
             tool_call_id: request.tool_call_id,
             has_plan,
             plan_content,
+            plan_file_name,
             source,
             stashed_prompt,
             origin: ReviewOrigin::InTurn(Some(response_tx)),
@@ -132,6 +137,8 @@ impl PlanApprovalViewState {
             tool_call_id,
             has_plan,
             plan_content,
+            // CreatePlan/after-turn reviews carry no path; they are always the legacy single file.
+            plan_file_name: plan_file_name(None),
             source: PlanReviewSource::Inline,
             stashed_prompt,
             origin: ReviewOrigin::AfterTurn,
@@ -163,7 +170,9 @@ impl PlanApprovalViewState {
                         inline_plan_snippets(self.plan_content.as_deref(), &comment.line_range);
                     format!("{label}\n{snippets}\n\nComment:\n{}", comment.text)
                 }
-                PlanReviewSource::FileBacked => format_file_backed_plan_comment(comment),
+                PlanReviewSource::FileBacked => {
+                    format_file_backed_plan_comment(comment, &self.plan_file_name)
+                }
             })
             .collect();
 
@@ -250,12 +259,45 @@ impl PlanApprovalViewState {
     }
 }
 
-fn format_file_backed_plan_comment(comment: &PlanComment) -> String {
+/// Basename of an episode's plan file, for `@<name>:<line>` anchors.
+/// `plan.md` when the path is absent or empty: that is the filename agents used before plan files
+/// were allocated per episode, so a legacy review keeps its familiar label.
+pub fn plan_file_name(path: Option<&str>) -> String {
+    path.and_then(|p| p.rsplit(['/', '\\']).next())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("plan.md")
+        .to_owned()
+}
+
+/// First markdown H1, with a leading `Plan:` stripped. Mirrors the shell's `plan_heading`.
+pub fn plan_heading(body: &str) -> Option<String> {
+    body.lines()
+        .map(str::trim_start)
+        .find(|line| line.starts_with("# ") && line.len() > 2)
+        .map(|line| {
+            let title = line["# ".len()..].trim();
+            title
+                .strip_prefix("Plan:")
+                .map(str::trim)
+                .filter(|rest| !rest.is_empty())
+                .unwrap_or(title)
+                .to_owned()
+        })
+        .filter(|title| !title.is_empty())
+}
+
+/// Overlay title: the plan H1 when the body has one, otherwise the episode filename.
+pub fn plan_overlay_title(file_name: &str, body: Option<&str>) -> String {
+    body.and_then(plan_heading)
+        .unwrap_or_else(|| file_name.to_owned())
+}
+
+fn format_file_backed_plan_comment(comment: &PlanComment, plan_file_name: &str) -> String {
     let range = if comment.line_range.len() == 1 {
-        format!("@plan.md:{}", comment.line_range.start)
+        format!("@{plan_file_name}:{}", comment.line_range.start)
     } else {
         format!(
-            "@plan.md:{}-{}",
+            "@{plan_file_name}:{}-{}",
             comment.line_range.start,
             comment.line_range.end - 1
         )
@@ -326,6 +368,7 @@ mod tests {
             session_id: "test-session".into(),
             tool_call_id: "call_123".into(),
             plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+            plan_file_path: None,
         };
         let state = PlanApprovalViewState::new(
             request,
@@ -489,6 +532,7 @@ mod tests {
             session_id: "test-session".into(),
             tool_call_id: "call_456".into(),
             plan_content: None,
+            plan_file_path: None,
         };
         let state = PlanApprovalViewState::new(
             request,
@@ -530,6 +574,7 @@ mod tests {
             session_id: "test-session".into(),
             tool_call_id: "call_789".into(),
             plan_content: Some("   \n\n  ".into()),
+            plan_file_path: None,
         };
         let state = PlanApprovalViewState::new(
             request,
@@ -601,5 +646,55 @@ mod tests {
             state.format_feedback(Some("freeform")),
             "@plan.md:1-2\nkeep file ref\n\nfreeform"
         );
+    }
+
+    /// A file-backed review anchors its comments to the episode's file, so the `@<name>:<line>`
+    /// reference points at the file the model is allowed to edit.
+    #[test]
+    fn file_backed_plan_feedback_uses_the_episode_filename() {
+        let (mut state, _rx) = make_test_state();
+        state.source = PlanReviewSource::FileBacked;
+        state.plan_file_name = "2026-09-19T14-30-22Z.md".to_string();
+        state.plan_content = Some("alpha\nbravo".into());
+        state.comments.push(PlanComment {
+            id: 0,
+            line_range: 1..3,
+            text: "keep file ref".into(),
+        });
+
+        assert_eq!(
+            state.format_feedback(None),
+            "@2026-09-19T14-30-22Z.md:1-2\nkeep file ref"
+        );
+    }
+
+    #[test]
+    fn plan_file_name_falls_back_to_the_legacy_name() {
+        assert_eq!(plan_file_name(None), "plan.md");
+        assert_eq!(plan_file_name(Some("")), "plan.md");
+        assert_eq!(plan_file_name(Some("/trailing/slash/")), "plan.md");
+        assert_eq!(
+            plan_file_name(Some("/sessions/abc/plans/2026-09-19T14-30-22Z.md")),
+            "2026-09-19T14-30-22Z.md"
+        );
+        assert_eq!(
+            plan_file_name(Some("C:\\sessions\\abc\\plans\\2026-09-19T14-30-22Z.md")),
+            "2026-09-19T14-30-22Z.md"
+        );
+    }
+
+    /// The review stores the episode filename for `@<name>:<line>` anchors. The overlay title
+    /// prefers the plan H1.
+    #[test]
+    fn plan_approval_view_takes_the_episode_filename_from_the_request() {
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = ExitPlanModeExtRequest {
+            session_id: "test-session".into(),
+            tool_call_id: "call_789".into(),
+            plan_content: Some("# Plan".into()),
+            plan_file_path: Some("/sessions/abc/plans/2026-09-19T14-30-22Z.md".into()),
+        };
+        let state = PlanApprovalViewState::new(request, StashedPrompt::default(), tx);
+        assert_eq!(state.plan_file_name, "2026-09-19T14-30-22Z.md");
     }
 }

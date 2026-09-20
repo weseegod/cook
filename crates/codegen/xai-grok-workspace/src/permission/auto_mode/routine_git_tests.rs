@@ -88,7 +88,35 @@ fn branch_switching_and_local_workflow_are_routine() {
         "git worktree list",
         "git status",
         "git diff HEAD",
+        // `/commit-and-push` and the conflict-resolution path it can hand back to the model
+        "git push",
+        "git push -u origin HEAD",
+        "git push origin HEAD",
+        "git push --quiet",
+        "git rebase --continue",
     ] {
         assert!(git_words_are_routine(&words(cmd)), "{cmd}");
+    }
+}
+
+#[test]
+fn pushes_to_other_refs_and_non_continue_rebase_stay_non_routine() {
+    for cmd in [
+        "git push origin main",
+        "git push origin",
+        "git push -f origin HEAD",
+        "git push --force",
+        "git push --force-with-lease",
+        "git push --delete origin feature",
+        "git push origin HEAD:main",
+        "git push upstream HEAD",
+        "git push --mirror",
+        "git push --no-verify origin HEAD",
+        "git rebase --abort",
+        "git rebase main",
+        "git rebase",
+        "git rebase -i HEAD~3",
+    ] {
+        assert!(!git_words_are_routine(&words(cmd)), "{cmd}");
     }
 }

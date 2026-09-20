@@ -1,4 +1,5 @@
-import type { McpServerView, McpToolSummary, PluginView } from "../extensions";
+import type { McpToolSummary, PluginView } from "../extensions";
+import { mergeMcpCatalog, mcpServersFromParams } from "../mcp-servers";
 import type { HookView, MemoryFileView } from "../settings-ext";
 import { activityPayload } from "../activity";
 import { notifyTurnComplete, shouldNotifyTurnComplete, turnCompleteNotifyCopy } from "../os-notify";
@@ -78,70 +79,6 @@ function hookEventSummary(params: Record<string, unknown>): { event: string; sum
   return { event, summary: parts.join(" · ") };
 }
 
-/** Normalize `servers` / `mcpServers` notif payloads into catalog rows. */
-export function mcpServersFromParams(params: Record<string, unknown>): McpServerView[] | null {
-  const raw = params.servers ?? params.mcpServers;
-  if (!Array.isArray(raw)) return null;
-  return raw.filter(isRecord).map((server) => {
-    const session = isRecord(server.session) ? server.session : undefined;
-    const toolsRaw = session && Array.isArray(session.tools)
-      ? session.tools
-      : Array.isArray(server.tools)
-        ? server.tools
-        : [];
-    const tools: McpToolSummary[] = toolsRaw.filter(isRecord).map((tool) => ({
-      name: String(tool.name ?? "tool"),
-      enabled: tool.enabled !== false,
-      displayName: typeof tool.displayName === "string" ? tool.displayName : undefined,
-      description: typeof tool.description === "string" ? tool.description : undefined,
-    }));
-    const setup = isRecord(server.setup)
-      ? {
-          fields: Array.isArray(server.setup.fields)
-            ? server.setup.fields.filter(isRecord).map((field) => ({
-                id: String(field.id ?? ""),
-                label: String(field.label ?? field.id ?? ""),
-                type: typeof field.type === "string" ? field.type : undefined,
-                required: field.required === true,
-                default: typeof field.default === "string" ? field.default : undefined,
-                options: Array.isArray(field.options)
-                  ? field.options.filter(isRecord).map((option) => ({
-                      label: String(option.label ?? option.value ?? ""),
-                      value: String(option.value ?? ""),
-                    }))
-                  : undefined,
-              }))
-            : [],
-        }
-      : undefined;
-    const setupValues = isRecord(server.setupValues)
-      ? Object.fromEntries(Object.entries(server.setupValues).map(([key, value]) => [key, String(value)]))
-      : undefined;
-    return {
-      name: String(server.name ?? "server"),
-      source: typeof server.source === "string" ? server.source : undefined,
-      type: typeof server.type === "string" ? server.type : undefined,
-      url: typeof server.url === "string" ? server.url : undefined,
-      command: typeof server.command === "string" ? server.command : undefined,
-      args: Array.isArray(server.args) ? server.args.map(String) : undefined,
-      setup,
-      setupValues,
-      session: {
-        enabled: session?.enabled !== false && server.enabled !== false,
-        status: typeof session?.status === "string"
-          ? session.status
-          : typeof server.status === "string"
-            ? server.status
-            : undefined,
-        tools,
-        authRequired: session?.authRequired === true,
-        setupRequired: session?.setupRequired === true,
-        blockedReason: typeof session?.blockedReason === "string" ? session.blockedReason : undefined,
-      },
-    } satisfies McpServerView;
-  });
-}
-
 function outcomeFromPromptComplete(params: Record<string, unknown>): TurnOutcome {
   const stop = String(params.stopReason ?? params.stop_reason ?? params.agentResult ?? "");
   if (/cancel/i.test(stop)) return { kind: "cancelled" };
@@ -160,7 +97,10 @@ function outcomeFromPromptComplete(params: Record<string, unknown>): TurnOutcome
 
 function patchServerStatus(serverName: string, status: string): void {
   const { mcpServers, setMcpServers } = useCatalogStore.getState();
-  if (mcpServers.length === 0) return;
+  if (mcpServers.length === 0) {
+    void refreshConnectorCatalog();
+    return;
+  }
   setMcpServers(
     mcpServers.map((server) =>
       server.name === serverName
@@ -172,7 +112,11 @@ function patchServerStatus(serverName: string, status: string): void {
 
 function patchServerTools(serverName: string, tools: McpToolSummary[]): void {
   const { mcpServers, setMcpServers } = useCatalogStore.getState();
-  if (mcpServers.length === 0 || !serverName) return;
+  if (mcpServers.length === 0) {
+    void refreshConnectorCatalog();
+    return;
+  }
+  if (!serverName) return;
   setMcpServers(
     mcpServers.map((server) =>
       server.name === serverName
@@ -180,6 +124,12 @@ function patchServerTools(serverName: string, tools: McpToolSummary[]): void {
         : server,
     ),
   );
+}
+
+/** A `tools_changed` before the list query seeded the catalog must still reach the screen. */
+async function refreshConnectorCatalog(): Promise<void> {
+  const { queryClient } = await import("../../state/query-client");
+  void queryClient.invalidateQueries({ queryKey: ["connectors"] });
 }
 
 function taskNoticeName(params: Record<string, unknown>): string {
@@ -237,7 +187,10 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/mcp/servers_updated",
     handle: (ctx) => {
       const servers = mcpServersFromParams(ctx.params);
-      if (servers) useCatalogStore.getState().setMcpServers(servers);
+      if (servers) {
+        const store = useCatalogStore.getState();
+        store.setMcpServers(mergeMcpCatalog(store.mcpServers, servers));
+      }
     },
   },
   {

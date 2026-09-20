@@ -1,0 +1,132 @@
+import { expect, test, type Page } from "@playwright/test";
+import { CONNECTED_SEED } from "./seed";
+import { api, capture, openWorkspace } from "./support/harness";
+
+/**
+ * Settings → Data Controls: "Delete all conversations", behind a confirmation, erasing every
+ * conversation and the plan files they produced.
+ *
+ * The wipe runs in the agent (`x.ai/sessions/delete_all`); this suite drives the shipped renderer
+ * over the recording mock transport and reads back both the request and the agent-side state, so a
+ * screen that merely looks erased cannot pass.
+ */
+
+const PLAN_DIR = "/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/mock-session/plans";
+const NEWEST = "2026-09-19T14-30-22Z.md";
+
+const DATA_SEED = {
+  ...CONNECTED_SEED,
+  sessions: [
+    { id: "session-login", title: "Fix login bug", cwd: "/tmp/cook-demo", updatedAt: "2026-09-17T10:00:00Z" },
+    { id: "session-providers", title: "Provider settings", cwd: "/tmp/cook-demo", updatedAt: "2026-09-15T10:00:00Z" },
+    { id: "session-plans", title: "Plan the plan list", cwd: "/tmp/cook-demo", updatedAt: "2026-09-14T10:00:00Z" },
+  ],
+  planFiles: [
+    { name: NEWEST, path: `${PLAN_DIR}/${NEWEST}`, relativePath: `plans/${NEWEST}`, sizeBytes: 1368, modifiedMs: Date.parse("2026-09-19T14:30:22Z"), active: true, deletable: false, content: "# Current plan" },
+    { name: "2026-09-18T09-15-00Z.md", path: `${PLAN_DIR}/2026-09-18T09-15-00Z.md`, relativePath: "plans/2026-09-18T09-15-00Z.md", sizeBytes: 804, modifiedMs: Date.parse("2026-09-18T09:15:00Z"), active: false, deletable: true, content: "# First plan" },
+  ],
+};
+
+/** Settings → Data Controls. */
+async function openDataControls(page: Page) {
+  await page.getByLabel("Settings").click();
+  await page.getByRole("tab", { name: "Data Controls" }).click();
+  await expect(page.getByTestId("delete-all-conversations")).toBeVisible();
+}
+
+test.describe("data controls", () => {
+  test("deletes every conversation and plan file once confirmed", async ({ page }) => {
+    await openWorkspace(page, DATA_SEED);
+    await expect(page.getByTestId("session-row-session-plans")).toBeVisible();
+    // A conversation with plans behind it: the header chip lists them before the wipe.
+    await page.getByTestId("composer-input").fill("show me the plans");
+    await page.getByTestId("composer-input").press("Enter");
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await openDataControls(page);
+    await page.getByTestId("delete-all-conversations").click();
+    await capture(page, "data-controls-confirm");
+    await page.getByTestId("delete-all-confirm").click();
+
+    await expect(page.getByTestId("notice-banner")).toContainText("Deleted 3 conversations and 2 plan files");
+    const stored = (await api(page).state()) as {
+      sessions: Array<{ id: string }>;
+      planFiles: Array<{ name: string }>;
+    };
+    // The agent's own state is what proves the erase: no conversations, no plan files.
+    expect(stored.sessions).toEqual([]);
+    expect(stored.planFiles).toEqual([]);
+    const request = (await api(page).requests())
+      .filter((entry) => entry.method === "x.ai/sessions/delete_all")
+      .at(-1);
+    expect(request?.params).toEqual({});
+
+    // Nothing survives on screen either: no rows, no plans, and the open conversation is gone.
+    await page.keyboard.press("Escape");
+    for (const id of ["session-login", "session-providers", "session-plans"]) {
+      await expect(page.getByTestId(`session-row-${id}`)).toHaveCount(0);
+    }
+    await expect(page.getByTestId("composer-input")).toBeVisible();
+    await page.getByTestId("plan-chip").click();
+    await expect(page.getByTestId("plan-menu-empty")).toContainText("No plans in this conversation yet");
+  });
+
+  test("keeps the panel inside a narrow window", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkspace(page, DATA_SEED);
+    await openDataControls(page);
+
+    // The shell itself overflows this viewport; only the overflow this panel adds is a regression.
+    await page.getByRole("tab", { name: "General" }).click();
+    const baseline = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    await page.getByRole("tab", { name: "Data Controls" }).click();
+
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(baseline + 1);
+    await expect(page.getByTestId("delete-all-conversations")).toBeVisible();
+    await capture(page, "data-controls-narrow");
+  });
+
+  test("keeps the destructive action legible in both themes", async ({ page }) => {
+    await openWorkspace(page, DATA_SEED);
+    await openDataControls(page);
+
+    /** WCAG contrast of the label against the surface it is painted on, translucency included. */
+    const contrast = () =>
+      page.getByTestId("delete-all-conversations").evaluate((node) => {
+        const lines = (value: string) => {
+          const numbers = value.match(/[\d.]+/g)!.map(Number);
+          const scale = value.startsWith("color(srgb") ? 1 : 255;
+          return [numbers[0] / scale, numbers[1] / scale, numbers[2] / scale, numbers[3] ?? 1];
+        };
+        const [foreground, background, surface] = [
+          lines(getComputedStyle(node).color),
+          lines(getComputedStyle(node).backgroundColor),
+          lines(getComputedStyle(node.closest(".settings-panel")!).backgroundColor),
+        ];
+        // The button's own tint is translucent, so composite it over the panel it sits on.
+        const painted = background
+          .slice(0, 3)
+          .map((channel, index) => channel * background[3] + surface[index] * (1 - background[3]));
+        const luminance = (channels: number[]) => {
+          const [r, g, b] = channels.map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4));
+          return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        };
+        const [a, b] = [luminance(foreground.slice(0, 3)), luminance(painted)].sort((x, y) => y - x);
+        return (a + 0.05) / (b + 0.05);
+      });
+
+    // The pale fixed colour this button used to carry scored 1.2:1 on the light tint.
+    expect(await contrast()).toBeGreaterThanOrEqual(4.5);
+
+    // Settings stays open; the theme lives on its General tab.
+    await page.getByRole("tab", { name: "General" }).click();
+    await page.getByTestId("theme-option-light").click();
+    await page.getByRole("tab", { name: "Data Controls" }).click();
+
+    expect(await contrast()).toBeGreaterThanOrEqual(4.5);
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+    await capture(page, "data-controls-light");
+  });
+});

@@ -560,7 +560,7 @@ async fn pre_tool_use_ask_on_a_plan_file_edit_forces_a_prompt() {
 
             let result = prepare_call(
                 &actor,
-                search_replace_call_at("call_plan_file_ask", "/tmp/test-session/plan.md"),
+                search_replace_call_at("call_plan_file_ask", &plan_file_path(&actor)),
             )
             .await;
             assert!(

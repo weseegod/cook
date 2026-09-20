@@ -152,6 +152,143 @@ After assembly, mention the final output path.
 - **Real people:** reference-first — drive the video from a verified reference image; never animate a named person without one.
 - Don't loop the same clip unless asked.";
 
+/// Advertised name of the `/commit` command.
+pub const COMMIT_COMMAND_NAME: &str = "commit";
+
+/// Advertised name of the `/commit-and-push` command.
+pub const COMMIT_AND_PUSH_COMMAND_NAME: &str = "commit-and-push";
+
+/// Usage hint for a bare `/commit --help`-style mistake.
+pub fn commit_usage_message() -> &'static str {
+    "Usage: /commit [message hint]\n\
+     Stage the current changes and commit them with a generated message."
+}
+
+/// Usage hint for a bare `/commit-and-push --help`-style mistake.
+pub fn commit_and_push_usage_message() -> &'static str {
+    "Usage: /commit-and-push [message hint]\n\
+     Commit the current changes, integrate the upstream branch, and push."
+}
+
+/// Integrate-then-push section appended when `push` is set.
+const COMMIT_PUSH_SECTION: &str = "\n## Then push\n\
+     After the commit, integrate the upstream branch and push:\n\
+     1. `git fetch` the tracked upstream of the current branch (`@{u}`); when the branch has no \
+        upstream, fetch `origin <branch>`.\n\
+     2. `git pull` with no extra flags so the user's `pull.rebase` / `pull.ff` setting is honored. \
+        Never add `--force` or `--force-with-lease`.\n\
+     3. A clean pull: push with `git push`, or `git push -u origin <branch>` when the branch has no \
+        upstream yet.\n\
+     4. A pull that left conflicts: do NOT abort. List them with \
+        `git diff --name-only --diff-filter=U`, read only those files, and resolve each so both this \
+        branch's intent and the incoming changes hold. Never blindly take \"ours\" or \"theirs\". Stage \
+        the resolved paths, then continue the sequence: `git commit --no-edit` for a merge, or \
+        `GIT_EDITOR=true git rebase --continue` for a rebase. Repeat until it finishes, then push.\n\
+     5. A push that fails on auth or network: report the error verbatim and leave the commit in \
+        place. If the remote moved again while resolving conflicts, retry the push once, then stop \
+        and report.\n";
+
+/// Parsed `/commit`-family arguments, shared by every front-end so the flag grammar cannot drift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommitArgs<'a> {
+    /// The user's message steer, with any trailing `--push` removed.
+    pub hint: &'a str,
+    /// Whether to integrate and push (`/commit-and-push`, or a trailing `--push`).
+    pub push: bool,
+    /// `--help` / `-h`: show usage instead of running.
+    pub help: bool,
+}
+
+/// Parse `/commit` arguments. `force_push` is the command's own meaning
+/// (`/commit-and-push` sets it); a trailing standalone `--push` token sets it too.
+/// A hint that merely mentions `--push` mid-sentence is left untouched.
+pub fn parse_commit_args(args: &str, force_push: bool) -> CommitArgs<'_> {
+    let trimmed = args.trim();
+    if matches!(trimmed, "--help" | "-h") {
+        return CommitArgs {
+            hint: "",
+            push: force_push,
+            help: true,
+        };
+    }
+    let (hint, flag_push) = split_trailing_push_flag(trimmed);
+    CommitArgs {
+        hint,
+        push: force_push || flag_push,
+        help: false,
+    }
+}
+
+/// Split a trailing standalone `--push` token off `args`.
+fn split_trailing_push_flag(args: &str) -> (&str, bool) {
+    let Some((raw_head, tail)) = args.rsplit_once("--push") else {
+        return (args, false);
+    };
+    if !tail.trim().is_empty() {
+        return (args, false);
+    }
+    let head = raw_head.trim_end();
+    if head.is_empty() || raw_head.ends_with(char::is_whitespace) {
+        return (head, true);
+    }
+    (args, false)
+}
+
+/// Build the model instruction that `/commit` (and `/commit-and-push`) expand into.
+///
+/// `hint` is the user's optional steer for the message; `push` appends the integrate-and-push
+/// section. The wording keeps the turn cheap: the conversation already describes the work, so the
+/// instruction asks for compact git probes and forbids the extra model calls a summary would cost.
+pub fn commit_instruction(hint: &str, push: bool) -> String {
+    let hint = hint.trim();
+    let hint_line = if hint.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nThe user supplied this steer for the message: \"{hint}\". When it already reads as a \
+             complete subject line, use it (fix only capitalization and punctuation); otherwise \
+             treat it as emphasis and still write the message from the actual changes.\n"
+        )
+    };
+    let push_section = if push { COMMIT_PUSH_SECTION } else { "" };
+    format!(
+        "# /commit -- commit the current changes\n\n\
+         Commit the work in this workspace now. Everything below is one turn: do not end it until \
+         the commit exists or you have reported why it cannot.{hint_line}\n\
+         ## Message\n\
+         - Write it from the conversation: what this session changed and why. Do not re-read files \
+           you just wrote.\n\
+         - Match the style of recent history (`git log -5 --oneline`): conventional-commit prefixes \
+           only when the log already uses them.\n\
+         - Subject: imperative, at most 72 characters, no trailing period. Add a body only when the \
+           reason is not obvious from the subject.\n\
+         - No attribution trailers (\"Made-with\", co-author) unless this repository already uses \
+           them.\n\n\
+         ## How to commit\n\
+         1. One compact probe, color off: `git -c color.ui=false -c color.diff=false status \
+            --porcelain`, `git -c color.ui=false -c color.diff=false diff --stat HEAD`, and \
+            `git log -5 --oneline`. Do NOT dump a full patch: the conversation already covers most \
+            of it. Read a file's full diff only when the conversation does not explain that file.\n\
+         2. Nothing modified or staged: say so and stop.\n\
+         3. A merge, rebase, cherry-pick, or bisect already in progress: report it and stop; do not \
+            start a commit on top of it.\n\
+         4. Stage the changes that belong in this commit. Keep secrets (`.env`), dependencies \
+            (`node_modules/`), and build output out of it.\n\
+         5. Write the message to a file with the write tool, then run `git commit -F <file>`. Do not \
+            pass a multi-line `-m`, and do not use a shell heredoc: `<<` is not portable and quoting \
+            breaks the message. Do not add `--no-verify`, `--amend`, or `--allow-empty` unless the \
+            user asked.\n\
+         6. Report the short hash, the subject, and the branch state (`git status -sb`).\n\
+         {push_section}\n\
+         ## Rules\n\
+         - Never force-push, never rewrite published history, and never drop a commit to make a \
+           command succeed.\n\
+         - Run git commands one at a time; do not start a second mutating command while one runs.\n\
+         - No subagents and no extra summary call: this command must not cost a model round-trip of \
+           its own.\n"
+    )
+}
+
 pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 
 pub const WORKFLOW_TOOL_NAME: &str = "workflow";
@@ -207,6 +344,90 @@ mod tests {
         let text = imagine_video_instruction("a cat playing piano");
         assert!(text.contains("a cat playing piano"));
         assert!(text.contains("image_to_video"));
+    }
+
+    #[test]
+    fn commit_instruction_covers_both_variants() {
+        let plain = commit_instruction("", false);
+        assert!(!plain.contains("## Then push"));
+        assert!(plain.contains("git commit -F <file>"));
+        assert!(plain.contains("Never force-push"));
+        assert!(plain.contains("no extra summary call"));
+        assert!(plain.contains("Do NOT dump a full patch"));
+
+        let push = commit_instruction("ship the widget", true);
+        assert!(push.contains("## Then push"));
+        assert!(push.contains("git diff --name-only --diff-filter=U"));
+        assert!(push.contains("GIT_EDITOR=true git rebase --continue"));
+        assert!(push.contains("ship the widget"));
+        assert!(!plain.contains("ship the widget"));
+    }
+
+    #[test]
+    fn commit_usage_messages_name_their_command() {
+        assert!(commit_usage_message().contains("Usage: /commit "));
+        assert!(commit_and_push_usage_message().contains("Usage: /commit-and-push "));
+    }
+
+    #[test]
+    fn parse_commit_args_handles_push_flag_and_help() {
+        assert_eq!(
+            parse_commit_args("", false),
+            CommitArgs {
+                hint: "",
+                push: false,
+                help: false
+            }
+        );
+        assert_eq!(
+            parse_commit_args("fix the parser", false),
+            CommitArgs {
+                hint: "fix the parser",
+                push: false,
+                help: false
+            }
+        );
+        assert_eq!(
+            parse_commit_args("fix the parser --push", false),
+            CommitArgs {
+                hint: "fix the parser",
+                push: true,
+                help: false
+            }
+        );
+        assert_eq!(
+            parse_commit_args("--push", false),
+            CommitArgs {
+                hint: "",
+                push: true,
+                help: false
+            }
+        );
+        // The command's own meaning wins even with no flag.
+        assert_eq!(parse_commit_args("fix it", true).push, true);
+        assert_eq!(parse_commit_args("--help", false).help, true);
+        assert_eq!(parse_commit_args("-h", true).help, true);
+    }
+
+    #[test]
+    fn parse_commit_args_leaves_embedded_push_text_alone() {
+        // A hint that mentions --push mid-sentence is not a flag.
+        assert_eq!(
+            parse_commit_args("document --push behavior", false),
+            CommitArgs {
+                hint: "document --push behavior",
+                push: false,
+                help: false
+            }
+        );
+        assert_eq!(
+            parse_commit_args("explain --push", false),
+            CommitArgs {
+                hint: "explain",
+                push: true,
+                help: false
+            }
+        );
     }
 
     #[test]

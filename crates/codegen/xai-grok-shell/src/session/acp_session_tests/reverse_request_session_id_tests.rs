@@ -31,10 +31,15 @@ fn exit_plan_mode_request_carries_session_id() {
         session_id: "sess-xyz".to_string(),
         tool_call_id: "call-2".to_string(),
         plan_content: Some("plan".to_string()),
+        plan_file_path: Some("/sessions/sess-xyz/plans/2026-09-19T14-30-22Z.md".to_string()),
     };
     assert!(!req.session_id.is_empty());
     let json = serde_json::to_value(&req).unwrap();
     assert_eq!(json.get("sessionId"), Some(&serde_json::json!("sess-xyz")));
+    assert_eq!(
+        json.get("planFilePath"),
+        Some(&serde_json::json!("/sessions/sess-xyz/plans/2026-09-19T14-30-22Z.md"))
+    );
     assert!(
         json.get("sessionId")
             .and_then(|v| v.as_str())

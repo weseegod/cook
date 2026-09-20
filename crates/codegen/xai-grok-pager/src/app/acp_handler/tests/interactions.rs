@@ -705,6 +705,7 @@
             session_id: "sess-A".into(),
             tool_call_id: "tc-persist".into(),
             plan_content: Some("# Plan\nDo stuff".into()),
+            plan_file_path: None,
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         handle(
@@ -751,6 +752,7 @@
             session_id: "sess-A".into(),
             tool_call_id: "tc-reopen".into(),
             plan_content: Some("# Plan\nStep 1".into()),
+            plan_file_path: None,
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         handle(
@@ -790,6 +792,7 @@
             session_id: "sess-A".into(),
             tool_call_id: "tc-prompt".into(),
             plan_content: Some("# Plan\nDo things".into()),
+            plan_file_path: None,
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         handle(
@@ -929,6 +932,7 @@
             session_id: "sess-B".into(),
             tool_call_id: "tc-draft".into(),
             plan_content: Some("# Plan\n".into()),
+            plan_file_path: None,
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         handle(
@@ -978,6 +982,7 @@
             session_id: "sess-perm".into(),
             tool_call_id: "tc-perm".into(),
             plan_content: Some("# Plan\n".into()),
+            plan_file_path: None,
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         handle(
@@ -1032,6 +1037,7 @@
             session_id: "sess-img".into(),
             tool_call_id: "tc-img".into(),
             plan_content: Some("# Plan\n".into()),
+            plan_file_path: None,
         };
         let raw = serde_json::value::to_raw_value(&ext_req).unwrap();
         handle(

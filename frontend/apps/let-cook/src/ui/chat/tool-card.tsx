@@ -9,7 +9,7 @@ import {
   Search,
   Terminal,
 } from "lucide-react";
-import { memo, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { openPath } from "../../acp/host";
 import { normalizeError } from "../../acp/errors";
 import { useArtifactStore } from "../../state/artifacts";
@@ -18,23 +18,76 @@ import { Markdown } from "./markdown";
 import { copyText, displayPath } from "./clipboard";
 import { formatThinkingDuration } from "./format-duration";
 import { isLiveTool, isTerminalToolStatus } from "./transcript-projection";
+import { thinkingPreview, type ThinkingPreview } from "./thinking-preview";
+import { toolLineCounts } from "./edit-lines";
 import { verbGroupLabel } from "./verb-group";
 
 /** Tall edit diffs open in the Preview dock instead of drowning the transcript. */
 const TALL_DIFF_LINES = 40;
 
+const EDIT_KINDS = ["edit", "write", "write_file"];
+
+/** Tool kinds that create or overwrite a whole file, painted as `Creating {path}` rows. */
+export const WRITE_TOOL_KINDS = ["write", "write_file"];
+
+export function isWriteTool(kind: string | null | undefined): boolean {
+  return WRITE_TOOL_KINDS.includes((kind ?? "").toLowerCase());
+}
+
+/**
+ * Whether a write row keeps its body open. The chat shows what the agent wrote rather than the
+ * TUI's one-liner (`edit.rs::header_line`, which folds an Edit row to `+N/-M`), but only while the
+ * body fits the transcript frame it would be read in: a taller body folds back to the one-liner,
+ * where opening it is the user's call.
+ */
+export function writeBodyFitsFrame(bodyHeight: number, frameHeight: number): boolean {
+  return bodyHeight > 0 && frameHeight > 0 && bodyHeight <= frameHeight;
+}
+
+/** The collapsed Edit suffix (`edit.rs::header_line`): a diffstat, else ` ({n} edits)`. */
+export type EditSuffix =
+  | { kind: "diff"; added: number; removed: number }
+  | { kind: "edits"; count: number };
+
 /** Header text for a collapsed tool row (`scrollback/blocks/tool/*`). */
-export function toolHeader(tool: ToolBlock): { prefix?: string; text: string } {
-  if (tool.description) return { text: tool.description };
+export function toolHeader(tool: ToolBlock): { prefix?: string; text: string; suffix?: EditSuffix } {
+  const suffix = editHeaderSuffix(tool);
+  const head = (text: string): { prefix?: string; text: string; suffix?: EditSuffix } => (suffix ? { text, suffix } : { text });
+  if (tool.description) return head(tool.description);
   if (isExecute(tool) && tool.command) return { prefix: "$ ", text: tool.command };
   const path = tool.paths[0] ? displayPath(tool.paths[0]) : null;
   const kind = (tool.kind ?? "").toLowerCase();
   if (path && isGenericTitle(tool.title, kind)) {
-    if (["edit", "write", "write_file"].includes(kind)) return { text: `${kind === "write" || kind === "write_file" ? "Creating" : "Edit"} ${path}` };
+    if (EDIT_KINDS.includes(kind)) return head(`${kind === "write" || kind === "write_file" ? "Creating" : "Edit"} ${path}`);
     if (["list", "list_dir", "list_directory"].includes(kind)) return { text: `List ${path}` };
     if (["read", "file"].includes(kind)) return { text: `Read ${path}` };
   }
-  return { text: tool.title };
+  return head(tool.title);
+}
+
+/**
+ * Counts for the collapsed Edit one-liner. A call that touched several files reports one diff per
+ * file, so counts describing only the first would lie and the row falls back to ` ({n} edits)`.
+ */
+export function editHeaderSuffix(tool: ToolBlock): EditSuffix | null {
+  if (!EDIT_KINDS.includes((tool.kind ?? "").toLowerCase())) return null;
+  const stats = toolLineCounts(tool.content);
+  if (tool.paths.length <= 1 && (stats.added > 0 || stats.removed > 0)) {
+    return { kind: "diff", added: stats.added, removed: stats.removed };
+  }
+  if (stats.hunks > 1) return { kind: "edits", count: stats.hunks };
+  return null;
+}
+
+function EditSuffixSpans({ suffix }: { suffix: EditSuffix }) {
+  if (suffix.kind === "edits") return <span className="row-suffix row-edits">({suffix.count} edits)</span>;
+  return (
+    <span className="row-suffix row-diffstat">
+      <span className="row-diff-add">+{suffix.added}</span>
+      <span className="row-diff-sep">/</span>
+      <span className="row-diff-del">-{suffix.removed}</span>
+    </span>
+  );
 }
 
 function isGenericTitle(title: string, kind: string): boolean {
@@ -93,12 +146,66 @@ export const VerbGroupRow = memo(function VerbGroupRow({ tools }: { tools: ToolB
   && previous.tools.every((tool, index) => toolVisualEqual(tool, next.tools[index]))
 ));
 
-/** One tool block, collapsed by default; no elapsed in the row and no rerun control. */
+/**
+ * One tool block; no elapsed in the row and no rerun control. Edit rows stay folded (the diffstat
+ * belongs to the one-liner: an expanded row shows the hunks themselves), while a write row opens
+ * itself so the file the agent wrote is readable in the chat.
+ */
 export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
   const header = toolHeader(tool);
   const running = isLiveTool(tool);
+  const write = isWriteTool(tool.kind);
+  const [open, setOpen] = useState(false);
+  // The body is only worth opening while it fits the frame; `full` drops the body's inner scroll cap
+  // for the rows that earned that, so an opened write reads as one piece.
+  const [full, setFull] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const detailsRef = useRef<HTMLDetailsElement>(null);
+  const openRef = useRef(false);
+  const decidedContent = useRef<readonly unknown[] | null>(null);
+
+  const applyOpen = useCallback((value: boolean) => {
+    openRef.current = value;
+    setOpen(value);
+  }, []);
+
+  // A write decides once per content revision, mounting the body so the frame fit below can measure
+  // it. Content the transcript defers to the Preview dock, and a call that has not reported anything
+  // yet, keep the one-liner.
+  useLayoutEffect(() => {
+    if (!write || pinned || decidedContent.current === tool.content) return;
+    decidedContent.current = tool.content;
+    const readable = tool.content.length > 0 && !tallDiffText(toolDetailText(tool));
+    setFull(readable);
+    applyOpen(readable);
+  }, [applyOpen, pinned, tool, write]);
+
+  // An oversized body folds back to the one-liner; the user can still open it by hand.
+  useLayoutEffect(() => {
+    if (!write || pinned || !open) return;
+    const details = detailsRef.current;
+    const body = details?.querySelector<HTMLElement>(".tool-detail") ?? null;
+    const frame = details?.closest<HTMLElement>(".transcript") ?? null;
+    if (writeBodyFitsFrame(body?.offsetHeight ?? 0, frame?.clientHeight ?? 0)) return;
+    setFull(false);
+    applyOpen(false);
+  }, [applyOpen, open, pinned, tool, write]);
+
   return (
-    <details className={`tool-row tool-${running ? "running" : normalizedStatus(tool.status)}`} data-testid={`tool-row-${tool.id}`}>
+    <details
+      ref={detailsRef}
+      className={`tool-row tool-${running ? "running" : normalizedStatus(tool.status)}`}
+      data-testid={`tool-row-${tool.id}`}
+      open={open}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        // Our own collapses echo back as toggles; only a change we did not ask for is the user's.
+        if (next === openRef.current) return;
+        openRef.current = next;
+        setPinned(true);
+        setOpen(next);
+      }}
+    >
       <summary>
         <span className="row-chevron"><ChevronRight size={13} /></span>
         <span className={`row-bullet${running ? " animated" : ""}`} aria-hidden="true" />
@@ -107,25 +214,42 @@ export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
           {header.prefix && <span className="row-prefix">{header.prefix}</span>}
           {header.text}
         </strong>
+        {!open && header.suffix && <EditSuffixSpans suffix={header.suffix} />}
       </summary>
-      <ToolDetail tool={tool} />
+      <ToolDetail tool={tool} full={full} />
     </details>
   );
 }, toolPropsEqual);
 
-/** Thinking row: `Thinking…` while running, `Thought for 1.2s` once frozen. */
+/**
+ * Thinking row: `Thinking…` plus the last few lines while running, `Thought for 1.2s` with no body
+ * once frozen. A running block defaults to the truncated view and finish collapses it
+ * (`scrollback/blocks/thinking.rs::default_display_mode` / `finished_display_mode`).
+ */
 export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: string; text: string; streaming: boolean; elapsedMs?: number | null } }) {
   const time = block.elapsedMs ?? null;
   const header = block.streaming ? "Thinking…" : time === null ? "Thought" : `Thought for ${formatThinkingDuration(time)}`;
+  const streaming = block.streaming;
+  const [expanded, setExpanded] = useState(false);
+  // Finish collapses even a block the user had opened.
+  useEffect(() => {
+    if (!streaming) setExpanded(false);
+  }, [streaming]);
+  const preview = streaming && !expanded ? thinkingPreview(block.text) : null;
   return (
-    <details className="thinking-row" data-testid={`thinking-${block.id}`} open={block.streaming}>
-      <summary>
+    <div
+      className={`thinking-row thinking-${streaming ? "running" : "done"}`}
+      data-testid={`thinking-${block.id}`}
+      data-expanded={expanded ? "true" : "false"}
+    >
+      <button type="button" className="thinking-summary" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
         <span className="row-chevron"><ChevronRight size={13} /></span>
-        <span className={`row-bullet${block.streaming ? " animated" : ""}`} aria-hidden="true" />
+        <span className={`row-bullet${streaming ? " animated" : ""}`} aria-hidden="true" />
         <strong>{header}</strong>
-      </summary>
-      <div className="thinking-body"><Markdown text={block.text} streaming={block.streaming} /></div>
-    </details>
+      </button>
+      {expanded && <div className="thinking-body"><Markdown text={block.text} streaming={streaming} /></div>}
+      {preview && preview.text !== "" && <ThinkingPreviewBody preview={preview} />}
+    </div>
   );
 }, (previous, next) => (
   previous.block.id === next.block.id
@@ -134,13 +258,38 @@ export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: s
   && previous.block.elapsedMs === next.block.elapsedMs
 ));
 
-export function ToolDetail({ tool }: { tool: ToolBlock }) {
+/**
+ * The running block's truncated tail: a muted `…` when lines were dropped, then the last lines the
+ * TUI keeps. Plain text, not markdown — half-finished markdown would repaint on every chunk.
+ */
+function ThinkingPreviewBody({ preview }: { preview: ThinkingPreview }) {
+  const textRef = useRef<HTMLDivElement>(null);
+  const [clipped, setClipped] = useState(false);
+  // A long unbroken line wraps past the 3-line box; flag that so the `…` cue stays honest.
+  useLayoutEffect(() => {
+    const node = textRef.current;
+    const clip = node?.parentElement;
+    if (node && clip) setClipped(node.offsetHeight - clip.clientHeight > 1);
+  }, [preview.text]);
+  return (
+    <div className="thinking-preview">
+      {(preview.truncated || clipped) && <div className="thinking-ellipsis" aria-hidden="true">…</div>}
+      <div className="thinking-preview-clip">
+        <div className="thinking-preview-text" ref={textRef}>{preview.text}</div>
+      </div>
+    </div>
+  );
+}
+
+export function ToolDetail({ tool, full = false }: { tool: ToolBlock; full?: boolean }) {
   const [copied, setCopied] = useState<string | null>(null);
-  const text = tool.content.map(contentText).filter(Boolean).join("\n");
+  const text = toolDetailText(tool);
   const images = tool.content.flatMap(contentImages);
   const pathText = tool.paths.map(displayPath).join("\n");
-  const tallDiff = looksLikeDiff(text) && text.split("\n").length >= TALL_DIFF_LINES;
-  const isEdit = ["edit", "write", "write_file"].includes((tool.kind ?? "").toLowerCase()) || tallDiff;
+  // A write row that opened itself fits the frame, so it paints the whole body instead of the
+  // Preview hand-off.
+  const tallDiff = !full && tallDiffText(text);
+  const isEdit = EDIT_KINDS.includes((tool.kind ?? "").toLowerCase()) || tallDiff;
 
   async function copy(label: string, value: string) {
     if (!value) return;
@@ -154,7 +303,7 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
   }
 
   return (
-    <div className="tool-detail">
+    <div className={`tool-detail${full ? " tool-detail-full" : ""}`}>
       {(tool.command || pathText || text) && (
         <div className="tool-actions" aria-label="Tool actions">
           {tool.command && <button type="button" onClick={() => void copy("command", tool.command!)}><Copy size={12} /> {copied === "command" ? "Copied" : "Copy command"}</button>}
@@ -202,6 +351,16 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
       {tool.paths.length > 0 && <div className="tool-locations">{tool.paths.map((path) => <code key={path} title={displayPath(path)}>{displayPath(path)}</code>)}</div>}
     </div>
   );
+}
+
+/** The text a tool row would paint, shared by the detail body and the write row's fold decision. */
+function toolDetailText(tool: ToolBlock): string {
+  return tool.content.map(contentText).filter(Boolean).join("\n");
+}
+
+/** Diffs this tall are not painted inline; the row hands them to the Preview dock instead. */
+function tallDiffText(text: string): boolean {
+  return looksLikeDiff(text) && text.split("\n").length >= TALL_DIFF_LINES;
 }
 
 function contentText(value: unknown): string {

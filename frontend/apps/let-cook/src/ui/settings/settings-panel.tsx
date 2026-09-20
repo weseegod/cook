@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Cable, Cpu, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
+import { Cable, Cpu, Database, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { getConfigSecurity } from "../../acp/host";
@@ -7,23 +7,30 @@ import { useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { checkForAppUpdates, UPDATER_CONFIGURED, type UpdateCheckResult } from "../../updater";
 import { ConnectorsPanel } from "./connectors";
+import { DataControlsPanel } from "./data-controls";
 import { MemoryPanel, ProjectInstructionsPanel, SkillsPanel } from "./context-panels";
 import { HooksPanel } from "./hooks-panel";
 import { ProvidersPanel } from "./providers";
 import { useTheme, type ThemePreference } from "../theme/theme";
 import { ConfirmDialog } from "../components/dialog";
 import { ToggleSwitch } from "../components/toggle-switch";
+import {
+  COMPOSER_SHOW_DIFFSTAT_KEY,
+  COMPOSER_SHOW_TPS_KEY,
+  useBooleanPref,
+} from "../preferences";
 
-export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "about";
+export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "data" | "about";
 type Tab = SettingsTab;
 
 const TABS: Array<{ id: Tab; label: string; description: string; icon: React.ReactNode }> = [
   { id: "general", label: "General", description: "Appearance and behavior", icon: <SlidersHorizontal size={16} /> },
   { id: "models", label: "Models", description: "Providers, connections and model catalog", icon: <Cpu size={16} /> },
-  { id: "connectors", label: "Connectors", description: "MCP servers and tools", icon: <Cable size={16} /> },
+  { id: "connectors", label: "Connectors", description: "MCP servers and their tools", icon: <Cable size={16} /> },
   { id: "context", label: "Memory & project", description: "Instructions and memory", icon: <Palette size={16} /> },
-  { id: "skills", label: "Skills", description: "Skills, plugins and workflows", icon: <Sparkles size={16} /> },
+  { id: "skills", label: "Skills", description: "Enable or disable discovered skills", icon: <Sparkles size={16} /> },
   { id: "hooks", label: "Hooks", description: "Lifecycle hooks and event log", icon: <Webhook size={16} /> },
+  { id: "data", label: "Data Controls", description: "Stored data and erasure", icon: <Database size={16} /> },
   { id: "about", label: "About", description: "Let Cook details", icon: <Info size={16} /> },
 ];
 
@@ -35,7 +42,6 @@ const THEME_OPTIONS: Array<{ id: ThemePreference; label: string; icon: React.Rea
 
 export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 0 }: { onClose: () => void; initialTab?: Tab; closeRequest?: number }) {
   const sessionId = useSessionStore((state) => state.sessionId);
-  const planMode = useSessionStore((state) => state.planMode);
   const connection = useSessionStore((state) => state.connection);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
   const connected = connection === "ready";
@@ -44,7 +50,7 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
   const [pendingTab, setPendingTab] = useState<Tab | null>(null);
   const [confirmClose, setConfirmClose] = useState(false);
   const { preference, setPreference } = useTheme();
-  const { id: selectedModel, known: modelKnown, models } = useModelSelection();
+  const { id: selectedModel, models } = useModelSelection();
   const configSecurity = useQuery({ queryKey: ["config-security"], queryFn: getConfigSecurity });
 
   useEffect(() => {
@@ -135,14 +141,17 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
                   ))}
                 </div>
               </Section>
-              <Section title="Behavior" description="Control how Cook handles permissions and planning." icon={<SlidersHorizontal size={15} />}>
-                <BehaviorOptions sessionId={sessionId} planMode={planMode} alwaysApprove={alwaysApprove} />
+              <Section title="Behavior" description="Control how Cook handles permissions." icon={<SlidersHorizontal size={15} />}>
+                <BehaviorOptions sessionId={sessionId} alwaysApprove={alwaysApprove} />
+              </Section>
+              <Section title="Display" description="Muted metrics on the turn status bar." icon={<Monitor size={15} />}>
+                <DisplayOptions />
               </Section>
             </>
           )}
           {tab === "models" && (
             <Section title="Models" description="Connect providers and manage the models available in chat." icon={<Cpu size={15} />}>
-              <ProvidersPanel connected={connected} models={models} selectedModel={selectedModel} modelKnown={modelKnown} onDirtyChange={setDirty} />
+              <ProvidersPanel connected={connected} models={models} selectedModel={selectedModel} onDirtyChange={setDirty} />
             </Section>
           )}
 
@@ -172,6 +181,12 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
           {tab === "hooks" && (
             <Section title="Hooks" description="Trust, enable, and inspect lifecycle hooks." icon={<Webhook size={15} />}>
               <HooksPanel connected={connected} />
+            </Section>
+          )}
+
+          {tab === "data" && (
+            <Section title="Data controls" description="What this machine stores, and how to erase it." icon={<Database size={15} />}>
+              <DataControlsPanel connected={connected} />
             </Section>
           )}
 
@@ -281,20 +296,47 @@ function AboutUpdates() {
   );
 }
 
-function BehaviorOptions({ sessionId, planMode, alwaysApprove }: { sessionId: string | null; planMode: boolean; alwaysApprove: boolean }) {
+function BehaviorOptions({ sessionId, alwaysApprove }: { sessionId: string | null; alwaysApprove: boolean }) {
   return (
     <>
       <div className="toggle-row">
         <span title="Run tools without permission prompts."><strong>Always approve</strong></span>
         <ToggleSwitch checked={alwaysApprove} ariaLabel="Always approve" onChange={(checked) => void acpClient.setYolo(checked)} />
       </div>
-      <div className="toggle-row">
-        <span title="Inspect and propose before changing files."><strong>Plan mode</strong></span>
-        <ToggleSwitch checked={planMode} ariaLabel="Plan mode" onChange={(checked) => void acpClient.setPlanMode(checked)} />
-      </div>
       <button className="ghost-button" disabled={!sessionId} onClick={() => sessionId && void acpClient.xai.resetPermissions(sessionId)}>
         <ShieldCheck size={15} /> Reset permissions
       </button>
+    </>
+  );
+}
+
+function DisplayOptions() {
+  const [showTps, setShowTps] = useBooleanPref(COMPOSER_SHOW_TPS_KEY);
+  const [showDiffstat, setShowDiffstat] = useBooleanPref(COMPOSER_SHOW_DIFFSTAT_KEY);
+  return (
+    <>
+      <div className="toggle-row">
+        <span title="Tokens/sec of the last completed reply on the status bar.">
+          <strong>Show tokens per second</strong>
+          <small>Tokens/sec of the last completed reply on the status bar.</small>
+        </span>
+        <ToggleSwitch
+          checked={showTps}
+          ariaLabel="Show tokens per second"
+          onChange={setShowTps}
+        />
+      </div>
+      <div className="toggle-row">
+        <span title="Working-tree +added −removed on the status bar.">
+          <strong>Show line changes</strong>
+          <small>Working-tree +added −removed on the status bar.</small>
+        </span>
+        <ToggleSwitch
+          checked={showDiffstat}
+          ariaLabel="Show line changes"
+          onChange={setShowDiffstat}
+        />
+      </div>
     </>
   );
 }

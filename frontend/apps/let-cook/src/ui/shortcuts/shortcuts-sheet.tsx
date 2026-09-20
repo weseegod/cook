@@ -17,6 +17,7 @@ export const SHORTCUT_BINDINGS: ShortcutBinding[] = [
   { id: "stop", label: "Stop turn", keys: ["Esc"] },
   { id: "yolo", label: "Always approve", keys: ["/always-approve"] },
   { id: "review", label: "Review changes", keys: ["⌃⇧G"] },
+  { id: "tasks", label: "Background tasks", keys: ["⌃G"] },
   { id: "files", label: "Browse files", keys: ["⌘P"] },
 ];
 

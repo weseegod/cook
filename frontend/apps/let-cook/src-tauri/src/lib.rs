@@ -157,6 +157,14 @@ async fn workspace_review(host: State<'_, AcpHost>) -> Result<workspace::ReviewS
 }
 
 #[tauri::command]
+async fn workspace_git_status(host: State<'_, AcpHost>) -> Result<workspace::GitStatusSummary, String> {
+    let root = host.workspace_root()?;
+    tauri::async_runtime::spawn_blocking(move || workspace::git_status(root))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn workspace_open(host: State<'_, AcpHost>, relative_path: String) -> Result<(), String> {
     let root = host.workspace_root()?;
     tauri::async_runtime::spawn_blocking(move || workspace::open(root, relative_path))
@@ -406,6 +414,7 @@ pub fn run() {
             workspace_list,
             workspace_read_file,
             workspace_review,
+            workspace_git_status,
             workspace_open,
             open_path,
             config_security,

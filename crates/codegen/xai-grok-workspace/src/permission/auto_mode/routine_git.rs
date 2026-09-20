@@ -23,9 +23,33 @@ pub(super) fn git_words_are_routine(words: &[String]) -> bool {
     };
     match verb {
         "add" | "commit" | "pull" | "fetch" => true,
+        "push" => is_routine_push(args),
+        "rebase" => args.first().map(String::as_str) == Some("--continue"),
         "worktree" => args.first().map(String::as_str) == Some("list"),
         "checkout" | "switch" => is_routine_branch_switch(args),
         "stash" => is_routine_stash(args),
+        _ => false,
+    }
+}
+
+/// Shapes `/commit-and-push` needs: a bare push to the tracked upstream, or an explicit
+/// `origin HEAD` push on a branch with no upstream yet. Anything naming another ref -- most
+/// importantly `push origin main` -- or carrying a flag that can rewrite history stays
+/// fail-closed and goes to the model.
+fn is_routine_push(args: &[String]) -> bool {
+    let mut operands = Vec::new();
+    for word in args.iter().map(String::as_str) {
+        match word {
+            "-u" | "--set-upstream" => {}
+            "-q" | "--quiet" => {}
+            "--progress" | "--no-progress" => {}
+            _ if word.starts_with('-') => return false,
+            _ => operands.push(word),
+        }
+    }
+    match operands.as_slice() {
+        [] => true,
+        ["origin", "HEAD"] => true,
         _ => false,
     }
 }

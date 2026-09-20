@@ -6,6 +6,7 @@
 //!
 //! - `x.ai/session/rename`                  rename a session locally and remote
 //! - `x.ai/session/delete`                  delete a session locally and remote
+//! - `x.ai/sessions/delete_all`             delete every local session and its plan files
 //! - `x.ai/session/update_mcp_servers`      mid-session MCP server swap
 //! - `x.ai/session/add_local_workspace`     mid-session local workspace add-only (chat)
 //! - `x.ai/session/fork`                    fork a session into a new one
@@ -27,6 +28,7 @@ use serde::Deserialize;
 
 use super::{ExtResult, parse_params, to_raw_response};
 use crate::agent::MvpAgent;
+use crate::extensions::plan_files::count_plan_files;
 use crate::leader::protocol::InternalMethod;
 use crate::session::persistence::{
     MAX_TITLE_BYTES, MAX_TITLE_SCALARS, PersistenceMsg, list_summaries, sanitize_rename_title,
@@ -45,6 +47,7 @@ pub(crate) async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResul
     match args.method.as_ref() {
         "x.ai/session/rename" => handle_session_rename(agent, args).await,
         "x.ai/session/delete" => handle_session_delete(agent, args).await,
+        "x.ai/sessions/delete_all" => handle_delete_all_sessions(agent, args).await,
         "x.ai/session/update_mcp_servers" => handle_update_mcp_servers(agent, args).await,
         #[cfg(feature = "local-workspace")]
         "x.ai/session/add_local_workspace" => handle_add_local_workspace(agent, args).await,
@@ -484,6 +487,68 @@ async fn handle_session_delete(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
     tracing::info!(session_id = %req.session_id, "Session deleted");
 
     to_raw_response(&serde_json::json!({ "success": true }))
+}
+
+/// `x.ai/sessions/delete_all`: erase every conversation this machine holds, with its plan files.
+///
+/// The desktop's Data Controls section drives this. Each session goes through the same
+/// [`delete_session_history`] path as `x.ai/session/delete`, one at a time, so a wipe removes
+/// exactly what deleting each conversation by hand would — local directory (plans included),
+/// search-index rows, and the remote copy when writeback storage makes that authoritative.
+///
+/// A session that fails is counted and skipped rather than aborting the run: the caller reports
+/// both counts, so a partial wipe is visible instead of silently reported as complete.
+async fn handle_delete_all_sessions(agent: &MvpAgent, _args: &acp::ExtRequest) -> ExtResult {
+    let summaries = list_summaries(None).await.map_err(|e| {
+        acp::Error::internal_error().data(format!("failed to list sessions: {e}"))
+    })?;
+
+    // Resolved once: every session in one run shares the storage mode and the account.
+    let needs_remote =
+        agent.is_writeback_storage() && agent.current_auth().is_some_and(|a| !a.is_zdr_team());
+    let storage = JsonlStorageAdapter::default();
+    let search_index = agent.search_index().writer();
+
+    let mut deleted = 0usize;
+    let mut plans_deleted = 0usize;
+    let mut failed = 0usize;
+
+    for summary in &summaries {
+        let session_id = summary.info.id.to_string();
+        let session_dir = storage.session_dir(&summary.info);
+        // Counted before the delete: the session directory is what holds the plans, and it is gone
+        // once `delete_session_history` returns.
+        let plans = count_plan_files(&session_dir);
+        // A session the agent still holds has to stop before its files go; a non-resident one is a no-op.
+        agent.teardown_live_session_before_delete(&summary.info.id).await;
+
+        match crate::session::persistence::delete_session_history(
+            &session_id,
+            Some(&summary.info.cwd),
+            needs_remote,
+            agent.auth_manager.clone(),
+            search_index,
+        )
+        .await
+        {
+            Ok(_) => {
+                deleted += 1;
+                plans_deleted += plans;
+            }
+            Err(e) => {
+                failed += 1;
+                tracing::warn!(?e, %session_id, "delete_all: session could not be deleted");
+            }
+        }
+    }
+
+    tracing::info!(deleted, failed, plans_deleted, "Deleted all local sessions");
+
+    to_raw_response(&serde_json::json!({
+        "deleted": deleted,
+        "plansDeleted": plans_deleted,
+        "failed": failed,
+    }))
 }
 
 async fn soft_delete_chat_conversation(agent: &MvpAgent, conversation_id: &str) -> ExtResult {

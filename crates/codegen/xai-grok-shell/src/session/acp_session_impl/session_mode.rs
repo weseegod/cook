@@ -107,6 +107,7 @@ impl SessionActor {
             let turn_in_flight = self.state.lock().await.running_task.is_some();
             self.plan_mode.lock().user_exit(turn_in_flight);
             self.persist_plan_mode_state();
+            self.sync_plan_file_path_resource().await;
             self.enqueue_current_mode_update(session_mode_id.clone());
             tracing::info!(
                 session_id = %self.session_info.id.0,
@@ -220,12 +221,15 @@ impl SessionActor {
         };
         let mut injected_this_turn = false;
         let activation = {
-            let tracker = self.plan_mode.lock();
-            (tracker.state() == PlanModeState::Pending)
-                .then(|| (tracker.is_reentry(), tracker.plan_file_path().to_path_buf()))
+            let mut tracker = self.plan_mode.lock();
+            (tracker.state() == PlanModeState::Pending).then(|| {
+                let is_reentry = tracker.is_reentry();
+                tracker.activate();
+                (is_reentry, tracker.plan_file_path().to_path_buf())
+            })
         };
         if let Some((is_reentry, plan_path)) = activation {
-            self.plan_mode.lock().activate();
+            self.sync_plan_file_path_resource().await;
             self.persist_plan_mode_state();
             let plan_has_content =
                 crate::session::plan_mode::plan_file_has_content(&plan_path).await;
@@ -289,10 +293,12 @@ impl SessionActor {
     /// No-op unless the tracker is `Pending`.
     pub(super) async fn activate_plan_mode_mid_turn(&self) {
         use crate::session::plan_mode::PlanModeState;
+        // Resolve the fresh episode path before rendering: allocation is deterministic for
+        // unchanged tracker state, and `activate_mid_turn` installs exactly this path.
         let activation = {
             let tracker = self.plan_mode.lock();
             (tracker.state() == PlanModeState::Pending)
-                .then(|| (tracker.is_reentry(), tracker.plan_file_path().to_path_buf()))
+                .then(|| (tracker.is_reentry(), tracker.next_episode_path()))
         };
         let Some((is_reentry, plan_path)) = activation else {
             return;
@@ -321,6 +327,7 @@ impl SessionActor {
         if !activated {
             return;
         }
+        self.sync_plan_file_path_resource().await;
         self.persist_plan_mode_state();
         tracing::info!(
             session_id = %self.session_info.id.0,
@@ -328,6 +335,17 @@ impl SessionActor {
             buffered,
             "Plan mode activated mid-turn"
         );
+    }
+    /// Point the `PlanFilePath` tool resource at the tracker's current episode file.
+    /// Every episode allocation must be followed by this so `exit_plan_mode` reads the file the
+    /// reminder just named, and so the tool-side plan-path fallbacks never see the previous plan.
+    pub(super) async fn sync_plan_file_path_resource(&self) {
+        let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
+        self.agent
+            .borrow()
+            .tool_bridge()
+            .update_resource(xai_grok_tools::types::resources::PlanFilePath(plan_path))
+            .await;
     }
     /// The activation reminder template for the active template (no first-entry/reentry distinction), or grok's reentry/full variant.
     /// Shared by turn-start injection (`inject_plan_mode_reminders` case 1) and the mid-turn toggle (`activate_plan_mode_mid_turn`).

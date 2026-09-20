@@ -1,14 +1,15 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, Bot, Brain, Copy, FileCode2, RefreshCw, X } from "lucide-react";
 import { acpClient } from "../../acp/client";
+import { TaskViewer } from "../activity/task-viewer";
 import { useSessionStore, type MessageBlock, type SessionEventBlock } from "../../state/session";
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
 import { PlanDialog } from "./plan-dialog";
+import { PlanFileDialog } from "./plan-file-dialog";
 import { PromptSlot } from "./prompt-slot";
 import { RecapDialog } from "./recap-dialog";
 import { RewindDialog } from "./rewind-dialog";
-import { TodoOverlay } from "./todo-overlay";
 import { TurnStatus } from "./turn-status";
 import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
 import { isLiveTool, projectTranscript, type DisplayBlock } from "./transcript-projection";
@@ -213,7 +214,6 @@ export function ChatView() {
   return (
     <TranscriptActionsContext.Provider value={actions}>
       <div className="chat-layout">
-        <TodoOverlay />
         <div className="chat-main">
           <div className="transcript-shell">
             <div
@@ -290,6 +290,8 @@ export function ChatView() {
         <PromptSlot />
         <RewindDialog />
         <RecapDialog />
+        <PlanFileDialog />
+        <TaskViewer />
       </div>
     </TranscriptActionsContext.Provider>
   );

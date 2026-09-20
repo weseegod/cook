@@ -6675,6 +6675,7 @@ fn overlay_q_esc_do_not_exit_while_input_overlay_pending() {
                 session_id: "s".into(),
                 tool_call_id: "c".into(),
                 plan_content: Some("p".into()),
+                plan_file_path: None,
             };
             let stashed = crate::views::prompt_widget::StashedPrompt {
                 text: String::new(),
@@ -7101,6 +7102,7 @@ fn install_plan_overlay(app: &mut AppView, id: super::super::agent::AgentId) {
         session_id: "s".into(),
         tool_call_id: "c".into(),
         plan_content: Some("p".into()),
+        plan_file_path: None,
     };
     let stashed = crate::views::prompt_widget::StashedPrompt {
         text: String::new(),
@@ -7325,6 +7327,7 @@ fn install_plan_preview_overlay(app: &mut AppView, id: super::super::agent::Agen
         session_id: "s".into(),
         tool_call_id: "c".into(),
         plan_content: Some("# Plan\n- step one\n- step two".into()),
+        plan_file_path: None,
     };
     let view = crate::views::plan_approval_view::PlanApprovalViewState::new(
         request,

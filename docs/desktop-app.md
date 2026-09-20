@@ -243,7 +243,9 @@ tag is ignored, never rendered as a row.
 Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
 to the session cwd plus one allow-path: the agent's own session store
 (`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`).
-Without it plan mode cannot write `<session>/plan.md`, which lives outside
+Without it plan mode cannot write its plan file (`<session>/plan.md`, or
+`<session>/plans/<utc>.md` per planning episode, published to
+`<slug>-<utc>.md` when the episode ends), which lives outside
 every workspace. That allow-path is load-bearing.
 
 ### 5.3 `x.ai/*` groups
@@ -346,6 +348,30 @@ duplicate them.
 The transcript machine lives in `src/state/session.ts` (`reduceTranscript` /
 `reduceNotifications`) plus `goal.ts` / `plan-review.ts`. Replay and live
 updates use the same reducer.
+
+Plan files are the one part of plan state that is not in the transcript: a
+session's history of them comes from the agent (`x.ai/session/plans`), is held
+in `planFiles`, and is painted by the header chip (`plan-chip.tsx`) as a list —
+newest first by the UTC token in the filename, each row labeled with the plan
+H1 (`title`), current episode marked, each row's three-dot menu offering Copy,
+Copy file path and Delete (`x.ai/session/plans/delete`). The chip belongs to the
+conversation rather than to a plan: it sits in the header from the moment a
+workspace is open and reports an empty list before the first episode is written.
+An agent that predates those methods leaves the list empty too, and keeps its
+older single-plan behavior for a parked review, so the feature degrades instead
+of erroring.
+
+Erasing conversations is a Settings surface, not a sidebar action: **Data
+Controls** (`ui/settings/data-controls.tsx`) holds "Delete all conversations",
+which confirms first and then calls `x.ai/sessions/delete_all`. The agent walks
+its own session store and deletes each session through the same path as
+`x.ai/session/delete`, so a wipe takes the transcripts, the search-index rows,
+the plan files inside each session directory, and the cloud copy when writeback
+storage makes that authoritative. It reports how many conversations and plan
+files went, and how many could not be deleted, rather than assuming success; the
+renderer drops the open conversation and its sidebar preferences and reports
+those counts. Sessions that exist only in the cloud are outside this scope: the
+agent enumerates what its session store holds.
 
 **Forbidden chrome** (the TUI does not have these): a pinned live-tool
 activity rail, per-tool elapsed on collapsed rows, in-transcript command

@@ -261,6 +261,7 @@ impl AcpHost {
         if let Some(session_id) = &prompt_session {
             *self.live_session.lock() = Some(session_id.clone());
         }
+        let session_cwd = request_workspace(&method, &params).map(str::to_owned);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         logging::trace("acp.request", format!("id={id} method={method}"));
         let (sender, receiver) = oneshot::channel();
@@ -276,6 +277,9 @@ impl AcpHost {
                 self.live_session.lock().take();
             }
             return Err(error);
+        }
+        if let Some(cwd) = session_cwd {
+            self.follow_workspace(&cwd);
         }
         let result = receiver
             .await
@@ -330,6 +334,35 @@ impl AcpHost {
             .clone()
             .ok_or_else(|| "no active workspace".to_owned())
     }
+
+    /// Point the workspace-rooted commands (`workspace_*`, the `fs/*` bridge) at the folder a
+    /// conversation belongs to. The window can open a conversation from another project without
+    /// respawning the agent, and those commands have to answer for the folder on screen rather than
+    /// the one the agent was spawned in. A path the host cannot resolve — a session whose folder
+    /// was moved or deleted since it was saved — keeps the current root instead of breaking every
+    /// caller.
+    fn follow_workspace(&self, cwd: &str) {
+        let Ok(root) = Path::new(cwd).canonicalize() else {
+            return;
+        };
+        if !root.is_dir() {
+            return;
+        }
+        let mut workspace = self.workspace.lock();
+        if workspace.as_deref() != Some(root.as_path()) {
+            logging::info("acp.workspace", format!("cwd={}", root.display()));
+            *workspace = Some(root);
+        }
+    }
+}
+
+/// The folder a request names, when the method carries one. Only the two session openers do, and
+/// both take the conversation's `cwd` — the folder the session list says the conversation lives in.
+fn request_workspace<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
+    if !matches!(method, "session/new" | "session/load") {
+        return None;
+    }
+    params.get("cwd").and_then(Value::as_str)
 }
 
 fn write_message(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), String> {
@@ -519,7 +552,8 @@ fn exit_detail(
 ///
 /// Sessions-root allow-path: `fs/*` may touch the workspace cwd **and** the agent's
 /// session store (`$COOK_HOME/sessions` / `$GROK_HOME/sessions` / `~/.cook/sessions`)
-/// so plan mode can write `<session>/plan.md` outside any workspace.
+/// so plan mode can write its plan file (`<session>/plan.md`, or `<session>/plans/<utc>.md`
+/// / `<slug>-<utc>.md` for each planning episode) outside any workspace.
 fn handle_host_request(
     message: &Value,
     stdin: &Arc<Mutex<ChildStdin>>,
@@ -561,9 +595,9 @@ fn host_native_outcome(
     }
 }
 
-/// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file to
-/// `<session>/plan.md` through this client filesystem, so that tree has to stay reachable even
-/// though it sits outside any workspace.
+/// The agent's session store (`<app home>/sessions`). Plan mode writes its plan file there
+/// (`<session>/plan.md`, or `<session>/plans/<utc>.md` / `<slug>-<utc>.md` per episode) through this client
+/// filesystem, so that tree has to stay reachable even though it sits outside any workspace.
 fn agent_state_root() -> PathBuf {
     agent_state_root_from(
         std::env::var_os("GROK_HOME").as_deref(),
@@ -685,6 +719,53 @@ mod tests {
         assert!(host_native_outcome("x.ai/terminal/create", &json!({}), &workspace).is_none());
     }
 
+    /// Opening a conversation is what moves the host's workspace: the conversation list can point
+    /// at another project than the agent was spawned in, and the workspace-rooted commands have to
+    /// follow it. Other methods never carry a folder, so they cannot move it by accident.
+    #[test]
+    fn only_session_openers_name_a_workspace() {
+        let params = json!({ "cwd": "/tmp/project", "sessionId": "s-1" });
+        assert_eq!(
+            request_workspace("session/load", &params),
+            Some("/tmp/project")
+        );
+        assert_eq!(
+            request_workspace("session/new", &params),
+            Some("/tmp/project")
+        );
+        assert_eq!(request_workspace("session/prompt", &params), None);
+        assert_eq!(request_workspace("session/cancel", &params), None);
+        assert_eq!(request_workspace("session/load", &json!({})), None);
+    }
+
+    #[test]
+    fn follows_the_conversation_into_its_workspace() {
+        let host = AcpHost::default();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+
+        host.follow_workspace(first.path().to_str().unwrap());
+        assert_eq!(
+            host.workspace_root().unwrap(),
+            first.path().canonicalize().unwrap()
+        );
+
+        // Switching conversations repoints the same commands without respawning anything.
+        host.follow_workspace(second.path().to_str().unwrap());
+        assert_eq!(
+            host.workspace_root().unwrap(),
+            second.path().canonicalize().unwrap()
+        );
+
+        // A folder that is gone keeps the last good root rather than failing every caller.
+        let missing = second.path().join("moved-away");
+        host.follow_workspace(missing.to_str().unwrap());
+        assert_eq!(
+            host.workspace_root().unwrap(),
+            second.path().canonicalize().unwrap()
+        );
+    }
+
     #[test]
     fn rejects_parent_traversal() {
         let root = Arc::new(Mutex::new(Some(std::env::temp_dir())));
@@ -717,8 +798,9 @@ mod tests {
         );
     }
 
-    /// Plan mode writes `<session>/plan.md` through the client filesystem; the session store is
-    /// outside the workspace, so it must be an allow-path.
+    /// Plan mode writes its plan file through the client filesystem; the session store is
+    /// outside the workspace, so it must be an allow-path. Each planning episode gets its own file
+    /// under `<session>/plans/`, so the allow-path must cover that subdirectory too.
     #[test]
     fn allows_plan_file_in_session_store_outside_workspace() {
         let tmp = tempfile::tempdir().unwrap();
@@ -728,14 +810,21 @@ mod tests {
             .join("store")
             .join("%2FUsers%2Fdemo%2FProjects")
             .join("01a0afaa");
+        let plans = session.join("plans");
         std::fs::create_dir_all(&workspace).unwrap();
-        std::fs::create_dir_all(&session).unwrap();
+        std::fs::create_dir_all(&plans).unwrap();
         let allowed = vec![workspace.clone(), base.join("store")];
 
         let plan = session.join("plan.md");
         assert_eq!(
             safe_path(plan.to_str().unwrap(), &workspace, &allowed, true).unwrap(),
             plan
+        );
+
+        let episode = plans.join("2026-09-19T14-30-22Z.md");
+        assert_eq!(
+            safe_path(episode.to_str().unwrap(), &workspace, &allowed, true).unwrap(),
+            episode
         );
     }
 

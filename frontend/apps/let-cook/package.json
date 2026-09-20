@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "tauri": "tauri"
+    "tauri": "node scripts/tauri.mjs",
+    "tauri:icons": "node scripts/tauri.mjs icons"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
