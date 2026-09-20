@@ -11,20 +11,15 @@ use xai_grok_shell::util::grok_home::grok_home;
 
 const TTL_SECONDS_BEFORE_AUTO_UPDATE: Duration = Duration::from_secs(60 * 30);
 const NPM_PACKAGE: &str = "@xai-official/grok";
-/// Fork's own GitHub repo. All release feed lookups (gh-release installer,
-/// channel pointers, binary downloads) resolve against this repo instead of
-/// upstream's `xai-org-shared/grok-build`.
-pub const GH_RELEASE_REPO: &str = "weseegod/thanh";
+/// Optional `gh release` fallback repo. The primary feed is Cloudflare R2
+/// (`CLI_BASE_URL_PRIMARY`).
+pub const GH_RELEASE_REPO: &str = "weseegod/cook";
 
-/// Primary CLI base URL: the fork's GitHub Releases "latest" download
-/// endpoint. Assets on each release are published as `stable` / `alpha`
-/// channel pointers (plain-text semver) plus `cook-<version>-<os>-<arch>`
-/// binaries, so the existing channel-pointer fetch (`{base}/{channel}`) and
-/// binary download (`{base}/{object}`) keep working unchanged against
-/// `releases/latest/download/...` (GitHub redirects to the asset CDN, which
-/// reqwest follows).
-pub(crate) const CLI_BASE_URL_PRIMARY: &str =
-    "https://github.com/weseegod/thanh/releases/latest/download";
+/// Primary CLI base URL: Cloudflare R2 behind https://download.letcook.dev.
+/// Assets are `stable` / `alpha` channel pointers (plain-text semver) plus
+/// `cook-<version>-<os>-<arch>` binaries at the bucket root, so
+/// `{base}/{channel}` and `{base}/{object}` keep working.
+pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://download.letcook.dev";
 
 /// CLI base URLs in preference order. The fork publishes to a single GitHub
 /// Releases feed, so there is no separate fallback mirror; callers

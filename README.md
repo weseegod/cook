@@ -28,8 +28,21 @@ same agent runtime through any of these entry points:
 
 ## Install
 
-Prebuilt downloads and release notes are published on
-[letcook.dev](https://letcook.dev). To build the CLI locally, install Rust and
+Prebuilt CLI + desktop installers are published to
+[download.letcook.dev](https://download.letcook.dev) (Cloudflare R2) for
+**macOS (Apple Silicon + Intel)**, **Linux x86_64**, and **Windows x86_64**.
+A tag `v*` starts the self-hosted GitHub Actions pipeline
+([`docs/desktop-release.md`](docs/desktop-release.md)).
+
+```sh
+curl -fsSL https://download.letcook.dev/install.sh | bash
+```
+
+A background updater keeps the binary fresh — the welcome screen shows
+`Update: vX available — press ctrl+u to restart`, or run `cook update`
+manually. It only manages `~/.cook/bin/cook` and never touches `~/.grok`.
+
+To build the CLI locally, install Rust and
 [DotSlash](https://dotslash-cli.com), then run:
 
 ```sh
@@ -61,14 +74,22 @@ capability notes, and troubleshooting.
 ## Develop
 
 Requirements: Rust (the toolchain is pinned in
-[`rust-toolchain.toml`](rust-toolchain.toml)), Node.js, pnpm, and DotSlash.
+[`rust-toolchain.toml`](rust-toolchain.toml)), Node.js, pnpm, and DotSlash on
+`PATH` (needed so the hermetic [`bin/protoc`](bin/protoc) wrapper can download
+and run `protoc`).
 
 ```sh
-cargo check -p xai-grok-pager-bin
-cargo test -p xai-grok-config
-cargo clippy -p <crate>
+cargo run -p xai-grok-pager-bin   # build + launch the TUI in one go
+cargo check -p xai-grok-pager-bin # fast validation
+cargo test -p xai-grok-config     # per-crate tests
+cargo clippy -p <crate>           # always target a specific crate: full-workspace builds are slow
 cargo fmt --all
 ```
+
+> [!IMPORTANT]
+> The root `Cargo.toml` (workspace members, dependency versions, lints,
+> profiles) is **generated** — treat it as read-only. Prefer editing per-crate
+> `Cargo.toml` files.
 
 To work on the desktop client:
 
@@ -83,10 +104,18 @@ pnpm tauri dev
 
 - [Architecture](ARCHITECTURE.md) — workspace layout and runtime boundaries
 - [Desktop app](docs/desktop-app.md) — Let Cook architecture
+- [Desktop ↔ TUI capability map](docs/desktop-tui-capability-map.md) — what the
+  desktop covers of the TUI, and what it deliberately does not
+- [Desktop production plan](docs/desktop-app-implement.md) and
+  [client layering](docs/desktop-app-client-implement.md) — providers and the
+  honesty/registry fold
+- [Desktop release](docs/desktop-release.md) — self-build and updater artifacts
 - [BYOK models](docs/byok-models.md) — model and provider configuration
 - [User guide](crates/codegen/xai-grok-pager/docs/user-guide/) — CLI usage,
   configuration, permissions, MCP, plugins, and integrations
 - [Upstream sync playbook](UPSTREAM-MERGE.md) — maintainer-only merge notes
+- [Restore core surfaces after a sync](docs/post-merge-core-fix.md) — implement
+  and test the fork-only surfaces a sync can drop
 
 ## Contributing
 

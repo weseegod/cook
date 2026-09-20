@@ -1,0 +1,252 @@
+name: Release (CLI + desktop)
+run-name: Release ${{ github.ref_name }}
+
+# Tag push `v<semver>` builds Cook CLI + Let Cook on self-hosted runners
+# (same machines as quac) and publishes to Cloudflare R2:
+#   https://download.letcook.dev
+#
+#   - macOS Apple Silicon  — Mac mini (label: macos-arm64)
+#   - macOS Intel          — same Mac mini, cross x86_64-apple-darwin
+#   - Windows              — Ubuntu box (label: linux-x64, xwin cross)
+#   - Linux Ubuntu         — same Ubuntu box, native
+#
+# Trigger is tag push only. Do not also fire on `release: published`.
+# No Apple notarization. Updater signing uses TAURI_SIGNING_PRIVATE_KEY.
+
+concurrency:
+  group: cook-release-${{ github.ref }}
+  cancel-in-progress: false
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+
+env:
+  COOK_REQUIRE_UPDATER: "1"
+  COOK_RELEASES_R2_ENDPOINT: ${{ secrets.COOK_RELEASES_R2_ENDPOINT }}
+  COOK_RELEASES_R2_ACCESS_KEY_ID: ${{ secrets.COOK_RELEASES_R2_ACCESS_KEY_ID }}
+  COOK_RELEASES_R2_SECRET_ACCESS_KEY: ${{ secrets.COOK_RELEASES_R2_SECRET_ACCESS_KEY }}
+  COOK_RELEASES_R2_BUCKET: ${{ secrets.COOK_RELEASES_R2_BUCKET }}
+  COOK_RELEASES_PUBLIC_BASE_URL: ${{ secrets.COOK_RELEASES_PUBLIC_BASE_URL }}
+  COOK_UPDATER_PUBLIC_KEY: ${{ secrets.COOK_UPDATER_PUBLIC_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+jobs:
+  setup:
+    name: Setup
+    if: github.repository == 'weseegod/cook'
+    runs-on: [self-hosted, linux-x64]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      source_sha: ${{ steps.source.outputs.source_sha }}
+    steps:
+      - name: Determine version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version '$VERSION'. Expected semver (e.g. 1.0.37 or 1.0.37-rc.1)"
+            echo "::error::Use the same full tag for create + push, e.g. TAG=v1.0.37; git tag \"\$TAG\" && git push origin \"\$TAG\""
+            exit 1
+          fi
+
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        id: source
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          scripts/verify-release-ref.sh v "$VERSION"
+          echo "source_sha=$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_OUTPUT"
+
+  release-linux:
+    name: Release (Linux Ubuntu)
+    if: github.repository == 'weseegod/cook'
+    runs-on: [self-hosted, linux-x64]
+    needs: setup
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
+
+      - name: Build CLI + desktop
+        run: scripts/release-platform.sh linux
+
+      - name: Upload Linux objects to R2
+        run: scripts/publish-release-to-r2.sh --objects-only "$VERSION" release-artifacts/*
+
+  release-macos-arm:
+    name: Release (macOS Apple Silicon)
+    if: github.repository == 'weseegod/cook'
+    runs-on: [self-hosted, macos-arm64]
+    needs: setup
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
+
+      - name: Build CLI + desktop
+        run: scripts/release-platform.sh macos-arm
+
+      - name: Upload macOS arm64 objects to R2
+        run: scripts/publish-release-to-r2.sh --objects-only "$VERSION" release-artifacts/*
+
+  release-macos-x64:
+    name: Release (macOS Intel)
+    if: github.repository == 'weseegod/cook'
+    runs-on: [self-hosted, macos-arm64]
+    needs: setup
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+      TARGET: x86_64-apple-darwin
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      CMAKE_OSX_DEPLOYMENT_TARGET: "10.15"
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
+
+      - name: Build CLI + desktop
+        run: scripts/release-platform.sh macos-x64
+
+      - name: Upload macOS Intel objects to R2
+        run: scripts/publish-release-to-r2.sh --objects-only "$VERSION" release-artifacts/*
+
+  release-windows:
+    name: Release (Windows)
+    if: github.repository == 'weseegod/cook'
+    runs-on: [self-hosted, linux-x64]
+    needs: setup
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+      TARGET: x86_64-pc-windows-msvc
+      CC_x86_64_pc_windows_msvc: clang-cl
+      CXX_x86_64_pc_windows_msvc: clang-cl
+      AR_x86_64_pc_windows_msvc: llvm-lib
+      CMAKE_GENERATOR: Ninja
+      CMAKE_TOOLCHAIN_FILE: ${{ github.workspace }}/scripts/xwin-msvc-toolchain.cmake
+      LIB: /opt/xwin/crt/lib/x86_64;/opt/xwin/sdk/lib/um/x86_64;/opt/xwin/sdk/lib/ucrt/x86_64
+      CFLAGS_x86_64_pc_windows_msvc: >-
+        -fuse-ld=lld
+        -msse4.1 -mavx
+        -libpath:/opt/xwin/crt/lib/x86_64
+        -libpath:/opt/xwin/sdk/lib/um/x86_64
+        -libpath:/opt/xwin/sdk/lib/ucrt/x86_64
+        -imsvc /opt/xwin/crt/include
+        -imsvc /opt/xwin/sdk/include/ucrt
+        -imsvc /opt/xwin/sdk/include/um
+        -imsvc /opt/xwin/sdk/include/shared
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tag-bound release source
+        run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
+
+      - name: Install xwin (skip if already present)
+        run: |
+          if ! command -v xwin >/dev/null 2>&1; then
+            cargo install xwin --locked
+          fi
+          test -d /opt/xwin/crt/lib/x86_64 || {
+            echo "::error::/opt/xwin missing — same one-time setup as quac/RELEASE_BUILD.md"
+            exit 1
+          }
+
+      - name: Add Rust target
+        run: rustup target add "$TARGET"
+
+      - name: Build CLI + desktop
+        run: scripts/release-platform.sh windows
+
+      - name: Upload Windows objects to R2
+        run: scripts/publish-release-to-r2.sh --objects-only "$VERSION" release-artifacts/*
+
+  publish-r2:
+    name: Publish to R2
+    if: |
+      always() &&
+      needs.setup.result == 'success' &&
+      needs.release-linux.result == 'success' &&
+      needs.release-macos-arm.result == 'success' &&
+      needs.release-macos-x64.result == 'success' &&
+      needs.release-windows.result == 'success' &&
+      github.ref == format('refs/tags/v{0}', needs.setup.outputs.version)
+    runs-on: [self-hosted, linux-x64]
+    needs: [setup, release-linux, release-macos-arm, release-macos-x64, release-windows]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ needs.setup.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Flip latest.json + CLI pointers
+        run: scripts/publish-release-to-r2.sh --finalize "$VERSION"

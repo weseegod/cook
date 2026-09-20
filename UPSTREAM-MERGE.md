@@ -147,7 +147,7 @@ useful on BYOK. Hide grok.com *limits*, not local session facts.
 
 | Remote | Repository | Role |
 |--------|------------|------|
-| `origin` | Cook repository | This fork — push here |
+| `origin` | `weseegod/cook` | This fork — push here |
 | `upstream` | `xai-org/grok-build` | Source of truth for core |
 
 Setup (if `upstream` is missing):
@@ -265,8 +265,8 @@ These paths contain fork customizations. Preserve them during merges.
 |----------|-------|------|
 | Fork-only files | `build.sh`, `docs/byok-models.md`, `docs/post-merge-core-fix.md` | Never delete; keep fork version |
 | Desktop ACP client (leaf) | entire `frontend/apps/let-cook/`; `docs/desktop-app.md`, `docs/desktop-app-client-implement.md`, `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md` | Never delete; never fold into an upstream `grok-desktop` tree. Do not patch shell/pager for Desktop-only behaviour. |
-| Fork release pipeline | `scripts/publish_release.sh` (self-build via `./build.sh`; **no CI** — `.github/` is removed) | Never delete; keep fork-owned |
-| Self-update feed (`cook`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep the Cook release channel, home `~/.cook` (default in `default_grok_home()`/`resolve_grok_home()`), `cook` managed binary name (`~/.cook/bin/cook`, assets `cook-<ver>-<os>-<arch>`), `version-cook.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
+| Fork release pipeline | `scripts/publish_release.sh` + `.github/workflows/release.yml` (tag `v*` → self-hosted 4-platform build → R2 `download.letcook.dev`) | Never delete; keep fork-owned |
+| Self-update feed (`cook`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`https://download.letcook.dev`), fork home `~/.cook` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `cook` managed binary name (`~/.cook/bin/cook`, assets `cook-<ver>-<os>-<arch>`), `version-cook.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
 | User home (`~/.cook`) | `crates/codegen/xai-dirs/src/lib.rs` (`grok_home_in`) | **Single source of truth.** Upstream rewrites this file every sync (`GrokHomeSource`, `home_dir()`). Keep those APIs; re-apply `.join(".cook")`. Never take upstream's `.join(".grok")` wholesale. |
 | Version lockstep | `crates/codegen/xai-grok-version/Cargo.toml`, `crates/codegen/xai-grok-pager-bin/Cargo.toml` | Keep fork version; bump after every sync (see [Release & versioning](#release--versioning)) |
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
@@ -295,10 +295,10 @@ sync #2, 7 inventory files merged that way; the marker diff caught no loss.
 The fork ships binaries as **`cook`** (not `grok`) with its own home
 **`~/.cook`** (config, auth, sessions, `bin/`, `downloads/`, caches) so it
 runs fully isolated from an official grok install that keeps `~/.grok`.
-Release assets on the Cook release page are named
-`cook-<version>-<os>-<arch>` (e.g. `cook-0.2.122-macos-aarch64`), plus
+Release assets on Cloudflare R2 (`https://download.letcook.dev`) are named
+`cook-<version>-<os>-<arch>` (e.g. `cook-1.0.37-macos-aarch64`), plus
 plain-text `stable` / `alpha` channel pointers that the built-in updater
-(Ctrl+U / `cook update`) reads from `releases/latest/download/`.
+(Ctrl+U / `cook update`) reads from `{base}/stable` and `{base}/cook-<ver>-<os>-<arch>`.
 
 Rules:
 
@@ -428,7 +428,7 @@ Manual checks:
 - [ ] `docs/byok-models.md` and `docs/post-merge-core-fix.md` exist
 - [ ] `build.sh` exists and is executable
 - [ ] `./build.sh` prints a version (e.g. `cook 0.2.x`)
-- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok|ApprovedAsGoal|GoalPlanSource|LeaveAndStartGoal`, plus the Cook release channel, `version-cook.json`, `~/.cook`, `bin/cook`
+- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok|ApprovedAsGoal|GoalPlanSource|LeaveAndStartGoal`, plus `weseegod/cook`, `download.letcook.dev`, `version-cook.json`, `~/.cook`, `bin/cook`
 - [ ] `xai-dirs` default home is `~/.cook` (`ends_with(".cook")`)
 - [ ] `cook models` sees models from `~/.cook/config.toml` (not `~/.grok/config.toml`)
 - [ ] Plan approval footer still has `g run as goal`; `g` seeds a goal (not "request changes")

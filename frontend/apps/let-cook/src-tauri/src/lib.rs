@@ -413,7 +413,9 @@ pub fn run() {
     // App-shell updater only (see plugins.updater). Never writes ~/.cook/bin/cook.
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     {
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        builder = builder
+            .plugin(tauri_plugin_process::init())
+            .plugin(tauri_plugin_updater::Builder::new().build());
     }
 
     let app = builder

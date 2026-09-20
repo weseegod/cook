@@ -5,7 +5,12 @@ import { acpClient } from "../../acp/client";
 import { getConfigSecurity } from "../../acp/host";
 import { useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
-import { checkForAppUpdates, UPDATER_CONFIGURED, type UpdateCheckResult } from "../../updater";
+import {
+  checkForAppUpdates,
+  installAppUpdate,
+  UPDATER_CONFIGURED,
+  type UpdateCheckResult,
+} from "../../updater";
 import { ConnectorsPanel } from "./connectors";
 import { DataControlsPanel } from "./data-controls";
 import { MemoryPanel, ProjectInstructionsPanel, SkillsPanel } from "./context-panels";
@@ -248,16 +253,27 @@ function Section({ title, description, icon, children }: { title: string; descri
 }
 
 function AboutUpdates() {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"check" | "install" | null>(null);
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
 
   async function onCheck() {
-    setBusy(true);
+    setBusy("check");
     setResult(null);
     try {
       setResult(await checkForAppUpdates());
     } finally {
-      setBusy(false);
+      setBusy(null);
+    }
+  }
+
+  async function onInstall() {
+    setBusy("install");
+    try {
+      const installed = await installAppUpdate();
+      if (installed.status === "up-to-date") setResult({ status: "up-to-date" });
+      if (installed.status === "error") setResult({ status: "error", message: installed.message });
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -266,7 +282,7 @@ function AboutUpdates() {
       <button
         type="button"
         className="ghost-button"
-        disabled={!UPDATER_CONFIGURED || busy}
+        disabled={!UPDATER_CONFIGURED || busy !== null}
         title={
           UPDATER_CONFIGURED
             ? "Check for Let Cook shell updates"
@@ -274,22 +290,32 @@ function AboutUpdates() {
         }
         onClick={() => void onCheck()}
       >
-        <RefreshCw size={15} /> {busy ? "Checking…" : "Check for updates"}
+        <RefreshCw size={15} /> {busy === "check" ? "Checking…" : "Check for updates"}
       </button>
       {!UPDATER_CONFIGURED && (
         <p className="settings-note">
-          Auto-update is wired but inactive until a release pubkey and endpoint are set
-          in <code>tauri.conf.json</code> (and <code>UPDATER_CONFIGURED</code> in{" "}
-          <code>src/updater.ts</code>).
+          Auto-update is inactive in dev builds. Release packages from{" "}
+          <code>scripts/publish_release.sh</code> bake the GitHub Releases endpoint
+          and minisign pubkey; they never write <code>~/.cook/bin/cook</code>.
         </p>
       )}
       {result?.status === "up-to-date" && <p className="settings-note">You are on the latest desktop build.</p>}
       {result?.status === "available" && (
-        <p className="settings-note">
-          Update available: <strong>{result.version}</strong>
-          {result.notes ? ` — ${result.notes}` : ""}. Download from the release page; the
-          updater never touches the CLI binary.
-        </p>
+        <>
+          <p className="settings-note">
+            Update available: <strong>{result.version}</strong>
+            {result.notes ? ` — ${result.notes}` : ""}. This updates the desktop shell
+            only, never the CLI binary.
+          </p>
+          <button
+            type="button"
+            className="ghost-button"
+            disabled={busy !== null}
+            onClick={() => void onInstall()}
+          >
+            {busy === "install" ? "Installing…" : "Install and restart"}
+          </button>
+        </>
       )}
       {result?.status === "error" && <p className="settings-note">{result.message}</p>}
     </div>

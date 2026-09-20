@@ -256,9 +256,9 @@ Ship in layers. Each layer is independently reviewable.
 20. **macOS dmg** — targeted in `tauri.conf.json` (`appimage` / `deb` / `dmg`).
     Unsigned ok for this fork (same as CLI).
 21. **Tauri updater** — `tauri-plugin-updater` for the **app shell only**; never
-    write `~/.cook/bin/cook`. Placeholder pubkey + empty endpoints +
-    `createUpdaterArtifacts: false` until release signing is wired; Settings →
-    About **Check for updates** gated via `UPDATER_CONFIGURED`.
+    write `~/.cook/bin/cook`. Dev keeps placeholder pubkey + empty endpoints +
+    `createUpdaterArtifacts: false`. Release self-builds overlay pubkey /
+    GitHub `latest.json` / `VITE_COOK_UPDATER=1` ([`desktop-release.md`](desktop-release.md)).
 22. **Stable sidecar optional** — `bin_resolve` prefers `COOK_BIN` →
     `~/.cook/bin/cook` → bundled `thanh-<triple>`; enable with
     `bundle.externalBin` when binaries are present (see app README).
@@ -313,7 +313,7 @@ P8  hooks list/action (do not stamp session hooks meta)
 P9  follow-ups + interject / btw + queue pane
 P10 protocol leftovers (init response, load meta, envelopes, git head, sessions/changed)
 P11 artifacts preview dock
-P12 ship: updater + optional sidecar
+P12 ship: updater + optional sidecar (**self-build wired**)
 ```
 
 P1–P3 independent of P4. P4 before P9 if they share the activity column.

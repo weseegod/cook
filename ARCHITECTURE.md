@@ -89,10 +89,10 @@ agent process.
 
 - `build.sh` — `cargo build -p xai-grok-pager-bin --release`, installs the
   artifact as `cook` into `~/.cook/bin/cook` + `~/.local/bin` symlink.
-- `scripts/publish_release.sh` — bumps the lockstepped version in
-  `xai-grok-version` + `xai-grok-pager-bin`, builds locally, publishes
-  `cook-<ver>-<os>-<arch>` assets + `stable`/`alpha` channel pointers to
-  GitHub Releases (the updater reads these).
+- `scripts/publish_release.sh` — bumps the lockstepped version, tags `v*`,
+  pushes; GitHub Actions on self-hosted runners builds four platforms and
+  publishes CLI + Let Cook to Cloudflare R2 (`https://download.letcook.dev`).
+  See [`docs/desktop-release.md`](docs/desktop-release.md).
 - `SOURCE_REV` at the root records the upstream monorepo commit SHA.
 
 ---
@@ -185,7 +185,7 @@ All paths under `crates/`. The workspace is split into `crates/codegen/*`
 
 | Crate | Role |
 |---|---|
-| `xai-grok-update`, `xai-grok-version` | Self-update through the Cook release channel + version lockstep. |
+| `xai-grok-update`, `xai-grok-version` | Self-update (feed: `https://download.letcook.dev`) + version lockstep. |
 | `xai-grok-telemetry` | Mixpanel events, Sentry errors, OpenTelemetry tracing, unified log. |
 | `xai-grok-hooks` (+ `xai-hooks-plugins-types`) | JSON-defined hooks discovered from hook dirs, run as subprocesses at lifecycle/tool events. |
 | `xai-grok-announcements`, `xai-grok-diag-server`, `xai-crash-handler`, `xai-system-power` | Banner announcements, in-guest `/ready` HTTP server, crash handling, power events. |
@@ -475,7 +475,7 @@ and read-only foreign agent stores (Claude/Codex/Cursor).
 | Change session event schema | `xai-grok-session-events` |
 | Change session search / FTS5 index | `xai-grok-session-search` |
 | Change memory persistence | `xai-grok-memory` |
-| Change self-update / version feed | `xai-grok-update` (Cook release channel; version crates: `xai-grok-version`, `xai-grok-pager-bin`) |
+| Change self-update / version feed | `xai-grok-update` (fork feed `https://download.letcook.dev`; version crates: `xai-grok-version`, `xai-grok-pager-bin`) |
 | Change telemetry / analytics | `xai-grok-telemetry` |
 | Change voice input | `xai-grok-voice` (+ pager `src/voice/`) |
 | Change CLI subcommands / entry dispatch | `xai-grok-pager-bin/src/main.rs` (`async_main`) |
@@ -509,9 +509,10 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
 - TUI UX: `/clear`, `/new` keep-model behavior, turn-status/tasks-pane tweaks
   in `xai-grok-pager`.
 - Build/release: `build.sh`, `scripts/publish_release.sh` (local builds, no
-  CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
+  CI) + `scripts/desktop_release.sh` for Let Cook installers, `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
   `docs/desktop-app.md` + `docs/desktop-app-client-implement.md` +
-  `docs/desktop-app-implement.md` + `docs/desktop-tui-capability-map.md`
+  `docs/desktop-app-implement.md` + `docs/desktop-tui-capability-map.md` +
+  `docs/desktop-release.md`
   (desktop ACP client; code in `frontend/apps/let-cook/`, not a
   workspace crate).
 - Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D;

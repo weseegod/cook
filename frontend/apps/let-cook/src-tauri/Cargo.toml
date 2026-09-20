@@ -2,7 +2,7 @@
 
 [package]
 name = "let-cook"
-version = "1.0.36"
+version = "1.0.37"
 description = "Chat-first ACP desktop client for Cook"
 authors = ["Let Cook contributors"]
 edition = "2021"
@@ -42,6 +42,7 @@ tempfile = "3"
 libc = "0.2"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-process = "2"
 tauri-plugin-updater = "2.11.0"
 
 [features]
