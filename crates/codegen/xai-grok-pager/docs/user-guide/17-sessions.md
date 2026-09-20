@@ -1,6 +1,6 @@
 # Session Management
 
-Grok saves every conversation to disk automatically. Whether you work in the TUI, in headless mode, or over agent stdio, Grok records the exchange as a session. You can resume, rewind, or compact it. This document describes how to manage sessions.
+Cook saves every conversation to disk automatically. Whether you work in the TUI, in headless mode, or over agent stdio, Cook records the exchange as a session. You can resume, rewind, or compact it. This document describes how to manage sessions.
 
 ---
 
@@ -15,13 +15,13 @@ A session is a persistent conversation with full history. It includes:
 - Token usage and turn counts
 - Subagent sessions (when enabled)
 
-Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.cook/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.cook`.
+Sessions are identified by a unique session ID (a UUIDv7 when Cook generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.cook/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Cook uses `~/.cook`.
 
 ---
 
 ## Storage Layout
 
-Grok stores each session in its own directory, grouped by working directory. It URL-encodes the working directory to name the group. When the encoded name exceeds 255 bytes, it instead uses a slug plus a hash and records the original path in a `.cwd` file inside the group.
+Cook stores each session in its own directory, grouped by working directory. It URL-encodes the working directory to name the group. When the encoded name exceeds 255 bytes, it instead uses a slug plus a hash and records the original path in a `.cwd` file inside the group.
 
 ```
 ~/.cook/sessions/<encoded-cwd>/<session-id>/
@@ -61,13 +61,13 @@ This clears the current context and begins a new conversation. To clear the on-s
 
 ### Exit
 
-End the session and quit Grok:
+End the session and quit Cook:
 
 ```
 /quit
 ```
 
-Alias: `/exit`. To leave the current session but stay in Grok, use `/home` to return to the welcome screen.
+Alias: `/exit`. To leave the current session but stay in Cook, use `/home` to return to the welcome screen.
 
 ### Delete the current session
 
@@ -147,7 +147,7 @@ Alias: `/title`. `/rename --auto` clears a manual title and re-enables auto-titl
 /undo
 ```
 
-When you run `/rewind` or `/undo` (or press **Esc Esc** within 800ms while idle with an empty prompt and conversation messages), Grok:
+When you run `/rewind` or `/undo` (or press **Esc Esc** within 800ms while idle with an empty prompt and conversation messages), Cook:
 
 1. Shows a list of rewind points (one per user prompt)
 2. Lets you select which point to rewind to
@@ -172,7 +172,7 @@ The optional `context` argument lets you provide additional instructions about w
 
 ### Auto-Compact
 
-Grok automatically compacts the conversation when the context window approaches its limit. You will see a notification when auto-compact triggers. The `context_window` setting on your model configuration controls when this threshold is reached.
+Cook automatically compacts the conversation when the context window approaches its limit. You will see a notification when auto-compact triggers. The `context_window` setting on your model configuration controls when this threshold is reached.
 
 ---
 
@@ -195,7 +195,7 @@ This shows:
 - API backend and sandbox profile (when set)
 - Context window usage (used and total tokens, with the percentage used)
 
-On the Session info tab, click a value to copy it, or drag to select a range (same highlight as the tool viewer). `c` copies the session ID and `y` copies the whole block. Copy uses the same clipboard route as the rest of Grok, including `cook wrap`.
+On the Session info tab, click a value to copy it, or drag to select a range (same highlight as the tool viewer). `c` copies the session ID and `y` copies the whole block. Copy uses the same clipboard route as the rest of Cook, including `cook wrap`.
 
 ---
 
@@ -294,7 +294,7 @@ Output is JSON with `sessionId`, `updatedAt`, `session`, and `turns`. A specific
 
 ## Worktree Sessions
 
-When working with subagents or session forks, Grok can create isolated git worktrees per session. Each worktree gets its own copy of the working directory, so file changes in one session do not affect another.
+When working with subagents or session forks, Cook can create isolated git worktrees per session. Each worktree gets its own copy of the working directory, so file changes in one session do not affect another.
 
 Worktree sessions are managed internally through the `x.ai/git/worktree/*` extension methods. Key operations:
 
@@ -353,7 +353,7 @@ Those names do not accumulate. Each gc pass drops the ones that no longer hold a
 
 ### Persistence Format
 
-Grok stores the conversation as newline-delimited JSON (JSONL). Each line in `updates.jsonl` is a self-contained ACP session update event. This format supports:
+Cook stores the conversation as newline-delimited JSON (JSONL). Each line in `updates.jsonl` is a self-contained ACP session update event. This format supports:
 
 - Incremental writes (append-only during a session)
 - Efficient streaming reads (for session restore)

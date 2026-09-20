@@ -1,6 +1,7 @@
-# Grok Build User Guide
+# Cook User Guide
 
-Learn how to install, configure, and extend Grok Build, the terminal-based AI coding assistant from SpaceXAI.
+Learn how to install, configure, and extend Cook, the terminal-based AI coding
+assistant. See [letcook.dev](https://letcook.dev) for the project website.
 
 ---
 
@@ -20,7 +21,7 @@ Start here. These guides cover what you need on your first day.
 
 ## Tier 2: Core Feature Docs
 
-Customize and extend Grok Build.
+Customize and extend Cook.
 
 | # | Document | Description |
 |---|----------|-------------|
@@ -37,7 +38,7 @@ Customize and extend Grok Build.
 
 ## Tier 3: Advanced Usage Docs
 
-Automate, script, and integrate Grok Build with other systems.
+Automate, script, and integrate Cook with other systems.
 
 | # | Document | Description |
 |---|----------|-------------|

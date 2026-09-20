@@ -1,6 +1,6 @@
 # Configuration
 
-Grok reads settings from config files, environment variables, and CLI flags. This page covers the common options. The field list for `config.toml`, `managed_config.toml`, and `requirements.toml` is [26-config-reference.md](26-config-reference.md) (extracted to `~/.cook/docs/user-guide/` on launch).
+Cook reads settings from config files, environment variables, and CLI flags. This page covers the common options. The field list for `config.toml`, `managed_config.toml`, and `requirements.toml` is [26-config-reference.md](26-config-reference.md) (extracted to `~/.cook/docs/user-guide/` on launch).
 
 ---
 
@@ -27,7 +27,7 @@ A harness or ACP client that launches `cook agent stdio` can inject settings wit
 - **`GROK_CONFIG`**: an inline JSON object overlay.
 - **`GROK_CONFIG_PATH`**: an *additional* file overlay (not a replacement for `config.toml`), a JSON or TOML file read by its extension (`.json` → JSON, else TOML). `GROK_CONFIG` wins if both are set. An empty `GROK_CONFIG` is treated as unset, and a malformed one logs a warning and falls through to `GROK_CONFIG_PATH`.
 
-The overlay is **deep-merged** on top of your `config.toml` (it overrides only the keys it sets), placed above the user/managed layers but **below** `requirements.toml` / MDM so an enterprise pin still wins. A malformed blob is ignored with a warning. This mirrors `CODEX_CONFIG` from the `codex-acp` adapter (a JSON object merged into the session config); Grok is ACP-native, so the overlay lives in the agent itself. It only affects settings read from the merged config, and it is **not** a permission-escalation path. The overlay is confined, fail-closed, to an **allowlist** of soft settings (`models`, `features`, a narrowed `toolset`, and a `shell_environment_policy` limited to its filter fields, which select among env names the launcher already controls and cannot inject an env value into tool subprocesses); every other table is dropped at the choke point, so the overlay cannot spawn commands, set auth policy, redirect network traffic, elevate trust, or add a discovery source. Even on the allowlisted settings, a specific set of security gates read the raw disk layers rather than the overlay. The `ConfigLayers::env_overlay` rustdoc is the canonical list of what the overlay can and cannot reach and which gates read it overlay-free; see also the [internal environment-variables reference](../internal/22-environment-variables.md). Use `GROK_DEFAULT_SELECTED_PERMISSION` for headless permission control. For example, to set the default reasoning effort:
+The overlay is **deep-merged** on top of your `config.toml` (it overrides only the keys it sets), placed above the user/managed layers but **below** `requirements.toml` / MDM so an enterprise pin still wins. A malformed blob is ignored with a warning. This mirrors `CODEX_CONFIG` from the `codex-acp` adapter (a JSON object merged into the session config); Cook is ACP-native, so the overlay lives in the agent itself. It only affects settings read from the merged config, and it is **not** a permission-escalation path. The overlay is confined, fail-closed, to an **allowlist** of soft settings (`models`, `features`, a narrowed `toolset`, and a `shell_environment_policy` limited to its filter fields, which select among env names the launcher already controls and cannot inject an env value into tool subprocesses); every other table is dropped at the choke point, so the overlay cannot spawn commands, set auth policy, redirect network traffic, elevate trust, or add a discovery source. Even on the allowlisted settings, a specific set of security gates read the raw disk layers rather than the overlay. The `ConfigLayers::env_overlay` rustdoc is the canonical list of what the overlay can and cannot reach and which gates read it overlay-free; see also the [internal environment-variables reference](../internal/22-environment-variables.md). Use `GROK_DEFAULT_SELECTED_PERMISSION` for headless permission control. For example, to set the default reasoning effort:
 
 ```bash
 GROK_CONFIG='{"models": {"default_reasoning_effort": "high"}}' cook agent stdio
@@ -37,7 +37,7 @@ GROK_CONFIG='{"models": {"default_reasoning_effort": "high"}}' cook agent stdio
 
 ## config.toml (main configuration)
 
-Location: `~/.cook/config.toml`. If the file is missing, Grok uses its built-in defaults, so you only need to set the values you want to override.
+Location: `~/.cook/config.toml`. If the file is missing, Cook uses its built-in defaults, so you only need to set the values you want to override.
 
 ### General settings
 
@@ -130,7 +130,7 @@ To switch the prompt to vim-style editing:
 simple_mode = false
 ```
 
-You can also flip it from the settings pane (`/settings` → **Disable vim input mode**); Grok writes your choice to `[ui] simple_mode`. `simple_mode` and `vim_mode` are independent — one governs the prompt editor, the other governs scrollback navigation. See [Keyboard Shortcuts](03-keyboard-shortcuts.md) for the full binding reference.
+You can also flip it from the settings pane (`/settings` → **Disable vim input mode**); Cook writes your choice to `[ui] simple_mode`. `simple_mode` and `vim_mode` are independent — one governs the prompt editor, the other governs scrollback navigation. See [Keyboard Shortcuts](03-keyboard-shortcuts.md) for the full binding reference.
 
 #### Default selected permission
 
@@ -163,7 +163,7 @@ You can also override this with `GROK_DEFAULT_SELECTED_PERMISSION`, which is han
 | `false` (default) | Bare-letter and `Shift+letter` keys (`j`/`k`, `h`/`l`, `g`/`G`, `y`/`Y`, `o`/`O`, `r`, `x`, `e`/`E`, `H`/`L`, plus `i`) are suppressed in the scrollback: pressing one focuses the prompt and types the character. Arrows, `Tab`, `Space`, `PageUp`/`PageDown`, and every `Ctrl+letter` shortcut still navigate. `Esc` is **not** a scrollback key — it never cancels a running turn (`Ctrl+C` does), and while idle follows the clear / rewind policy (see [Keyboard Shortcuts](03-keyboard-shortcuts.md#escape)). |
 | `true` | All vim-style scrollback bindings are active, exactly as listed in [Keyboard Shortcuts](03-keyboard-shortcuts.md). Esc behavior is the same in both settings. |
 
-Toggle it at runtime with `/vim-mode`, or from `/settings` → **Vim scrollback navigation**. Grok writes the change to `[ui] vim_mode` immediately and applies it to every future pager session, including new agents and subagents in the same process. There's no per-session override — `config.toml` is the source of truth on next launch. `vim_mode` is independent of `simple_mode`.
+Toggle it at runtime with `/vim-mode`, or from `/settings` → **Vim scrollback navigation**. Cook writes the change to `[ui] vim_mode` immediately and applies it to every future pager session, including new agents and subagents in the same process. There's no per-session override — `config.toml` is the source of truth on next launch. `vim_mode` is independent of `simple_mode`.
 
 #### Screen mode
 
@@ -440,7 +440,7 @@ disabled = ["user/a1b2c3d4/noisy-plugin"]
 
 ### Hints
 
-`[hints]` holds small persisted UI preferences: remembered answers and modal layout. Grok writes these for you as you use the TUI, but you can edit or delete them by hand; removing a key restores the default.
+`[hints]` holds small persisted UI preferences: remembered answers and modal layout. Cook writes these for you as you use the TUI, but you can edit or delete them by hand; removing a key restores the default.
 
 `[hints]` is read from the **effective config merge**, with the usual precedence: system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`, higher layers winning. The TUI only ever **writes** these to your user `~/.cook/config.toml`.
 
@@ -499,10 +499,10 @@ items = ["action-required", "spinner", "activity", "session-name", "grok"]
 | VS Code | BEL | Yes | No |
 | Apple Terminal | BEL | No | No |
 | VTE (GNOME Terminal) | OSC 777 | Yes | No |
-| Grok Desktop | None (native) | N/A | N/A |
+| Cook Desktop | None (native) | N/A | N/A |
 | Unknown | BEL | No | No |
 
-With `method = "auto"`, Grok detects the terminal brand and picks the best protocol. Set `method` explicitly to override that.
+With `method = "auto"`, Cook detects the terminal brand and picks the best protocol. Set `method` explicitly to override that.
 
 #### Notification hooks
 
@@ -511,7 +511,7 @@ Run your own commands when events fire. Hooks receive `$GROK_EVENT`, `$GROK_MESS
 ```toml
 # macOS native notification
 [[ui.notifications.hooks]]
-command = "terminal-notifier -title 'Grok' -message '$GROK_MESSAGE'"
+command = "terminal-notifier -title 'Cook' -message '$GROK_MESSAGE'"
 events = ["turn_complete", "approval_required"]
 only_unfocused = true
 timeout_secs = 10
@@ -581,7 +581,7 @@ mixpanel_enabled = false                                  # disable Mixpanel pro
 trace_upload = false                                      # disable session/trace uploads (inherits the telemetry toggle when unset)
 ```
 
-Set these only to point telemetry at your own infrastructure or to switch parts off. The built-in endpoint and credentials are managed by Grok — leave them unset to use the defaults.
+Set these only to point telemetry at your own infrastructure or to switch parts off. The built-in endpoint and credentials are managed by Cook — leave them unset to use the defaults.
 
 The same `[telemetry]` table also configures the **external OpenTelemetry stream**, an independent opt-in (it doesn't require the telemetry toggle above) that ships a curated, content-free usage schema to your *own* OTLP collector. Collector auth comes from `OTEL_EXPORTER_OTLP_HEADERS` and is never stored on disk. See [Monitoring & Usage](24-monitoring-usage.md) for the full schema, env vars, and privacy model.
 
@@ -660,7 +660,7 @@ default = "company-grok"
 [model.company-grok]
 model = "grok-4.6"
 base_url = "https://grok-proxy.acme.com/"
-name = "Grok 4.6 (Proxy)"
+name = "Cook 4.6 (Proxy)"
 context_window = 128000
 
 [features]
@@ -855,7 +855,7 @@ The key ones. See the README for the complete list.
 | `.grok/hooks/` | Project-scoped hooks |
 | `.grok/lsp.json` | LSP server configuration |
 
-### How Grok saves `config.toml`
+### How Cook saves `config.toml`
 
 Writes to **`~/.grok/config.toml`** (`/settings`, `/vim-mode`, and other user-config saves) follow a leaf symlink. The atomic rename writes the referent (a file in your dotfiles repo). The link stays a link. If the link is dangling, the write creates the referent as a regular file.
 

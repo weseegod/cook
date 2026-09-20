@@ -1,4 +1,4 @@
-import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry } from "../workspace";
+import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry, WorkspaceIndexEntry } from "../workspace";
 import { nextRequestId, notify, request, responses, state } from "./state";
 import type { MockPlanFile } from "./types";
 
@@ -39,6 +39,25 @@ export function mockWorkspaceList(relativePath = ""): WorkspaceEntry[] {
   const entries = state.workspace.entries[relativePath];
   if (!entries) throw new Error(`directory not found: ${relativePath || "."}`);
   return structuredClone(entries);
+}
+
+/** Flatten the seeded directory tree into the same shape `workspace_index` returns. */
+export function mockWorkspaceIndex(_hidden = false): WorkspaceIndexEntry[] {
+  const seen = new Set<string>();
+  const flat: WorkspaceIndexEntry[] = [];
+  for (const entries of Object.values(state.workspace.entries)) {
+    for (const entry of entries) {
+      if (seen.has(entry.path)) continue;
+      seen.add(entry.path);
+      flat.push({ path: entry.path, kind: entry.kind });
+    }
+  }
+  flat.sort((left, right) => {
+    const kind = Number(left.kind !== "directory") - Number(right.kind !== "directory");
+    if (kind !== 0) return kind;
+    return left.path.localeCompare(right.path, undefined, { sensitivity: "base" });
+  });
+  return structuredClone(flat);
 }
 
 export function mockWorkspaceReadFile(relativePath: string): FilePreview {
@@ -174,6 +193,18 @@ export function mockPlan(overrides: Record<string, unknown> = {}): number {
  */
 export function mockSessionNotification(update: Record<string, unknown>, sessionId = "mock-session"): void {
   notify("_x.ai/session_notification", { sessionId, update });
+}
+
+/**
+ * A real `session/update` under an arbitrary session, `_meta` included — the shape a child session
+ * streams its own turn in (a subagent carries its own `promptId`, which is not the parent's).
+ */
+export function mockSessionUpdate(
+  sessionId: string,
+  update: Record<string, unknown>,
+  meta: Record<string, unknown> = {},
+): void {
+  notify("session/update", { sessionId, update, ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}) });
 }
 
 /** Ext notif helpers for activity panel tests (SessionNotification envelope). */

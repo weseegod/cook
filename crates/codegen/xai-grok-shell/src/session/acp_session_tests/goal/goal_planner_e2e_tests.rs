@@ -338,9 +338,10 @@ async fn send_now_restarts_planner_with_all_steering() {
             );
 
             // Staged files (`plan-<uuid>.md`, `plan-baseline-<uuid>.md`) are `TempPath`s
-            // Interrupted attempts drop theirs and the winner renames onto `plan.md`, so nothing matching `plan-*.md` survives
-            let goal_dir = actor.goal_tracker.lock().plan_path();
-            let goal_dir = goal_dir.parent().expect("plan path has a parent");
+            // Interrupted attempts drop theirs and the winner publishes under `plans/`, so no
+            // private `goal/plan-<uuid>.md` staging file survives.
+            let baseline = actor.goal_tracker.lock().plan_baseline_path();
+            let goal_dir = baseline.parent().expect("baseline path has a parent");
             let leaked: Vec<String> = std::fs::read_dir(goal_dir)
                 .into_iter()
                 .flatten()
@@ -389,16 +390,17 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
                 spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: b"# Plan\n" });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
-            let plan_path = actor.goal_tracker.lock().plan_path();
             let baseline_path = actor.goal_tracker.lock().plan_baseline_path();
-            std::fs::create_dir_all(plan_path.parent().unwrap()).unwrap();
-            std::fs::write(&plan_path, "stale plan").unwrap();
             std::fs::write(&baseline_path, "stale baseline").unwrap();
 
             actor.maybe_run_goal_planner("do X").await;
 
             assert_eq!(spawn_count.load(SeqOrd::SeqCst), 1);
             let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
+            let plan_path = snap
+                .plan_file
+                .clone()
+                .expect("planner publishes a plan episode");
             assert_eq!(snap.plan_file.as_deref(), Some(plan_path.as_path()));
             assert_eq!(
                 snap.plan_baseline_file.as_deref(),
@@ -406,6 +408,15 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
             );
             assert_eq!(std::fs::read_to_string(plan_path).unwrap(), "# Plan\n");
             assert_eq!(std::fs::read_to_string(baseline_path).unwrap(), "# Plan\n");
+            assert!(
+                !actor
+                    .goal_tracker
+                    .lock()
+                    .plan_baseline_path()
+                    .with_file_name("plan.md")
+                    .exists(),
+                "new planners must not write goal/plan.md",
+            );
             assert_eq!(
                 snap.status,
                 crate::session::goal_tracker::GoalStatus::Active,
@@ -639,16 +650,29 @@ async fn planner_clears_planning_latch_before_publishing_the_plan() {
             let (actor, _tmp, mut persistence_rx) =
                 make_planner_actor_capturing(Some(tx), true).await;
             create_test_goal(&actor);
-            let plan_path = actor.goal_tracker.lock().plan_path();
+            let session_dir = actor
+                .goal_tracker
+                .lock()
+                .plan_baseline_path()
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
 
             let observed_at_publish = StdArc::new(std::sync::Mutex::new(None::<bool>));
             let observer = {
                 let actor = StdArc::clone(&actor);
-                let plan_path = plan_path.clone();
+                let plans_dir = session_dir.join(crate::session::storage::PLANS_DIR);
                 let observed = StdArc::clone(&observed_at_publish);
                 tokio::task::spawn_local(async move {
                     loop {
-                        if plan_path.exists() {
+                        let published = std::fs::read_dir(&plans_dir)
+                            .into_iter()
+                            .flatten()
+                            .flatten()
+                            .any(|entry| entry.metadata().is_ok_and(|metadata| metadata.len() > 0));
+                        if published {
                             *observed.lock().unwrap() = actor
                                 .goal_tracker
                                 .lock()
@@ -841,7 +865,7 @@ async fn planner_missing_plan_file_pauses_goal() {
     local
         .run_until(async {
             let (tx, _spawn_count) = spawn_planner_coordinator(SpawnBehaviour::NoWriteThenDone);
-            let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
+            let (actor, tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
 
             actor.maybe_run_goal_planner("do X").await;
@@ -849,6 +873,11 @@ async fn planner_missing_plan_file_pauses_goal() {
             let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
             assert!(snap.plan_file.is_none());
             assert!(snap.status.is_paused());
+            assert!(
+                crate::extensions::plan_files::list_plans(tmp.path()).is_empty(),
+                "a failed planner must remove its squatted empty episode",
+            );
+            assert!(!tmp.path().join("goal/plan.md").exists());
         })
         .await;
 }
@@ -1424,14 +1453,18 @@ async fn setup_goal_reminder_is_plan_aware_when_planner_enabled() {
                 body: b"# Plan\n\n1. do it\n",
             });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
-            let plan_path = actor.goal_tracker.lock().plan_path();
 
-            let GoalSetupOutcome::Inference { reminder } = actor.setup_goal("ship it", None, None).await
+            let GoalSetupOutcome::Inference { reminder } =
+                actor.setup_goal("ship it", None, None).await
             else {
                 panic!("a published plan must flow through to inference");
             };
 
             let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
+            let plan_path = snap
+                .plan_file
+                .clone()
+                .expect("planner publishes a plan episode");
             assert_eq!(snap.plan_file.as_deref(), Some(plan_path.as_path()));
             let expected = format!("\nPlan: {}\n", plan_path.display());
             assert!(

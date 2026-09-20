@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
 import { COMPOSER_SHOW_TPS_KEY, useBooleanPref } from "../preferences";
@@ -14,8 +14,67 @@ import {
   isSendableWait,
   phaseKey,
   resolveTurnActivity,
+  type TurnActivity,
 } from "./turn-activity";
 import { useSpinFrame } from "./use-spin-frame";
+
+/**
+ * When the phase on screen started, keyed by `phaseKey`. The TUI restarts the phase clock on every
+ * transition (`views/turn_status.rs`), and a child view runs the same clock on its own activity.
+ */
+export function usePhaseClock(key: string | null): number | null {
+  const phase = useRef<{ key: string | null; startedAt: number }>({ key: null, startedAt: Date.now() });
+  useEffect(() => {
+    if (key !== phase.current.key) phase.current = { key, startedAt: Date.now() };
+  }, [key]);
+  return key === null ? null : phase.current.startedAt;
+}
+
+/**
+ * The status row itself, without the session it came from: the parent chat and a subagent's own
+ * view paint the same row for their own activity.
+ */
+export function TurnStatusRow({
+  activity,
+  phaseStartedAt,
+  tick,
+  blocked = false,
+  queuedHint = null,
+  trailing = null,
+}: {
+  activity: TurnActivity;
+  phaseStartedAt: number | null;
+  tick: number;
+  blocked?: boolean;
+  queuedHint?: string | null;
+  /** Right-aligned controls the surface owns — the parent's t/s rail and `[stop]`. */
+  trailing?: ReactNode;
+}) {
+  const parts = activityParts(activity);
+  // An ask owns the row while its card is open, and its phase timer is hidden.
+  const elapsed = phaseStartedAt === null || activity.kind === "ask" ? null : Math.max(0, Date.now() - phaseStartedAt);
+  return (
+    <div className="turn-status" data-testid="turn-status" role="status" aria-live="polite">
+      <span className={`turn-status-spinner${blocked ? " blocked" : ""}`} aria-hidden="true">
+        {blocked ? "◆" : BRAILLE_FRAMES[tick % BRAILLE_FRAMES.length]}
+      </span>
+      <span className="turn-status-label" title={parts.text}>
+        {parts.prefix && parts.subject
+          ? (
+            <>
+              <span className="turn-status-prefix">{parts.prefix}</span>
+              <span className="turn-status-subject accent">{parts.subject}</span>
+            </>
+          )
+          : parts.text}
+      </span>
+      {elapsed !== null && <span className="turn-status-phase">{formatDuration(elapsed)}</span>}
+      {queuedHint && <span className="turn-status-queued">{queuedHint}</span>}
+      <span className="turn-status-spacer" />
+      {trailing}
+    </div>
+  );
+}
 
 /**
  * The live activity row between the transcript and the prompt (`views/turn_status.rs`), reading
@@ -32,7 +91,6 @@ export function TurnStatus() {
   const [showTps] = useBooleanPref(COMPOSER_SHOW_TPS_KEY);
   const tps = useComposerMetricsStore((state) => state.tps);
   const tick = useSpinFrame(turnRunning);
-  const phase = useRef<{ key: string | null; startedAt: number }>({ key: null, startedAt: Date.now() });
 
   // Goal verification runs in-turn while the model is idle, so the TUI labels the whole window
   // `Verifying…` ahead of any stale streaming activity (`views/turn_status.rs::compute_activity`).
@@ -45,16 +103,8 @@ export function TurnStatus() {
     askDetail: pendingQuestion?.kind === "question" ? pendingQuestion.title ?? "" : null,
   });
 
-  const key = phaseKey(resolved);
-  useEffect(() => {
-    if (key !== phase.current.key) phase.current = { key, startedAt: Date.now() };
-  }, [key]);
-
+  const phaseStartedAt = usePhaseClock(phaseKey(resolved));
   const hasTps = showTps && tps != null && tps > 0;
-
-  const now = Date.now();
-  const parts = resolved ? activityParts(resolved) : null;
-  const phaseElapsed = !resolved || key === null || resolved.kind === "ask" ? null : Math.max(0, now - phase.current.startedAt);
   const blocked = Boolean(pendingPermission || pendingQuestion);
   const queuedHint = !resolved || queued === 0
     ? null
@@ -67,39 +117,30 @@ export function TurnStatus() {
   return (
     <>
       <ComposerMetricsHost />
-      <div
-        className={`turn-status${resolved ? "" : " idle-metrics"}`}
-        data-testid="turn-status"
-        role="status"
-        aria-live={resolved ? "polite" : "off"}
-      >
-        {resolved ? (
-          <>
-            <span className={`turn-status-spinner${blocked ? " blocked" : ""}`} aria-hidden="true">
-              {blocked ? "◆" : BRAILLE_FRAMES[tick % BRAILLE_FRAMES.length]}
-            </span>
-            <span className="turn-status-label" title={parts!.text}>
-              {parts!.prefix && parts!.subject
-                ? (
-                  <>
-                    <span className="turn-status-prefix">{parts!.prefix}</span>
-                    <span className="turn-status-subject accent">{parts!.subject}</span>
-                  </>
-                )
-                : parts!.text}
-            </span>
-            {phaseElapsed !== null && <span className="turn-status-phase">{formatDuration(phaseElapsed)}</span>}
-            {queuedHint && <span className="turn-status-queued">{queuedHint}</span>}
-          </>
-        ) : null}
-        <span className="turn-status-spacer" />
-        <ComposerTpsRail />
-        {turnRunning && (
-          <button type="button" className="stop-button turn-status-stop" onClick={() => void acpClient.cancel()}>
-            [stop]
-          </button>
-        )}
-      </div>
+      {resolved ? (
+        <TurnStatusRow
+          activity={resolved}
+          phaseStartedAt={phaseStartedAt}
+          tick={tick}
+          blocked={blocked}
+          queuedHint={queuedHint}
+          trailing={
+            <>
+              <ComposerTpsRail />
+              {turnRunning && (
+                <button type="button" className="stop-button turn-status-stop" onClick={() => void acpClient.cancel()}>
+                  [stop]
+                </button>
+              )}
+            </>
+          }
+        />
+      ) : (
+        <div className="turn-status idle-metrics" data-testid="turn-status" role="status" aria-live="off">
+          <span className="turn-status-spacer" />
+          <ComposerTpsRail />
+        </div>
+      )}
     </>
   );
 }

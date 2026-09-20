@@ -19,6 +19,10 @@ export interface InboundPipeline {
   readonly refreshModels: () => Promise<void>;
 }
 
+// The store is frame-coalesced, so two goal updates in one wire batch cannot reliably compare
+// against store state. Track the transient planning latch at the inbound boundary instead.
+const goalPlanningByPipeline = new WeakMap<InboundPipeline, boolean>();
+
 export async function handleInboundMessages(pipeline: InboundPipeline, messages: RpcMessage[]) {
   for (const message of messages) {
     const method = unwrapMethod(message);
@@ -30,10 +34,23 @@ export async function handleInboundMessages(pipeline: InboundPipeline, messages:
       || method === "x.ai/session_notification"
       || method === "x.ai/session/update"
     ) {
-      if (!pipeline.promptCorrelation.accept(params)) continue;
       const rail: "acp" | "xai" = method === "session/update" ? "acp" : "xai";
-      if (!pipeline.sessionEvents.accept(rail, params)) continue;
       const update = params.update as Record<string, unknown> | undefined;
+      // A child runs its own prompt, so its updates carry the child's `promptId` — never one this
+      // window sent. They belong to their own row and must reach it before the parent's correlation
+      // gate discards them as another prompt's leftovers. Without this order a spawned agent's view
+      // shows nothing but the prompt it was started with.
+      if (!shouldApplyToActiveSession(params, update)) {
+        if (!pipeline.sessionEvents.accept(rail, params)) continue;
+        // A child's first update can share a packet batch with its spawn, which the coalescer is
+        // still holding: apply what is pending so the row exists before the update is routed.
+        pipeline.sessionUpdates.flushNow();
+        routeChildUpdate(params, update);
+        noteBackgroundActivity(params, update);
+        continue;
+      }
+      if (!pipeline.promptCorrelation.accept(params)) continue;
+      if (!pipeline.sessionEvents.accept(rail, params)) continue;
       if (update?.sessionUpdate === "available_commands_update") {
         useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
       }
@@ -55,15 +72,16 @@ export async function handleInboundMessages(pipeline: InboundPipeline, messages:
       if (sessionKind === "current_mode_update" && planModeIsOn(update)) {
         pipeline.refreshPlanFiles();
       }
-      if (shouldApplyToActiveSession(params, update)) {
-        pipeline.sessionUpdates.enqueue(params as unknown as SessionNotification);
-      } else {
-        // A child's first update can share a packet batch with its spawn, which the coalescer is
-        // still holding: apply what is pending so the row exists before the update is routed.
-        pipeline.sessionUpdates.flushNow();
-        routeChildUpdate(params, update);
-        noteBackgroundActivity(params, update);
+      if (sessionKind === "goal_updated") {
+        const previous = goalPlanningByPipeline.get(pipeline)
+          ?? useSessionStore.getState().goal?.planning
+          ?? false;
+        const next = update?.planning === true;
+        const goalCreated = update?.last_event === "goal_created";
+        if ((previous && !next) || goalCreated) pipeline.refreshPlanFiles();
+        goalPlanningByPipeline.set(pipeline, next);
       }
+      pipeline.sessionUpdates.enqueue(params as unknown as SessionNotification);
       continue;
     }
     // Non-session messages can affect prompt completion, so do not let a deferred update pass

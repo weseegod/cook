@@ -483,7 +483,8 @@ pub struct GoalOrchestration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes_baseline_commit: Option<String>,
 
-    /// Path to the goal's plan markdown (`<session_dir>/goal/plan.md`, via [`GoalTracker::plan_path`]).
+    /// Path to the goal's plan episode (`<session_dir>/plans/<slug>-<utc>.md`, via [`GoalTracker::plan_path`]).
+    /// Older snapshots may still point at `<session_dir>/goal/plan.md`.
     /// `None` until a planner writes one.
     /// `is_some()` is the single source of truth for "this goal has a plan".
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -705,9 +706,32 @@ impl GoalTracker {
         self.session_dir.join("goal")
     }
 
-    /// Path to the goal's plan markdown (`<session_dir>/goal/plan.md`); may not exist yet.
+    /// Path to the goal's published plan episode. Legacy snapshots without `plan_file` fall back
+    /// to `<session_dir>/goal/plan.md` so in-flight goals written by older builds keep working.
     pub fn plan_path(&self) -> PathBuf {
-        self.goal_dir().join("plan.md")
+        self.orchestration
+            .as_ref()
+            .and_then(|o| o.plan_file.clone())
+            .unwrap_or_else(|| self.goal_dir().join("plan.md"))
+    }
+
+    /// Reserve a fresh visible plan episode without marking the goal as planned. The empty file
+    /// squats the timestamp identity until content is published; callers must remove it on failure.
+    pub(crate) fn allocate_plan_episode(&self) -> std::io::Result<PathBuf> {
+        let plans_dir = self.session_dir.join(crate::session::storage::PLANS_DIR);
+        std::fs::create_dir_all(&plans_dir)?;
+        loop {
+            let path = crate::session::plan_mode::next_episode_path(&self.session_dir);
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(_) => return Ok(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(error),
+            }
+        }
     }
 
     /// Path to the immutable baseline snapshot of the planner's original plan (`<session_dir>/goal/plan.baseline.md`).
@@ -853,24 +877,44 @@ impl GoalTracker {
     }
 
     /// Seed the active goal with a user-provided plan body (`/goal --plan`,
-    /// `/goal --from-plan`, approve-as-goal). Writes `<session>/goal/plan.md`
-    /// plus its immutable baseline snapshot `<session>/goal/plan.baseline.md`
-    /// (identical body — the verifier diffs later edits against it), then
-    /// publishes `plan_file`/`plan_baseline_file`. Publishing `plan_file`
+    /// `/goal --from-plan`, approve-as-goal). Attaches `episode_path` when supplied; otherwise
+    /// writes and publishes a fresh `plans/<slug>-<utc>.md`. In either case it snapshots the body
+    /// to `<session>/goal/plan.baseline.md`, then publishes `plan_file`/`plan_baseline_file`.
+    /// Publishing `plan_file`
     /// makes this "a goal that has a plan": the planner is skipped ("plan
     /// present" gate in `maybe_run_goal_planner`) and the load-time
     /// reconciler treats it as planned. Best-effort — on any write failure
     /// nothing is published, and the planner runs normally instead. Returns
     /// `true` when the seed was published.
-    pub(crate) fn seed_plan(&mut self, content: &str) -> bool {
+    pub(crate) fn seed_plan(
+        &mut self,
+        content: &str,
+        episode_path: Option<&std::path::Path>,
+    ) -> bool {
         if self.orchestration.is_none() {
             return false;
         }
         let _ = std::fs::create_dir_all(self.goal_dir());
-        let plan_path = self.plan_path();
+        let (plan_path, allocated) = match episode_path {
+            Some(path) if path.is_file() => {
+                if std::fs::read_to_string(path).ok().as_deref() != Some(content) {
+                    return false;
+                }
+                (path.to_path_buf(), false)
+            }
+            Some(_) => return false,
+            None => match self.allocate_plan_episode() {
+                Ok(path) => (path, true),
+                Err(error) => {
+                    tracing::warn!(error = %error, "goal seed: failed to allocate plan episode");
+                    return false;
+                }
+            },
+        };
         let baseline_path = self.plan_baseline_path();
-        if std::fs::write(&plan_path, content).is_err() {
-            tracing::warn!(path = %plan_path.display(), "goal seed: failed to write plan.md");
+        if allocated && std::fs::write(&plan_path, content).is_err() {
+            tracing::warn!(path = %plan_path.display(), "goal seed: failed to write plan episode");
+            let _ = std::fs::remove_file(&plan_path);
             return false;
         }
         if std::fs::write(&baseline_path, content).is_err() {
@@ -878,8 +922,16 @@ impl GoalTracker {
                 path = %baseline_path.display(),
                 "goal seed: failed to write plan.baseline.md"
             );
+            if allocated {
+                let _ = std::fs::remove_file(&plan_path);
+            }
             return false;
         }
+        let plan_path = if allocated {
+            crate::session::plan_mode::publish_plan_episode(&plan_path)
+        } else {
+            plan_path
+        };
         if let Some(o) = &mut self.orchestration {
             o.plan_file = Some(plan_path);
             o.plan_baseline_file = Some(baseline_path);

@@ -1162,6 +1162,36 @@ impl SessionActor {
             .lock()
             .snapshot()
             .map(|goal| goal.goal_id.clone());
+        let reserved_plan_file = if self.goal_planner_enabled {
+            let tracker = self.goal_tracker.lock();
+            match tracker.snapshot() {
+                Some(goal)
+                    if goal.status == crate::session::goal_tracker::GoalStatus::Active
+                        && goal.plan_file.is_none() =>
+                {
+                    match tracker.allocate_plan_episode() {
+                        Ok(path) => Some(path),
+                        Err(error) => {
+                            tracing::warn!(error = %error, "goal planner: failed to allocate plan episode");
+                            drop(tracker);
+                            if let Some(goal_id) = run_goal_id.as_deref() {
+                                let _ = self
+                                    .auto_pause_goal_if_matches_with_message(
+                                        goal_id,
+                                        crate::session::goal_tracker::GoalPauseReason::Planner,
+                                        planner_failure_pause_message(),
+                                    )
+                                    .await;
+                            }
+                            return;
+                        }
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         let _planner_state = GoalPlannerStateGuard {
             tracker: &self.goal_tracker,
         };
@@ -1188,7 +1218,13 @@ impl SessionActor {
             attempt += 1;
 
             let (goal_id, plan_file, attempt_file, outcome) = match self
-                .run_goal_planner_attempt(&objective, &steering, run_goal_id.as_deref(), attempt)
+                .run_goal_planner_attempt(
+                    &objective,
+                    &steering,
+                    run_goal_id.as_deref(),
+                    attempt,
+                    reserved_plan_file.as_deref(),
+                )
                 .await
             {
                 PlannerAttemptStep::Stop => break,
@@ -1241,22 +1277,26 @@ impl SessionActor {
                         }
                         break;
                     }
+                    let published_plan_file =
+                        crate::session::plan_mode::publish_plan_episode(&plan_file);
                     // Record `plan_file`, then snapshot the planner's ORIGINAL plan as the immutable baseline the verifier diffs later edits against
                     // Capture once: this runs only when no plan exists yet, and the `is_none()` guard keeps a restart / re-entry from overwriting it
                     let baseline_target = {
                         let mut tracker = self.goal_tracker.lock();
-                        let src = tracker.plan_path();
                         let dst = tracker.plan_baseline_path();
                         let Some(goal) = tracker
                             .snapshot_mut()
                             .filter(|goal| same_active_goal(goal) && goal.plan_file.is_none())
                         else {
+                            let _ = std::fs::remove_file(&published_plan_file);
                             break;
                         };
                         let need_baseline = goal.plan_baseline_file.is_none();
-                        goal.plan_file = Some(plan_file);
-                        need_baseline.then_some((src, dst))
+                        goal.plan_file = Some(published_plan_file.clone());
+                        need_baseline.then_some((published_plan_file, dst))
                     };
+                    self.goal_notify_sender()
+                        .persist_goal_state(&self.goal_tracker.lock());
                     if let Some((src, dst)) = baseline_target {
                         let tmp = dst
                             .with_file_name(format!("plan-baseline-{}.md", uuid::Uuid::now_v7()));
@@ -1325,6 +1365,17 @@ impl SessionActor {
         // Those paths: Stop, cap-exhausted, fail-closed, steered-retry, or a publish that broke out before committing.
         // The conditional emit inside the helper keeps the success path's earlier clear from being re-emitted as a duplicate `planning=None` A no-op if the orchestration has since vanished or the goal was replaced.
         self.clear_goal_planning_latch(run_goal_id.as_deref()).await;
+        if let Some(path) = reserved_plan_file
+            && path.exists()
+            && self
+                .goal_tracker
+                .lock()
+                .snapshot()
+                .and_then(|goal| goal.plan_file.as_deref())
+                != Some(path.as_path())
+        {
+            let _ = std::fs::remove_file(path);
+        }
     }
 
     /// Host-turn text when a planner run left the goal non-`Active`; `None` while it is still `Active`.
@@ -1371,6 +1422,7 @@ impl SessionActor {
         steering: &[String],
         run_goal_id: Option<&str>,
         attempt: u32,
+        reserved_plan_file: Option<&std::path::Path>,
     ) -> PlannerAttemptStep {
         if !self.goal_planner_enabled {
             return PlannerAttemptStep::Stop;
@@ -1393,9 +1445,13 @@ impl SessionActor {
                     return PlannerAttemptStep::Stop;
                 }
                 Some(o) => {
-                    let plan_file = tracker.plan_path();
-                    let attempt_plan_file =
-                        plan_file.with_file_name(format!("plan-{}.md", uuid::Uuid::now_v7()));
+                    let Some(plan_file) = reserved_plan_file.map(std::path::Path::to_path_buf)
+                    else {
+                        return PlannerAttemptStep::Stop;
+                    };
+                    let attempt_plan_file = tracker
+                        .plan_baseline_path()
+                        .with_file_name(format!("plan-{}.md", uuid::Uuid::now_v7()));
                     (o.goal_id.clone(), plan_file, attempt_plan_file)
                 }
                 None => return PlannerAttemptStep::Stop,

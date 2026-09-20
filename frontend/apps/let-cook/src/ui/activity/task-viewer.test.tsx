@@ -3,18 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../acp/host", () => ({
   request: vi.fn(async (method: string) => {
-    if (method === "x.ai/subagent/get") {
-      return { snapshot: { subagent_id: "sa-1", description: "Explore the repository", status: "running", tools_used: ["read", "search"] } };
-    }
     if (method === "x.ai/task/list") return { tasks: [] };
-    if (method === "x.ai/subagent/list_running") return { subagents: [] };
     return {};
   }),
   unwrapExtResult: <T,>(value: T) => value,
   wireMethod: (method: string) => method,
 }));
 
-import { emptyTranscriptCursor, reduceTranscript, useSessionStore } from "../../state/session";
+import { emptyTranscriptCursor, useSessionStore } from "../../state/session";
 import { useActivityStore, type ActivityItem } from "../../state/activity";
 import { TaskViewer } from "./task-viewer";
 
@@ -38,7 +34,7 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe("TaskViewer", () => {
-  it("renders nothing until a row asks for it", () => {
+  it("renders nothing until a background task asks for it", () => {
     const { container } = render(<TaskViewer />);
     expect(container).toBeEmptyDOMElement();
   });
@@ -51,6 +47,8 @@ describe("TaskViewer", () => {
     expect(screen.getByTestId("task-viewer-command")).toHaveTextContent("sleep 30");
     expect(screen.getByTestId("task-viewer-output")).toHaveTextContent("listening on :1420");
     expect(screen.getByTestId("task-viewer-meta")).toHaveTextContent("running");
+    expect(screen.getByTestId("dialog-hide")).toHaveAccessibleName("Hide task");
+    expect(screen.queryByTestId("dialog-close")).toBeNull();
   });
 
   it("follows the stdout the store learns while it is open", async () => {
@@ -69,21 +67,11 @@ describe("TaskViewer", () => {
     expect(screen.getByText(/full log is at \/tmp\/out\.log/)).toBeInTheDocument();
   });
 
-  it("paints a subagent's own transcript, not the parent chat's", () => {
-    const transcript = reduceTranscript(
-      { blocks: [], cursor: emptyTranscriptCursor() },
-      { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Execute", kind: "execute", status: "in_progress", rawInput: { command: "cargo build" } },
-    );
-    useActivityStore.getState().setChildTranscript("child-1", transcript);
-    viewing({ id: "sa-1", kind: "subagent", name: "Explore the repository", status: "running", startedAt: Date.now(), detail: "explore", childSessionId: "child-1" });
-    render(<TaskViewer />);
-
-    expect(screen.getByTestId("task-viewer-transcript")).toHaveTextContent("cargo build");
-  });
-
-  it("says nothing has streamed yet when this window attached late", () => {
-    viewing({ id: "sa-1", kind: "subagent", name: "Explore", status: "running", startedAt: Date.now(), childSessionId: "child-missing" });
-    render(<TaskViewer />);
-    expect(screen.getByText("Nothing streamed to this window yet.")).toBeInTheDocument();
+  it("leaves a subagent to its own session view instead of painting a reduced transcript", () => {
+    // The child's own view is ChatView's `SubagentTakeover`; this viewer is stdout only.
+    useActivityStore.getState().setChildTranscript("child-1", { blocks: [], cursor: emptyTranscriptCursor() });
+    viewing({ id: "sa-1", kind: "subagent", name: "Explore", status: "running", startedAt: Date.now(), childSessionId: "child-1" });
+    const { container } = render(<TaskViewer />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

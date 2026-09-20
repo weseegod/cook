@@ -32,7 +32,15 @@ pub struct AcpHost {
     next_id: AtomicU64,
     generation: Arc<AtomicU64>,
     workspace: Arc<Mutex<Option<PathBuf>>>,
+    /// Cached `@` path inventory keyed by `(root, hidden)`. Invalidated when the workspace moves.
+    index_cache: Mutex<Option<WorkspaceIndexCache>>,
     live_session: Mutex<Option<String>>,
+}
+
+struct WorkspaceIndexCache {
+    root: PathBuf,
+    hidden: bool,
+    entries: Vec<crate::workspace::WorkspaceIndexEntry>,
 }
 
 impl Default for AcpHost {
@@ -43,6 +51,7 @@ impl Default for AcpHost {
             next_id: AtomicU64::new(1),
             generation: Arc::new(AtomicU64::new(0)),
             workspace: Arc::new(Mutex::new(None)),
+            index_cache: Mutex::new(None),
             live_session: Mutex::new(None),
         }
     }
@@ -157,6 +166,7 @@ impl AcpHost {
         let diagnostics = Arc::new(ChildDiagnostics::default());
 
         *self.workspace.lock() = Some(cwd.clone());
+        *self.index_cache.lock() = None;
         *self.runtime.lock() = Some(ChildRuntime {
             child: child.clone(),
             stdin: stdin.clone(),
@@ -235,6 +245,7 @@ impl AcpHost {
             let _ = child.wait();
         }
         self.fail_pending("ACP process stopped");
+        *self.index_cache.lock() = None;
     }
 
     fn fail_pending(&self, message: &str) {
@@ -335,6 +346,31 @@ impl AcpHost {
             .ok_or_else(|| "no active workspace".to_owned())
     }
 
+    /// Cached `@` inventory for `(root, hidden)`, when the workspace has not moved.
+    pub fn cached_workspace_index(
+        &self,
+        root: &Path,
+        hidden: bool,
+    ) -> Option<Vec<crate::workspace::WorkspaceIndexEntry>> {
+        self.index_cache.lock().as_ref().and_then(|cache| {
+            (cache.root == root && cache.hidden == hidden).then(|| cache.entries.clone())
+        })
+    }
+
+    /// Remember a freshly walked `@` inventory until the workspace root changes.
+    pub fn store_workspace_index(
+        &self,
+        root: PathBuf,
+        hidden: bool,
+        entries: Vec<crate::workspace::WorkspaceIndexEntry>,
+    ) {
+        *self.index_cache.lock() = Some(WorkspaceIndexCache {
+            root,
+            hidden,
+            entries,
+        });
+    }
+
     /// Point the workspace-rooted commands (`workspace_*`, the `fs/*` bridge) at the folder a
     /// conversation belongs to. The window can open a conversation from another project without
     /// respawning the agent, and those commands have to answer for the folder on screen rather than
@@ -352,6 +388,7 @@ impl AcpHost {
         if workspace.as_deref() != Some(root.as_path()) {
             logging::info("acp.workspace", format!("cwd={}", root.display()));
             *workspace = Some(root);
+            *self.index_cache.lock() = None;
         }
     }
 }

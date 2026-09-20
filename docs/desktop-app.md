@@ -37,7 +37,7 @@ Desktop is a presentation client, not an IDE and not a second agent.
 | Shared `~/.cook` with CLI | Separate auth/config/session store |
 | Linux + macOS first | Electron Chromium bundle |
 
-Upstream Grok Build already used this shape (`frontend/apps/grok-desktop`,
+The upstream implementation already used this shape (`frontend/apps/grok-desktop`,
 `clientIdentifier: grok-desktop`). This fork does not ship that tree. Thanh
 Desktop is a new app on the **same ACP contract**. If upstream lands
 `grok-desktop`, do not rename this tree; cherry-pick protocol patterns.
@@ -244,9 +244,10 @@ tag is ignored, never rendered as a row.
 Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
 to the session cwd plus one allow-path: the agent's own session store
 (`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`).
-Without it plan mode cannot write its plan file (`<session>/plan.md`, or
-`<session>/plans/<utc>.md` per planning episode, published to
-`<slug>-<utc>.md` when the episode ends), which lives outside
+Without it plan mode and goal planning cannot write their plan files
+(`<session>/plan.md` as the legacy plan-mode fallback, or
+`<session>/plans/<utc>.md` per plan/goal episode, published to
+`<slug>-<utc>.md` when complete), which live outside
 every workspace. That allow-path is load-bearing.
 
 ### 5.3 `x.ai/*` groups
@@ -350,6 +351,21 @@ The transcript machine lives in `src/state/session.ts` (`reduceTranscript` /
 `reduceNotifications`) plus `goal.ts` / `plan-review.ts`. Replay and live
 updates use the same reducer.
 
+One surface reads a transcript that is not the open conversation's: a subagent
+runs its own ACP session, so its updates arrive under the child's session id and
+are routed to `childTranscripts` instead of the parent's scrollback
+(`acp/client/state.ts` `routeChildUpdate`), ahead of the parent's prompt
+correlation — a child's updates carry the child's own `promptId`, which no
+prompt this window sent would match. The tasks list row's `[view]` then replaces
+the chat column with that child's own view (`ui/chat/subagent-takeover.tsx`,
+`app/agent_view/subagent_takeover.rs`): the same `TranscriptPane` rows and a
+turn-status row derived from the child's blocks. The takeover has no prompt of
+its own — the TUI's does not either, and a child is addressed by the parent's
+`send_subagent_message` row, not from inside its view. A long prompt, in either
+transcript, folds to three lines (`scrollback/blocks/user.rs`
+`COLLAPSED_MAX_LINES`). A background command is not a conversation and keeps the
+stdout viewer (`ui/activity/task-viewer.tsx`, `show_bg_task_viewer`).
+
 Plan files are the one part of plan state that is not in the transcript: a
 session's history of them comes from the agent (`x.ai/session/plans`), is held
 in `planFiles`, and is painted by the header chip (`plan-chip.tsx`) as a list —
@@ -358,6 +374,10 @@ H1 (`title`), current episode marked, each row's three-dot menu offering Copy,
 Copy file path and Delete (`x.ai/session/plans/delete`). The chip belongs to the
 conversation rather than to a plan: it sits in the header from the moment a
 workspace is open and reports an empty list before the first episode is written.
+`/goal` planner output and `--plan` seeds use the same episode list without
+turning on plan mode; `--from-plan` and approve-as-goal reuse an inactive
+published episode. The private verifier snapshot at `goal/plan.baseline.md` is
+never listed, and a live or paused goal's contract cannot be deleted.
 An agent that predates those methods leaves the list empty too, and keeps its
 older single-plan behavior for a parked review, so the feature degrades instead
 of erroring.

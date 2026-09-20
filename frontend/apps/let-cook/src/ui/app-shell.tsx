@@ -26,6 +26,7 @@ import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
 
 const DISMISSED_KEY = "cook.connectProviderDismissed";
+const NOTICE_TIMEOUT_MS = 3_000;
 const SETTINGS_TABS = new Set<SettingsTab>(["general", "models", "connectors", "context", "skills", "hooks", "about"]);
 
 function isSettingsTab(value: string): value is SettingsTab {
@@ -55,6 +56,7 @@ function exportActiveTranscript() {
 export function AppShell() {
   const cwd = useSessionStore((state) => state.cwd);
   const connection = useSessionStore((state) => state.connection);
+  const notice = useSessionStore((state) => state.notice);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [utilityPanelOpen, setUtilityPanelOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
@@ -65,6 +67,14 @@ export function AppShell() {
   const activityPanelNonce = useActivityStore((state) => state.panelNonce);
   const toolsPanelNonce = useToolsPanelStore((state) => state.nonce);
   const artifactEpoch = useArtifactStore((state) => state.openEpoch);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => {
+      useSessionStore.getState().set({ notice: null });
+    }, NOTICE_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
 
   useEffect(() => {
     if (activityPanelNonce > 0) setUtilityPanelOpen(true);

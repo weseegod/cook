@@ -4,7 +4,7 @@ This file ships with the CLI and is extracted to `~/.cook/docs/user-guide/26-con
 
 ## How to configure
 
-Three files configure Grok Build, and they are written by different people.
+Three files configure Cook, and they are written by different people.
 
 | File | Who writes it | Where it lives | Use it to |
 | --- | --- | --- | --- |
@@ -14,7 +14,7 @@ Three files configure Grok Build, and they are written by different people.
 
 Choose `managed_config.toml` for defaults you want people to be able to adjust, and `requirements.toml` for the ones you do not.
 
-Grok Build also reads these layers, later rows winning except where a requirements pin or the Managed column says otherwise.
+Cook also reads these layers, later rows winning except where a requirements pin or the Managed column says otherwise.
 
 1. Compiled defaults.
 2. `/etc/grok/managed_config.toml`, then `$GROK_HOME/managed_config.toml` (fleet defaults; console-synced).
@@ -218,7 +218,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.cook/con
 | `features.mcp_liveness_watchers` | `boolean` | `yes` | `user` | Poll MCP transports and push server_status updates. Emergency kill switch when false. |
 | `features.mcp_push_server_status` | `boolean` | `yes` | `user` | Pager subscribes to MCP server_status push. Process env GROK_MCP_PUSH_SERVER_STATUS wins at launch. |
 | `features.mcp_recursive_config_watch` | `boolean` | `yes` | `user` | Watch `<cwd>/` and `<cwd>/.grok/` for project MCP config edits. Name is a misnomer; watches are non-recursive. |
-| `features.non_git_warning` | `boolean` | `yes` | `user` | Show a blocking warning when Grok starts outside a Git repository. |
+| `features.non_git_warning` | `boolean` | `yes` | `user` | Show a blocking warning when Cook starts outside a Git repository. |
 | `features.remember_mode` | `boolean` | `—` | `—` | Remember the last permission mode across sessions. Read from user `config.toml` only. |
 | `features.remote_fetch` | `boolean` | `pin` | `fleet` | Pin remote model-catalog and asset fetch. Managed wins over the user file when both set. |
 | `features.repo_status_in_system_prompt` | `boolean` | `pin` | `user` | Enable or disable `repo_status_in_system_prompt`. Default true. Also `GROK_REPO_STATUS_IN_SYSTEM_PROMPT`. |
@@ -255,7 +255,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.cook/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `grok_com_config` | `table` | `yes` | `user` | Grok.com websocket and OAuth/OIDC settings. `[auth]` is an alias. |
+| `grok_com_config` | `table` | `yes` | `user` | Cook.com websocket and OAuth/OIDC settings. `[auth]` is an alias. |
 | `grok_com_config.auth_provider_command` | `string` | `yes` | `user` | External auth binary; stdout is the token. Also GROK_AUTH_PROVIDER_COMMAND. |
 | `grok_com_config.auth_provider_label` | `string` | `yes` | `user` | Login button label for an external auth provider. Also GROK_AUTH_PROVIDER_LABEL. |
 | `grok_com_config.auth_token_ttl` | `number` | `yes` | `user` | Token TTL in seconds for providers that return a bare token. Also GROK_AUTH_TOKEN_TTL. |
@@ -396,7 +396,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.cook/con
 | `model.<id>.stream_tool_calls` | `boolean` | `yes` | `user` | Per-model tool-call streaming request shape. |
 | `model.<id>.subagent_rate_limit_max_attempts` | `number` | `yes` | `user` | Maximum subagent 429 wait-loop attempts when `rate_limit_retry_threshold` is unset; default 8, maximum 32, and `0` disables the wait loop. |
 | `model.<id>.supported_in_api` | `boolean` | `yes` | `user` | Whether this catalog entry is offered as a public API model. |
-| `model.<id>.supports_backend_search` | `boolean` | `yes` | `user` | Whether the endpoint supports Grok-hosted server-side search tools. |
+| `model.<id>.supports_backend_search` | `boolean` | `yes` | `user` | Whether the endpoint supports Cook-hosted server-side search tools. |
 | `model.<id>.supports_reasoning_effort` | `boolean` | `yes` | `user` | Deprecated; prefer `reasoning_efforts`. |
 | `model.<id>.system_prompt_label` | `string` | `yes` | `user` | Per-model system-prompt identity label. |
 | `model.<id>.temperature` | `number` | `yes` | `user` | Per-model sampling temperature. |
@@ -672,7 +672,7 @@ One exception to that rule:
 | --- | --- |
 | `features.remote_fetch` | The managed value wins over the developer's. |
 
-Grok Build reads `/etc/grok/managed_config.toml` first, then `$GROK_HOME/managed_config.toml`, which the console keeps in sync. Values in the second replace values in the first.
+Cook reads `/etc/grok/managed_config.toml` first, then `$GROK_HOME/managed_config.toml`, which the console keeps in sync. Values in the second replace values in the first.
 
 The **Managed** column on the tables above is the per-key answer: `fleet` means the fleet value stands, `user` means the user's file wins, `—` means this file is ignored.
 
@@ -690,11 +690,11 @@ These keys exist only in `requirements.toml`:
 
 ## What happens when a setting is refused
 
-| Situation | What Grok Build does |
+| Situation | What Cook does |
 | --- | --- |
 | A developer sets a key you pinned | The pinned value applies. `grok inspect` lists the requirements file that contributed. |
 | A developer sets a key you shipped in `managed_config.toml` | Their value applies, except `features.remote_fetch`. Pin the key instead if it must hold. |
-| `requirements.toml` is missing or its signature does not verify | The pins do not apply, and Grok Build starts without them. Set `fail_closed = true` to refuse to start instead. |
+| `requirements.toml` is missing or its signature does not verify | The pins do not apply, and Cook starts without them. Set `fail_closed = true` to refuse to start instead. |
 | A pinned key names a value this version does not recognise | The key is ignored and the rest of the file still applies. |
 
 ## Check what is in effect

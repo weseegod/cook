@@ -1,6 +1,6 @@
 # Plugins
 
-A plugin bundles skills, slash commands, agents, hooks, and MCP servers into one installable unit. You get plugins from a marketplace, install the ones you want, and Grok loads what they add. To build and share your own, see [Create your own marketplace](#create-your-own-marketplace).
+A plugin bundles skills, slash commands, agents, hooks, and MCP servers into one installable unit. You get plugins from a marketplace, install the ones you want, and Cook loads what they add. To build and share your own, see [Create your own marketplace](#create-your-own-marketplace).
 
 ---
 
@@ -8,7 +8,7 @@ A plugin bundles skills, slash commands, agents, hooks, and MCP servers into one
 
 A marketplace is a catalog of plugins that someone has published and shared. Using one takes two steps, like adding an app store: adding the marketplace lets you browse its plugins, and you then choose which to install.
 
-1. **Add the marketplace** so Grok can show what it offers. Nothing installs yet.
+1. **Add the marketplace** so Cook can show what it offers. Nothing installs yet.
 2. **Install the plugins you want**, one at a time.
 
 Plugins stay off until you install and enable them, and a plugin's hooks and MCP servers stay inactive until you [trust](#trust-and-security) it.
@@ -75,9 +75,9 @@ The source you install accepts several forms:
 - a full git URL (`https://github.com/user/repo.git`) or SSH (`git@github.com:user/repo.git`)
 - a local path (`./local-dir` or `/absolute/path`)
 
-Run `grok plugin install <source>` without `--trust` and Grok shows the source, warns that installing activates the plugin's hooks, MCP servers, and skills, then stops. Add `--trust` to go ahead. Only install plugins from sources you trust (see [Trust and security](#trust-and-security)).
+Run `grok plugin install <source>` without `--trust` and Cook shows the source, warns that installing activates the plugin's hooks, MCP servers, and skills, then stops. Add `--trust` to go ahead. Only install plugins from sources you trust (see [Trust and security](#trust-and-security)).
 
-A plugin's skills appear in the slash menu. When a skill name is ambiguous, Grok shows the qualified form prefixed by the plugin name, for example `/deploy-tools:release`. To pick up a newly installed plugin, press `r` in the Plugins tab or start a new session.
+A plugin's skills appear in the slash menu. When a skill name is ambiguous, Cook shows the qualified form prefixed by the plugin name, for example `/deploy-tools:release`. To pick up a newly installed plugin, press `r` in the Plugins tab or start a new session.
 
 ---
 
@@ -122,7 +122,7 @@ In the **Marketplace** tab, browse and install from your sources:
 
 Component summaries in the Marketplace tab appear only for marketplaces that publish a [`plugin-index.json`](#add-a-catalog-optional) catalog. Destructive actions ask for confirmation: press lowercase `y` to confirm, any other key (including `Esc`) to cancel.
 
-In the **Workflows** tab (open it directly with `/workflows`, or `Tab` from the commands above), browse the saved workflows Grok discovered: built-ins, project `.grok/workflows/`, and user `~/.grok/workflows/`. Each row shows the workflow's name, source, and description; press `Enter` to expand its path and when-to-use notes, `r` to reload the list, and `/` to search. Rows are browse-only — run one with `/workflow <name>` or its own slash command.
+In the **Workflows** tab (open it directly with `/workflows`, or `Tab` from the commands above), browse the saved workflows Cook discovered: built-ins, project `.grok/workflows/`, and user `~/.grok/workflows/`. Each row shows the workflow's name, source, and description; press `Enter` to expand its path and when-to-use notes, `r` to reload the list, and `/` to search. Rows are browse-only — run one with `/workflow <name>` or its own slash command.
 
 ### Turn plugins on or off in config
 
@@ -145,7 +145,7 @@ To hide the plugins and hooks interface entirely, set `disable_plugins = true` i
 
 Plugins run with your privileges, so treat them like any software you install: only add marketplaces and install plugins from sources you trust.
 
-Enabled plugins require trust to load skills, commands, hooks, MCP servers, and LSP servers. Untrusted plugin agents remain listed with frontmatter only. Grok trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust. Install with `--trust` to grant it:
+Enabled plugins require trust to load skills, commands, hooks, MCP servers, and LSP servers. Untrusted plugin agents remain listed with frontmatter only. Cook trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust. Install with `--trust` to grant it:
 
 ```bash
 grok plugin install <source> --trust
@@ -165,7 +165,7 @@ You need three things: a git repository, one folder per plugin, and a single ind
 
 1. **Create a git repository.** A private repository is fine; access uses each person's own git credentials.
 2. **Add each plugin as a folder.** A plugin folder holds any of `skills/`, `commands/`, `agents/`, `hooks/hooks.json`, `.mcp.json`, and an optional `plugin.json` manifest (see [What a plugin contains](#what-a-plugin-contains)).
-3. **List the plugins in `.grok-plugin/marketplace.json`.** This is the index Grok reads.
+3. **List the plugins in `.grok-plugin/marketplace.json`.** This is the index Cook reads.
 4. **Push the repository.**
 
 A typical layout:
@@ -173,7 +173,7 @@ A typical layout:
 ```
 my-org-plugins/
   .grok-plugin/
-    marketplace.json      # the index Grok reads (required)
+    marketplace.json      # the index Cook reads (required)
     plugin-index.json     # optional catalog for richer browsing
   plugins/
     gdrive/
@@ -182,7 +182,7 @@ my-org-plugins/
       .mcp.json           # MCP servers this plugin adds
 ```
 
-Grok reads the index from `.grok-plugin/marketplace.json`. It also accepts `.grok-plugin/plugin.json` and the `.claude-plugin/` equivalents.
+Cook reads the index from `.grok-plugin/marketplace.json`. It also accepts `.grok-plugin/plugin.json` and the `.claude-plugin/` equivalents.
 
 ### Write the index
 
@@ -267,7 +267,7 @@ git = "https://github.com/my-org/my-org-plugins.git"
 enabled = ["gdrive"]
 ```
 
-For a hands-off install with no per-person step, also place the plugin's files where Grok discovers and trusts them automatically: `~/.grok/plugins/`, or a directory your device-management tool manages that you point to with `[plugins].paths`. Then enable them with `[plugins].enabled`.
+For a hands-off install with no per-person step, also place the plugin's files where Cook discovers and trusts them automatically: `~/.grok/plugins/`, or a directory your device-management tool manages that you point to with `[plugins].paths`. Then enable them with `[plugins].enabled`.
 
 A managed workspace can also sync skills to users directly, without a plugin. Synced skills appear with the `server` scope and are administered by the workspace; a user's own skill of the same name shadows the synced one. See [Skills](08-skills.md).
 
@@ -301,7 +301,7 @@ source = { source = "git", url = "https://github.com/ACME/my-org-plugins.git", r
 
 ### Restrict which MCP servers can run
 
-Grok enforces MCP allow/deny lists from every native TOML policy layer and from Claude `managed-settings.json` (advisory; see above). `grok inspect` prints the merged lists.
+Cook enforces MCP allow/deny lists from every native TOML policy layer and from Claude `managed-settings.json` (advisory; see above). `grok inspect` prints the merged lists.
 
 Each allow or deny entry is one of:
 
@@ -344,13 +344,13 @@ command = "node"
 server_url = "https://mcp.untrusted.example/*"
 ```
 
-The lists apply after Grok merges user, project, plugin, and imported MCP config. A blocked server is dropped from the session (logged as `MCP server blocked by managed settings policy`) with a reason of matching `deniedMcpServers`, not in `allowedMcpServers`, locked down by policy, or the project-MCP pin, plus the policy file path (inspect/JSON/logs keep the full path; user-facing refusals show the file name).
+The lists apply after Cook merges user, project, plugin, and imported MCP config. A blocked server is dropped from the session (logged as `MCP server blocked by managed settings policy`) with a reason of matching `deniedMcpServers`, not in `allowedMcpServers`, locked down by policy, or the project-MCP pin, plus the policy file path (inspect/JSON/logs keep the full path; user-facing refusals show the file name).
 
 The deployment can also send MCP servers to users directly. Native allowlists still bound what any configuration, managed or personal, is allowed to run.
 
 ### Turn off session-start plugin auto-update
 
-`plugin_auto_update = false` / `pluginAutoUpdate = false` is tighten-only. This global pin is Grok's own key with no Claude counterpart. When pinned, session start does not scan marketplaces or fan out per-plugin updates (no toast). Manual `grok plugin update` still works. Claude's per-marketplace `extraKnownMarketplaces.<name>.autoUpdate: false` pins the same global switch.
+`plugin_auto_update = false` / `pluginAutoUpdate = false` is tighten-only. This global pin is Cook's own key with no Claude counterpart. When pinned, session start does not scan marketplaces or fan out per-plugin updates (no toast). Manual `grok plugin update` still works. Claude's per-marketplace `extraKnownMarketplaces.<name>.autoUpdate: false` pins the same global switch.
 
 ### Require pinned versions
 
@@ -373,7 +373,7 @@ disable_plugins = true
 
 ### What this does not cover
 
-Marketplaces distribute Grok content: skills, commands, agents, hooks, and MCP server configurations. They do not install a program onto a machine. A skill or MCP server that runs a helper binary (for example a custom sign-in tool) still needs that binary delivered separately, bundled with your deployment or pushed through your device-management tool.
+Marketplaces distribute Cook content: skills, commands, agents, hooks, and MCP server configurations. They do not install a program onto a machine. A skill or MCP server that runs a helper binary (for example a custom sign-in tool) still needs that binary delivered separately, bundled with your deployment or pushed through your device-management tool.
 
 ---
 
@@ -408,13 +408,13 @@ A plugin is a directory with any combination of:
 - **MCP servers**: a `.mcp.json` file
 - **LSP servers**: a `.lsp.json` file
 
-An optional `plugin.json` manifest can override paths or add metadata; without one, Grok discovers components from these standard directories. For example, a `team-tools` plugin might bundle a deploy skill, a code-review agent, pre-commit hooks, and a Linear MCP server, installed together in one step.
+An optional `plugin.json` manifest can override paths or add metadata; without one, Cook discovers components from these standard directories. For example, a `team-tools` plugin might bundle a deploy skill, a code-review agent, pre-commit hooks, and a Linear MCP server, installed together in one step.
 
 A skill or command may ship a **helper script** next to its SKILL.md (for example a Python file it calls). Put the script in the plugin and have the skill run it by relative path; it is copied to the machine with the plugin. The script's runtime and any packages it imports must already be present, plugins deliver files, not runtimes or native binaries (see [What this does not cover](#what-this-does-not-cover)).
 
-### Where Grok looks for plugins
+### Where Cook looks for plugins
 
-Grok discovers plugins from these locations, in priority order. The `.claude/plugins/` equivalents also work, and when two plugins share a name the higher-priority one wins:
+Cook discovers plugins from these locations, in priority order. The `.claude/plugins/` equivalents also work, and when two plugins share a name the higher-priority one wins:
 
 | Location | Scope | Trust |
 |----------|-------|-------|
@@ -435,7 +435,7 @@ Plugin hooks receive two variables beyond the standard hook environment:
 | `GROK_PLUGIN_ROOT` | Absolute path to the plugin's installed directory. |
 | `GROK_PLUGIN_DATA` | Absolute path to the plugin's writable data directory, for state, caches, and logs. |
 
-Grok sets these and overrides any same-named value in the hook's `env` map (the `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` aliases are set too). See the [Hooks guide](10-hooks.md) for every variable passed to hooks.
+Cook sets these and overrides any same-named value in the hook's `env` map (the `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA` aliases are set too). See the [Hooks guide](10-hooks.md) for every variable passed to hooks.
 
 ### Keyboard shortcuts
 

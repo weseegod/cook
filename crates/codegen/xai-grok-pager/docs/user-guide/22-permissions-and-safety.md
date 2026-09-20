@@ -1,15 +1,15 @@
 # Permissions and safety
 
-Control what Grok can access and do: permission modes, allow/ask/deny rules, hooks, and the optional OS-level sandbox.
+Control what Cook can access and do: permission modes, allow/ask/deny rules, hooks, and the optional OS-level sandbox.
 
-- **Modes** set how often Grok asks for approval (always-approve, auto, ask, and related).
+- **Modes** set how often Cook asks for approval (always-approve, auto, ask, and related).
 - **Rules** set which tools are allowed, asked about, or blocked within that baseline.
 
 ---
 
 ## Permission modes
 
-When Grok edits a file, runs a command, or calls an external tool, it may pause for approval. Permission modes control how often that happens.
+When Cook edits a file, runs a command, or calls an external tool, it may pause for approval. Permission modes control how often that happens.
 
 Modes set a baseline. Allow, ask, and deny [rules](#configuring-permissions) still apply on top of any mode.
 
@@ -112,7 +112,7 @@ disable_bypass_permissions_mode = true
 
 Do not use `permission_mode` for this lock; that key is a switchable default. The legacy `[ui] yolo = false` key in `requirements.toml` also disables always-approve for compatibility.
 
-Grok can still load Claude-style permission **rules** from managed settings; always-approve is locked with `requirements.toml` as shown above.
+Cook can still load Claude-style permission **rules** from managed settings; always-approve is locked with `requirements.toml` as shown above.
 
 ---
 
@@ -180,7 +180,7 @@ These checks apply per segment. In a command like `ls && rm -rf /`, the `ls` seg
 
 ## Configuring Permissions
 
-Grok reads permission rules from three compatible sources. Rules from all sources are merged into one set; a rule's effect depends on its action (`deny` > `ask` > `allow`), not on which file it came from.
+Cook reads permission rules from three compatible sources. Rules from all sources are merged into one set; a rule's effect depends on its action (`deny` > `ask` > `allow`), not on which file it came from.
 
 ### Where Permission Rules Live (Scopes)
 
@@ -191,13 +191,13 @@ Permission rules can be global (all projects), project-scoped (one repository), 
 | Global (all projects) | `~/.cook/config.toml` | No |
 | Project (committed) | `<project>/.grok/config.toml` | Yes (commit it) |
 | Project (personal) | `<project>/.claude/settings.local.json` | No (gitignore it) |
-| Interactive grants | Stored internally by Grok, per project | No |
+| Interactive grants | Stored internally by Cook, per project | No |
 
 Notes on scoping:
 
-- Grok discovers a `.grok/config.toml` at every directory level from the repository root down to your working directory, so a subdirectory can add rules on top of the repo root's.
+- Cook discovers a `.grok/config.toml` at every directory level from the repository root down to your working directory, so a subdirectory can add rules on top of the repo root's.
 - Rules from all scopes are merged into one rule set; `deny` > `ask` > `allow` applies across scopes, so a global `deny` cannot be overridden by a project `allow`.
-- Grok has no native `config.local.toml`. For personal, uncommitted rules in a project, use `.claude/settings.local.json`; Grok reads it directly (see [Claude Code Compatibility](#3-claude-code-compatibility-claudesettingsjson)).
+- Cook has no native `config.local.toml`. For personal, uncommitted rules in a project, use `.claude/settings.local.json`; Cook reads it directly (see [Claude Code Compatibility](#3-claude-code-compatibility-claudesettingsjson)).
 - Interactive "Always allow" decisions are stored outside the repository, scoped to the project (see [Interactive Approvals](#interactive-approvals-and-where-they-persist)).
 
 To stop prompts for a specific command in one project, add a narrow allow rule to that project's `.grok/config.toml` (or `.claude/settings.json`):
@@ -253,7 +253,7 @@ Because `deny` always wins, you cannot combine these `allow` rules with a catch-
 
 Rules from the global `~/.cook/config.toml` and every project `.grok/config.toml` (from the repo root down to your working directory) are merged into one rule set, alongside any `.claude/settings.json` rules.
 
-Managed configuration deployed by your organization also contributes `[permission]` rules: the system `/etc/grok/managed_config.toml`, and a user-level copy that Grok maintains automatically at `~/.cook/managed_config.toml`. Managed rules merge like rules from any other source, with two properties specific to managed `allow` rules: your own `deny` and `ask` rules win over a managed `allow` (severity ordering), and a catch-all managed `allow` is ignored when always-approve is locked off. For rules that users cannot edit away, use the root-owned system `/etc/grok/requirements.toml`.
+Managed configuration deployed by your organization also contributes `[permission]` rules: the system `/etc/grok/managed_config.toml`, and a user-level copy that Cook maintains automatically at `~/.cook/managed_config.toml`. Managed rules merge like rules from any other source, with two properties specific to managed `allow` rules: your own `deny` and `ask` rules win over a managed `allow` (severity ordering), and a catch-all managed `allow` is ignored when always-approve is locked off. For rules that users cannot edit away, use the root-owned system `/etc/grok/requirements.toml`.
 
 Permission rules from every source are read once, when a session starts. Changes apply to the next session.
 
@@ -276,7 +276,7 @@ allow = [
 
 ### 3. Claude Code Compatibility (`.claude/settings.json`)
 
-Grok reads `~/.claude/settings.json` and `~/.claude/settings.local.json`, plus the project-level `<project>/.claude/settings.json` and `settings.local.json` (walking up to the repo root). The native `.grok` source for permission rules is `config.toml`, described in the section above.
+Cook reads `~/.claude/settings.json` and `~/.claude/settings.local.json`, plus the project-level `<project>/.claude/settings.json` and `settings.local.json` (walking up to the repo root). The native `.grok` source for permission rules is `config.toml`, described in the section above.
 
 Example:
 
@@ -297,7 +297,7 @@ Example:
 }
 ```
 
-Supported `defaultMode` values include `default`, `auto`, `acceptEdits`, `bypassPermissions`, `dontAsk`, and `plan`. Grok reads `defaultMode` from its canonical location under `permissions`; a top-level `defaultMode` is also accepted when the nested key is absent.
+Supported `defaultMode` values include `default`, `auto`, `acceptEdits`, `bypassPermissions`, `dontAsk`, and `plan`. Cook reads `defaultMode` from its canonical location under `permissions`; a top-level `defaultMode` is also accepted when the nested key is absent.
 
 `permissions.allow`, `permissions.deny`, and `permissions.ask` entries are translated into native rules and then matched with the semantics in the [Rule Matching Reference](#rule-matching-reference). Translation notes:
 
@@ -324,7 +324,7 @@ Matching is case-sensitive. Leading whitespace in the command is trimmed before 
 
 A trailing `:*` suffix on a Bash rule is stripped to a plain prefix: `Bash(git commit:*)` becomes prefix `git commit`. Because prefixes have no word boundary, a `deny` written as `Bash(sed:*)` also blocks commands such as `sed-custom`.
 
-**Chained commands.** Grok parses each command like a shell and splits it on `&&`, `||`, `;`, `|`, and newlines. The rule actions treat segments differently:
+**Chained commands.** Cook parses each command like a shell and splits it on `&&`, `||`, `;`, `|`, and newlines. The rule actions treat segments differently:
 
 - `deny` and `ask` rules are checked against every segment, and against the whole string. One denied segment rejects the entire command.
 - `allow` rules are conjunctive: the command is auto-approved by rule only when **every** segment independently matches an allow rule. `Bash(git *)` approves `git status && git diff`, but not `git status && rm -rf /` — the `rm` segment matches no allow rule, so the command falls through to the mode's normal handling (a prompt in `default` mode; the classifier in `auto` mode, which may still approve or block it; a denial under `dontAsk`). A single allow rule can therefore never approve a chain that smuggles in an unrelated command.
@@ -362,7 +362,7 @@ Path patterns are globs matched against the tool path after lexical normalizatio
 
 ### MCP Rules
 
-`MCPTool(...)` patterns match the full Grok tool name in `server__tool` form, with glob support: `MCPTool(linear__*)` matches every tool from the `linear` server. Grok tool names carry no `mcp__` prefix.
+`MCPTool(...)` patterns match the full Cook tool name in `server__tool` form, with glob support: `MCPTool(linear__*)` matches every tool from the `linear` server. Cook tool names carry no `mcp__` prefix.
 
 The `mcp__` rule spelling used in `.claude/settings.json` files is also accepted and rewritten onto the same matcher: `mcp__linear` (every tool on the `linear` server), `mcp__linear__get_issue` (one tool), `mcp__linear__*` (every tool on the server), and `mcp__*` (every MCP tool).
 
@@ -414,9 +414,9 @@ Commands on the [dangerous list](#dangerous-commands) (for example `git push` an
 
 ### Persistence Is Per Project
 
-Interactive grants are stored in Grok's own state directory under your home directory, scoped to the git repository you launched Grok in (its repository root), so a grant accepted at the repo root also applies in sessions started from a subdirectory of the same repository. Outside a git repository, grants are scoped to the launch directory, and each git worktree keeps its own grants. A grant made in one project never applies in another, grants are not written into the repository, and they are not meant to be hand-edited.
+Interactive grants are stored in Cook's own state directory under your home directory, scoped to the git repository you launched Cook in (its repository root), so a grant accepted at the repo root also applies in sessions started from a subdirectory of the same repository. Outside a git repository, grants are scoped to the launch directory, and each git worktree keeps its own grants. A grant made in one project never applies in another, grants are not written into the repository, and they are not meant to be hand-edited.
 
-To inspect or reset a project's grants, open the `sessions` subdirectory of your Grok home (the `.grok` directory under your home directory, or `$GROK_HOME`): each project directory there (URL-encoded scope root) holds a `permission.toml` (plus per-client `permission_<client>.toml` variants) listing the remembered command prefixes, globs, MCP tools/servers, web-fetch domains, and "never allow" entries. Deleting the file resets that project's grants; the next matching tool call prompts again. Treat it as read-only state — to *add* rules, use the declarative `[permission]` configuration instead.
+To inspect or reset a project's grants, open the `sessions` subdirectory of your Cook home (the `.grok` directory under your home directory, or `$GROK_HOME`): each project directory there (URL-encoded scope root) holds a `permission.toml` (plus per-client `permission_<client>.toml` variants) listing the remembered command prefixes, globs, MCP tools/servers, web-fetch domains, and "never allow" entries. Deleting the file resets that project's grants; the next matching tool call prompts again. Treat it as read-only state — to *add* rules, use the declarative `[permission]` configuration instead.
 
 Interactive grants are personal, per-machine state. For an allowlist you can review in code review and share with teammates, use declarative rules in the project's `.grok/config.toml` instead.
 

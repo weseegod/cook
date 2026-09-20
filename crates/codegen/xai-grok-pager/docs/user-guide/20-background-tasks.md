@@ -1,6 +1,6 @@
 # Background Tasks and Monitoring
 
-Grok runs long-lived processes without blocking the conversation. This document covers background commands, the `/loop` command, the `monitor` tool, and the scheduler.
+Cook runs long-lived processes without blocking the conversation. This document covers background commands, the `/loop` command, the `monitor` tool, and the scheduler.
 
 ---
 
@@ -94,7 +94,7 @@ The `monitor` tool streams events from a long-running script. Each line of outpu
 ### How It Works
 
 1. You provide a shell command (`command`) and a short `description` that appears in every notification.
-2. Grok merges the command's stdout and stderr into a single output file.
+2. Cook merges the command's stdout and stderr into a single output file.
 3. Each new line in that file becomes a notification delivered to the conversation.
 4. The monitor runs until the command exits or you stop it.
 
@@ -137,7 +137,7 @@ Stop persistent monitors with `kill_command_or_subagent(task_id)`.
 
 ### Volume Control
 
-If a monitor produces too many events, Grok stops it automatically. When this happens, restart the monitor with a tighter filter. Prefer `grep --line-buffered`, `awk`, or a wrapper script that emits only the events you care about.
+If a monitor produces too many events, Cook stops it automatically. When this happens, restart the monitor with a tighter filter. Prefer `grep --line-buffered`, `awk`, or a wrapper script that emits only the events you care about.
 
 ---
 

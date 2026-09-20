@@ -70,9 +70,9 @@ The two are separate worlds:
 
 | World | Covers | Commands | Store |
 |-------|--------|----------|-------|
-| Grok | the model and API | `grok login`, `grok logout` | `~/.grok/auth.json` |
+| Cook | the model and API | `grok login`, `grok logout` | `~/.grok/auth.json` |
 
-`grok clone` never reads `~/.grok/auth.json` for Git. Signing into Grok does not
+`grok clone` never reads `~/.grok/auth.json` for Git. Signing into Cook does not
 give the daemon a credential for the remote, and neither does
 `[clone] enabled = true`: that flag is a **product gate** deciding whether
 `grok clone` runs at all, not authorization for GitHub.

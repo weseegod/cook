@@ -21,7 +21,7 @@ scrollback gets a selection you can move with the arrow keys.
 
 ## Panes
 
-- **`Ctrl+T`** — toggle the **todos pane**: Grok's live plan for the
+- **`Ctrl+T`** — toggle the **todos pane**: Cook's live plan for the
   current task.
 - **`Ctrl+G`** — toggle the **tasks pane**: everything running in the
   background, with its status.

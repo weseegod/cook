@@ -1,4 +1,4 @@
-# Upstream merge playbook (AI-oriented)
+# Cook upstream merge playbook (AI-oriented)
 
 This document is a step-by-step guide for syncing this fork with upstream
 [xai-org/grok-build](https://github.com/xai-org/grok-build). Follow it
@@ -10,7 +10,7 @@ verbatim when performing automated upstream merges.
 reason: to let third-party models (DeepSeek, OpenRouter, any OpenAI-compatible
 API) run reliably on the upstream agent/TUI core with Bring Your Own Key
 (BYOK) configuration — plus a few small TUI ergonomics — and to trim what a
-personal BYOK fork doesn't need (billing/paywall, product telemetry).
+Cook's BYOK distribution doesn't need (billing/paywall, product telemetry).
 Everything else is taken from upstream exactly as shipped.
 
 - **KEEP (upstream-owned — never fork):** the agent runtime, TUI, tools, core
@@ -226,14 +226,21 @@ git fetch --all
    scripts/publish_release.sh
    ```
 
-   The script bumps `xai-grok-version` + `xai-grok-pager-bin` (+ `Cargo.lock`),
-   tags `vX.Y.Z`, builds `cook` **locally** via `./build.sh` for the current
-   platform, and publishes the GitHub Release with the local binary + `stable`/
-   `alpha` pointers. **There is no CI** — the fork builds and releases from the
-   machine running the script (needs `gh` installed + authenticated). Before
-   closing out the sync, confirm the release + `stable` pointer are live
-   (`gh release view vX.Y.Z`). To ship other platforms, build on each machine
-   and `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
+   The script bumps `xai-grok-version` + `xai-grok-pager-bin` (+ the desktop
+   version files and lockfiles), commits, tags `vX.Y.Z` and pushes. The tag
+   starts `.github/workflows/release.yml` on the self-hosted runners — macOS
+   arm64 and the Intel cross on the Mac mini (`macos-arm64`), Linux and the
+   Windows cross on the Ubuntu box (`linux-x64`) — which builds all four
+   platforms and publishes CLI + Let Cook to Cloudflare R2
+   (`https://download.letcook.dev`) with the `latest.json` / `stable` / `alpha`
+   pointers. **Nothing is built locally**, and the runners must be registered on
+   `weseegod/cook` or the jobs sit queued forever. Before closing out the sync,
+   confirm the run went green and the pointers moved:
+
+   ```bash
+   gh run list --workflow release.yml --limit 3
+   curl -fsS https://download.letcook.dev/latest.json | head
+   ```
 
 **Strategy:** always **merge** `upstream/main` into a branch off fork `main`.
 Do **not** rebase fork commits onto upstream — that drops fork history and
@@ -276,7 +283,7 @@ These paths contain fork customizations. Preserve them during merges.
 | Fork TUI UX | `crates/codegen/xai-grok-pager/src/slash/commands/clear.rs`, `new.rs`, `views/turn_status.rs`, `views/tasks_pane.rs`, related `agent_view/` and `dispatch/` changes | Keep fork UX; merge upstream structural refactors around them |
 | Plan approve-as-goal | `xai-grok-shell/.../tool_calls.rs` (`PlanApprovalOutcome::ApprovedAsGoal`, `ResumeAction::LeaveAndStartGoal`), `goal.rs` (`setup_goal` + `read_goal_plan_source`), `slash_commands.rs` (`GoalPlanSource`, `parse_goal_args`); pager `plan.rs` / `plan_approval_view.rs` / `viewer.rs` | Keep the wire string `"approved_as_goal"` end-to-end. Restore from `499e1d56` onto current files — do not take `tool_calls.rs` wholesale from the old tip. |
 | Plan-approval model picker | `xai-grok-pager/.../agent_view/render.rs` (draw order), `plan.rs` (slash-on-Enter), `viewer.rs` (`/` on preview), `input.rs` (`try_plan_overlay_agent_action`) | Plan `line_viewer` first; dropdowns + ArgPicker on top. Overlay stays for `a`/`g`. |
-| Plan file per episode | `xai-grok-shell/src/session/plan_mode.rs` (`begin_plan_episode`, `publish_episode_name`, `PlanModeSnapshot.plan_file`, reentry reminder), `acp_session_impl/session_mode.rs` (`sync_plan_file_path_resource`), `acp_session_impl/tool_calls.rs` (pre-dispatch rotation for `enter_plan_mode`, implement message), `acp_session_impl/goal.rs` (`--from-plan` path), `extensions/plan_files.rs` (`x.ai/session/plans` `title`, `x.ai/session/plans/delete`); pager `agent_view/plan.rs` (`plan_mode.json` lookup, H1 overlay title), `views/plan_approval_view.rs` (`plan_file_name`, `plan_heading`), `xai-grok-tools/.../exit_plan_mode/types.rs` (`planFilePath`); desktop `src/acp/plan-files.ts`, `src/ui/chat/plan-chip.tsx` | **Fork-only behavior.** Upstream keeps one `plan.md` per session and recomputes it in `PlanModeTracker::new`/`from_snapshot`. Keep the per-episode allocation: `<session>/plans/<utc>.md` on each `Inactive → Active` activation, published to `<slug>-<utc>.md` when the episode becomes Inactive, `<session>/plan.md` as the pre-episode and legacy fallback. Never revert the tracker to a hardcoded `join("plan.md")`, and never drop `PlanModeSnapshot.plan_file` (the pager, `--from-plan` and the plan-file extension read it). Never rename while Active (the reminder named the UTC path). |
+| Plan file per episode | `xai-grok-shell/src/session/plan_mode.rs` (`begin_plan_episode`, `publish_plan_episode`, `PlanModeSnapshot.plan_file`, reentry reminder), `acp_session_impl/session_mode.rs` (`sync_plan_file_path_resource`), `acp_session_impl/tool_calls.rs` (pre-dispatch rotation for `enter_plan_mode`, implement message), `acp_session_impl/goal.rs` / `goal_support.rs` (`--from-plan`, goal planner publish), `goal_tracker.rs` (goal contract + private baseline), `extensions/plan_files.rs` (`x.ai/session/plans` `title`, protected delete); pager `agent_view/plan.rs` (`plan_mode.json` lookup, H1 overlay title), `views/plan_approval_view.rs` (`plan_file_name`, `plan_heading`), `xai-grok-tools/.../exit_plan_mode/types.rs` (`planFilePath`); desktop `src/acp/plan-files.ts`, `src/acp/client/messages.ts`, `src/ui/chat/plan-chip.tsx` | **Fork-only behavior.** Upstream keeps one `plan.md` per session and recomputes it in `PlanModeTracker::new`/`from_snapshot`. Keep the shared per-episode allocation: plan mode, `/goal` planner, and `/goal --plan` write `<session>/plans/<utc>.md`, published to `<slug>-<utc>.md`; inactive `--from-plan` / approve-as-goal attaches the existing episode instead of copying it. `<session>/plan.md` is only the pre-episode/legacy plan-mode fallback; legacy goal snapshots may still point at `<session>/goal/plan.md`. The verifier baseline stays private at `<session>/goal/plan.baseline.md`. Never set plan mode Active for a goal. Never drop `PlanModeSnapshot.plan_file`, rename an Active plan-mode episode, list the baseline, or allow deletion of a non-terminal goal's contract. |
 | Fork docs edits | `crates/codegen/xai-grok-pager/docs/user-guide/04-slash-commands.md`, `05-configuration.md`, `11-custom-models.md`, `17-sessions.md`, `20-background-tasks.md`; `docs/post-merge-core-fix.md` | Prefer upstream wording, then re-apply fork additions. Never delete the implementer spec. |
 | Trims (hide, don't delete modules) | Privacy: `app_view.rs` `privacy_banner_should_show`, `slash/commands/privacy.rs`, settings `coding_data_sharing`. Usage limits: `slash/commands/usage.rs` `usage_command_visible`. Announcements: `slash/commands/announcements.rs`, `acp_handler/settings.rs`. Paywall: `app/subscription.rs` (gate chokepoint kept). Telemetry: `xai-grok-telemetry` wiring in `pager-bin`. | After every sync take upstream's re-additions first, then re-hide at the chokepoints. Keep `/context` and `/session-info`. |
 
@@ -307,17 +314,18 @@ Rules:
   be considered an update). Keep `xai-grok-version` and `xai-grok-pager-bin`
   lockstepped (they already are, both synced to upstream's current version).
 - **After every upstream sync**, bump the version (typically patch
-  `1.0.0 → 1.0.1`) and publish: `scripts/publish_release.sh`. It builds
-  `cook` **locally** via `./build.sh` for the machine it runs on (no CI).
-  `gh` must be installed and authenticated (`gh auth login`) to create the
-  GitHub Release; to ship other platforms, build on each machine and
-  `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
+  `1.0.0 → 1.0.1`) and publish: `scripts/publish_release.sh`. It commits, tags
+  `vX.Y.Z` and pushes; the tag's workflow builds all four platforms on the
+  self-hosted runners and uploads them to R2. `gh` must be installed and
+  authenticated (`gh auth login`) to push the tag.
 - **Verify the release after publishing**: the `stable`/`alpha` pointers and
-  the `thanh-<ver>-<os>-<arch>` assets must exist on the GitHub Release
-  before `cook update` can serve them — check `gh release view vX.Y.Z`.
+  the `cook-<ver>-<os>-<arch>` objects must exist on R2 before `cook update`
+  can serve them — check `gh run list --workflow release.yml` and
+  `curl -fsS https://download.letcook.dev/latest.json`.
 - The updater's default installer is `internal` (pure HTTP against the fork's
-  GitHub Releases); `gh-release` (needs `gh`) is also supported. It manages
-  `~/.cook/bin/cook` only and never touches grok's `~/.grok` tree.
+  R2 base `https://download.letcook.dev`); `gh-release` (needs `gh`, reads the
+  fork's GitHub Releases) is also supported. It manages `~/.cook/bin/cook` only
+  and never touches grok's `~/.grok` tree.
 
 ### Fork commit map
 
@@ -437,7 +445,7 @@ Manual checks:
 - [ ] No `/usage` / `/cost`, no grok.com quota/upgrade CTA, no announcement promo
 - [ ] `/context` and `/session-info` still work
 - [ ] No conflict markers left in source (`rg -n '^(<<<<<<<|=======|>>>>>>>)'` — match at line start only; mid-line matches in string literals are false positives)
-- [ ] Release published after the sync (when binaries are shipped): `gh release view vX.Y.Z` shows the `stable` pointer + `thanh-<ver>-<os>-<arch>` assets
+- [ ] Release published after the sync (when binaries are shipped): the tag's workflow run is green and `curl -fsS https://download.letcook.dev/latest.json` reports `vX.Y.Z`, with `cook-<ver>-<os>-<arch>` objects for all four platforms
 
 ## Anti-patterns
 

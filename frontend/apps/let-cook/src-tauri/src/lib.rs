@@ -138,6 +138,23 @@ async fn workspace_list(
 }
 
 #[tauri::command]
+async fn workspace_index(
+    host: State<'_, AcpHost>,
+    hidden: bool,
+) -> Result<Vec<workspace::WorkspaceIndexEntry>, String> {
+    let root = host.workspace_root()?;
+    if let Some(entries) = host.cached_workspace_index(&root, hidden) {
+        return Ok(entries);
+    }
+    let walk_root = root.clone();
+    let entries = tauri::async_runtime::spawn_blocking(move || workspace::index(walk_root, hidden))
+        .await
+        .map_err(|error| error.to_string())??;
+    host.store_workspace_index(root, hidden, entries.clone());
+    Ok(entries)
+}
+
+#[tauri::command]
 async fn workspace_read_file(
     host: State<'_, AcpHost>,
     relative_path: String,
@@ -414,6 +431,7 @@ pub fn run() {
             pick_files,
             read_file_base64,
             workspace_list,
+            workspace_index,
             workspace_read_file,
             workspace_review,
             workspace_git_status,

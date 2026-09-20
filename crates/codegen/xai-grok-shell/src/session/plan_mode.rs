@@ -162,40 +162,7 @@ impl PlanModeTracker {
     /// Identities already on disk (including a published `<slug>-<utc>.md`) count as taken, so a
     /// later episode in the same UTC second still gets `-2` after the previous file was renamed.
     pub(crate) fn next_episode_path(&self) -> PathBuf {
-        let plans_dir = self.session_dir.join(crate::session::storage::PLANS_DIR);
-        let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
-        let taken = self.existing_episode_identities();
-        let mut identity = stamp.clone();
-        let mut suffix = 2u32;
-        while taken.contains(&identity) {
-            identity = format!("{stamp}-{suffix}");
-            suffix += 1;
-        }
-        plans_dir.join(format!("{identity}.md"))
-    }
-
-    /// UTC tokens already used by this session's plan files (in-memory allocations and on disk).
-    fn existing_episode_identities(&self) -> HashSet<String> {
-        let mut ids = HashSet::new();
-        let mut add = |path: &Path| {
-            if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && let Some(id) = episode_stamp(name)
-            {
-                ids.insert(id.to_string());
-            }
-        };
-        add(&self.plan_file_path);
-        for path in &self.episode_files {
-            add(path);
-        }
-        if let Ok(entries) =
-            std::fs::read_dir(self.session_dir.join(crate::session::storage::PLANS_DIR))
-        {
-            for entry in entries.flatten() {
-                add(&entry.path());
-            }
-        }
-        ids
+        next_episode_path_with_extra(&self.session_dir, self.episode_files.iter())
     }
 
     /// Start a new planning episode on a fresh file under `<session_dir>/plans/`.
@@ -215,6 +182,13 @@ impl PlanModeTracker {
                 error = %e,
                 dir = %dir.display(),
                 "failed to create plan episode directory"
+            );
+        }
+        if let Err(e) = std::fs::File::create(&path) {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "failed to squat plan episode file"
             );
         }
         self.episode_files.push(path.clone());
@@ -381,41 +355,7 @@ impl PlanModeTracker {
     /// `episode_files` keeps the original UTC allocation so a same-second next episode still
     /// collides in memory even after this file has moved.
     fn publish_episode_name(&mut self) {
-        let path = self.plan_file_path.clone();
-        let plans_dir = self.session_dir.join(crate::session::storage::PLANS_DIR);
-        if path.parent() != Some(plans_dir.as_path()) {
-            return;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()).map(str::to_owned) else {
-            return;
-        };
-        let Some(stamp) = episode_stamp(&name).map(str::to_owned) else {
-            return;
-        };
-        let Ok(body) = std::fs::read_to_string(&path) else {
-            return;
-        };
-        let Some(heading) = plan_heading(&body) else {
-            return;
-        };
-        let slug = plan_file_slug(&heading);
-        if slug.is_empty() {
-            return;
-        }
-        let dest = published_episode_path(&plans_dir, &path, &slug, &stamp);
-        if dest == path {
-            return;
-        }
-        if let Err(e) = std::fs::rename(&path, &dest) {
-            tracing::warn!(
-                error = %e,
-                from = %path.display(),
-                to = %dest.display(),
-                "failed to publish plan episode name"
-            );
-            return;
-        }
-        self.plan_file_path = dest;
+        self.plan_file_path = publish_plan_episode(&self.plan_file_path);
     }
     /// Queue the one-shot exit reminder for the next turn.
     /// For exit paths whose tool result carries no exit signal (the compat harness).
@@ -578,6 +518,83 @@ pub(crate) fn plan_file_slug(title: &str) -> String {
         slug.pop();
     }
     truncate_slug(&slug, PLAN_SLUG_MAX)
+}
+
+/// Allocate the next timestamp identity for a plan episode without changing plan-mode state.
+/// Existing published names count because [`episode_stamp`] reads the identity from the suffix.
+pub(crate) fn next_episode_path(session_dir: &Path) -> PathBuf {
+    next_episode_path_with_extra(session_dir, std::iter::empty::<&PathBuf>())
+}
+
+fn next_episode_path_with_extra<'a>(
+    session_dir: &Path,
+    extra: impl IntoIterator<Item = &'a PathBuf>,
+) -> PathBuf {
+    let plans_dir = session_dir.join(crate::session::storage::PLANS_DIR);
+    let stamp = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ").to_string();
+    let mut taken = HashSet::new();
+    let mut add = |path: &Path| {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str())
+            && let Some(id) = episode_stamp(name)
+        {
+            taken.insert(id.to_string());
+        }
+    };
+    for path in extra {
+        add(path);
+    }
+    if let Ok(entries) = std::fs::read_dir(&plans_dir) {
+        for entry in entries.flatten() {
+            add(&entry.path());
+        }
+    }
+    let mut identity = stamp.clone();
+    let mut suffix = 2u32;
+    while taken.contains(&identity) {
+        identity = format!("{stamp}-{suffix}");
+        suffix += 1;
+    }
+    plans_dir.join(format!("{identity}.md"))
+}
+
+/// Publish a completed episode from `<utc>.md` to `<h1-slug>-<utc>.md`.
+/// Missing headings, already-published paths, and I/O failures leave the original path in place.
+pub(crate) fn publish_plan_episode(path: &Path) -> PathBuf {
+    let Some(plans_dir) = path.parent() else {
+        return path.to_path_buf();
+    };
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+        return path.to_path_buf();
+    };
+    let Some(stamp) = episode_stamp(name) else {
+        return path.to_path_buf();
+    };
+    let Ok(body) = std::fs::read_to_string(path) else {
+        return path.to_path_buf();
+    };
+    let Some(heading) = plan_heading(&body) else {
+        return path.to_path_buf();
+    };
+    let slug = plan_file_slug(&heading);
+    if slug.is_empty() || name != format!("{stamp}.md") {
+        return path.to_path_buf();
+    }
+    let dest = published_episode_path(plans_dir, path, &slug, stamp);
+    if dest == path {
+        return path.to_path_buf();
+    }
+    match std::fs::rename(path, &dest) {
+        Ok(()) => dest,
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                from = %path.display(),
+                to = %dest.display(),
+                "failed to publish plan episode name"
+            );
+            path.to_path_buf()
+        }
+    }
 }
 
 fn is_pathish_token(token: &str) -> bool {

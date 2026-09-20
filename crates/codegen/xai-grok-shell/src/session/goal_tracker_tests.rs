@@ -181,12 +181,16 @@ fn budget_limit_records_history_via_chokepoint() {
 }
 
 #[test]
-fn plan_path_is_session_scoped() {
-    let t = GoalTracker::new(PathBuf::from("/tmp/plan-path-session-xyz"));
+fn plan_path_falls_back_for_legacy_snapshots_and_prefers_published_episode() {
+    let mut t = GoalTracker::new(PathBuf::from("/tmp/plan-path-session-xyz"));
     assert_eq!(
         t.plan_path(),
         PathBuf::from("/tmp/plan-path-session-xyz/goal/plan.md"),
     );
+    activate_tracker(&mut t);
+    let episode = PathBuf::from("/tmp/plan-path-session-xyz/plans/ship-it-2026-09-20T00-00-00Z.md");
+    t.snapshot_mut().unwrap().plan_file = Some(episode.clone());
+    assert_eq!(t.plan_path(), episode);
 }
 
 #[test]

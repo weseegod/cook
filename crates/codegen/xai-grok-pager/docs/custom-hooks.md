@@ -1,6 +1,6 @@
 # Custom Hooks Guide
 
-Hooks let you run custom scripts or HTTP requests at key moments during a Grok session, for example before or after a tool runs, when a session starts or ends, or when the agent sends a notification.
+Hooks let you run custom scripts or HTTP requests at key moments during a Cook session, for example before or after a tool runs, when a session starts or ends, or when the agent sends a notification.
 
 Use them for automation, safety checks, logging, notifications, and integrating with your own tools.
 
@@ -29,7 +29,7 @@ Common use cases:
        "SessionStart": [
          {
            "hooks": [
-            { "type": "command", "command": "echo \"🚀 Grok session started in $(pwd)\"" }
+            { "type": "command", "command": "echo \"🚀 Cook session started in $(pwd)\"" }
            ]
          }
        ]
@@ -37,7 +37,7 @@ Common use cases:
    }
    ```
 
-3. Start (or restart) a Grok session. The hook runs automatically on `SessionStart`.
+3. Start (or restart) a Cook session. The hook runs automatically on `SessionStart`.
 
    To confirm it loaded, open the Hooks tab: press `Ctrl+L` outside the VS Code family, or run `/hooks` anywhere (preferred on VS Code, Cursor, Windsurf, and Zed).
 
@@ -92,7 +92,7 @@ Key fields:
 - **command**: Path to executable (relative to the JSON file) or inline shell command.
 - **timeout**: Seconds before killing the hook (default: 5, or 600 for `Stop`/`SubagentStop`/`PostToolUse` gates). Hooks fail open on timeout.
 
-**Tool name aliases**: Claude-style names like `Bash`, `Edit`, `Read` automatically match Grok's internal names (`run_terminal_cmd`, `search_replace`, `read_file`).
+**Tool name aliases**: Claude-style names like `Bash`, `Edit`, `Read` automatically match Cook's internal names (`run_terminal_cmd`, `search_replace`, `read_file`).
 
 ## Writing Hook Scripts
 
@@ -133,7 +133,7 @@ For events like `SessionStart` or `Notification`, stdout is ignored. Just exit 0
 
 ### Useful Environment Variables
 
-Grok injects the following variables into every hook process:
+Cook injects the following variables into every hook process:
 
 - `GROK_HOOK_EVENT`: the event name (e.g. `pre_tool_use`, `session_start`, `post_tool_use`).
 - `GROK_HOOK_NAME`: the full configured name of this hook.
@@ -183,12 +183,12 @@ config-load time:
 
 Lookup order for each reference:
 1. The handler's own `env` map.
-2. The current process environment (the env Grok itself sees).
+2. The current process environment (the env Cook itself sees).
 
 If a reference is unset in both, it's **preserved verbatim** (e.g. `${UNSET}`
 stays as the literal string). Runner-injected names (`CLAUDE_PROJECT_DIR`,
 `GROK_WORKSPACE_ROOT`, `GROK_HOOK_EVENT`, `GROK_HOOK_NAME`,
-`GROK_SESSION_ID`) are not taken from the Grok process environment at
+`GROK_SESSION_ID`) are not taken from the Cook process environment at
 load. Unix `sh -c` expands them from the child env; Windows PowerShell
 rewrites `$VAR` to `$env:VAR`. HTTP `url` substitutes them at request
 time. Remaining unresolved command refs are refused with "required env
@@ -267,7 +267,7 @@ The full event envelope is POSTed as JSON. Useful for webhooks, analytics, or se
 - **Hook not running?** → Press `Ctrl+L` on non–VS Code family (or run `/hooks` anywhere) to see if it's loaded and matched.
 - **Project hooks ignored?** → Trust the project first.
 - **Script not found?** → Check the path is relative to the `.json` file and executable (`chmod +x`).
-- **`The argument '/.claude/hooks/….ps1' to the -File parameter does not exist`?** → PowerShell treated `$CLAUDE_PROJECT_DIR` as empty. Grok rewrites it to `$env:CLAUDE_PROJECT_DIR` unless `GROK_SHELL=cmd`.
+- **`The argument '/.claude/hooks/….ps1' to the -File parameter does not exist`?** → PowerShell treated `$CLAUDE_PROJECT_DIR` as empty. Cook rewrites it to `$env:CLAUDE_PROJECT_DIR` unless `GROK_SHELL=cmd`.
 - **See errors?** → Check the pager logs (usually in the tracing pane or `~/.cook/logs`).
 
 ## More Examples

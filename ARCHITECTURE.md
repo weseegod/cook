@@ -1,4 +1,4 @@
-# Grok Build (`cook`) — Architecture
+# Cook — Architecture
 
 This document is the engineer-facing map of the repository: what the pieces
 are, how they fit together, and — most importantly — **where to go to change,
@@ -10,10 +10,9 @@ into the tree cold. See `README.md` for user-level build/install info and
 
 ## 1. Overview
 
-This is a Rust workspace (93 crates) implementing **Grok Build**, a
-terminal-based AI coding agent. This fork ships the binary as **`cook`**
-(the cargo artifact is `xai-grok-pager`) with its own home directory
-**`~/.cook`**, fully isolated from the official grok CLI's `~/.grok`.
+This is a Rust workspace (93 crates) implementing **Cook**, a terminal-based
+AI coding agent. The binary is **`cook`** (the cargo artifact is
+`xai-grok-pager`) with its own home directory **`~/.cook`**.
 
 The product runs in four modes, all sharing one agent runtime:
 

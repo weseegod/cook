@@ -1,12 +1,12 @@
 # Keyboard Shortcuts
 
-Reference for key bindings in the Grok Build TUI. Bindings are built in and cannot currently be remapped.
+Reference for key bindings in the Cook TUI. Bindings are built in and cannot currently be remapped.
 
 ---
 
 ## Input Modes
 
-Grok has two input modes that control how you navigate the scrollback:
+Cook has two input modes that control how you navigate the scrollback:
 
 - **Simple mode** (default): Arrow keys for navigation, `Shift+Arrow` for turn navigation, `Space` to focus the prompt, and any letter key auto-focuses the prompt.
 - **Vim mode** (opt-in): `j`/`k` for navigation, `H`/`L` for selected-turn navigation, `J`/`K` for viewport-top turn jumps (same as the timeline arrows), `h`/`l` for fold, `e`/`E` for expand/collapse, and `i`/`Tab`/`Space` to focus the prompt.
@@ -270,11 +270,11 @@ Actions that affect the agent session, available from the agent screen.
 
 **Note:** While a draft is stashed, the prompt's top border reads `Stashed` (next to the `/rename` title, if you set one). Minimal mode draws no border, so it prints a line in the scrollback each time you stash or restore. The stash lives in memory only: it is gone when you quit, and it does not travel to a resumed session. A new stash replaces the old one, and only the old one's **text** moves to the `↑` history, so any images on the replaced draft are lost.
 
-**Note:** External editing works in every render mode: minimal mode binds `Ctrl+G`, and the full TUI uses `/edit-prompt` or the command palette. Grok resolves `$VISUAL`, then `$EDITOR`, then `vi`. Values may include quoted arguments. Saving replaces only the draft (the final newline editors append on save is stripped); an empty file clears it. Drafts with pasted/file/image chips must be edited in the composer so attachments are not flattened.
+**Note:** External editing works in every render mode: minimal mode binds `Ctrl+G`, and the full TUI uses `/edit-prompt` or the command palette. Cook resolves `$VISUAL`, then `$EDITOR`, then `vi`. Values may include quoted arguments. Saving replaces only the draft (the final newline editors append on save is stripped); an empty file clears it. Drafts with pasted/file/image chips must be edited in the composer so attachments are not flattened.
 
 **Note:** `Ctrl+'` is a Windows alt for `Ctrl+;` — some Windows consoles drop the `Ctrl` modifier on punctuation keys.
 
-**Note:** `Ctrl+.` needs the Kitty keyboard protocol (or tmux `extended-keys on` so that protocol can pass through). On VS Code / Cursor / Windsurf / Zed integrated terminals, VTE, Apple Terminal, Windows Terminal, JetBrains, tmux with `extended-keys off`, screen, and similar no-KKP setups, Grok advertises **`Ctrl+X`** as the primary shortcuts-cheatsheet key instead. **`Ctrl+X` always works** as a classic control character even when `Ctrl+.` does not. Run `/doctor` if modified keys misbehave in tmux.
+**Note:** `Ctrl+.` needs the Kitty keyboard protocol (or tmux `extended-keys on` so that protocol can pass through). On VS Code / Cursor / Windsurf / Zed integrated terminals, VTE, Apple Terminal, Windows Terminal, JetBrains, tmux with `extended-keys off`, screen, and similar no-KKP setups, Cook advertises **`Ctrl+X`** as the primary shortcuts-cheatsheet key instead. **`Ctrl+X` always works** as a classic control character even when `Ctrl+.` does not. Run `/doctor` if modified keys misbehave in tmux.
 
 ---
 
@@ -295,10 +295,10 @@ Non-image files insert their absolute path as text instead of a chip.
 Linux X11 has two independent text selections:
 
 - `Ctrl+V` reads **CLIPBOARD**, the explicit copy/cut selection. It never falls back to PRIMARY. To put text there with `xclip`, use `printf %s "text" | xclip -selection clipboard`.
-- An unmodified middle click in Grok reads **PRIMARY**, the current mouse selection, only when `DISPLAY` is non-empty. Pure X11 can use its native reader fallback; XWayland requires `xclip` or `xsel` on `PATH` so Grok reads the X11 selection rather than Wayland PRIMARY. The press is handled once; the release does not paste again.
+- An unmodified middle click in Cook reads **PRIMARY**, the current mouse selection, only when `DISPLAY` is non-empty. Pure X11 can use its native reader fallback; XWayland requires `xclip` or `xsel` on `PATH` so Cook reads the X11 selection rather than Wayland PRIMARY. The press is handled once; the release does not paste again.
 - `Shift+Insert` is the terminal-native way to paste selected text. Many terminals also use `Shift+middle click` to bypass application mouse reporting.
 
-Over SSH, the remote Grok process usually cannot access the terminal's local X11 selection. Use terminal-native `Shift+Insert` or `Shift+middle click` so the local terminal sends the selected text through the PTY.
+Over SSH, the remote Cook process usually cannot access the terminal's local X11 selection. Use terminal-native `Shift+Insert` or `Shift+middle click` so the local terminal sends the selected text through the PTY.
 
 ---
 
@@ -328,7 +328,7 @@ Send-now is intentionally interruptive — it reads as "stop what you're doing a
 
 > **Windows (non–VS Code family)**: Some consoles drop the `Ctrl` modifier on `Ctrl+Enter` (it can collapse to bare `Enter` or `Ctrl+J`). Use `Ctrl+I` as the alt — letter-key Ctrl chords are stable everywhere. On VS Code family, use **`Ctrl+L`**.
 
-> **VS Code family `Ctrl+L`**: Grok uses it for interject and leaves the extensions shortcut unbound (open plugins with `/plugins` or the command palette). If your terminal profile still maps **Clear** (or another command) to `Ctrl+L`, that host binding can steal the chord — rebind or remove it so the PTY receives form feed (`\x0c`).
+> **VS Code family `Ctrl+L`**: Cook uses it for interject and leaves the extensions shortcut unbound (open plugins with `/plugins` or the command palette). If your terminal profile still maps **Clear** (or another command) to `Ctrl+L`, that host binding can steal the chord — rebind or remove it so the PTY receives form feed (`\x0c`).
 
 ---
 
@@ -342,7 +342,7 @@ Actions available from any screen.
 | `Ctrl+\` | | Open or toggle the [Agent Dashboard](23-dashboard.md) | No |
 | `Ctrl+Q` | `Ctrl+D` | Quit the application | Yes (double-press within 1000ms) |
 
-**VS Code family terminal** (VS Code, Cursor, Windsurf, Zed integrated terminals): `Ctrl+Q` is captured by the host, so Grok makes **`Ctrl+D` the sole quit key** (`Ctrl+Q` is not bound). Half-page-down is rebound to bare **`Shift+D`**. Mid-turn interject uses **`Ctrl+L`** (no alternates) because `Ctrl+Enter` / `Ctrl+I` do not reliably reach the PTY; extensions are opened via `/plugins` instead of `Ctrl+L`.
+**VS Code family terminal** (VS Code, Cursor, Windsurf, Zed integrated terminals): `Ctrl+Q` is captured by the host, so Cook makes **`Ctrl+D` the sole quit key** (`Ctrl+Q` is not bound). Half-page-down is rebound to bare **`Shift+D`**. Mid-turn interject uses **`Ctrl+L`** (no alternates) because `Ctrl+Enter` / `Ctrl+I` do not reliably reach the PTY; extensions are opened via `/plugins` instead of `Ctrl+L`.
 
 > **Returning to the welcome screen has no key binding** — use the `/home` slash command (alias `/welcome`) from inside a session. See [Slash Commands](04-slash-commands.md).
 
@@ -487,7 +487,7 @@ drop the highlight while still performing their normal action. Note
 `Shift+←/→` only selects while the **prompt** is focused; with scrollback
 focused the same chords jump between turns (see Navigation above).
 
-> **Cmd+A is gated to Ghostty.** Grok's in-app `Cmd+A` handler is only
+> **Cmd+A is gated to Ghostty.** Cook's in-app `Cmd+A` handler is only
 > wired up when the detected terminal is Ghostty. Other terminals
 > either swallow `Cmd+A` at the terminal layer (Apple Terminal, default
 > iTerm2) or apply their own in-terminal "Select All" behaviour (Kitty,
