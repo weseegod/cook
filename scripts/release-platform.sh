@@ -82,7 +82,15 @@ if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" || -z "${COOK_UPDATER_PUBLIC_KEY:-}" ]
   exit 1
 fi
 
-export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/bin:$HOME/.cargo/bin:$PATH"
+if [[ -d "$HOME/.nvm/versions/node" ]]; then
+  node_bin="$(find "$HOME/.nvm/versions/node" -maxdepth 2 -type f -name node | sort | tail -1)"
+  [[ -n "$node_bin" ]] && export PATH="$(dirname "$node_bin"):$PATH"
+fi
+if ! command -v dotslash >/dev/null 2>&1; then
+  echo "error: dotslash is required (bin/protoc wrapper). cargo install dotslash" >&2
+  exit 1
+fi
 if [[ -x "$ROOT/bin/protoc" ]]; then
   export PROTOC="$ROOT/bin/protoc"
   export PATH="$ROOT/bin:$PATH"

@@ -93,6 +93,9 @@ jobs:
       - name: Verify tag-bound release source
         run: scripts/verify-release-ref.sh v "$VERSION"
 
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
+
       - name: Build CLI + desktop
         run: scripts/release-platform.sh linux
 
@@ -120,6 +123,9 @@ jobs:
 
       - name: Verify tag-bound release source
         run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
 
       - name: Build CLI + desktop
         run: scripts/release-platform.sh macos-arm
@@ -149,6 +155,9 @@ jobs:
 
       - name: Verify tag-bound release source
         run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
 
       - name: Build CLI + desktop
         run: scripts/release-platform.sh macos-x64
@@ -191,6 +200,9 @@ jobs:
 
       - name: Verify tag-bound release source
         run: scripts/verify-release-ref.sh v "$VERSION"
+
+      - name: Add cargo / node / dotslash to PATH
+        run: scripts/release-path.sh
 
       - name: Install xwin (skip if already present)
         run: |
