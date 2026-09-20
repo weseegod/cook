@@ -151,7 +151,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-t-r | `terminal/release` | A→C | — | not advertised | `ok` | protocol |
 | ACP-t-k | `terminal/kill` | A→C | — | not advertised | `ok` | protocol |
 
-Plan-mode plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` before a session's first planning episode, then `<session>/plans/<utc>.md` per episode (published to `<slug>-<utc>.md` when the episode becomes Inactive). That allow-path is load-bearing. The desktop reads and prunes them through C-plans rather than the filesystem, so the list also works for a session loaded from disk. The list payload includes `title` (the plan H1) so the header chip can name the episode.
+Plan-mode and goal-plan files are written through ACP-fs-w into `$COOK_HOME/sessions` (else `$GROK_HOME/sessions`, else `~/.cook/sessions`): `<session>/plan.md` is the legacy plan-mode fallback; current plan-mode episodes, `/goal` planner output, and `/goal --plan` seeds use `<session>/plans/<utc>.md`, published to `<slug>-<utc>.md`. Inactive `--from-plan` / approve-as-goal reuses that episode. The private goal verifier baseline remains `<session>/goal/plan.baseline.md` and is never listed. That allow-path is load-bearing. The desktop reads and prunes episodes through C-plans rather than the filesystem, so the list also works for a session loaded from disk. The list payload includes `title` (the plan H1) so the header chip can name the episode.
 
 ---
 
@@ -721,7 +721,7 @@ Wire is mostly `ok` on this branch. Presentation issues stay in the Chat UI plan
 |---|---|---|---|
 | P-mode | `session/set_mode` | `ok` | protocol |
 | P-list | `x.ai/session/plans` | header plan list, current episode marked, per-row Copy / Copy file path / Delete | surface |
-| P-del | `x.ai/session/plans/delete` | deletes one plan file; the running episode's file is refused agent-side | surface |
+| P-del | `x.ai/session/plans/delete` | deletes one plan file; a running plan-mode episode or active/paused goal contract is refused agent-side | surface |
 | P-acp | ACP `plan` / `plan_update` / `plan_removed` | `ok` | protocol |
 | P-exit | `x.ai/exit_plan_mode` | `ok` | protocol |
 | P-goal | `goal_updated` on `x.ai/session_notification` | `ok` | surface |
@@ -741,7 +741,7 @@ Two channels:
 | `x.ai/fs/{read_file,write_file,exists}` | C→A | Settings project files (`exists` unused) | `ok` / `partial` |
 | `x.ai/fs/{list,delete_file}` | C→A | missing | `gap` / `na` (Files panel is Tauri) |
 
-**Invariant:** plan-mode plan files live under the agent session store, outside the workspace: `<session>/plan.md` until a session starts its first planning episode, then `<session>/plans/<utc>.md` per episode, published to `<slug>-<utc>.md` when the episode ends. ACP-fs-w must keep that allow-path (`acp_host.rs` `agent_state_root`).
+**Invariant:** listed plan contracts live under the agent session store, outside the workspace: `<session>/plan.md` is legacy-only; plan-mode and goal-plan episodes use `<session>/plans/<utc>.md`, published to `<slug>-<utc>.md`. Goal execution does not activate plan mode. `<session>/goal/plan.baseline.md` is private verifier state, never a C-plans row. ACP-fs-w must keep the session-store allow-path (`acp_host.rs` `agent_state_root`).
 
 ---
 

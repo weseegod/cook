@@ -19,6 +19,10 @@ export interface InboundPipeline {
   readonly refreshModels: () => Promise<void>;
 }
 
+// The store is frame-coalesced, so two goal updates in one wire batch cannot reliably compare
+// against store state. Track the transient planning latch at the inbound boundary instead.
+const goalPlanningByPipeline = new WeakMap<InboundPipeline, boolean>();
+
 export async function handleInboundMessages(pipeline: InboundPipeline, messages: RpcMessage[]) {
   for (const message of messages) {
     const method = unwrapMethod(message);
@@ -56,6 +60,15 @@ export async function handleInboundMessages(pipeline: InboundPipeline, messages:
         pipeline.refreshPlanFiles();
       }
       if (shouldApplyToActiveSession(params, update)) {
+        if (sessionKind === "goal_updated") {
+          const previous = goalPlanningByPipeline.get(pipeline)
+            ?? useSessionStore.getState().goal?.planning
+            ?? false;
+          const next = update?.planning === true;
+          const goalCreated = update?.last_event === "goal_created";
+          if ((previous && !next) || goalCreated) pipeline.refreshPlanFiles();
+          goalPlanningByPipeline.set(pipeline, next);
+        }
         pipeline.sessionUpdates.enqueue(params as unknown as SessionNotification);
       } else {
         // A child's first update can share a packet batch with its spawn, which the coalescer is

@@ -116,6 +116,7 @@ pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
     let active_is_held = snapshot
         .as_ref()
         .is_some_and(|s| s.state != PlanModeState::Inactive);
+    let goal_plan = held_goal_plan_file(session_dir);
 
     let mut paths: Vec<PathBuf> = std::fs::read_dir(session_dir.join(st::PLANS_DIR))
         .into_iter()
@@ -133,7 +134,15 @@ pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
 
     paths
         .iter()
-        .map(|path| describe(session_dir, path, &active, active_is_held))
+        .map(|path| {
+            describe(
+                session_dir,
+                path,
+                &active,
+                active_is_held,
+                goal_plan.as_deref(),
+            )
+        })
         .collect()
 }
 
@@ -179,7 +188,22 @@ pub(crate) fn delete_plan(session_dir: &Path, target: &Path) -> Result<(), Strin
             target.display()
         ));
     }
+    if held_goal_plan_file(session_dir).as_deref() == Some(target) {
+        return Err(format!(
+            "{} is the active goal plan and cannot be deleted until the goal ends or is cleared",
+            target.display()
+        ));
+    }
     std::fs::remove_file(target).map_err(|e| format!("could not delete {}: {e}", target.display()))
+}
+
+fn held_goal_plan_file(session_dir: &Path) -> Option<PathBuf> {
+    let bytes = std::fs::read(session_dir.join(st::GOAL_STATE_FILE)).ok()?;
+    let goal: crate::session::goal_tracker::GoalOrchestration =
+        serde_json::from_slice(&bytes).ok()?;
+    (goal.status == crate::session::goal_tracker::GoalStatus::Active || goal.status.is_paused())
+        .then_some(goal.plan_file)
+        .flatten()
 }
 
 fn is_active_held(session_dir: &Path, target: &Path) -> bool {
@@ -190,7 +214,13 @@ fn is_active_held(session_dir: &Path, target: &Path) -> bool {
         && restore_plan_file_path(session_dir, snapshot.plan_file.as_deref()) == target
 }
 
-fn describe(session_dir: &Path, path: &Path, active: &Path, active_is_held: bool) -> PlanFileEntry {
+fn describe(
+    session_dir: &Path,
+    path: &Path,
+    active: &Path,
+    active_is_held: bool,
+    goal_plan: Option<&Path>,
+) -> PlanFileEntry {
     let metadata = std::fs::metadata(path).ok();
     let is_active = path == active;
     let content = read_content(path);
@@ -217,7 +247,7 @@ fn describe(session_dir: &Path, path: &Path, active: &Path, active_is_held: bool
             .map(|since| since.as_millis() as u64)
             .unwrap_or(0),
         active: is_active,
-        deletable: !is_active || !active_is_held,
+        deletable: (!is_active || !active_is_held) && goal_plan != Some(path),
         content,
     }
 }
@@ -261,6 +291,19 @@ mod tests {
             snapshot["plan_file"] = json!(plan_file);
         }
         std::fs::write(dir.join(st::PLAN_MODE_FILE), snapshot.to_string()).unwrap();
+    }
+
+    fn write_goal_snapshot(
+        dir: &Path,
+        status: crate::session::goal_tracker::GoalStatus,
+        plan_file: &Path,
+    ) {
+        let mut goal = crate::session::goal_tracker::make_base_orchestration();
+        goal.status = status;
+        goal.plan_file = Some(plan_file.to_path_buf());
+        let path = dir.join(st::GOAL_STATE_FILE);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, serde_json::to_vec(&goal).unwrap()).unwrap();
     }
 
     fn names(plans: &[PlanFileEntry]) -> Vec<&str> {
@@ -457,6 +500,30 @@ mod tests {
 
         assert!(error.contains("current plan"), "{error}");
         assert!(path.exists());
+    }
+
+    #[test]
+    fn goal_episode_is_protected_until_the_goal_is_terminal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = write_plan(tmp.path(), &format!("plans/{EPISODE_A}"), "# a");
+        write_goal_snapshot(
+            tmp.path(),
+            crate::session::goal_tracker::GoalStatus::UserPaused,
+            &path,
+        );
+
+        assert!(!list_plans(tmp.path())[0].deletable);
+        let error = delete_plan(tmp.path(), &path).unwrap_err();
+        assert!(error.contains("active goal plan"), "{error}");
+
+        write_goal_snapshot(
+            tmp.path(),
+            crate::session::goal_tracker::GoalStatus::Complete,
+            &path,
+        );
+        assert!(list_plans(tmp.path())[0].deletable);
+        delete_plan(tmp.path(), &path).unwrap();
+        assert!(!path.exists());
     }
 
     #[test]

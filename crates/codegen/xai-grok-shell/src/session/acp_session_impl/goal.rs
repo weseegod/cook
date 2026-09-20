@@ -843,19 +843,42 @@ impl SessionActor {
         )
     }
 
-    async fn read_goal_plan_source(&self, source: GoalPlanSource) -> Result<String, String> {
-        let content = match source {
-            GoalPlanSource::Content(content) => content,
+    async fn read_goal_plan_source(
+        &self,
+        source: GoalPlanSource,
+    ) -> Result<(String, Option<std::path::PathBuf>), String> {
+        let (content, episode_path) = match source {
+            GoalPlanSource::Content(content) => {
+                let episode_path = {
+                    let tracker = self.plan_mode.lock();
+                    let path = tracker.plan_file_path();
+                    (tracker.state() == crate::session::plan_mode::PlanModeState::Inactive
+                        && path.parent().and_then(std::path::Path::file_name)
+                            == Some(std::ffi::OsStr::new(crate::session::storage::PLANS_DIR))
+                        && std::fs::read_to_string(path).ok().as_deref() == Some(content.as_str()))
+                    .then(|| path.to_path_buf())
+                };
+                (content, episode_path)
+            }
             GoalPlanSource::SessionPlan => {
                 // The plan tracker owns the current episode's file; a session that has not started
                 // an episode yet still resolves to the legacy `<session>/plan.md`.
-                let path = self.plan_mode.lock().plan_file_path().to_path_buf();
-                tokio::fs::read_to_string(&path).await.map_err(|err| {
+                let (path, inactive_episode) = {
+                    let tracker = self.plan_mode.lock();
+                    let path = tracker.plan_file_path().to_path_buf();
+                    let inactive_episode = tracker.state()
+                        == crate::session::plan_mode::PlanModeState::Inactive
+                        && path.parent().and_then(std::path::Path::file_name)
+                            == Some(std::ffi::OsStr::new(crate::session::storage::PLANS_DIR));
+                    (path, inactive_episode)
+                };
+                let content = tokio::fs::read_to_string(&path).await.map_err(|err| {
                     format!(
                         "failed to read the session plan at {}: {err}",
                         path.display()
                     )
-                })?
+                })?;
+                (content, inactive_episode.then_some(path))
             }
             GoalPlanSource::Path(path) => {
                 let full = self
@@ -863,17 +886,17 @@ impl SessionActor {
                     .cwd
                     .as_path()
                     .join(std::path::Path::new(&path));
-                tokio::fs::read_to_string(&full).await.map_err(|err| {
+                let content = tokio::fs::read_to_string(&full).await.map_err(|err| {
                     format!("failed to read the plan at {}: {err}", full.display())
-                })?
+                })?;
+                (content, None)
             }
         };
         if content.trim().is_empty() {
             return Err("the plan is empty; a goal needs plan content to execute".to_string());
         }
-        Ok(content)
+        Ok((content, episode_path))
     }
-
 
     pub(super) async fn setup_goal(
         &self,
@@ -884,7 +907,7 @@ impl SessionActor {
         let plan_seed = match plan_source {
             None => None,
             Some(source) => match self.read_goal_plan_source(source).await {
-                Ok(content) => Some(content),
+                Ok(seed) => Some(seed),
                 Err(detail) => {
                     return GoalSetupOutcome::Message(format!("Cannot start the goal: {detail}"));
                 }
@@ -904,8 +927,10 @@ impl SessionActor {
             created_at,
             baseline_commit,
         );
-        if let Some(content) = &plan_seed {
-            self.goal_tracker.lock().seed_plan(content);
+        if let Some((content, episode_path)) = &plan_seed {
+            self.goal_tracker
+                .lock()
+                .seed_plan(content, episode_path.as_deref());
         }
         self.goal_turn_task_ids.lock().clear();
         self.clear_pending_classifier_completions();

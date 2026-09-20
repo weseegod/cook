@@ -217,10 +217,53 @@ async fn from_plan_reads_the_current_episode_file() {
                     .and_then(|o| o.plan_file.clone())
                     .expect("seeding a goal from a plan must publish the goal plan")
             };
+            assert_ne!(
+                seeded, second,
+                "an Active plan-mode episode must be copied so a later publish cannot move the goal contract",
+            );
             assert_eq!(
                 std::fs::read_to_string(&seeded).unwrap(),
                 "# second plan\n",
                 "the goal must be seeded from the current episode, not an earlier one or the legacy file"
+            );
+        })
+        .await;
+}
+
+/// Once plan mode is inactive, `--from-plan` adopts the published episode as the live goal
+/// contract instead of making a duplicate with the same H1.
+#[tokio::test(flavor = "current_thread")]
+async fn from_plan_attaches_the_inactive_published_episode() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, dir) = build_episode_actor().await;
+            activate_plan_mode(&actor);
+            let raw = actor.plan_mode.lock().plan_file_path().to_path_buf();
+            std::fs::write(&raw, "# Plan: Ship it\n\n- [ ] implement\n").unwrap();
+            actor.plan_mode.lock().deactivate_approved();
+            let published = actor.plan_mode.lock().plan_file_path().to_path_buf();
+
+            let outcome = actor
+                .setup_goal("ship it", None, Some(GoalPlanSource::SessionPlan))
+                .await;
+            assert!(matches!(outcome, GoalSetupOutcome::Inference { .. }));
+
+            let snapshot = actor.goal_tracker.lock().snapshot().cloned().unwrap();
+            assert_eq!(snapshot.plan_file.as_deref(), Some(published.as_path()));
+            let listed: Vec<_> = std::fs::read_dir(dir.path().join("plans"))
+                .unwrap()
+                .flatten()
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+                .collect();
+            assert_eq!(
+                listed.len(),
+                1,
+                "attach must not create a duplicate episode"
+            );
+            assert_eq!(
+                std::fs::read_to_string(snapshot.plan_baseline_file.unwrap()).unwrap(),
+                "# Plan: Ship it\n\n- [ ] implement\n",
             );
         })
         .await;
