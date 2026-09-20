@@ -226,14 +226,21 @@ git fetch --all
    scripts/publish_release.sh
    ```
 
-   The script bumps `xai-grok-version` + `xai-grok-pager-bin` (+ `Cargo.lock`),
-   tags `vX.Y.Z`, builds `cook` **locally** via `./build.sh` for the current
-   platform, and publishes the GitHub Release with the local binary + `stable`/
-   `alpha` pointers. **There is no CI** — the fork builds and releases from the
-   machine running the script (needs `gh` installed + authenticated). Before
-   closing out the sync, confirm the release + `stable` pointer are live
-   (`gh release view vX.Y.Z`). To ship other platforms, build on each machine
-   and `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
+   The script bumps `xai-grok-version` + `xai-grok-pager-bin` (+ the desktop
+   version files and lockfiles), commits, tags `vX.Y.Z` and pushes. The tag
+   starts `.github/workflows/release.yml` on the self-hosted runners — macOS
+   arm64 and the Intel cross on the Mac mini (`macos-arm64`), Linux and the
+   Windows cross on the Ubuntu box (`linux-x64`) — which builds all four
+   platforms and publishes CLI + Let Cook to Cloudflare R2
+   (`https://download.letcook.dev`) with the `latest.json` / `stable` / `alpha`
+   pointers. **Nothing is built locally**, and the runners must be registered on
+   `weseegod/cook` or the jobs sit queued forever. Before closing out the sync,
+   confirm the run went green and the pointers moved:
+
+   ```bash
+   gh run list --workflow release.yml --limit 3
+   curl -fsS https://download.letcook.dev/latest.json | head
+   ```
 
 **Strategy:** always **merge** `upstream/main` into a branch off fork `main`.
 Do **not** rebase fork commits onto upstream — that drops fork history and
@@ -307,17 +314,18 @@ Rules:
   be considered an update). Keep `xai-grok-version` and `xai-grok-pager-bin`
   lockstepped (they already are, both synced to upstream's current version).
 - **After every upstream sync**, bump the version (typically patch
-  `1.0.0 → 1.0.1`) and publish: `scripts/publish_release.sh`. It builds
-  `cook` **locally** via `./build.sh` for the machine it runs on (no CI).
-  `gh` must be installed and authenticated (`gh auth login`) to create the
-  GitHub Release; to ship other platforms, build on each machine and
-  `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
+  `1.0.0 → 1.0.1`) and publish: `scripts/publish_release.sh`. It commits, tags
+  `vX.Y.Z` and pushes; the tag's workflow builds all four platforms on the
+  self-hosted runners and uploads them to R2. `gh` must be installed and
+  authenticated (`gh auth login`) to push the tag.
 - **Verify the release after publishing**: the `stable`/`alpha` pointers and
-  the `thanh-<ver>-<os>-<arch>` assets must exist on the GitHub Release
-  before `cook update` can serve them — check `gh release view vX.Y.Z`.
+  the `cook-<ver>-<os>-<arch>` objects must exist on R2 before `cook update`
+  can serve them — check `gh run list --workflow release.yml` and
+  `curl -fsS https://download.letcook.dev/latest.json`.
 - The updater's default installer is `internal` (pure HTTP against the fork's
-  GitHub Releases); `gh-release` (needs `gh`) is also supported. It manages
-  `~/.cook/bin/cook` only and never touches grok's `~/.grok` tree.
+  R2 base `https://download.letcook.dev`); `gh-release` (needs `gh`, reads the
+  fork's GitHub Releases) is also supported. It manages `~/.cook/bin/cook` only
+  and never touches grok's `~/.grok` tree.
 
 ### Fork commit map
 
@@ -437,7 +445,7 @@ Manual checks:
 - [ ] No `/usage` / `/cost`, no grok.com quota/upgrade CTA, no announcement promo
 - [ ] `/context` and `/session-info` still work
 - [ ] No conflict markers left in source (`rg -n '^(<<<<<<<|=======|>>>>>>>)'` — match at line start only; mid-line matches in string literals are false positives)
-- [ ] Release published after the sync (when binaries are shipped): `gh release view vX.Y.Z` shows the `stable` pointer + `thanh-<ver>-<os>-<arch>` assets
+- [ ] Release published after the sync (when binaries are shipped): the tag's workflow run is green and `curl -fsS https://download.letcook.dev/latest.json` reports `vX.Y.Z`, with `cook-<ver>-<os>-<arch>` objects for all four platforms
 
 ## Anti-patterns
 
