@@ -1401,6 +1401,62 @@ async fn apply_supported_effort_assigns_only_when_supported() {
     );
     assert_eq!(none_cfg.reasoning_effort, Some(ReasoningEffort::Low));
 }
+
+#[tokio::test]
+async fn apply_supported_effort_clamps_unsupported_menu_value() {
+    use crate::agent::config::{EndpointsConfig, ModelEntry};
+    use crate::sampling::EffortTarget;
+    use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption};
+    let agent = build_minimal_agent_for_tests();
+    let mut bonsai = ModelEntry::fallback("local/bonsai2-27b", &EndpointsConfig::default());
+    bonsai.info.supports_reasoning_effort = true;
+    bonsai.info.reasoning_effort = Some(ReasoningEffort::Xhigh);
+    bonsai.info.reasoning_efforts = vec![
+        ReasoningEffortOption {
+            id: "xhigh".into(),
+            value: ReasoningEffort::Xhigh,
+            label: "Extra High".into(),
+            description: None,
+            default: true,
+        },
+        ReasoningEffortOption {
+            id: "high".into(),
+            value: ReasoningEffort::Xhigh,
+            label: "High".into(),
+            description: None,
+            default: false,
+        },
+        ReasoningEffortOption {
+            id: "medium".into(),
+            value: ReasoningEffort::Medium,
+            label: "Medium".into(),
+            description: None,
+            default: false,
+        },
+        ReasoningEffortOption {
+            id: "low".into(),
+            value: ReasoningEffort::Low,
+            label: "Low".into(),
+            description: None,
+            default: false,
+        },
+    ];
+    agent
+        .models_manager
+        .insert_test_entry("local/bonsai2-27b", bonsai.clone());
+    let sid = acp::SessionId::new("bonsai-clamp-sess");
+    let mut cfg = agent.prepare_sampling_config_for_model(&bonsai, None);
+    cfg.reasoning_effort = None;
+    // Session still carrying canonical `high` (not offered as a wire value) must clamp to xhigh.
+    agent.models_manager.apply_supported_effort(
+        &mut cfg,
+        Some(ReasoningEffort::High),
+        &sid,
+        EffortTarget::ModelSwitch,
+    );
+    assert_eq!(cfg.reasoning_effort, Some(ReasoningEffort::Xhigh));
+}
+
 /// Setting `reasoning_effort` without switching the id runs, and bills, whatever the entry opened on.
 /// The status line would still read `low`.
 #[tokio::test]

@@ -323,12 +323,6 @@ pub struct SamplingClient {
     first_use_noted: Arc<AtomicBool>,
 }
 
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-
-fn is_chatgpt_codex_endpoint(base_url: &str) -> bool {
-    base_url.trim_end_matches('/') == CHATGPT_CODEX_BASE_URL
-}
-
 impl std::fmt::Debug for SamplingClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SamplingClient")
@@ -1283,11 +1277,11 @@ impl SamplingClient {
             request.inner.max_output_tokens = self.defaults.max_completion_tokens;
         }
 
-        // The ChatGPT Codex Responses endpoint rejects `max_output_tokens`. The normal
-        // Responses API accepts it, so keep this compatibility adjustment scoped to Codex.
-        if is_chatgpt_codex_endpoint(&self.base_url) {
-            request.inner.max_output_tokens = None;
-        }
+        // Codex rejects `max_output_tokens`; Platform Responses still accepts it.
+        xai_grok_sampling_types::clear_max_output_tokens_if_codex(
+            &self.base_url,
+            &mut request.inner.max_output_tokens,
+        );
 
         // The API defaults `store` to true, which breaks ZDR compliance
         if request.inner.store.is_none() {
@@ -2021,11 +2015,11 @@ impl SamplingClient {
             request.max_output_tokens = self.defaults.max_completion_tokens;
         }
 
-        // This value is copied into the Responses request during conversion. Codex rejects
-        // the field even when it came from a client default, so remove it before conversion.
-        if is_chatgpt_codex_endpoint(&self.base_url) {
-            request.max_output_tokens = None;
-        }
+        // Copied into the Responses request during conversion; Codex rejects the field.
+        xai_grok_sampling_types::clear_max_output_tokens_if_codex(
+            &self.base_url,
+            &mut request.max_output_tokens,
+        );
 
         Ok(())
     }
@@ -2414,7 +2408,7 @@ mod tests {
     #[test]
     fn codex_endpoint_drops_unsupported_max_output_tokens() {
         let client = SamplingClient::new(SamplerConfig {
-            base_url: CHATGPT_CODEX_BASE_URL.to_string(),
+            base_url: xai_grok_sampling_types::CHATGPT_CODEX_BASE_URL.to_string(),
             max_completion_tokens: Some(64_000),
             ..minimal_config()
         })

@@ -885,6 +885,56 @@ fn default_reasoning_effort_only_stamps_supporting_model() {
 }
 
 #[test]
+fn default_reasoning_effort_skips_when_menu_does_not_offer_level() {
+    use indexmap::IndexMap;
+    use xai_grok_sampling_types::ReasoningEffortOption;
+
+    // Bonsai-style: supports effort, but only xhigh|medium|low — global `high` must not stamp.
+    let mut cfg = config::Config::default();
+    cfg.models.default = Some("local/bonsai2-27b".to_string());
+    cfg.models.default_reasoning_effort = Some(ReasoningEffort::High);
+
+    let mut prefetched = IndexMap::new();
+    let mut bonsai = make_model_entry("local/bonsai2-27b");
+    bonsai.info.supports_reasoning_effort = true;
+    bonsai.info.reasoning_efforts = vec![
+        ReasoningEffortOption {
+            id: "xhigh".into(),
+            value: ReasoningEffort::Xhigh,
+            label: "Extra High".into(),
+            description: None,
+            default: true,
+        },
+        ReasoningEffortOption {
+            id: "medium".into(),
+            value: ReasoningEffort::Medium,
+            label: "Medium".into(),
+            description: None,
+            default: false,
+        },
+        ReasoningEffortOption {
+            id: "low".into(),
+            value: ReasoningEffort::Low,
+            label: "Low".into(),
+            description: None,
+            default: false,
+        },
+    ];
+    bonsai.info.reasoning_effort = Some(ReasoningEffort::Xhigh);
+    prefetched.insert("local/bonsai2-27b".to_string(), bonsai);
+
+    let catalog = resolve_model_catalog(&cfg, Some(prefetched));
+    let Some(entry) = catalog.get("local/bonsai2-27b") else {
+        panic!("expected local/bonsai2-27b: {catalog:?}");
+    };
+    assert_eq!(
+        entry.info.reasoning_effort,
+        Some(ReasoningEffort::Xhigh),
+        "global default high must not overwrite menu default when high is not offered",
+    );
+}
+
+#[test]
 fn reasoning_effort_override_skips_models_that_do_not_offer_level() {
     use indexmap::IndexMap;
     use xai_grok_sampling_types::ReasoningEffortOption;

@@ -859,6 +859,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_unexpected_reasoning_effort_jinja_is_fatal() {
+        let err = api_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Error: Jinja Exception: Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.",
+        );
+        match classify_error(&err, 0, 15, RATE_LIMIT_RETRY_THRESHOLD) {
+            RetryDecision::Fatal(_) => {}
+            other => panic!("expected Fatal on bonsai Jinja effort error, got {other:?}"),
+        }
+        // Still fatal after a prior attempt — never escalate into a retry storm.
+        match classify_error(&err, 5, 15, RATE_LIMIT_RETRY_THRESHOLD) {
+            RetryDecision::Fatal(_) => {}
+            other => panic!("expected Fatal on later attempt, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn format_includes_retry_prefix_when_count_present() {
         let err = SamplingError::auth_unknown("bad");
         let s = format_sampling_error(&err, Some(3));

@@ -23,15 +23,8 @@ const ERROR_BODY_LIMIT: usize = 400;
 /// Cap on discovered models merged into the catalog from one `/models` response.
 const MAX_DISCOVERED_MODELS: usize = 200;
 /// ChatGPT OAuth model discovery lives on the Codex backend and requires the client version.
-const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-
 fn models_list_url(base_url: &str) -> String {
-    let base_url = base_url.trim_end_matches('/');
-    if base_url == CHATGPT_CODEX_BASE_URL {
-        format!("{base_url}/models?client_version={}", xai_grok_version::VERSION)
-    } else {
-        format!("{base_url}/models")
-    }
+    xai_grok_sampling_types::chatgpt_codex_models_list_url(base_url, xai_grok_version::VERSION)
 }
 
 // ── Entry point ─────────────────────────────────────────────────────
@@ -914,16 +907,8 @@ async fn probe_credential(target: &ProbeTarget) -> TestResponse {
             })),
         Some(model) if target.api_backend == "responses" => client
             .post(format!("{base}/responses"))
-            .json(&serde_json::json!({
-                "model": model,
-                // ChatGPT's Codex Responses endpoint requires the structured input form;
-                // the public Responses API accepts it too, so keep the probe portable.
-                "input": [{
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "ping"}]
-                }],
-                "max_output_tokens": 16,
-            })),
+            // Codex rejects `max_output_tokens`; other Responses hosts still get a small cap.
+            .json(&xai_grok_sampling_types::responses_probe_body(model, base)),
         Some(model) => client
             .post(format!("{base}/chat/completions"))
             .json(&serde_json::json!({

@@ -15,7 +15,7 @@ impl ModelsManager {
         session_id: &acp::SessionId,
         target: EffortTarget,
     ) {
-        let Some(effort) = effort else {
+        let Some(requested) = effort else {
             return;
         };
         if !self.model_supports_reasoning_effort(&sampling.model) {
@@ -24,12 +24,38 @@ impl ModelsManager {
                 tracing::warn!(
                     session_id = %session_id.0,
                     model = %sampling.model,
-                    effort = %effort,
+                    effort = %requested,
                     "reasoning_effort: model does not support effort; ignoring it"
                 );
             }
             return;
         }
+        // Clamp unsupported wire values (e.g. session still on `high` after switching to a
+        // local model whose menu is only xhigh|medium|low) to the model's advertised default.
+        let effort = if self.model_supports_reasoning_effort_value(&sampling.model, requested) {
+            requested
+        } else if let Some(fallback) = self.model_default_reasoning_effort(&sampling.model) {
+            if matches!(target, EffortTarget::NewSession | EffortTarget::ModelSwitch) {
+                tracing::warn!(
+                    session_id = %session_id.0,
+                    model = %sampling.model,
+                    requested = %requested,
+                    fallback = %fallback,
+                    "reasoning_effort: unsupported for model; clamping to model default"
+                );
+            }
+            fallback
+        } else {
+            if matches!(target, EffortTarget::NewSession | EffortTarget::ModelSwitch) {
+                tracing::warn!(
+                    session_id = %session_id.0,
+                    model = %sampling.model,
+                    effort = %requested,
+                    "reasoning_effort: unsupported for model and no default; ignoring it"
+                );
+            }
+            return;
+        };
         // Some models are a different model id at each effort, so swap in the id this effort asks for.
         // Do this before the log, or the log records an id we are not sending.
         if let Some(routed) = self.model_for_effort(&sampling.model, effort) {

@@ -6,6 +6,7 @@
 
 #![deny(clippy::indexing_slicing)]
 
+pub mod chatgpt_codex;
 pub mod conversation;
 pub mod doom_loop;
 pub mod error;
@@ -14,6 +15,11 @@ pub mod provider_error;
 pub mod serde_helpers;
 pub mod tool_overrides;
 pub mod types;
+
+pub use self::chatgpt_codex::{
+    CHATGPT_CODEX_BASE_URL, clear_max_output_tokens_if_codex, is_chatgpt_codex_endpoint,
+    models_list_url as chatgpt_codex_models_list_url, responses_probe_body,
+};
 
 pub use self::conversation::*;
 pub use self::doom_loop::{
