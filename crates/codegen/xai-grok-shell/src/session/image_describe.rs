@@ -232,6 +232,7 @@ impl ImageDescribeCache {
     /// Returns a cached description when `(source, path_key, bytes, prompt)` matches a prior successful describe.
     pub(crate) async fn get_or_describe(
         &self,
+        handle: &xai_chat_state::ChatStateHandle,
         client: xai_grok_sampler::SamplingClient,
         model: &str,
         raw_bytes: &[u8],
@@ -253,8 +254,14 @@ impl ImageDescribeCache {
             base64::engine::general_purpose::STANDARD.encode(raw_bytes)
         );
         let prompt_text = build_describe_prompt(outline, current_query);
-        let description =
-            describe_user_images(client, model, prompt_text, std::slice::from_ref(&url)).await?;
+        let description = describe_user_images(
+            handle,
+            client,
+            model,
+            prompt_text,
+            std::slice::from_ref(&url),
+        )
+        .await?;
         self.inner.lock().insert(cache_key, description.clone());
         Ok(description)
     }
@@ -344,6 +351,7 @@ pub(crate) enum DescribeError {
 /// `image_urls` should be the cached URLs from [`persist_user_images`].
 /// The caller is responsible for outline and prompt assembly so this stays a pure transport helper.
 pub(crate) async fn describe_user_images(
+    handle: &xai_chat_state::ChatStateHandle,
     client: OaiCompatClient,
     model: &str,
     prompt_text: String,
@@ -377,6 +385,14 @@ pub(crate) async fn describe_user_images(
             ))
         })?
         .map_err(|e| DescribeError::Sampling(format!("{e}")))?;
+    // The vision call spends provider tokens; it is not a main-loop turn, so it folds under its own purpose.
+    crate::session::side_call_usage::record_side_call_response(
+        handle,
+        xai_chat_state::CallPurpose::ImageDescribe,
+        model,
+        &response,
+        None,
+    );
     let text = response
         .assistant()
         .map(|a| a.content.as_ref().to_owned())
@@ -723,5 +739,118 @@ mod tests {
     fn strip_template_tags_does_not_false_match_prefix() {
         let input = "<rules_extra>keep me</rules_extra>";
         assert_eq!(strip_template_context_tags(input), input);
+    }
+
+    /// The vision call spends provider tokens outside the main loop, so it must fold into the
+    /// session ledger under its own purpose and must not advance the reported turn count.
+    /// End to end through a real chat-state actor and a real SSE response.
+    #[tokio::test]
+    async fn describe_folds_usage_under_image_describe() {
+        use axum::Router;
+        use axum::response::sse::{Event, KeepAlive, Sse};
+        use axum::routing::post;
+        use futures_util::stream;
+        use serde_json::json;
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                let events = vec![
+                    Event::default().data(
+                        json!({
+                            "id": "chatcmpl-test",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "vision-model",
+                            "choices": [{
+                                "index": 0,
+                                "delta": { "role": "assistant", "content": "a red square" },
+                                "finish_reason": "stop"
+                            }]
+                        })
+                        .to_string(),
+                    ),
+                    Event::default().data(
+                        json!({
+                            "id": "chatcmpl-test",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "vision-model",
+                            "choices": [],
+                            "usage": {
+                                "prompt_tokens": 1_200,
+                                "completion_tokens": 12,
+                                "total_tokens": 1_212,
+                                "cost_in_usd_ticks": 5
+                            }
+                        })
+                        .to_string(),
+                    ),
+                    Event::default().data("[DONE]"),
+                ];
+                let stream =
+                    stream::iter(events.into_iter().map(Ok::<_, std::convert::Infallible>));
+                Sse::new(stream).keep_alive(KeepAlive::default())
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        let (chat_event_tx, _chat_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = xai_chat_state::ChatStateActor::spawn(
+            vec![],
+            xai_grok_sampling_types::SamplingConfig::default(),
+            Box::new(xai_chat_state::NullChatPersistence),
+            chat_event_tx,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("test-api-key".to_string()),
+            model: "vision-model".to_string(),
+            context_window: 256_000,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let description = describe_user_images(
+            &handle,
+            client,
+            "vision-model",
+            "describe this image".to_string(),
+            &["data:image/png;base64,AAAA".to_string()],
+        )
+        .await
+        .expect("describe succeeds");
+        let _ = shutdown_tx.send(());
+        assert_eq!(description, "a red square");
+
+        let session = handle
+            .try_get_session_usage()
+            .await
+            .expect("session ledger");
+        let describe = session
+            .by_purpose
+            .get(&xai_chat_state::CallPurpose::ImageDescribe)
+            .expect("image describe row");
+        assert_eq!(describe.input_tokens, 1_200);
+        assert_eq!(describe.output_tokens, 12);
+        assert_eq!(describe.model_calls, 1);
+        assert_eq!(
+            session.main_loop_model_calls, 0,
+            "a vision call is not a turn"
+        );
+        assert_eq!(session.side_call_model_calls, 1);
+        assert_eq!(session.totals.cost_usd_ticks, Some(5));
     }
 }

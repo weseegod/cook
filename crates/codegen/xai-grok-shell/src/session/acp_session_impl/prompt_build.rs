@@ -929,6 +929,7 @@ impl SessionActor {
             } else {
                 self.image_describe_cache
                     .get_or_describe(
+                        &self.chat_state_handle,
                         client.clone(),
                         model,
                         &p.raw_bytes,

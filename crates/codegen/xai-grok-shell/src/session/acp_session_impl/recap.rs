@@ -801,6 +801,13 @@ impl SessionActor {
             }
         };
         let latency_ms = Some(started.elapsed().as_millis() as u64);
+        crate::session::side_call_usage::record_side_call_response(
+            &self.chat_state_handle,
+            xai_chat_state::CallPurpose::PromptSuggestion,
+            &request_model,
+            &response,
+            latency_ms,
+        );
 
         let raw = response.assistant_text();
         let suggestion = match prompt_suggest::sanitize_suggestion(&raw) {

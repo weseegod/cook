@@ -519,7 +519,7 @@ impl SessionActor {
                 ConversationItem::system(crate::session::memory::dream::DREAM_SYSTEM_PROMPT),
                 ConversationItem::user(user_message),
             ],
-            model: Some(model),
+            model: Some(model.clone()),
             x_grok_conv_id: Some(format!("dream-{}", uuid::Uuid::new_v4())),
             x_grok_req_id: Some(format!("xai-dream-{}", uuid::Uuid::new_v4())),
             x_grok_session_id: Some(session_id),
@@ -532,6 +532,13 @@ impl SessionActor {
             .map_err(|e| {
                 acp::Error::internal_error().data(format!("dream model call failed: {e}"))
             })?;
+        crate::session::side_call_usage::record_side_call_response(
+            &self.chat_state_handle,
+            xai_chat_state::CallPurpose::MemoryDream,
+            &model,
+            &response,
+            None,
+        );
         Ok(response.assistant_text())
     }
 
@@ -632,6 +639,9 @@ impl SessionActor {
                 "MEMORY_FLUSH: using model={model}"
             );
             let session_id = self.session_info.id.to_string();
+            // The flush runs on a spawned task, so the ledger handle and the model name travel with it.
+            let chat_state_handle = self.chat_state_handle.clone();
+            let flush_model = model.clone();
             let request = ConversationRequest {
                 items,
                 model: Some(model),
@@ -648,6 +658,13 @@ impl SessionActor {
                     .conversation_collect(request)
                     .await
                     .map_err(|e| format!("flush model call failed: {e}"))?;
+                crate::session::side_call_usage::record_side_call_response(
+                    &chat_state_handle,
+                    xai_chat_state::CallPurpose::MemoryFlush,
+                    &flush_model,
+                    &response,
+                    None,
+                );
                 Ok::<_, String>(response.assistant_text())
             });
             // Abort the spawned task if this future is dropped (session cancellation), preventing orphan HTTP streams

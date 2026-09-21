@@ -56,11 +56,25 @@ pub enum CallPurpose {
     TitleRefresh,
     /// The `/btw` side question.
     Btw,
+    /// The memory capture extraction.
+    MemoryCapture,
+    /// The memory dream consolidation.
+    MemoryDream,
+    /// The memory flush turn.
+    MemoryFlush,
+    /// The laziness classifier.
+    Laziness,
+    /// The goal evaluator.
+    GoalEvaluator,
+    /// The prompt-suggestion call.
+    PromptSuggestion,
+    /// The vision call that describes an attached image.
+    ImageDescribe,
 }
 
 impl CallPurpose {
     /// Every purpose, in reporting order.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 16] = [
         Self::MainLoop,
         Self::CompactSingle,
         Self::CompactPass1,
@@ -70,6 +84,13 @@ impl CallPurpose {
         Self::TurnSummary,
         Self::TitleRefresh,
         Self::Btw,
+        Self::MemoryCapture,
+        Self::MemoryDream,
+        Self::MemoryFlush,
+        Self::Laziness,
+        Self::GoalEvaluator,
+        Self::PromptSuggestion,
+        Self::ImageDescribe,
     ];
 
     /// Stable identifier for reports and telemetry. Also the label auxiliary
@@ -85,6 +106,13 @@ impl CallPurpose {
             Self::TurnSummary => "turn_summary",
             Self::TitleRefresh => "title_refresh",
             Self::Btw => "btw",
+            Self::MemoryCapture => "memory_capture",
+            Self::MemoryDream => "memory_dream",
+            Self::MemoryFlush => "memory_flush",
+            Self::Laziness => "laziness",
+            Self::GoalEvaluator => "goal_evaluator",
+            Self::PromptSuggestion => "prompt_suggestion",
+            Self::ImageDescribe => "image_describe",
         }
     }
 
@@ -435,7 +463,14 @@ mod tests {
                 "recap",
                 "turn_summary",
                 "title_refresh",
-                "btw"
+                "btw",
+                "memory_capture",
+                "memory_dream",
+                "memory_flush",
+                "laziness",
+                "goal_evaluator",
+                "prompt_suggestion",
+                "image_describe"
             ]
         );
         assert_eq!(
@@ -446,18 +481,14 @@ mod tests {
 
     #[test]
     fn auxiliary_purposes_fold_outside_the_main_loop() {
-        for purpose in [
-            CallPurpose::Recap,
-            CallPurpose::TurnSummary,
-            CallPurpose::TitleRefresh,
-            CallPurpose::Btw,
-        ] {
-            assert!(!purpose.is_main_loop(), "{purpose:?} is not the main loop");
+        // Every purpose that is not the main loop must be recordable as a side call: if one were
+        // misclassified, `record_side_call` would trip its debug assertion in tests.
+        for purpose in CallPurpose::ALL.into_iter().filter(|p| !p.is_main_loop()) {
             let mut ledger = UsageLedger::default();
             ledger.record_side_call(purpose, "m", &TokenUsage::default(), None, None);
-            assert_eq!(ledger.main_loop_model_calls, 0);
-            assert_eq!(ledger.side_call_model_calls, 1);
-            assert_eq!(ledger.by_purpose[&purpose].model_calls, 1);
+            assert_eq!(ledger.main_loop_model_calls, 0, "{purpose:?}");
+            assert_eq!(ledger.side_call_model_calls, 1, "{purpose:?}");
+            assert_eq!(ledger.by_purpose[&purpose].model_calls, 1, "{purpose:?}");
         }
     }
 }
