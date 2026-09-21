@@ -10,7 +10,7 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 ## 1. Outcome
 
-This experiment implemented eight bounded changes:
+This experiment implemented nine bounded changes:
 
 1. A P0 accounting correction: a successful model response that omits usage now marks both the open prompt ledger and the session ledger incomplete. Unknown usage is no longer silently indistinguishable from a free call.
 2. An opt-in P1 context arm: request-copy pruning can age tool results by tool round within one user turn and cap the recent raw-result characters. The legacy behavior remains the default because both new limits default to zero.
@@ -20,8 +20,9 @@ This experiment implemented eight bounded changes:
 6. A fourth P0 side-call increment: session title generation, the last call that reached no ledger, is accounted through a late-bound handle, because it runs in the persistence actor. See section 15. Every model call site in `xai-grok-shell` now reaches the session ledger.
 7. A Step 1 measurement increment: every completed main-loop call now records the estimated composition of the request it sent — system, tool schemas, user, injected reminders, compaction meta, images, assistant, reasoning replay, and tool results — and the persisted session report shows the shares. See section 16.
 8. A report-integrity fix found by running a real session rather than the test suite: the per-turn fold in the persisted usage report dropped the per-purpose rows and the request composition, so both blocks were absent from every session's `usage.json` even though the ledger and the in-memory report had them. See section 17.
+9. A measurement increment: the step-aware arm now reports what it replaced, and a real-task harness runs the agent loop itself on a fixed corpus and compares two arms through their own persisted reports. The first paired run is in section 18, with its controls and its variance.
 
-Apart from the pruning arm in item 2, every increment changed only accounting or reporting; none changed what is sent to a model, which is why the pruning arm's measured result below is unaffected.
+Apart from the pruning arm in item 2, every increment changed only accounting, reporting, or measurement; none changed what is sent to a model, which is why the pruning arm's measured result below is unaffected. Item 9 adds the first measurement of the arm through the agent loop rather than through the endpoint microbenchmark.
 
 The local `bonsai2-27b` microbenchmark used a synthetic eight-round tool trace. The optimized trace reduced reported prompt input from 8,840 to 230 tokens (97.4%) while returning the same correct evidence and verdict in all three repetitions. This proves the fixture works and that its newest evidence survived. It does **not** prove a 97.4% saving on real coding tasks.
 
@@ -103,6 +104,13 @@ The component-estimate increment in section 16 touches these files:
 | `crates/codegen/xai-chat-state/src/usage.rs`, `commands.rs`, `handle.rs`, `actor/{mod,mutations}.rs` | Record component sums on the session ledger. |
 | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs`, `sampler_turn.rs` | Estimate the request after stripping and clamping, and fold it with the call's usage. |
 | `crates/codegen/xai-grok-shell/src/session/usage_file.rs` | Publish a `requestComponents` block in the persisted session report. |
+
+The measurement increment in section 18 touches these files:
+
+| File | Change |
+|---|---|
+| `crates/codegen/xai-chat-state/src/actor/request_builder.rs` | Return a `PruningReport` from `prune_conversation` and log it from the turn request path. |
+| `scripts/benchmark_step_pruning_live.sh` (new) | Drive the agent loop on a fixed corpus for two arms, with prune evidence and per-run fidelity in the table. |
 
 The report-integrity fix in section 17 touches these files:
 
@@ -388,6 +396,8 @@ Acceptance: one task report reconciles with the existing ledger, missing usage i
 
 ### Step 2: build a fixed real-task corpus
 
+Progress on 2026-09-21: one synthetic file-reading task runs through the real agent loop under two arms, with the persisted report as the instrument (section 18). That is a harness and a control, not a corpus: the 30–50 tasks below, the acceptance commands, and the repetition count are still open, and section 18 states why one task cannot carry a saving.
+
 Create 30–50 tasks across:
 
 - one-file fixes;
@@ -404,6 +414,8 @@ Pin repository revision, permissions, model parameters, acceptance commands, and
 
 ### Step 3: compare baseline and step-aware arms
 
+Progress on 2026-09-21: `scripts/benchmark_step_pruning_live.sh` implements the paired comparison for one task, at a stricter setting than arm B below, and reports whether each arm engaged. Section 18 has the first paired numbers, the null control that shows what an unengaged arm looks like, and the run-to-run variance that makes three repetitions the floor. The arm matrix below is not implemented yet.
+
 Use these initial arms:
 
 | Arm | Settings |
@@ -413,7 +425,7 @@ Use these initial arms:
 | C | 4 rounds, 48,000 chars |
 | D | 3 rounds, 32,000 chars |
 
-For each run, record accepted/not accepted, raw and uncached input, completion/reasoning, call count by purpose, reread tokens, retries, p50/p95 latency, compaction count/stall, and peak context.
+For each run, record accepted/not accepted, raw and uncached input, completion/reasoning, call count by purpose, reread tokens, retries, p50/p95 latency, compaction count/stall, and peak context. The section 18 harness already records the first, second, fifth, and part of the ninth of those per run; reread tokens, retries, and latency percentiles are not instrumented.
 
 ### Step 4: add fidelity-aware pins before broader rollout
 
@@ -468,6 +480,12 @@ read -rsp 'Local model API key: ' BONSAI_API_KEY
 echo
 export BONSAI_API_KEY
 RUNS=3 scripts/benchmark_step_pruning.sh
+
+# Run the real-task comparison through the agent loop itself. Needs the same local
+# model server, plus a built target/debug/xai-grok-pager. Prints one row per run and
+# records prune events per arm, so an arm that never engaged is visible as such.
+cargo build -p xai-grok-pager-bin --bin xai-grok-pager
+RUNS=3 scripts/benchmark_step_pruning_live.sh
 
 # Review exactly what will be committed
 git diff --check
@@ -944,3 +962,63 @@ The second turn also drew a prefix cache read of 15,690 tokens from the local se
 - The live run exercises the main-loop path with no compaction, so it does not confirm that a side call's purpose row survives the fold in production. That path is covered by the unit cases above (`compact_single`, `recap`, `title_refresh`) and by the report type's round trip, not by a live session, because forcing a real compaction against the local model was out of scope here.
 - The 78% fixed-overhead figure is one model's prompt on one machine: the tool schema share depends on the enabled tool set, and the system prompt on the harness version. It is a shape, not a constant.
 - Nothing in this section changes what is sent to a model or what is billed. It corrects what the report says about it.
+
+## 18. First real-task comparison through the agent loop
+
+Date: **2026-09-21**. Steps 2 and 3 of section 10 at the smallest scale that can produce a number: one task, two arms, the persisted report as the instrument.
+
+### The gap
+
+Section 7's microbenchmark posts synthetic trace text to the OpenAI-compatible endpoint, so it prices the fixture rather than the harness, and it cannot see the request-copy prune at all. Nothing could: the pruned request is never persisted, and until sections 12, 16, and 17 the report had neither the purpose breakdown nor the component shares, so a real session could not say what it sent or what compaction cost while an arm was running.
+
+### The harness
+
+`scripts/benchmark_step_pruning_live.sh` runs the actual agent loop on a fixed corpus and reads each arm's own report:
+
+- a corpus of small files whose only unique content is a marker line, so the answer can only come from reading the file;
+- two isolated homes (`COOK_HOME`) differing in nothing but the two `[compaction.pruning]` step settings, with an identical corpus, prompt, model, context window, and turn cap;
+- `--debug-file`, so each run carries evidence of whether the arm engaged;
+- one report row per run: main-loop calls, billed input, cache reads, output, measured requests, system and tool-schema and tool-result shares, compaction calls and tokens, and the prune counts;
+- fidelity, not just cost: the answer must carry the marker from an early round and the marker from the last one.
+
+Two design facts are worth stating because they decide whether a run means anything. Pruning runs only when the last model call's total exceeds half the context window (`should_prune`), and auto-compaction fires at 80% of it. So the window selects which mechanisms are in play: too wide and the arm never engages, too narrow and compaction runs in both arms. The script therefore defaults to `CONTEXT_WINDOW=40000` with its default corpus and reports prune events per arm, so a run in which the arm never fired cannot be read as a comparison. The default arm (`keep_last_n_tool_rounds = 2`, `recent_tool_result_char_budget = 12000`) is deliberately stricter than plan arm B in section 10; the four-arm matrix there is still the intended experiment.
+
+### Observability had to come first
+
+The first paired run, at the default window of the time (60,000), produced this:
+
+| Arm | Loop calls | Billed input | Cache reads | Tool-result tokens | Compaction | Wall |
+|---|---|---|---|---|---|---|
+| baseline | 5 | 140,612 | 106,064 | 66,345 | none | 200 s |
+| step-aware | 12 | 277,043 | 220,761 | 114,060 | none | 104 s |
+
+Read naively, that says the step-aware arm sends twice the prompt. It says nothing: the arm had not pruned anything. This was only established afterwards, by adding the prune report and re-running the step-aware arm at that window with a debug log, which recorded no rewrite event at all — the gate compares the last call's total, about 21,000 tokens, against half of 60,000. The 5-against-12 difference was model nondeterminism in how many files the model reads per round, which is why `prune_conversation` now returns a `PruningReport` (rounds cleared by the step budget, soft trims, hard clears, characters reclaimed) and the turn path logs it. The table above is kept as a control: it is what a comparison looks like when the treatment was never applied.
+
+At `CONTEXT_WINDOW=40000` the arm does engage. A single step-aware run logged 10 rewrite events, clearing 4 to 6 rounds each and reclaiming 31,696 and 47,544 characters on its two largest, while still returning both markers.
+
+### One paired run at that window
+
+| Arm | Loop calls | Billed input | Cache reads | Output | Measured requests | System + schemas | Tool-result tokens | Compaction | Prune events / rounds / chars | Fidelity | Wall |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline | 13 | 286,909 | 250,601 | 1,071 | 13 | 155,610 | 110,396 | 2 calls / 54,482 | 0 / 0 / 0 | both markers | 180 s |
+| step-aware | 14 | 269,076 | 186,292 | 2,568 | 14 | 167,580 | 74,650 | 2 calls / 41,277 | 5 / 40 / 277,920 | both markers | 251 s |
+
+The step-aware arm is lower on every prompt column: billed input by 17,833 (6%), cache reads by 64,309 (26%), tool-result tokens by 35,746 (32%), compaction tokens by 13,205 (24%), and prompt tokens overall (input plus cache reads) by 15%. It also made one more model call and produced more output, and both arms compacted twice, so the arm's saving is a saving on what each request carried, not a saving from avoiding compaction.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `cargo test -p xai-chat-state --lib` | 384 passed (381 before; 3 new `PruningReport` cases) |
+| `bash -n scripts/benchmark_step_pruning_live.sh` | clean |
+| Step-aware arm at `CONTEXT_WINDOW=40000`, instrumented | 10 rewrite events, 4–6 rounds each, 31,696/47,544 chars reclaimed, both markers returned |
+| Same settings, `CONTEXT_WINDOW=60000` | no rewrite event: the gate never opened, which is why the first pair is a control and not a result |
+
+### What this does not establish
+
+- **Run-to-run variance is larger than the effect.** A later step-aware run at the same settings as the paired run took 24 turns (the cap) and 487,217 billed input tokens, against 14 turns and 269,076 in the table above. The paired table is one sample per arm, so its direction is a hypothesis, not a rate; three repetitions per arm are the minimum before any saving is stated, and the harness supports `RUNS=n` for that.
+- Both arms compacted twice at this window, so nothing here separates "the arm sends less" from "the arm needs to compact less". Separating them needs a window where the baseline compacts and the step-aware arm does not.
+- The task is one synthetic file-reading task, not the 30–50 task corpus of plan Step 2, and it measures a local 27B model on one machine. Nothing here transfers to a hosted model's pricing or to a different tool set.
+- Cost is not measured. The columns are tokens; with cached reads priced differently from uncached input, the token direction is not the cost direction.
+- Reread cost is not measured. `requests_measured` counts calls, not whether a call re-read content the arm had replaced, which is the failure mode plan Step 5 exists to find.
+- The prune counts say how much was replaced, not whether replacing it was safe. Fidelity is one marker check per run, not the semantic pins of plan Step 4.
