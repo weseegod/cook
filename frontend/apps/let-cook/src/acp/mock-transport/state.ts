@@ -1,3 +1,4 @@
+import { resetMockOauth } from "./oauth-pending";
 import type { MockState, RecordedRequest } from "./types";
 
 function defaultState(): MockState {
@@ -252,6 +253,7 @@ export function mockReset(seed: Partial<MockState> = {}): void {
   requests = [];
   responses = [];
   nextServerRequestId = 1;
+  resetMockOauth();
   persist();
 }
 

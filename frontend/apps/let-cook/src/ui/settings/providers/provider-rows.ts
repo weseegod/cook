@@ -20,6 +20,8 @@ export function modelFromLink(model: ProviderModelLink, provider: string, select
     contextWindow: model.contextWindow,
     maxCompletionTokens: model.maxCompletionTokens,
     supportsReasoningEffort: model.supportsReasoningEffort,
+    reasoningEffort: model.reasoningEffort,
+    reasoningEfforts: model.reasoningEfforts,
     configured: true,
     isDefault: model.id === selectedModel,
   };

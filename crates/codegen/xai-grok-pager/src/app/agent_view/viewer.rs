@@ -75,6 +75,21 @@ impl AgentView {
         InputOutcome::Changed
     }
 
+    pub(super) fn copy_plan_file_path(&mut self) -> InputOutcome {
+        let path = self
+            .line_viewer
+            .as_ref()
+            .filter(|viewer| {
+                viewer.kind == crate::views::file_search::line_viewer::LineViewerKind::PlanPreview
+            })
+            .map(|viewer| viewer.path.clone())
+            .filter(|path| path.is_absolute());
+        if let Some(path) = path {
+            self.copy_to_clipboard(&path.display().to_string());
+        }
+        InputOutcome::Changed
+    }
+
     /// Handle a key event while the line viewer is open.
     pub(super) fn handle_line_viewer_key(&mut self, key: &KeyEvent) -> InputOutcome {
         let in_plan_approval = self.plan_approval_view.is_some();
@@ -268,7 +283,7 @@ impl AgentView {
         }
         if key!('Y').matches(key) {
             if self.is_plan_viewer() {
-                return InputOutcome::Changed;
+                return self.copy_plan_file_path();
             }
             if let Some(ref viewer) = self.line_viewer {
                 let name = viewer
@@ -439,6 +454,7 @@ impl AgentView {
         let goal_area = viewer.plan_ref().and_then(|p| p.goal_button_area);
         let comment_btn_area = viewer.plan_ref().and_then(|p| p.comment_button_area);
         let copy_btn_area = viewer.plan_ref().and_then(|p| p.copy_button_area);
+        let copy_path_btn_area = viewer.plan_ref().and_then(|p| p.copy_path_button_area);
         // Cached `is_plan_viewer()` so we don't need to call self while the line_viewer is mutably borrowed below
         let is_plan_preview =
             viewer.kind == crate::views::file_search::line_viewer::LineViewerKind::PlanPreview;
@@ -524,6 +540,10 @@ impl AgentView {
                 }
                 if copy_btn_area.is_some_and(|a| a.contains((mouse.column, mouse.row).into())) {
                     return self.copy_plan_full();
+                }
+                if copy_path_btn_area.is_some_and(|a| a.contains((mouse.column, mouse.row).into()))
+                {
+                    return self.copy_plan_file_path();
                 }
                 if send_area.is_some_and(|a| a.contains((mouse.column, mouse.row).into())) {
                     if self.plan_approval_view.is_some() {
@@ -656,6 +676,13 @@ impl AgentView {
                 let prev_copy_btn = viewer.plan_ref().is_some_and(|p| p.copy_hovered);
                 if copy_btn_hover != prev_copy_btn {
                     viewer.plan_mut().copy_hovered = copy_btn_hover;
+                    changed = true;
+                }
+                let copy_path_btn_hover = copy_path_btn_area
+                    .is_some_and(|a| a.contains((mouse.column, mouse.row).into()));
+                let prev_copy_path_btn = viewer.plan_ref().is_some_and(|p| p.copy_path_hovered);
+                if copy_path_btn_hover != prev_copy_path_btn {
+                    viewer.plan_mut().copy_path_hovered = copy_path_btn_hover;
                     changed = true;
                 }
                 if self.plan_approval_view.is_some()

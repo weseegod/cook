@@ -1,6 +1,7 @@
-import { Check, CheckCircle2, Cpu, LogIn, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { Check, CheckCircle2, Cpu, LogIn, LogOut, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { mergedProviderStatus } from "../../../acp/provider-presets";
 import type { ModelSummary } from "../../../acp/xai";
+import { ProviderLogo } from "./provider-logo";
 import { formatTokens, type ProviderRow } from "./provider-rows";
 
 interface ProviderCardProps {
@@ -9,19 +10,33 @@ interface ProviderCardProps {
   onAddModel: () => void;
   onEdit: () => void;
   onRemove: () => void;
+  onConnect?: () => void;
+  onSignOut?: () => void;
   onEditModel: (model: ModelSummary) => void;
   onRemoveModel: (model: ModelSummary) => void;
 }
 
 /** One provider's card: status badge, connection actions, and its model list. */
-export function ProviderCard({ row, selectedModel, onAddModel, onEdit, onRemove, onEditModel, onRemoveModel }: ProviderCardProps) {
+export function ProviderCard({
+  row,
+  selectedModel,
+  onAddModel,
+  onEdit,
+  onRemove,
+  onConnect,
+  onSignOut,
+  onEditModel,
+  onRemoveModel,
+}: ProviderCardProps) {
   const status = mergedProviderStatus(row.provider, row.oauthConnected);
   const label = row.provider?.name ?? row.preset.label;
+  const connected = status.tone === "ok";
   return (
     <article className="provider-model-card" data-testid={`provider-row-${row.preset.id}`}>
       <header className="provider-model-heading">
         <div className="provider-row-main">
           <div className="provider-title-line">
+            <ProviderLogo id={row.preset.id} size={22} label={label} />
             <strong>{label}</strong>
             <span className={`badge badge-${status.tone}`}>
               {status.tone === "ok" ? <CheckCircle2 size={12} /> : <TriangleAlert size={12} />} {status.label}
@@ -30,32 +45,45 @@ export function ProviderCard({ row, selectedModel, onAddModel, onEdit, onRemove,
           <small>{row.oauthConnected ? row.oauthEmail ?? "Cook account" : row.provider?.baseUrl ?? row.preset.baseUrl ?? "Provider endpoint"}</small>
         </div>
         <div className="provider-header-actions">
-          {row.provider ? (
+          {connected ? (
             <>
-              <button
-                className="ghost-button provider-header-model-button"
-                aria-label={`Add model to ${row.preset.id}`}
-                data-testid={`provider-add-model-${row.preset.id}`}
-                onClick={onAddModel}
-              >
-                <Plus size={13} /> Add model
-              </button>
+              {row.provider && (
+                <button
+                  className="ghost-button provider-header-model-button"
+                  aria-label={`Add model to ${row.preset.id}`}
+                  data-testid={`provider-add-model-${row.preset.id}`}
+                  onClick={onAddModel}
+                >
+                  <Plus size={13} /> Add model
+                </button>
+              )}
               <button className="ghost-button provider-header-model-button" data-testid={`provider-edit-${row.preset.id}`} onClick={onEdit}>
                 <Pencil size={13} /> Edit
               </button>
-              <button
-                className="ghost-button danger-ghost-button provider-header-model-button"
-                data-testid={`provider-remove-${row.preset.id}`}
-                onClick={onRemove}
-              >
-                <Trash2 size={13} /> Remove
-              </button>
+              {row.oauthConnected && onSignOut && (
+                <button
+                  className="ghost-button provider-header-model-button"
+                  data-testid={`provider-signout-${row.preset.id}`}
+                  onClick={onSignOut}
+                >
+                  <LogOut size={13} /> Sign out
+                </button>
+              )}
+              {row.provider && (
+                <button
+                  className="ghost-button danger-ghost-button provider-header-model-button"
+                  data-testid={`provider-remove-${row.preset.id}`}
+                  onClick={onRemove}
+                >
+                  <Trash2 size={13} /> Remove
+                </button>
+              )}
             </>
           ) : (
             <button
               className="primary-button provider-connect-button"
               data-testid={`provider-connect-${row.preset.id}`}
-              onClick={onEdit}
+              onClick={onConnect ?? onEdit}
             >
               <LogIn size={14} /> Connect
             </button>
@@ -100,7 +128,7 @@ export function ProviderCard({ row, selectedModel, onAddModel, onEdit, onRemove,
             </ul>
           ) : (
             <p className="provider-no-models">
-              {row.provider
+              {connected
                 ? "No models yet. Add one to make it selectable in chat."
                 : "Connect this provider to choose models."}
             </p>

@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { PROVIDER_PRESETS } from "../../acp/provider-presets";
+import { isOauthProvider, PROVIDER_PRESETS } from "../../acp/provider-presets";
+import { logoutProviderOauth } from "../../acp/provider-oauth";
 import { normalizeError } from "../../acp/errors";
 import {
   deleteProvider,
@@ -15,6 +16,7 @@ import { PresetGrid, ProviderEditor } from "./provider-form";
 import { ModelDialog } from "./model-dialog";
 import { Dialog } from "../components/dialog";
 import { LoadingState } from "../components/async-state";
+import { OauthDialog } from "./providers/oauth-dialog";
 import { ProviderCard } from "./providers/provider-card";
 import { RemoveModelDialog, RemoveProviderDialog, ReplacementModelDialog } from "./providers/provider-dialogs";
 import { modelFromLink, type ProviderRow } from "./providers/provider-rows";
@@ -46,6 +48,7 @@ export function ProvidersPanel({
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
   const [replacement, setReplacement] = useState<{ provider: ProviderSummary; modelId: string } | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
+  const [oauthPreset, setOauthPreset] = useState<ProviderPreset | null>(null);
 
   // Models arrive via a host call react-query does not track. Track that refresh so the panel
   // still shows a spinner when the providers query is already warm from the app shell.
@@ -140,7 +143,7 @@ export function ProvidersPanel({
         preset,
         provider,
         models: [...merged.values()].sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id)),
-        oauthConnected: preset.id === "xai" && Boolean(auth.data?.methodId),
+        oauthConnected: (preset.id === "xai" && Boolean(auth.data?.methodId)) || Boolean(provider?.oauth),
         oauthEmail: preset.id === "xai" ? auth.data?.email : null,
       };
     };
@@ -185,9 +188,33 @@ export function ProvidersPanel({
 
   function openEditor(preset: ProviderPreset, provider?: ProviderSummary) {
     setAdding(false);
+    setOauthPreset(null);
     setEditingProvider(provider ?? null);
     setEditing(preset);
     onDirtyChange?.(true);
+  }
+
+  function openConnect(preset: ProviderPreset, provider?: ProviderSummary) {
+    setNotice(null);
+    const keyed = Boolean(
+      provider?.oauth || provider?.inlineKey || (provider?.hasKey && provider.envKeyPresent),
+    );
+    if (isOauthProvider(preset.id) && !keyed) {
+      setOauthPreset(preset);
+      return;
+    }
+    openEditor(preset, provider);
+  }
+
+  async function signOut(preset: ProviderPreset) {
+    setNotice(null);
+    try {
+      await logoutProviderOauth(preset.id);
+      void queryClient.invalidateQueries({ queryKey: ["auth-info"] });
+      refresh();
+    } catch (error) {
+      setNotice(normalizeError(error, "Could not sign out"));
+    }
   }
 
   const modelsBusy = catalogLoading || presetsFetching || providers.isFetching;
@@ -223,6 +250,8 @@ export function ProvidersPanel({
                 selectedModel={selectedModel}
                 onAddModel={() => { setNotice(null); setModelTarget({ provider: row.provider! }); }}
                 onEdit={() => openEditor(row.preset, row.provider)}
+                onConnect={() => openConnect(row.preset, row.provider)}
+                onSignOut={row.oauthConnected ? () => void signOut(row.preset) : undefined}
                 onRemove={() => { setNotice(null); setDeletingProvider(row); }}
                 onEditModel={(model) => { if (row.provider) setModelTarget({ provider: row.provider, model }); }}
                 onRemoveModel={(model) => { setNotice(null); setDeletingModel(model); }}
@@ -273,6 +302,19 @@ export function ProvidersPanel({
         />
       )}
 
+      {oauthPreset && (
+        <OauthDialog
+          preset={oauthPreset}
+          onClose={() => setOauthPreset(null)}
+          onConnected={() => {
+            setOauthPreset(null);
+            void queryClient.invalidateQueries({ queryKey: ["auth-info"] });
+            refresh();
+          }}
+          onUseApiKey={() => openEditor(oauthPreset)}
+        />
+      )}
+
       {adding && !editing && (
         <Dialog
           title="Add provider"
@@ -280,7 +322,7 @@ export function ProvidersPanel({
           size="wide"
           onClose={() => setAdding(false)}
         >
-          <PresetGrid presets={presets} onPick={(preset) => openEditor(preset)} />
+          <PresetGrid presets={presets} onPick={(preset) => openConnect(preset)} />
         </Dialog>
       )}
 

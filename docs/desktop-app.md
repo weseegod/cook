@@ -146,7 +146,7 @@ only when both of these hold:
 
 | Cap | Contract | Until |
 |---|---|---|
-| `fs.readTextFile` / `writeTextFile` | `true` | host implements, cwd + sessions-root allow-path |
+| `fs.readTextFile` / `writeTextFile` | `true` | host implements; Always approve off uses cwd + sessions-root allow-path, on mirrors TUI `LocalFs` |
 | `terminal` | `false` | a real PTY exists (map `H-term`) |
 | `plan` | `{}` | already honoured |
 | `_meta["x.ai/folderTrust"].interactive` | `true` | reverse `x.ai/folder_trust/request` is implemented |
@@ -241,10 +241,13 @@ Consume `InitializeResponse.meta` (`availableCommands`, `sessionRecap`,
 ACP has no slot for (`goal_updated` above all). An unknown `sessionUpdate`
 tag is ignored, never rendered as a row.
 
-Host implements `fs/read_text_file` / `fs/write_text_file` in Rust, restricted
-to the session cwd plus one allow-path: the agent's own session store
+Host implements `fs/read_text_file` / `fs/write_text_file` in Rust. When
+Settings → General → Always approve is off, access is restricted to the
+session cwd plus one allow-path: the agent's own session store
 (`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`).
-Without it plan mode and goal planning cannot write their plan files
+When Always approve is on, the host mirrors the CLI/TUI `LocalFs` behavior and
+does not add a workspace path restriction. Without the session-store allow-path,
+plan mode and goal planning cannot write their plan files
 (`<session>/plan.md` as the legacy plan-mode fallback, or
 `<session>/plans/<utc>.md` per plan/goal episode, published to
 `<slug>-<utc>.md` when complete), which live outside

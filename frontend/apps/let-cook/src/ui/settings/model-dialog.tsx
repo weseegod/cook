@@ -63,6 +63,7 @@ export function ModelDialog({
   );
   const [text, setText] = useState(model?.inputModalities?.includes("text") ?? true);
   const [image, setImage] = useState(model?.inputModalities?.includes("image") ?? false);
+  const [reasoning, setReasoning] = useState(model ? model.supportsReasoningEffort === true : true);
   const [candidates, setCandidates] = useState<Candidate[] | null>(null);
   const [probing, setProbing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -112,6 +113,7 @@ export function ModelDialog({
         input,
         contextWindow: limits.contextWindow,
         maxCompletionTokens: limits.maxCompletionTokens,
+        supportsReasoningEffort: reasoning,
       });
       onSaved();
     } catch (caught) {
@@ -224,6 +226,15 @@ export function ModelDialog({
           <div className="toggle-row">
             <span><strong>Image input</strong></span>
             <ToggleSwitch checked={image} ariaLabel="Image" onChange={setImage} />
+          </div>
+        </div>
+        <div className="model-dialog-reasoning">
+          <div className="toggle-row">
+            <span>
+              <strong>Reasoning</strong>
+              <small>Show reasoning effort levels in the chat model picker.</small>
+            </span>
+            <ToggleSwitch checked={reasoning} ariaLabel="Reasoning" onChange={setReasoning} />
           </div>
         </div>
 

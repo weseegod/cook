@@ -323,6 +323,12 @@ pub struct SamplingClient {
     first_use_noted: Arc<AtomicBool>,
 }
 
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+
+fn is_chatgpt_codex_endpoint(base_url: &str) -> bool {
+    base_url.trim_end_matches('/') == CHATGPT_CODEX_BASE_URL
+}
+
 impl std::fmt::Debug for SamplingClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SamplingClient")
@@ -511,8 +517,9 @@ impl SamplingClient {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if let Some(ref api_key) = config.api_key {
+            let anthropic_oauth = api_key.starts_with("sk-ant-oat");
             match config.auth_scheme {
-                AuthScheme::XApiKey => {
+                AuthScheme::XApiKey if !anthropic_oauth => {
                     let header_value = HeaderValue::from_str(api_key).map_err(|_| {
                         tracing::debug!(
                             api_key = %api_key,
@@ -524,7 +531,7 @@ impl SamplingClient {
                     })?;
                     headers.insert(HeaderName::from_static("x-api-key"), header_value);
                 }
-                AuthScheme::Bearer => {
+                AuthScheme::Bearer | AuthScheme::XApiKey => {
                     let bearer = format!("Bearer {}", api_key);
                     let header_value = HeaderValue::from_str(&bearer).map_err(|_| {
                         tracing::debug!(
@@ -536,6 +543,12 @@ impl SamplingClient {
                         )
                     })?;
                     headers.insert(AUTHORIZATION, header_value);
+                    if anthropic_oauth {
+                        headers.insert(
+                            HeaderName::from_static("anthropic-beta"),
+                            HeaderValue::from_static("oauth-2024-06-04"),
+                        );
+                    }
                 }
             }
         }
@@ -700,15 +713,22 @@ impl SamplingClient {
             headers.remove(AUTHORIZATION);
             headers.remove(HeaderName::from_static("x-api-key"));
             if let Some(fresh) = resolver.current_bearer() {
+                let anthropic_oauth = fresh.starts_with("sk-ant-oat");
                 match self.defaults.auth_scheme {
-                    AuthScheme::XApiKey => {
+                    AuthScheme::XApiKey if !anthropic_oauth => {
                         if let Ok(v) = HeaderValue::from_str(&fresh) {
                             headers.insert(HeaderName::from_static("x-api-key"), v);
                         }
                     }
-                    AuthScheme::Bearer => {
+                    AuthScheme::Bearer | AuthScheme::XApiKey => {
                         if let Ok(v) = HeaderValue::from_str(&format!("Bearer {fresh}")) {
                             headers.insert(AUTHORIZATION, v);
+                        }
+                        if anthropic_oauth {
+                            headers.insert(
+                                HeaderName::from_static("anthropic-beta"),
+                                HeaderValue::from_static("oauth-2024-06-04"),
+                            );
                         }
                     }
                 }
@@ -1261,6 +1281,12 @@ impl SamplingClient {
 
         if request.inner.max_output_tokens.is_none() {
             request.inner.max_output_tokens = self.defaults.max_completion_tokens;
+        }
+
+        // The ChatGPT Codex Responses endpoint rejects `max_output_tokens`. The normal
+        // Responses API accepts it, so keep this compatibility adjustment scoped to Codex.
+        if is_chatgpt_codex_endpoint(&self.base_url) {
+            request.inner.max_output_tokens = None;
         }
 
         // The API defaults `store` to true, which breaks ZDR compliance
@@ -1995,6 +2021,12 @@ impl SamplingClient {
             request.max_output_tokens = self.defaults.max_completion_tokens;
         }
 
+        // This value is copied into the Responses request during conversion. Codex rejects
+        // the field even when it came from a client default, so remove it before conversion.
+        if is_chatgpt_codex_endpoint(&self.base_url) {
+            request.max_output_tokens = None;
+        }
+
         Ok(())
     }
 
@@ -2377,6 +2409,34 @@ mod tests {
             context_window: 8192,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn codex_endpoint_drops_unsupported_max_output_tokens() {
+        let client = SamplingClient::new(SamplerConfig {
+            base_url: CHATGPT_CODEX_BASE_URL.to_string(),
+            max_completion_tokens: Some(64_000),
+            ..minimal_config()
+        })
+        .expect("client should construct");
+
+        let mut response_request = CreateResponseWrapper::new(rs::CreateResponse {
+            max_output_tokens: Some(123),
+            ..Default::default()
+        });
+        client
+            .apply_response_defaults(&mut response_request)
+            .expect("defaults should apply");
+        assert_eq!(response_request.inner.max_output_tokens, None);
+
+        let mut conversation_request = ConversationRequest {
+            max_output_tokens: Some(123),
+            ..Default::default()
+        };
+        client
+            .apply_conversation_defaults(&mut conversation_request)
+            .expect("defaults should apply");
+        assert_eq!(conversation_request.max_output_tokens, None);
     }
 
     /// The serialized StreamingChatRequest flattens all ChatCompletionRequest fields at top level.

@@ -2016,7 +2016,8 @@ impl acp::Agent for MvpAgent {
             "x.ai/session/add_local_workspace" => {
                 crate::extensions::session_admin::handle(self, &args).await
             }
-            "x.ai/session/rename" | "x.ai/session/delete"
+            "x.ai/session/rename" | "x.ai/session/archive" | "x.ai/session/unarchive"
+            | "x.ai/session/delete"
             | "x.ai/sessions/delete_all"
             | "x.ai/session/update_mcp_servers" | "x.ai/session/fork"
             | "x.ai/plugins/reload" | "x.ai/commands/list" => {

@@ -103,6 +103,24 @@ fn parsed_models_reads_openai_and_ollama_shapes() {
 }
 
 #[test]
+fn parsed_models_reads_codex_slugs_and_skips_hidden_models() {
+    let codex: serde_json::Value = serde_json::json!({
+        "models": [
+            {"slug": "gpt-5.6-luna", "display_name": "GPT-5.6-Luna", "visibility": "list"},
+            {"slug": "gpt-reserve", "display_name": "GPT-Reserve", "visibility": "hide"}
+        ]
+    });
+    let models = parse_discovered_models(&codex);
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "gpt-5.6-luna");
+    assert_eq!(models[0].name.as_deref(), Some("GPT-5.6-Luna"));
+
+    let url = models_list_url("https://chatgpt.com/backend-api/codex/");
+    assert!(url.starts_with("https://chatgpt.com/backend-api/codex/models?client_version="));
+    assert_eq!(models_list_url("https://api.openai.com/v1"), "https://api.openai.com/v1/models");
+}
+
+#[test]
 fn presets_cover_every_documented_provider() {
     let ids: Vec<&str> = PRESETS.iter().map(|p| p.id).collect();
     for expected in [

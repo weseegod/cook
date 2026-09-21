@@ -1,4 +1,6 @@
 import { notify, request } from "./host";
+import { PROVIDER_PRESETS } from "./provider-presets";
+import type { ProviderList } from "./providers";
 
 export interface SessionSummary {
   id: string;
@@ -6,6 +8,19 @@ export interface SessionSummary {
   cwd?: string;
   updatedAt?: string | number;
   model?: string;
+  kind?: "build" | "chat";
+  archived?: boolean;
+}
+
+export type SessionListView = "conversations" | "archives";
+
+export interface ReasoningEffortOption {
+  /** Presentation/input id; the backend accepts the canonical `value` on the wire. */
+  id: string;
+  value: string;
+  label: string;
+  description?: string;
+  default?: boolean;
 }
 
 export interface ModelSummary {
@@ -18,6 +33,10 @@ export interface ModelSummary {
   /** Whether the agent's catalog marks this model as the configured default. */
   isDefault?: boolean;
   supportsReasoningEffort?: boolean;
+  /** The effort currently advertised by the model catalog (usually its default). */
+  reasoningEffort?: string;
+  /** Per-model selectable effort menu, when the agent advertises one. */
+  reasoningEfforts?: ReasoningEffortOption[];
   /** The model's context window in tokens, as `_meta.totalContextTokens` reports it. */
   contextWindow?: number;
   /** Maximum completion/output tokens configured for this model. */
@@ -97,9 +116,21 @@ export class XaiClient {
     return request<T>(method, params);
   }
 
-  async listSessions(query = ""): Promise<SessionSummary[]> {
-    const value = await this.call<unknown>("x.ai/session/list", query ? { query } : {});
+  async listSessions(query = "", view: SessionListView = "conversations"): Promise<SessionSummary[]> {
+    const params = {
+      ...(query ? { query } : {}),
+      ...(view === "archives" ? { archived: true } : {}),
+    };
+    const value = await this.call<unknown>("x.ai/session/list", params);
     return extractArray(value, ["sessions", "items"]).map(normalizeSession);
+  }
+
+  archiveSession(sessionId: string) {
+    return this.call("x.ai/session/archive", { sessionId, kind: "chat" });
+  }
+
+  unarchiveSession(sessionId: string) {
+    return this.call("x.ai/session/unarchive", { sessionId, kind: "chat" });
   }
 
   async loadHistory(sessionId: string): Promise<unknown> {
@@ -187,18 +218,24 @@ function extractArray(value: unknown, keys: string[]): UnknownRecord[] {
 }
 
 function normalizeSession(item: UnknownRecord): SessionSummary {
+  const meta = isRecord(item._meta) ? item._meta : {};
+  const sessionMeta = isRecord(meta["x.ai/session"]) ? meta["x.ai/session"] : {};
+  const kind = item.kind === "chat" || sessionMeta.kind === "chat" ? "chat" : "build";
   return {
     id: String(item.id ?? item.sessionId ?? ""),
     title: stringValue(item.title ?? item.name ?? item.firstPrompt),
     cwd: stringValue(item.cwd ?? item.workingDirectory),
     updatedAt: (item.updatedAt ?? item.updated_at ?? item.timestamp) as string | number | undefined,
     model: stringValue(item.model ?? item.modelId),
+    kind,
+    archived: item.archived === true || sessionMeta.archived === true,
   };
 }
 
 function normalizeModel(item: UnknownRecord): ModelSummary {
   const meta = isRecord(item._meta) ? item._meta : {};
   const modalities = item.inputModalities ?? meta.inputModalities ?? item.input;
+  const reasoningEfforts = normalizeReasoningEfforts(item.reasoningEfforts ?? meta.reasoningEfforts);
   const id = String(item.id ?? item.modelId ?? item.model ?? "");
   return {
     id,
@@ -208,11 +245,51 @@ function normalizeModel(item: UnknownRecord): ModelSummary {
     provider: stringValue(item.provider ?? item.modelProvider) ?? (id.includes("/") ? id.split("/", 1)[0] : "xai"),
     inputModalities: Array.isArray(modalities) ? modalities.map(String) : undefined,
     isDefault: item.isDefault === true || item.default === true,
-    supportsReasoningEffort: meta.supportsReasoningEffort === true,
+    supportsReasoningEffort: meta.supportsReasoningEffort === true || item.supportsReasoningEffort === true,
+    reasoningEffort: stringValue(meta.reasoningEffort ?? item.reasoningEffort),
+    ...(reasoningEfforts ? { reasoningEfforts } : {}),
     contextWindow: numberValue(meta.totalContextTokens ?? meta.total_context_tokens),
     maxCompletionTokens: numberValue(meta.maxCompletionTokens ?? meta.max_completion_tokens),
     apiModel: stringValue(meta.apiModel ?? meta.api_model ?? item.model),
   };
+}
+
+const FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
+  { id: "xhigh", value: "xhigh", label: "Xhigh", description: "Extended reasoning" },
+  { id: "high", value: "high", label: "High", description: "Heavy reasoning" },
+  { id: "medium", value: "medium", label: "Medium", description: "Balanced reasoning" },
+  { id: "low", value: "low", label: "Low", description: "Faster, lighter reasoning" },
+];
+
+function humanizeReasoningId(value: string): string {
+  return value.length > 0 ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+function normalizeReasoningEfforts(value: unknown): ReasoningEffortOption[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = value.flatMap((entry): ReasoningEffortOption[] => {
+    if (typeof entry === "string" && entry.trim()) {
+      const normalized = entry.trim();
+      return [{ id: normalized, value: normalized, label: humanizeReasoningId(normalized) }];
+    }
+    if (!isRecord(entry) || typeof entry.value !== "string" || !entry.value.trim()) return [];
+    const canonical = entry.value.trim();
+    const optionId = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : canonical;
+    return [{
+      id: optionId,
+      value: canonical,
+      label: typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : humanizeReasoningId(optionId),
+      ...(typeof entry.description === "string" && entry.description.trim() ? { description: entry.description.trim() } : {}),
+      ...(entry.default === true ? { default: true } : {}),
+    }];
+  });
+  return options.length > 0 ? options : undefined;
+}
+
+/** The menu exposed by the agent, or its documented fallback for older catalogs. */
+export function reasoningEffortOptions(model: ModelSummary | null | undefined): ReasoningEffortOption[] {
+  if (!model?.supportsReasoningEffort) return [];
+  return model.reasoningEfforts?.length ? model.reasoningEfforts : FALLBACK_REASONING_EFFORTS;
 }
 
 /**
@@ -223,6 +300,67 @@ export function modelCatalog(value: unknown): ModelCatalog {
   return {
     currentModelId: stringValue(isRecord(value) ? value.currentModelId : undefined) ?? null,
     models: extractArray(value, ["availableModels", "models", "items"]).map(normalizeModel),
+  };
+}
+
+/**
+ * Restore provider/config metadata that the agent's model catalog can omit.
+ *
+ * The ACP catalog is intentionally provider-agnostic for many ids, so an unnamespaced `gpt-*`
+ * entry otherwise falls through to the historical `xai` default in `normalizeModel`. Explicit
+ * `[model.*]` rows are the source of truth for Desktop and are also available from the browser
+ * mock, which makes this merge useful to both transports.
+ */
+export function mergeConfiguredModels(catalog: ModelCatalog, configured?: ProviderList | null): ModelCatalog {
+  if (!configured) return catalog;
+
+  const configuredModels = new Map<string, ModelSummary>();
+  const explicit = configured.models?.length ? configured.models : configured.providers.flatMap((provider) =>
+    provider.models.map((model) => ({ ...model, provider: provider.id })),
+  );
+  for (const model of explicit) {
+    if (!model.id) continue;
+    configuredModels.set(model.id, {
+      id: model.id,
+      apiModel: model.model,
+      name: model.name,
+      provider: model.provider,
+      inputModalities: model.input,
+      contextWindow: model.contextWindow,
+      maxCompletionTokens: model.maxCompletionTokens,
+      supportsReasoningEffort: model.supportsReasoningEffort,
+      reasoningEffort: model.reasoningEffort,
+      reasoningEfforts: model.reasoningEfforts,
+      configured: true,
+    });
+  }
+
+  const models = new Map(catalog.models.map((model) => [model.id, model]));
+  for (const [id, configuredModel] of configuredModels) {
+    const existing = models.get(id);
+    models.set(id, {
+      ...existing,
+      ...configuredModel,
+      // The ACP catalog may know richer runtime metadata than config.toml. Keep it when the
+      // configured row does not specify a value, while always trusting its provider ownership.
+      name: configuredModel.name ?? existing?.name,
+      apiModel: configuredModel.apiModel ?? existing?.apiModel,
+      inputModalities: configuredModel.inputModalities ?? existing?.inputModalities,
+      contextWindow: configuredModel.contextWindow ?? existing?.contextWindow,
+      maxCompletionTokens: configuredModel.maxCompletionTokens ?? existing?.maxCompletionTokens,
+      supportsReasoningEffort: configuredModel.supportsReasoningEffort ?? existing?.supportsReasoningEffort,
+      reasoningEffort: existing?.reasoningEffort ?? configuredModel.reasoningEffort,
+      reasoningEfforts: existing?.reasoningEfforts ?? configuredModel.reasoningEfforts,
+    });
+  }
+
+  const currentModelId = catalog.currentModelId || configured.defaultModel || null;
+  return {
+    currentModelId,
+    models: [...models.values()].map((model) => ({
+      ...model,
+      isDefault: model.id === currentModelId || model.isDefault,
+    })),
   };
 }
 
@@ -249,6 +387,10 @@ export function groupByProvider<T extends { provider?: string }>(models: T[]): A
     groups.set(key, [...(groups.get(key) ?? []), model]);
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+export function providerDisplayName(provider: string): string {
+  return PROVIDER_PRESETS.find((preset) => preset.id === provider)?.label ?? provider;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {

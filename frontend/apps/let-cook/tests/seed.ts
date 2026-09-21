@@ -14,7 +14,17 @@ export const CONNECTED_SEED = {
       apiBackend: "chat_completions",
       apiKey: "sk-mock-0123456789abcdef",
       models: [
-        { id: "gpt-5", name: "GPT-5", input: ["text", "image"] },
+        {
+          id: "gpt-5",
+          name: "GPT-5",
+          input: ["text", "image"],
+          supportsReasoningEffort: true,
+          reasoningEffort: "medium",
+          reasoningEfforts: [
+            { id: "balanced", value: "medium", label: "Balanced", description: "Balanced reasoning", default: true },
+            { id: "deep", value: "high", label: "Deep", description: "Heavy reasoning" },
+          ],
+        },
         { id: "o4-mini", name: "o4-mini", input: ["text"] },
       ],
     },

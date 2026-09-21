@@ -45,6 +45,24 @@ describe("session conversation reset", () => {
 });
 
 describe("session transcript reducer", () => {
+  it("tracks model and reasoning effort changes from the agent", () => {
+    const state = useSessionStore.getState();
+    const previousModelId = state.modelId;
+    const previousReasoningEffort = state.reasoningEffort;
+    state.set({ modelId: "gpt-4.1", reasoningEffort: "low" });
+    state.applyNotification({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "model_changed",
+        model_id: "o4-mini",
+        reasoning_effort: "high",
+      },
+    } as never);
+
+    expect(useSessionStore.getState()).toMatchObject({ modelId: "o4-mini", reasoningEffort: "high" });
+    useSessionStore.getState().set({ modelId: previousModelId, reasoningEffort: previousReasoningEffort });
+  });
+
   it("coalesces streamed assistant chunks without a message id", () => {
     let transcript = reduceTranscript(empty(), {
       sessionUpdate: "agent_message_chunk",

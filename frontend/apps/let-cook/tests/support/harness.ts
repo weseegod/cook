@@ -64,6 +64,7 @@ export function api(page: Page) {
       page.evaluate((value) => window.__cookMock!.elicit(value ?? {}), overrides ?? {}),
     modelsUpdate: (params?: Record<string, unknown>) =>
       page.evaluate((value) => window.__cookMock!.modelsUpdate(value ?? {}), params ?? {}),
+    completeOAuth: (id: string) => page.evaluate((value) => window.__cookMock!.completeOAuth(value), id),
   };
 }
 

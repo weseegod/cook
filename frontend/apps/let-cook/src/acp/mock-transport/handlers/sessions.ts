@@ -101,11 +101,21 @@ export const sessionHandlers: Record<string, MethodHandler> = {
   },
   "session/set_model": ({ p, respond }) => {
     const modelId = String(p.modelId ?? "");
-    if (!modelCatalog().availableModels.some((model) => model.id === modelId)) {
+    const model = modelCatalog().availableModels.find((entry) => entry.id === modelId);
+    if (!model) {
       return respond({ error: `unknown model \`${modelId}\`` });
     }
     state.defaultModel = modelId;
     notify("x.ai/models/update", modelCatalog());
+    const meta = (p._meta ?? {}) as Record<string, unknown>;
+    notify("_x.ai/session_notification", {
+      sessionId: "mock-session",
+      update: {
+        sessionUpdate: "model_changed",
+        model_id: modelId,
+        ...(typeof meta.reasoningEffort === "string" ? { reasoning_effort: meta.reasoningEffort } : {}),
+      },
+    });
     return respond({ _meta: { model: modelId } });
   },
   "session/set_mode": ({ p, sessionId, respond }) => {
@@ -118,8 +128,19 @@ export const sessionHandlers: Record<string, MethodHandler> = {
     notify("session/update", { sessionId, update: { sessionUpdate: "current_mode_update", currentModeId: modeId } });
     return respond({});
   },
-  "x.ai/session/list": ({ respond }) => {
-    return respond({ sessions: state.sessions });
+  "x.ai/session/list": ({ p, respond }) => {
+    const archived = p.archived === true;
+    return respond({ sessions: state.sessions.filter((session) => (session.archived === true) === archived) });
+  },
+  "x.ai/session/archive": ({ p, respond }) => {
+    const id = String(p.sessionId ?? "");
+    state.sessions = state.sessions.map((session) => (session.id === id ? { ...session, archived: true } : session));
+    return respond({ success: true, archived: true });
+  },
+  "x.ai/session/unarchive": ({ p, respond }) => {
+    const id = String(p.sessionId ?? "");
+    state.sessions = state.sessions.map((session) => (session.id === id ? { ...session, archived: false } : session));
+    return respond({ success: true, archived: false });
   },
   "x.ai/session/fork": ({ p, respond }) => {
     // Map id `C-sess-fork`: camelCase ForkSessionRequest → new peer session.

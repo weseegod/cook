@@ -4,7 +4,7 @@ import { CAPABILITIES } from "../handshake";
 import { notify, request, respond } from "../host";
 import { listPlanFiles } from "../plan-files";
 import { setDefaultModel as setDefaultModelOnAgent } from "../providers";
-import type { SessionInfo, XaiClient } from "../xai";
+import { reasoningEffortOptions, type SessionInfo, type XaiClient } from "../xai";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { writeLocal } from "../../ui/storage";
@@ -30,16 +30,61 @@ export function composePromptParts(text: string, attachments: Attachment[]) {
   return parts;
 }
 
-export async function sendModelChoice(modelId: string): Promise<void> {
+const REASONING_EFFORT_PREFS_KEY = "reasoningEffortByModel";
+
+function readReasoningEffortPrefs(): Record<string, string> {
+  try {
+    const value = JSON.parse(localStorage.getItem(`cook.${REASONING_EFFORT_PREFS_KEY}`) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, string] => typeof entry[0] === "string" && typeof entry[1] === "string"),
+    );
+  } catch {
+    return {};
+  }
+}
+
+export function preferredReasoningEffort(modelId: string): string | null {
+  return readReasoningEffortPrefs()[modelId] ?? null;
+}
+
+function rememberReasoningEffort(modelId: string, effort: string): void {
+  const prefs = readReasoningEffortPrefs();
+  prefs[modelId] = effort;
+  writeLocal(REASONING_EFFORT_PREFS_KEY, JSON.stringify(prefs));
+}
+
+function effectiveReasoningEffort(modelId: string, requested?: string): string | null {
+  const model = useCatalogStore.getState().models.find((entry) => entry.id === modelId);
+  const options = reasoningEffortOptions(model);
+  const candidate = requested ?? preferredReasoningEffort(modelId);
+  return candidate && options.some((option) => option.value === candidate) ? candidate : null;
+}
+
+export async function sendModelChoice(modelId: string, requestedEffort?: string): Promise<void> {
+  const effort = effectiveReasoningEffort(modelId, requestedEffort);
   const sessionId = useSessionStore.getState().sessionId;
   // Before the first prompt there is no session to switch, and there does not need to be: the
   // choice rides `session/new`'s `_meta.modelId` and is applied by the agent when it spawns.
-  if (sessionId) await request("session/set_model", { sessionId, modelId });
+  if (sessionId) {
+    await request("session/set_model", {
+      sessionId,
+      modelId,
+      ...(effort ? { _meta: { reasoningEffort: effort } } : {}),
+    });
+  }
+  if (requestedEffort && effort === requestedEffort) rememberReasoningEffort(modelId, effort);
   writeLocal("defaultModel", modelId);
-  useSessionStore.getState().set({ modelId });
-  useCatalogStore.getState().setModelCatalog({
+  const selected = useCatalogStore.getState().models.find((model) => model.id === modelId);
+  useSessionStore.getState().set({ modelId, reasoningEffort: effort ?? selected?.reasoningEffort ?? null });
+  const catalog = useCatalogStore.getState();
+  const usage = useSessionStore.getState().usage;
+  if (usage && selected?.contextWindow) {
+    useSessionStore.getState().set({ usage: { ...usage, size: selected.contextWindow } });
+  }
+  catalog.setModelCatalog({
     currentModelId: modelId,
-    models: useCatalogStore.getState().models,
+    models: catalog.models,
   });
 }
 

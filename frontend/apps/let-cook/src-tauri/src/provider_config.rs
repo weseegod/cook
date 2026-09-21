@@ -21,6 +21,18 @@ use toml_edit::{Array, DocumentMut, Item, Table, Value};
 const PROBE_BODY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Mirrors the agent's discovery cap: one listing cannot offer hundreds of models.
 const PROBE_MODEL_LIMIT: usize = 200;
+/// ChatGPT OAuth tokens are scoped to the Codex backend, not the public Platform API.
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
+
+fn models_list_url(base_url: &str) -> String {
+    let base_url = base_url.trim_end_matches('/');
+    if base_url == CHATGPT_CODEX_BASE_URL {
+        format!("{base_url}/models?client_version={}", env!("CARGO_PKG_VERSION"))
+    } else {
+        format!("{base_url}/models")
+    }
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +54,7 @@ struct ProviderView {
     env_key: Option<String>,
     env_key_present: bool,
     extra_headers: std::collections::BTreeMap<String, String>,
+    oauth: bool,
     models: Vec<ModelView>,
 }
 
@@ -85,6 +98,8 @@ pub struct ProviderUpsert {
     models: Vec<SeedModel>,
     #[serde(default)]
     set_as_default: bool,
+    #[serde(default)]
+    oauth: bool,
 }
 
 impl ProviderUpsert {
@@ -94,6 +109,100 @@ impl ProviderUpsert {
 
     pub fn model_ids(&self) -> Vec<String> {
         self.models.iter().map(|model| model.id.clone()).collect()
+    }
+
+    /// Connect via OAuth: store the access token as the provider credential.
+    pub fn oauth(id: &str, access_token: &str) -> Self {
+        let (label, base_url, api_backend, extra_headers, models) = match id {
+            "anthropic" => (
+                "Anthropic",
+                "https://api.anthropic.com/v1",
+                "messages",
+                [
+                    ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
+                    ("anthropic-beta".to_owned(), "oauth-2024-06-04".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+                vec![
+                    SeedModel {
+                        id: "claude-opus-4-6".into(),
+                        model: "claude-opus-4-6".into(),
+                        name: "Claude Opus".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "claude-sonnet-4-6".into(),
+                        model: "claude-sonnet-4-6".into(),
+                        name: "Claude Sonnet".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "claude-haiku-4-5".into(),
+                        model: "claude-haiku-4-5".into(),
+                        name: "Claude Haiku".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                ],
+            ),
+            "openai" => (
+                "OpenAI",
+                CHATGPT_CODEX_BASE_URL,
+                "responses",
+                std::collections::BTreeMap::new(),
+                vec![
+                    SeedModel {
+                        id: "gpt-5".into(),
+                        model: "gpt-5".into(),
+                        name: "GPT-5".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "gpt-4.1".into(),
+                        model: "gpt-4.1".into(),
+                        name: "GPT-4.1".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "o4-mini".into(),
+                        model: "o4-mini".into(),
+                        name: "o4-mini".into(),
+                        input: vec!["text".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                ],
+            ),
+            _ => (
+                "OpenAI",
+                OPENAI_API_BASE_URL,
+                "chat_completions",
+                std::collections::BTreeMap::new(),
+                Vec::new(),
+            ),
+        };
+        Self {
+            id: id.to_owned(),
+            name: Some(label.into()),
+            base_url: base_url.into(),
+            api_backend: api_backend.into(),
+            api_key: Some(access_token.to_owned()),
+            env_key: None,
+            extra_headers,
+            models,
+            set_as_default: true,
+            oauth: true,
+        }
     }
 }
 
@@ -108,6 +217,8 @@ pub struct ModelUpsert {
     input: Vec<String>,
     context_window: Option<u64>,
     max_completion_tokens: Option<u32>,
+    #[serde(default = "default_reasoning_enabled")]
+    supports_reasoning_effort: bool,
 }
 
 impl ModelUpsert {
@@ -150,8 +261,49 @@ pub struct ProbeModel {
 }
 
 pub fn list() -> Result<ProviderList, String> {
+    migrate_oauth_provider_routes()?;
     let doc = load()?;
     Ok(list_document(&doc))
+}
+
+/// Older Desktop builds persisted the ChatGPT OAuth bearer as an API key for the public
+/// Platform endpoint. That endpoint rejects ChatGPT OAuth with `model.request`/`api.model.read`
+/// scope errors. Repair the route in-place before returning settings data so the running agent
+/// and the picker converge on the Codex Responses endpoint.
+fn migrate_oauth_provider_routes() -> Result<(), String> {
+    let doc = load()?;
+    let Some(provider) = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("openai"))
+        .and_then(Item::as_table)
+    else {
+        return Ok(());
+    };
+    let is_oauth = string(provider, "auth_method").as_deref() == Some("oauth");
+    if !is_oauth {
+        return Ok(());
+    }
+    let already_migrated = string(provider, "base_url").as_deref() == Some(CHATGPT_CODEX_BASE_URL)
+        && string(provider, "api_backend").as_deref() == Some("responses");
+    if already_migrated {
+        return Ok(());
+    }
+    update(|doc| {
+        let Some(provider) = doc
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+            .and_then(|providers| providers.get_mut("openai"))
+            .and_then(Item::as_table_mut)
+        else {
+            return Ok(());
+        };
+        if string(provider, "auth_method").as_deref() == Some("oauth") {
+            provider.insert("base_url", toml_edit::value(CHATGPT_CODEX_BASE_URL));
+            provider.insert("api_backend", toml_edit::value("responses"));
+        }
+        Ok(())
+    })
 }
 
 /// Resolve a configured provider into a probe target. Blocking file IO; call it from a blocking task.
@@ -192,7 +344,7 @@ pub fn probe_target(id: &str) -> Result<ProbeTarget, String> {
         .unwrap_or_default();
     Ok(ProbeTarget {
         id,
-        url: format!("{}/models", base_url.trim_end_matches('/')),
+        url: models_list_url(&base_url),
         api_backend: string(table, "api_backend").unwrap_or_else(|| "chat_completions".to_owned()),
         key,
         extra_headers,
@@ -214,11 +366,14 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
     } = target;
     let mut request = crate::http::client().get(&url);
     if let Some(key) = key.as_deref() {
-        request = if api_backend == "messages" {
+        request = if api_backend == "messages" && !key.starts_with("sk-ant-oat") {
             request.header("x-api-key", key)
         } else {
             request.header("authorization", format!("Bearer {key}"))
         };
+        if key.starts_with("sk-ant-oat") {
+            request = request.header("anthropic-beta", "oauth-2024-06-04");
+        }
     }
     for (name, value) in &extra_headers {
         request = request.header(name.as_str(), value.as_str());
@@ -272,8 +427,9 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
     })
 }
 
-/// Parse the OpenAI-compatible `{ "data": [...] }` shape, OpenRouter metadata, and Google's
-/// `{ "models": [{ "name": "models/<id>" }] }`, in the order the provider reported them.
+/// Parse OpenAI-compatible `{ "data": [...] }`, Codex `{ "models": [{ "slug": ... }] }`,
+/// OpenRouter metadata, and Google's `{ "models": [{ "name": "models/<id>" }] }`, in the
+/// order the provider reported them.
 fn parse_models_listing(value: &serde_json::Value) -> Vec<ProbeModel> {
     let Some(entries) = value
         .get("data")
@@ -289,8 +445,20 @@ fn parse_models_listing(value: &serde_json::Value) -> Vec<ProbeModel> {
         if models.len() >= PROBE_MODEL_LIMIT {
             break;
         }
-        // OpenAI-compatible endpoints key the entry by `id`; Google lists `models/<id>` in `name`.
-        let explicit_id = entry.get("id").and_then(serde_json::Value::as_str);
+        // Codex uses `slug`/`display_name`; OpenAI-compatible endpoints use `id`/`name`, while
+        // Google lists `models/<id>` in `name`.
+        if entry
+            .get("visibility")
+            .and_then(serde_json::Value::as_str)
+            == Some("hide")
+        {
+            continue;
+        }
+        let explicit_id = entry
+            .get("id")
+            .or_else(|| entry.get("slug"))
+            .or_else(|| entry.get("model"))
+            .and_then(serde_json::Value::as_str);
         let Some(id) = explicit_id
             .or_else(|| entry.get("name").and_then(serde_json::Value::as_str))
             .map(|raw| raw.strip_prefix("models/").unwrap_or(raw).trim())
@@ -301,8 +469,10 @@ fn parse_models_listing(value: &serde_json::Value) -> Vec<ProbeModel> {
         if !seen.insert(id.to_owned()) {
             continue;
         }
-        let name = explicit_id
-            .and(entry.get("name").and_then(serde_json::Value::as_str))
+        let name = entry
+            .get("display_name")
+            .or_else(|| explicit_id.and_then(|_| entry.get("name")))
+            .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|name| !name.is_empty() && *name != id)
             .map(str::to_owned);
@@ -396,6 +566,7 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
                 env_key,
                 env_key_present,
                 extra_headers,
+                oauth: string(table, "auth_method").as_deref() == Some("oauth"),
                 models: all_models
                     .iter()
                     .filter(|model| model.provider == id)
@@ -415,6 +586,31 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
         models: all_models,
         default_model,
     }
+}
+
+fn default_reasoning_enabled() -> bool {
+    true
+}
+
+/// Drop the OAuth flag and stored token; models stay so the user can paste a key.
+pub fn clear_oauth(id: &str) -> Result<(), String> {
+    update(|doc| {
+        let Some(provider) = doc
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+            .and_then(|providers| providers.get_mut(id))
+            .and_then(Item::as_table_mut)
+        else {
+            return Ok(());
+        };
+        provider.remove("api_key");
+        provider.remove("auth_method");
+        if id == "openai" {
+            provider.insert("base_url", toml_edit::value(OPENAI_API_BASE_URL));
+            provider.insert("api_backend", toml_edit::value("chat_completions"));
+        }
+        Ok(())
+    })
 }
 
 pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
@@ -441,6 +637,11 @@ pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
                 headers.insert(name, toml_edit::value(value.as_str()));
             }
             provider.insert("extra_headers", Item::Table(headers));
+        }
+        if request.oauth {
+            provider.insert("auth_method", toml_edit::value("oauth"));
+        } else {
+            provider.remove("auth_method");
         }
         if let Some(key) = request
             .api_key
@@ -486,6 +687,7 @@ pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
                 &seed.input,
                 seed.context_window,
                 seed.max_completion_tokens,
+                None,
             )?;
         }
         if request.set_as_default {
@@ -539,6 +741,7 @@ pub fn upsert_model(request: ModelUpsert) -> Result<(), String> {
             &request.input,
             request.context_window,
             request.max_completion_tokens,
+            Some(request.supports_reasoning_effort),
         )
     })
 }
@@ -667,6 +870,7 @@ fn write_model(
     input: &[String],
     context_window: Option<u64>,
     max_completion_tokens: Option<u32>,
+    supports_reasoning_effort: Option<bool>,
 ) -> Result<(), String> {
     let id = checked_id(id, "model id")?;
     if !models.contains_key(id) {
@@ -703,6 +907,9 @@ fn write_model(
     }
     if let Some(value) = max_completion_tokens {
         table.insert("max_completion_tokens", toml_edit::value(i64::from(value)));
+    }
+    if let Some(value) = supports_reasoning_effort {
+        table.insert("supports_reasoning_effort", toml_edit::value(value));
     }
     Ok(())
 }
@@ -902,7 +1109,25 @@ fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table,
 
 #[cfg(test)]
 mod tests {
-    use super::{child_table, list_document, parse_models_listing, redact, write_model};
+    use super::{child_table, list_document, models_list_url, parse_models_listing, redact, write_model};
+
+    #[test]
+    fn codex_models_listing_uses_client_version_and_slug_metadata() {
+        let url = models_list_url("https://chatgpt.com/backend-api/codex/");
+        assert!(url.starts_with("https://chatgpt.com/backend-api/codex/models?client_version="));
+
+        let listing = serde_json::json!({
+            "models": [
+                {"slug": "gpt-5.6-luna", "display_name": "GPT-5.6-Luna", "context_window": 272000, "visibility": "list"},
+                {"slug": "gpt-reserve", "display_name": "GPT-Reserve", "visibility": "hide"}
+            ]
+        });
+        let models = parse_models_listing(&listing);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.6-luna");
+        assert_eq!(models[0].name.as_deref(), Some("GPT-5.6-Luna"));
+        assert_eq!(models[0].context_window, Some(272000));
+    }
 
     #[test]
     fn models_listing_reads_openai_and_top_provider_limits() {
@@ -994,6 +1219,7 @@ api_backend = "chat_completions"
             &input,
             Some(32_768),
             Some(2_000),
+            None,
         )
         .expect("write local model");
 
@@ -1021,6 +1247,7 @@ api_backend = "chat_completions"
             &input,
             Some(65_536),
             Some(4_096),
+            None,
         )
         .expect("edit local model");
         let edited = list_document(&doc)

@@ -158,8 +158,18 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/models/update",
     handle: async (ctx) => {
       const catalog = modelCatalog(ctx.params);
-      if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
-      else await ctx.refreshModels?.();
+      // Re-list through the client so Desktop/config provider metadata is merged back in. The
+      // notification payload often omits provider names, which would otherwise put OpenAI's
+      // unnamespaced models back under the xAI fallback bucket.
+      if (ctx.refreshModels) {
+        try {
+          await ctx.refreshModels();
+        } catch {
+          // A notification must not turn into a stale/empty picker just because the optional
+          // re-list failed; the payload is still a useful fallback.
+          if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
+        }
+      } else if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
     },
   },
   {

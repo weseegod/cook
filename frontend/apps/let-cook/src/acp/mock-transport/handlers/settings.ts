@@ -1,9 +1,52 @@
 import { PROVIDER_PRESETS } from "../../provider-presets";
 import { modelCatalog, providerList } from "../catalog";
 import { isRecord } from "../events";
-import { notify, state } from "../state";
+import {
+  approvedOauth,
+  grokAuthResolve,
+  pendingOauth,
+  setGrokAuthResolve,
+  setPendingOauth,
+} from "../oauth-pending";
+import { notify, persist, state } from "../state";
 import type { MockProvider, MockSeedModel } from "../types";
 import type { MethodHandler } from "./registry";
+
+function seedOauthProvider(id: string) {
+  const preset = PROVIDER_PRESETS.find((entry) => entry.id === id);
+  if (!preset) return;
+  const existing = state.providers.find((provider) => provider.id === id);
+  const next: MockProvider = {
+    id,
+    name: preset.label,
+    baseUrl: preset.baseUrl ?? "",
+    apiBackend: preset.apiBackend,
+    apiKeyPresent: true,
+    oauth: true,
+    models: existing?.models?.length
+      ? existing.models
+      : preset.models.map((model) => ({ id: model.id, model: model.model, name: model.name, input: [...model.input] })),
+  };
+  const index = state.providers.findIndex((provider) => provider.id === id);
+  state.providers = index < 0
+    ? [...state.providers, next]
+    : state.providers.map((provider, at) => at === index ? { ...provider, ...next, models: next.models } : provider);
+  notify("x.ai/models/update", modelCatalog());
+}
+
+export function completeMockOauth(id: string): void {
+  approvedOauth.add(id);
+  if (id === "xai") {
+    state.authMethodId = "grok.com";
+    grokAuthResolve?.();
+    setGrokAuthResolve(null);
+    notify("x.ai/models/update", modelCatalog());
+    persist();
+    return;
+  }
+  seedOauthProvider(id);
+  persist();
+}
 
 const skillsMutation: MethodHandler = ({ respond }) => {
     return respond({ result: { ok: true, skills: state.skills, message: "ok" } });
@@ -11,11 +54,86 @@ const skillsMutation: MethodHandler = ({ respond }) => {
 
 export const settingsHandlers: Record<string, MethodHandler> = {
   "x.ai/auth/info": ({ respond }) => {
-    return respond({ result: { methodId: state.authMethodId, email: null } });
+    return respond({ result: { methodId: state.authMethodId, email: state.authMethodId ? "cook@example.com" : null } });
   },
   "x.ai/auth/logout": ({ respond }) => {
     state.authMethodId = null;
+    approvedOauth.delete("xai");
     return respond({ result: { ok: true } });
+  },
+  "x.ai/auth/get_url": ({ respond }) => {
+    return respond({
+      result: {
+        auth_url: "https://auth.x.ai/oauth2/device?user_code=GROK-1234",
+        mode: "device",
+      },
+    });
+  },
+  "x.ai/auth/submit_code": ({ respond }) => respond({ result: { submitted: true } }),
+  "x.ai/auth/cancel": ({ respond }) => {
+    setGrokAuthResolve(null);
+    return respond({ result: { cancelled: true } });
+  },
+  authenticate: ({ p, respond }) => {
+    if (approvedOauth.has("xai") || state.authMethodId) {
+      state.authMethodId = String(p.methodId ?? "grok.com");
+      return respond({});
+    }
+    return new Promise((resolve) => {
+      setGrokAuthResolve(() => {
+        state.authMethodId = String(p.methodId ?? "grok.com");
+        resolve(respond({}));
+      });
+    });
+  },
+  "x.ai/providers/oauth/start": ({ p, respond }) => {
+    const id = String(p.id ?? "");
+    const paste = id === "anthropic";
+    const next = {
+      id,
+      mode: paste ? "paste" as const : "device" as const,
+      authorizeUrl: paste
+        ? "https://claude.ai/oauth/authorize"
+        : "https://auth.openai.com/codex/device?user_code=WXYZ-1234",
+      userCode: paste ? null : "WXYZ-1234",
+    };
+    setPendingOauth(next);
+    return respond({
+      id,
+      mode: next.mode,
+      authorizeUrl: next.authorizeUrl,
+      userCode: next.userCode,
+      needsCode: paste,
+    });
+  },
+  "x.ai/providers/oauth/poll": ({ p, respond }) => {
+    const id = String(p.id ?? pendingOauth?.id ?? "");
+    if (approvedOauth.has(id)) {
+      seedOauthProvider(id);
+      return respond({ status: "connected" });
+    }
+    return respond({ status: "pending" });
+  },
+  "x.ai/providers/oauth/submit_code": ({ p, respond }) => {
+    const id = String(p.id ?? pendingOauth?.id ?? "");
+    if (!String(p.code ?? "").trim()) return respond({ status: "error", error: "paste the authorization code" });
+    completeMockOauth(id);
+    return respond({ status: "connected" });
+  },
+  "x.ai/providers/oauth/cancel": ({ p, respond }) => {
+    const id = String(p.id ?? "");
+    if (pendingOauth?.id === id) setPendingOauth(null);
+    return respond({ ok: true });
+  },
+  "x.ai/providers/oauth/logout": ({ p, respond }) => {
+    const id = String(p.id ?? "");
+    approvedOauth.delete(id);
+    state.providers = state.providers.map((provider) =>
+      provider.id === id
+        ? { ...provider, oauth: false, apiKey: undefined, apiKeyPresent: false }
+        : provider,
+    );
+    return respond({ ok: true });
   },
   "x.ai/setApiKey": ({ respond }) => {
     // Upstream keys on `key` and stores the xAI session key only, so the desktop's legacy shape
@@ -74,6 +192,7 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       apiKey: apiKey ?? (envKey ? undefined : existing?.apiKey),
       apiKeyPresent: Boolean(apiKey || (!envKey && (existing?.apiKey || existing?.apiKeyPresent))),
       envKey: envKey ?? (apiKey ? undefined : existing?.envKey),
+      oauth: p.oauth === true,
       models: [...(existing?.models ?? []).filter((model) => !seeded.has(model.id)), ...seeds],
     };
     const providerIndex = state.providers.findIndex((provider) => provider.id === id);
@@ -121,6 +240,7 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       input: Array.isArray(p.input) ? p.input.map(String) : ["text"],
       contextWindow: typeof p.contextWindow === "number" ? p.contextWindow : undefined,
       maxCompletionTokens: typeof p.maxCompletionTokens === "number" ? p.maxCompletionTokens : undefined,
+      supportsReasoningEffort: p.supportsReasoningEffort === true,
     };
     provider.models = [...provider.models.filter((model) => model.id !== modelId), next];
     notify("x.ai/models/update", modelCatalog());

@@ -1,7 +1,7 @@
 import { useEffect, type Dispatch, type RefObject, type SetStateAction } from "react";
 
-/** Room a five-item conversation menu needs below its trigger before it flips upwards. */
-export const ROW_MENU_HEIGHT = 190;
+/** Room the full conversation menu needs below its trigger before it flips upwards. */
+export const ROW_MENU_HEIGHT = 220;
 
 export interface RowMenu {
   id: string;

@@ -389,3 +389,72 @@ test.describe("session fork and export", () => {
 
 });
 
+test.describe("conversation archives", () => {
+  const ARCHIVE_SEED = {
+    ...CONNECTED_SEED,
+    sessions: [
+      { id: "chat-active", title: "Active chat", cwd: "/tmp/cook-demo", updatedAt: "2026-09-19T10:00:00Z", kind: "chat" as const },
+      { id: "chat-archived", title: "Archived chat", cwd: "/tmp/cook-demo", updatedAt: "2026-09-18T10:00:00Z", kind: "chat" as const, archived: true },
+      { id: "build-local", title: "Local build", cwd: "/tmp/cook-demo", updatedAt: "2026-09-17T10:00:00Z", kind: "build" as const },
+    ],
+  };
+
+  async function openRowMenu(page: Page, id: string) {
+    const row = page.getByTestId(`session-row-${id}`);
+    await row.hover();
+    await row.getByTestId(`session-menu-${id}`).click();
+    await expect(row.getByRole("menu")).toBeVisible();
+    return row;
+  }
+
+  test("switches views and archives/unarchives chat conversations", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openWorkspace(page, ARCHIVE_SEED);
+
+    await expect(page.getByTestId("conversation-view")).toContainText("CONVERSATIONS");
+    await expect(page.getByTestId("session-row-chat-active")).toBeVisible();
+    await expect(page.getByTestId("session-row-build-local")).toBeVisible();
+    await expect(page.getByTestId("session-row-chat-archived")).toHaveCount(0);
+
+    const active = await openRowMenu(page, "chat-active");
+    await expect(active.getByRole("menu").getByRole("menuitem")).toHaveText([
+      "Pin to top",
+      "Rename",
+      "Fork",
+      "Export",
+      "Archive",
+      "Delete",
+    ]);
+    await active.getByTestId("session-archive-chat-active").click();
+    await waitForCalls(page, "x.ai/session/archive");
+    await expect(page.getByTestId("session-row-chat-active")).toHaveCount(0);
+
+    await page.getByTestId("conversation-view").click();
+    await page.getByTestId("conversation-view-archives").click();
+    await expect(page.getByTestId("conversation-view")).toContainText("ARCHIVES");
+    await expect(page.getByTestId("session-row-chat-active")).toBeVisible();
+    await expect(page.getByTestId("session-row-chat-archived")).toBeVisible();
+    await expect(page.getByTestId("session-row-build-local")).toHaveCount(0);
+
+    const archived = await openRowMenu(page, "chat-active");
+    await expect(archived.getByTestId("session-archive-chat-active")).toContainText("Unarchive");
+    await archived.getByTestId("session-archive-chat-active").click();
+    await waitForCalls(page, "x.ai/session/unarchive");
+    await expect(page.getByTestId("session-row-chat-active")).toHaveCount(0);
+
+    await page.getByTestId("conversation-view").click();
+    await page.getByTestId("conversation-view-conversations").click();
+    await expect(page.getByTestId("session-row-chat-active")).toBeVisible();
+    await expect(page.getByTestId("session-row-chat-archived")).toHaveCount(0);
+
+    // The remote-backed state survives a renderer reload.
+    await page.reload();
+    await expect(page.getByRole("button", { name: "New chat" })).toBeVisible();
+    await page.getByTestId("conversation-view").click();
+    await page.getByTestId("conversation-view-archives").click();
+    await expect(page.getByTestId("session-row-chat-active")).toHaveCount(0);
+    await expect(page.getByTestId("session-row-chat-archived")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+});

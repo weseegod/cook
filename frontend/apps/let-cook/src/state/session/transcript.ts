@@ -60,6 +60,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
   let planMode = state.planMode;
   let sessionTitle = state.sessionTitle;
   let modelId = state.modelId;
+  let reasoningEffort = state.reasoningEffort;
   let turnStartedAt = state.turnStartedAt;
   let turnPausedMs = state.turnPausedMs;
   let questionOpenedAt = state.questionOpenedAt;
@@ -89,6 +90,11 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
     if (kind === "session_info_update") {
       sessionTitle = stringOr(raw.title, sessionTitle) ?? sessionTitle;
       modelId = stringOr(raw.modelId, modelId ?? undefined) ?? null;
+      continue;
+    }
+    if (kind === "model_changed") {
+      modelId = stringOr(raw.model_id ?? raw.modelId, modelId ?? undefined) ?? null;
+      reasoningEffort = stringOr(raw.reasoning_effort ?? raw.reasoningEffort) ?? null;
       continue;
     }
     if (kind === "goal_updated") {
@@ -183,6 +189,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
     planMode,
     sessionTitle,
     modelId,
+    reasoningEffort,
     turnStartedAt,
     turnPausedMs,
     questionOpenedAt,

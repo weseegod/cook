@@ -11,6 +11,8 @@ import {
   waitForCalls,
 } from "./support/harness";
 
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
 /**
  * End-to-end shell, chat and command flows through the shipped renderer over the recording mock
  * ACP transport.
@@ -29,6 +31,9 @@ test.describe("first run", () => {
 
     // No provider and no agent credential: the connect flow replaces the chat.
     await expect(page.getByTestId("connect-provider")).toBeVisible();
+    await expect(page.getByTestId("preset-openai").locator(".provider-logo-openai")).toBeVisible();
+    await expect(page.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
+    await expect(page.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
     await expect(page.getByTestId("preset-deepseek")).toBeVisible();
     await expect(page.getByTestId("preset-ollama")).toHaveCount(0);
     await expect(page.getByTestId("preset-custom")).toHaveCount(0);
@@ -78,6 +83,7 @@ test.describe("first run", () => {
     const mock = api(page);
     await openWorkspace(page);
     await page.getByTestId("preset-openai").click();
+    await page.getByTestId("oauth-use-api-key").click();
     await page.getByLabel("API key").fill("sk-mock-0123456789abcdef");
     await page.getByTestId("provider-discover").click();
     await expect(page.getByTestId("provider-discovered")).toContainText("mock-discovered-model");
@@ -116,6 +122,7 @@ test.describe("first run", () => {
   test("surfaces a rejected credential instead of pretending it worked", async ({ page }) => {
     await openWorkspace(page, { testFails: true });
     await page.getByTestId("preset-openai").click();
+    await page.getByTestId("oauth-use-api-key").click();
     await page.getByLabel("API key").fill("sk-bad-key-0123456789");
     await page.getByTestId("provider-test").click();
     const result = page.getByTestId("provider-test-result");
@@ -141,11 +148,32 @@ test.describe("chat, attachments and the model picker", () => {
     const prompt = await waitForCalls(page, "session/prompt");
     expect(prompt[0].params.prompt).toEqual([{ type: "text", text: "What changed?" }]);
 
-    const groups = await page
-      .locator(".composer-model optgroup")
-      .evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptGroupElement).label));
-    expect(groups).toEqual(["openai"]);
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.getByRole("menu", { name: "Models" })).toBeVisible();
+    await expect(page.locator(".composer-model-picker-group-label").first()).toHaveText("OpenAI");
     expect(errors).toEqual([]);
+  });
+
+  test("opens reasoning levels on hover and sends the selected level", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+
+    await page.getByPlaceholder("Ask Cook anything…").fill("start a session");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Model" }).click();
+    const modelRow = page.locator("[data-model-picker-item]").filter({ hasText: "GPT-5" }).first();
+    await modelRow.hover();
+    await expect(page.getByRole("menu", { name: "GPT-5 reasoning levels" })).toBeVisible();
+    await page.getByRole("menuitemradio", { name: "Deep" }).click();
+
+    const request = await waitForCalls(page, "session/set_model");
+    expect(request.at(-1)?.params).toMatchObject({
+      sessionId: "mock-session",
+      modelId: "gpt-5",
+      _meta: { reasoningEffort: "high" },
+    });
+    await expect(page.getByRole("button", { name: /Model/ })).toContainText("high");
   });
 
   test("keeps composer input stable while a delayed stream is running", async ({ page }) => {
@@ -172,9 +200,10 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByTestId("provider-add-model-openai").click();
     await page.getByLabel("Model ID for openai").fill("gpt-custom");
     await page.getByLabel("Model display name").fill("GPT Custom");
+    await expect(page.getByLabel("Reasoning")).toBeChecked();
     await page.getByTestId("model-save").click();
     const upserts = await waitForCalls(page, "x.ai/models/upsert");
-    expect(upserts.at(-1)?.params).toMatchObject({ id: "gpt-custom", providerId: "openai", contextWindow: 300000, maxCompletionTokens: 64000, input: ["text"] });
+    expect(upserts.at(-1)?.params).toMatchObject({ id: "gpt-custom", providerId: "openai", contextWindow: 300000, maxCompletionTokens: 64000, input: ["text"], supportsReasoningEffort: true });
     await expect(page.getByTestId("model-row-gpt-custom")).toContainText("GPT Custom");
     await expect(page.getByTestId("model-row-gpt-custom")).toContainText("gpt-custom");
 
@@ -205,13 +234,50 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByRole("tab", { name: "Models" }).click();
     await expect(page.locator("[data-testid^='provider-row-']")).toHaveCount(8);
     await expect(page.getByTestId("provider-row-openai")).toContainText("Connected · API key");
+    await expect(page.getByTestId("provider-row-openai").locator(".provider-logo-openai")).toBeVisible();
     await expect(page.getByTestId("provider-row-anthropic")).toContainText("Not connected");
+    await expect(page.getByTestId("provider-row-anthropic").locator(".provider-logo-claude")).toBeVisible();
+    await expect(page.getByTestId("provider-row-xai").locator(".provider-logo-grok")).toBeVisible();
     await page.getByTestId("provider-add").click();
     const dialog = page.getByRole("dialog", { name: "Add provider" });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId("preset-openai").locator(".provider-logo-openai")).toBeVisible();
+    await expect(dialog.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
+    await expect(dialog.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
     await expect(dialog.getByText("Choose a provider")).toHaveCount(0);
     await dialog.getByLabel("Close dialog").click();
     await expect(dialog).toHaveCount(0);
+  });
+
+  test("Connect on Claude starts OAuth and records Connected · OAuth", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-connect-anthropic").click();
+    const dialog = page.getByTestId("oauth-dialog-anthropic");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".provider-logo-claude")).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Connect Claude" })).toBeVisible();
+    await dialog.getByTestId("oauth-code").fill("claude-code#state");
+    await page.getByTestId("oauth-submit").click();
+    await expect(page.getByTestId("provider-row-anthropic")).toContainText("Connected · OAuth");
+  });
+
+  test("Connect on Grok starts device login and records Connected · OAuth", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-connect-xai").click();
+    await expect(page.getByTestId("oauth-dialog-xai")).toBeVisible();
+    await expect(page.getByTestId("oauth-user-code")).toHaveText("GROK-1234");
+    const copyCode = page.getByTestId("oauth-copy-code");
+    await expect(copyCode).toHaveText("Copy");
+    await copyCode.click();
+    await expect(copyCode).toHaveText("Copied");
+    await mock.completeOAuth("xai");
+    await expect(page.getByTestId("provider-row-xai")).toContainText("Connected · OAuth");
+    await expect(page.getByTestId("provider-signout-xai")).toBeVisible();
   });
 
   test("edits a provider's name, then removes it and its models from config", async ({ page }) => {
@@ -260,9 +326,9 @@ test.describe("chat, attachments and the model picker", () => {
 
     await expect(page.getByTestId("model-row-gpt-5")).toHaveCount(0);
     await expect(page.getByTestId("provider-connect-openai")).toBeVisible();
-    const state = await mock.state();
-    expect((state.providers as Array<{ id: string }>).map((provider) => provider.id)).toEqual(["deepseek"]);
-    expect(state.defaultModel).toBe("deepseek-chat");
+    const removed = await mock.state();
+    expect((removed.providers as Array<{ id: string }>).map((provider) => provider.id)).toEqual(["deepseek"]);
+    expect(removed.defaultModel).toBe("deepseek-chat");
   });
 
   test("shows model context, output and input and edits them in a popup", async ({ page }) => {
@@ -291,16 +357,17 @@ test.describe("chat, attachments and the model picker", () => {
   test("re-lists the catalog when the agent broadcasts an empty models update", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
-    const picker = page.getByLabel("Model");
-    await expect(picker).toHaveValue("gpt-5");
+    const picker = page.getByRole("button", { name: "Model" });
+    await expect(picker).toContainText("GPT-5");
     const listed = (await waitForCalls(page, "x.ai/models/list")).length;
 
     // The machine-wide form of `x.ai/models/update` has no payload: it says the catalog moved on
     // disk. Adopting it as a catalog would leave the picker empty and the selection dangling.
     await mock.modelsUpdate();
     await waitForCalls(page, "x.ai/models/list", listed + 1);
-    await expect(picker).toHaveValue("gpt-5");
-    await expect(picker.locator("option")).toHaveCount(2);
+    await expect(picker).toContainText("GPT-5");
+    await picker.click();
+    await expect(page.locator("[data-model-picker-item]")).toHaveCount(2);
   });
 
   test("attaches an image as a base64 image part with its media type", async ({ page }) => {
@@ -455,7 +522,8 @@ test.describe("slash commands", () => {
 
     // No session yet, and the picker still works: the choice rides `session/new`'s `_meta.modelId`.
     await expect(page.getByLabel("Model")).toBeEnabled();
-    await page.getByLabel("Model").selectOption("o4-mini");
+    await page.getByLabel("Model").click();
+    await page.getByRole("menuitem", { name: "o4-mini" }).click();
 
     await composer(page).fill("What changed?");
     await page.getByTestId("send-button").click();
@@ -464,7 +532,7 @@ test.describe("slash commands", () => {
     const created = (await waitForCalls(page, "session/new"))[0];
     expect(created.params._meta).toMatchObject({ modelId: "o4-mini" });
     expect((await mock.state()).defaultModel).toBe("o4-mini");
-    await expect(page.getByLabel("Model")).toHaveValue("o4-mini");
+    await expect(page.getByLabel("Model")).toContainText("o4-mini");
   });
 
   test("keeps a default the agent cannot write, and says where it applies", async ({ page }) => {
@@ -478,7 +546,7 @@ test.describe("slash commands", () => {
     await page.getByTestId("palette-item-model-o4-mini").click();
 
     await expect(page.getByTestId("notice-banner")).toContainText("applies to this window only");
-    await expect(page.locator(".composer-model select")).toHaveValue("o4-mini");
+    await expect(page.getByLabel("Model")).toContainText("o4-mini");
 
     await composer(page).fill("What changed?");
     await page.getByTestId("send-button").click();
@@ -605,4 +673,3 @@ test.describe("minimum window", () => {
     expect(errors).toEqual([]);
   });
 });
-

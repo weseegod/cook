@@ -69,6 +69,10 @@ pub struct PlanApprovalViewState {
     pub tool_call_id: String,
     pub has_plan: bool,
     pub plan_content: Option<String>,
+    /// Absolute path of the episode's plan file, when the agent supplied one. The TUI keeps this
+    /// alongside the basename so actions such as Copy file path do not have to reconstruct it
+    /// from the session directory.
+    pub plan_file_path: Option<std::path::PathBuf>,
     /// Basename of the episode's plan file (`2026-09-19T14-30-22Z.md`), shown as the review title
     /// and used for `@<name>:<line>` comment anchors. `plan.md` when the request carried no path.
     pub plan_file_name: String,
@@ -107,11 +111,13 @@ impl PlanApprovalViewState {
     ) -> Self {
         let plan_content = request.plan_content.filter(|s| !s.trim().is_empty());
         let has_plan = plan_content.is_some();
+        let plan_file_path = request.plan_file_path.clone().map(std::path::PathBuf::from);
         let plan_file_name = plan_file_name(request.plan_file_path.as_deref());
         Self {
             tool_call_id: request.tool_call_id,
             has_plan,
             plan_content,
+            plan_file_path,
             plan_file_name,
             source,
             stashed_prompt,
@@ -129,16 +135,19 @@ impl PlanApprovalViewState {
     pub fn after_turn(
         tool_call_id: String,
         plan_content: String,
+        plan_file_path: Option<std::path::PathBuf>,
         stashed_prompt: StashedPrompt,
     ) -> Self {
         let plan_content = (!plan_content.trim().is_empty()).then_some(plan_content);
         let has_plan = plan_content.is_some();
+        let plan_file_name =
+            plan_file_name(plan_file_path.as_deref().and_then(std::path::Path::to_str));
         PlanApprovalViewState {
             tool_call_id,
             has_plan,
             plan_content,
-            // CreatePlan/after-turn reviews carry no path; they are always the legacy single file.
-            plan_file_name: plan_file_name(None),
+            plan_file_path,
+            plan_file_name,
             source: PlanReviewSource::Inline,
             stashed_prompt,
             origin: ReviewOrigin::AfterTurn,
@@ -485,9 +494,13 @@ mod tests {
 
     #[test]
     fn after_turn_review_has_no_ext_method() {
+        let plan_file_path = std::path::PathBuf::from(
+            "/tmp/sessions/sess-plan/plans/build-it-2026-09-19T14-30-22Z.md",
+        );
         let mut state = PlanApprovalViewState::after_turn(
             "CreatePlan".into(),
             "# Plan".into(),
+            Some(plan_file_path.clone()),
             StashedPrompt {
                 text: String::new(),
                 cursor: 0,
@@ -499,6 +512,8 @@ mod tests {
         );
         assert!(state.is_after_turn());
         assert!(state.has_plan);
+        assert_eq!(state.plan_file_path, Some(plan_file_path));
+        assert_eq!(state.plan_file_name, "build-it-2026-09-19T14-30-22Z.md");
         assert!(!state.send_approved());
         assert!(!state.send_abandoned());
     }
@@ -695,6 +710,12 @@ mod tests {
             plan_file_path: Some("/sessions/abc/plans/2026-09-19T14-30-22Z.md".into()),
         };
         let state = PlanApprovalViewState::new(request, StashedPrompt::default(), tx);
+        assert_eq!(
+            state.plan_file_path,
+            Some(std::path::PathBuf::from(
+                "/sessions/abc/plans/2026-09-19T14-30-22Z.md",
+            )),
+        );
         assert_eq!(state.plan_file_name, "2026-09-19T14-30-22Z.md");
     }
 }

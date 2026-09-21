@@ -654,6 +654,8 @@ pub struct PlanViewerExtras {
     pub abandon_hovered: bool,
     pub copy_button_area: Option<Rect>,
     pub copy_hovered: bool,
+    pub copy_path_button_area: Option<Rect>,
+    pub copy_path_hovered: bool,
     pub last_click_at: Option<std::time::Instant>,
     pub gutter_drag_start: Option<usize>,
     pub gutter_drag_end: Option<usize>,
@@ -1609,6 +1611,7 @@ pub fn render_line_viewer(
         plan.approve_button_area = None;
         plan.goal_button_area = None;
         plan.abandon_button_area = None;
+        plan.copy_path_button_area = None;
     }
 
     // Render ListPane.
@@ -1671,6 +1674,7 @@ pub fn render_line_viewer(
         let approve_hovered = viewer.plan_ref().is_some_and(|p| p.approve_hovered);
         let goal_hovered = viewer.plan_ref().is_some_and(|p| p.goal_hovered);
         let copy_hovered = viewer.plan_ref().is_some_and(|p| p.copy_hovered);
+        let copy_path_hovered = viewer.plan_ref().is_some_and(|p| p.copy_path_hovered);
         let is_approval = viewer.feedback_active();
 
         let comment_spans = build_shortcut_button('c', "comment", comment_hovered, theme);
@@ -1678,6 +1682,10 @@ pub fn render_line_viewer(
 
         let copy_spans = build_shortcut_button('y', "copy plan", copy_hovered, theme);
         let copy_w: u16 = copy_spans.iter().map(|s| s.width() as u16).sum();
+
+        let copy_path_spans =
+            build_shortcut_button('Y', "copy file path", copy_path_hovered, theme);
+        let copy_path_w: u16 = copy_path_spans.iter().map(|s| s.width() as u16).sum();
 
         // In approval mode, show `a approve` (or `a approve w/ comments` when inline comments are pending)
         // In casual mode, show `s send` only when comments exist
@@ -1760,7 +1768,18 @@ pub fn render_line_viewer(
         }
         let with_copy_w = base_w.saturating_add(sep_w).saturating_add(copy_w);
         let show_copy = with_copy_w <= inner.width;
-        let total_w = if show_copy { with_copy_w } else { base_w };
+        let show_copy_path = viewer.path.is_absolute();
+        let with_copy_path_w = with_copy_w
+            .saturating_add(sep_w)
+            .saturating_add(copy_path_w);
+        let show_copy_path = show_copy_path && with_copy_path_w <= inner.width;
+        let total_w = if show_copy_path {
+            with_copy_path_w
+        } else if show_copy {
+            with_copy_w
+        } else {
+            base_w
+        };
 
         if total_w <= inner.width {
             let mut x = inner.x + (inner.width - total_w) / 2;
@@ -1844,6 +1863,21 @@ pub fn render_line_viewer(
                 viewer.plan_mut().copy_button_area = None;
             }
 
+            if show_copy_path {
+                buf.set_string(x, bottom_y, separator, sep_style);
+                x += sep_w;
+                let copy_path_x = x;
+                for span in &copy_path_spans {
+                    let w = span.width() as u16;
+                    buf.set_span(x, bottom_y, span, w);
+                    x += w;
+                }
+                viewer.plan_mut().copy_path_button_area =
+                    Some(Rect::new(copy_path_x, bottom_y, copy_path_w, 1));
+            } else {
+                viewer.plan_mut().copy_path_button_area = None;
+            }
+
             // Quit button, approval mode only
             if let Some((spans, w)) = quit_spans {
                 buf.set_string(x, bottom_y, separator, sep_style);
@@ -1865,6 +1899,7 @@ pub fn render_line_viewer(
             plan.goal_button_area = None;
             plan.comment_button_area = None;
             plan.copy_button_area = None;
+            plan.copy_path_button_area = None;
             plan.abandon_button_area = None;
         }
     }
@@ -2038,6 +2073,42 @@ mod tests {
         assert!(
             viewer.plan_ref().and_then(|p| p.goal_button_area).is_none(),
             "no goal hit area outside approval mode"
+        );
+    }
+
+    #[test]
+    fn plan_footer_renders_copy_file_path_for_absolute_paths() {
+        let mut viewer = LineViewerState::open_markdown_content(
+            "/tmp/sessions/sess-plan/plans/build-it.md",
+            "# Plan\n\n- Do the thing".to_owned(),
+            None,
+        )
+        .expect("markdown content should open");
+        viewer.kind = LineViewerKind::PlanPreview;
+        viewer.plan = Some(PlanViewerExtras {
+            show_action_buttons: true,
+            ..Default::default()
+        });
+        viewer.prepare_layout(140, 24);
+
+        let theme = Theme::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 140, 24));
+        render_line_viewer(
+            &mut buf,
+            Rect::new(0, 0, 140, 24),
+            &mut viewer,
+            std::path::Path::new("/tmp"),
+            &theme,
+            0,
+        );
+
+        let path_area = viewer
+            .plan_ref()
+            .and_then(|plan| plan.copy_path_button_area)
+            .expect("absolute plan paths must expose a copy-path hit area");
+        assert!(
+            row_text(&buf, path_area.y).contains("Y copy file path"),
+            "footer must render the copy file path action"
         );
     }
 

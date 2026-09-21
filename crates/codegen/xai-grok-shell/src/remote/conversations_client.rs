@@ -16,6 +16,8 @@ pub struct Conversation {
     #[serde(default)]
     pub starred: bool,
     #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
     pub create_time: Option<String>,
     #[serde(default)]
     pub modify_time: Option<String>,
@@ -36,6 +38,7 @@ pub struct ConvQuery {
     pub page_token: Option<String>,
     pub search_query: Option<String>,
     pub workspace_id: Option<String>,
+    pub archived: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -52,6 +55,8 @@ pub struct UpdateConversationBody {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub starred: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -161,6 +166,9 @@ impl ConversationsClient {
         if let Some(workspace) = q.workspace_id.as_deref().filter(|s| !s.is_empty()) {
             query.push(("workspaceId", workspace.to_owned()));
         }
+        if q.archived {
+            query.push(("archived", "true".to_owned()));
+        }
 
         let builder = self.apply_auth_headers(self.http.get(&url).query(&query), &auth);
 
@@ -194,7 +202,7 @@ impl ConversationsClient {
         })
     }
 
-    /// `PUT /rest/app-chat/conversations/{conversation_id}`: rename and/or star.
+    /// `PUT /rest/app-chat/conversations/{conversation_id}`: rename, star and/or archive.
     pub async fn update_conversation(
         &self,
         conversation_id: &str,
@@ -218,6 +226,28 @@ impl ConversationsClient {
             });
         }
         Ok(())
+    }
+
+    pub async fn archive_conversation(&self, conversation_id: &str) -> Result<(), ConvError> {
+        self.update_conversation(
+            conversation_id,
+            &UpdateConversationBody {
+                archived: Some(true),
+                ..UpdateConversationBody::default()
+            },
+        )
+        .await
+    }
+
+    pub async fn unarchive_conversation(&self, conversation_id: &str) -> Result<(), ConvError> {
+        self.update_conversation(
+            conversation_id,
+            &UpdateConversationBody {
+                archived: Some(false),
+                ..UpdateConversationBody::default()
+            },
+        )
+        .await
     }
 
     /// `DELETE /rest/app-chat/conversations/soft/{conversation_id}`: soft-delete.
@@ -256,6 +286,7 @@ mod tests {
                 "conversationId": "conv_abc",
                 "title": "Compare GPU vendors",
                 "starred": true,
+                "archived": true,
                 "createTime": "2026-06-18T17:30:00Z",
                 "modifyTime": "2026-06-18T18:02:00Z",
                 "workspaces": [{ "workspaceId": "ws_9f3a" }]
@@ -269,6 +300,7 @@ mod tests {
         assert_eq!(c.conversation_id, "conv_abc");
         assert_eq!(c.title, "Compare GPU vendors");
         assert!(c.starred);
+        assert!(c.archived);
         assert_eq!(c.modify_time.as_deref(), Some("2026-06-18T18:02:00Z"));
         let [ws, ..] = c.workspaces.as_slice() else {
             panic!("expected one workspace: {:?}", c.workspaces);
@@ -297,6 +329,7 @@ mod tests {
         let title_only = UpdateConversationBody {
             title: Some("New title".into()),
             starred: None,
+            archived: None,
         };
         assert_eq!(
             serde_json::to_value(&title_only).unwrap(),
@@ -306,10 +339,20 @@ mod tests {
         let both = UpdateConversationBody {
             title: Some("T".into()),
             starred: Some(true),
+            archived: None,
         };
         assert_eq!(
             serde_json::to_value(&both).unwrap(),
             serde_json::json!({ "title": "T", "starred": true })
+        );
+
+        let archived = UpdateConversationBody {
+            archived: Some(true),
+            ..UpdateConversationBody::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&archived).unwrap(),
+            serde_json::json!({ "archived": true })
         );
     }
 }

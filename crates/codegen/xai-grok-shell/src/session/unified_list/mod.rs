@@ -108,6 +108,9 @@ pub struct ListReq {
     /// Omission preserves the legacy inclusive behavior; unknown explicit values fail closed to exclude.
     #[serde(default)]
     pub headless: Option<String>,
+    /// Whether the conversations lane should return archived conversations instead of active ones.
+    #[serde(default)]
+    pub archived: bool,
     #[serde(default, rename = "_meta")]
     pub meta: Option<serde_json::Value>,
 }
@@ -226,7 +229,7 @@ pub async fn build_unified_list(
     reg.apply_pushdown(&facet_filters, &mut source_query);
     let headless = HeadlessPolicy::from_wire(req.headless.as_deref());
     let exclude_conversations = excludes_conversations(&facet_filters, headless);
-    let exclude_build = excludes_build(&facet_filters);
+    let exclude_build = req.archived || excludes_build(&facet_filters);
     let over = crate::session::merge::over_fetch(limit);
     let cwd_scope = req.cwd_scope;
     let can_relax = relax_eligible(RelaxGate {
@@ -296,6 +299,7 @@ pub async fn build_unified_list(
             page_token: cursor.conv_page_token.clone(),
             search_query: query.clone(),
             workspace_id: source_query.workspace_id.clone(),
+            archived: req.archived,
         };
         match tokio::time::timeout(
             crate::session::merge::REMOTE_TIMEOUT,
@@ -308,7 +312,12 @@ pub async fn build_unified_list(
                 let rows: Vec<UnifiedRow> = page
                     .conversations
                     .into_iter()
-                    .map(|c| conversation_to_row(c, reg))
+                    .map(|mut c| {
+                        // The archive list is authoritative even when an older conversations
+                        // service omits the flag from each returned item.
+                        c.archived |= req.archived;
+                        conversation_to_row(c, reg)
+                    })
                     .collect();
                 let frontier = cursor::conv_frontier(&rows, next_token.is_some());
                 ConvLane::Page {
@@ -1125,6 +1134,13 @@ mod tests {
             HeadlessPolicy::from_wire(req.headless.as_deref()),
             HeadlessPolicy::Include
         );
+    }
+    #[test]
+    fn list_req_deserializes_archived_key() {
+        let req: ListReq = serde_json::from_str(r#"{"archived": true}"#).expect("parse");
+        assert!(req.archived);
+        let req: ListReq = serde_json::from_str("{}").expect("parse");
+        assert!(!req.archived);
     }
     #[test]
     fn relax_rows_scopes_to_repo_and_requires_messages() {

@@ -6,6 +6,7 @@
  */
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { desktopCommand, isTauriRuntime, request } from "./host";
+import type { ReasoningEffortOption } from "./xai";
 
 export interface ProviderModelLink {
   id: string;
@@ -15,6 +16,8 @@ export interface ProviderModelLink {
   contextWindow?: number;
   maxCompletionTokens?: number;
   supportsReasoningEffort?: boolean;
+  reasoningEffort?: string;
+  reasoningEfforts?: ReasoningEffortOption[];
 }
 
 export interface ProviderSummary {
@@ -27,6 +30,8 @@ export interface ProviderSummary {
   envKey?: string | null;
   envKeyPresent: boolean;
   extraHeaders: Record<string, string>;
+  /** True when Connect stored an OAuth session rather than an API key. */
+  oauth?: boolean;
   models: ProviderModelLink[];
 }
 
@@ -111,6 +116,7 @@ export interface ProviderUpsertRequest {
   extraHeaders?: Record<string, string>;
   models: PresetModel[];
   setAsDefault?: boolean;
+  oauth?: boolean;
 }
 
 export interface ProviderUpsertResponse {
@@ -121,7 +127,23 @@ export interface ProviderUpsertResponse {
 }
 
 export function listProviders() {
-  return desktopCommand("desktop_provider_list", {}, () => request<ProviderList>("x.ai/providers/list", {}));
+  return desktopCommand("desktop_provider_list", {}, () => request<ProviderList>("x.ai/providers/list", {})).then(async (response) => {
+    // The native list call also repairs legacy ChatGPT OAuth routes. Make the running agent
+    // consume that migration before the picker exposes the provider's models.
+    await reloadDesktopModels();
+    return response;
+  });
+}
+
+/**
+ * Desktop writes config.toml outside the agent process. Ask the running agent to consume that
+ * write before the settings flow exposes newly-added model ids to the picker. Older agents keep
+ * their config watcher as a fallback, so a missing internal method must not make a successful
+ * config write look like a failed save.
+ */
+async function reloadDesktopModels(): Promise<void> {
+  if (!isTauriRuntime()) return;
+  await request("x.ai/internal/reload_models").catch(() => undefined);
 }
 
 export function providerPresets() {
@@ -134,7 +156,10 @@ export function providerPresets() {
 export function upsertProvider(params: ProviderUpsertRequest) {
   return desktopCommand<ProviderUpsertResponse>("desktop_provider_upsert", { request: params }, async () =>
     request<ProviderUpsertResponse>("x.ai/providers/upsert", { ...params }),
-  );
+  ).then(async (response) => {
+    await reloadDesktopModels();
+    return response;
+  });
 }
 
 export function deleteProvider(id: string, replacement?: string) {
@@ -142,7 +167,10 @@ export function deleteProvider(id: string, replacement?: string) {
     "desktop_provider_delete",
     { id, replacement },
     () => request("x.ai/providers/delete", { id, ...(replacement ? { replacement } : {}) }),
-  );
+  ).then(async (response) => {
+    await reloadDesktopModels();
+    return response;
+  });
 }
 
 export interface ModelUpsertRequest {
@@ -153,18 +181,25 @@ export interface ModelUpsertRequest {
   input: string[];
   contextWindow?: number;
   maxCompletionTokens?: number;
+  supportsReasoningEffort?: boolean;
 }
 
 export function upsertModel(params: ModelUpsertRequest) {
   return desktopCommand<{ ok: boolean; modelId: string }>("desktop_model_upsert", { request: params }, () =>
     request("x.ai/models/upsert", { ...params }),
-  );
+  ).then(async (response) => {
+    await reloadDesktopModels();
+    return response;
+  });
 }
 
 export function deleteModel(modelId: string) {
   return desktopCommand<{ ok: boolean; modelId: string }>("desktop_model_delete", { modelId }, () =>
     request("x.ai/models/delete", { modelId }),
-  );
+  ).then(async (response) => {
+    await reloadDesktopModels();
+    return response;
+  });
 }
 
 export function testProvider(params: {
@@ -203,5 +238,8 @@ export function probeProviderModels(id: string) {
 export function setDefaultModel(modelId: string) {
   return desktopCommand<{ ok: boolean; defaultModel: string }>("desktop_model_set_default", { modelId }, () =>
     request("x.ai/models/set_default", { modelId }),
-  );
+  ).then(async (response) => {
+    await reloadDesktopModels();
+    return response;
+  });
 }

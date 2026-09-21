@@ -13,6 +13,9 @@ export interface MockSeedModel {
   input?: string[];
   contextWindow?: number;
   maxCompletionTokens?: number;
+  supportsReasoningEffort?: boolean;
+  reasoningEffort?: string;
+  reasoningEfforts?: Array<string | { id?: string; value: string; label?: string; description?: string; default?: boolean }>;
 }
 
 export interface MockProvider {
@@ -24,6 +27,7 @@ export interface MockProvider {
   /** Persisted mock state keeps only presence, never the credential itself. */
   apiKeyPresent?: boolean;
   envKey?: string;
+  oauth?: boolean;
   models: MockSeedModel[];
 }
 
@@ -82,6 +86,8 @@ export interface MockSession {
   title: string;
   cwd: string;
   updatedAt: string;
+  kind?: "build" | "chat";
+  archived?: boolean;
 }
 
 /** One plan file as `x.ai/session/plans` reports it, in the agent's camelCase wire shape. */
@@ -230,4 +236,6 @@ export interface MockControl {
   taskOutput(taskId: string, output: string): void;
   goalUpdate(overrides?: Record<string, unknown>): Record<string, unknown>;
   modelsUpdate(params?: Record<string, unknown>): void;
+  /** Approve an in-flight ChatGPT / Claude / Grok OAuth Connect from a Playwright test. */
+  completeOAuth(id: string): void;
 }

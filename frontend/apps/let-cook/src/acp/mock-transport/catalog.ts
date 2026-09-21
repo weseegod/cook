@@ -23,6 +23,7 @@ export function providerList() {
       envKey: provider.envKey ?? null,
       envKeyPresent: false,
       extraHeaders: presetFor(provider.id)?.extraHeaders ?? {},
+      oauth: provider.oauth === true,
       models: linkedModels(provider),
     })),
     models: state.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.id }))),
@@ -42,7 +43,14 @@ export function modelCatalog() {
         name: model.name ?? model.id,
         provider: provider.id,
         inputModalities: model.input ?? ["text"],
-        _meta: { totalContextTokens: model.contextWindow ?? 300_000, maxCompletionTokens: model.maxCompletionTokens ?? 64_000, apiModel: model.model ?? model.id },
+        _meta: {
+          totalContextTokens: model.contextWindow ?? 300_000,
+          maxCompletionTokens: model.maxCompletionTokens ?? 64_000,
+          apiModel: model.model ?? model.id,
+          ...(model.supportsReasoningEffort ? { supportsReasoningEffort: true } : {}),
+          ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+          ...(model.reasoningEfforts ? { reasoningEfforts: model.reasoningEfforts } : {}),
+        },
       });
     }
   }

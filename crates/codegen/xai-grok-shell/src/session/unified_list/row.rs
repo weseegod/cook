@@ -11,6 +11,7 @@ use crate::session::merge::MergedSession;
 #[derive(Debug, Clone)]
 pub struct UnifiedRow {
     pub kind: SessionKind,
+    pub archived: bool,
     pub legacy: MergedSession,
     pub title: String,
     pub updated_at: Option<String>,
@@ -18,15 +19,20 @@ pub struct UnifiedRow {
 }
 
 impl UnifiedRow {
-    fn envelope(kind: SessionKind, facets: FacetMap) -> RowMeta {
+    fn envelope(kind: SessionKind, archived: bool, facets: FacetMap) -> RowMeta {
         RowMeta {
-            session: SessionMetaEnvelope { kind, facets },
+            session: SessionMetaEnvelope {
+                kind,
+                archived,
+                facets,
+            },
         }
     }
 
     pub(crate) fn into_ext_superset(self) -> ExtSupersetRow {
         let UnifiedRow {
             kind,
+            archived,
             legacy,
             title,
             facets,
@@ -35,13 +41,14 @@ impl UnifiedRow {
         ExtSupersetRow {
             legacy,
             title,
-            meta: Self::envelope(kind, facets),
+            meta: Self::envelope(kind, archived, facets),
         }
     }
 
     pub(crate) fn into_session_info(self) -> SessionInfo {
         let UnifiedRow {
             kind,
+            archived,
             legacy,
             title,
             updated_at,
@@ -52,7 +59,7 @@ impl UnifiedRow {
             cwd: legacy.cwd,
             title: (!title.is_empty()).then_some(title),
             updated_at,
-            meta: Self::envelope(kind, facets),
+            meta: Self::envelope(kind, archived, facets),
         }
     }
 
@@ -69,6 +76,7 @@ pub fn merged_session_to_row(m: MergedSession, reg: &FacetRegistry) -> UnifiedRo
     let updated_at = effective_local_ts(&m);
     UnifiedRow {
         kind: SessionKind::Build,
+        archived: false,
         legacy: m,
         title,
         updated_at,
@@ -81,6 +89,7 @@ pub fn conversation_to_row(c: Conversation, reg: &FacetRegistry) -> UnifiedRow {
     let Conversation {
         conversation_id,
         title,
+        archived,
         modify_time,
         create_time,
         ..
@@ -109,6 +118,7 @@ pub fn conversation_to_row(c: Conversation, reg: &FacetRegistry) -> UnifiedRow {
     };
     UnifiedRow {
         kind: SessionKind::Chat,
+        archived,
         legacy,
         title,
         updated_at: modify_time,
@@ -256,6 +266,25 @@ mod tests {
         };
         let info = merged_session_to_row(merged, facet_registry()).into_session_info();
         assert_eq!(acp::SessionInfo::try_from(info), Err(CwdNotAbsolute));
+    }
+
+    #[test]
+    fn conversation_row_preserves_archived_flag() {
+        let c = Conversation {
+            conversation_id: "conv_archived".into(),
+            title: "Old chat".into(),
+            archived: true,
+            ..Conversation::default()
+        };
+        let row = conversation_to_row(c, facet_registry());
+        assert!(row.archived);
+
+        let meta = serde_json::to_value(row.into_ext_superset()).unwrap();
+        assert_eq!(
+            meta.pointer("/_meta/x.ai~1session/archived")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
     }
 
     #[test]

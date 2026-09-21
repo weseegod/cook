@@ -1,4 +1,4 @@
-import { CopyPlus, Download, Folder, MoreVertical, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, CopyPlus, Download, Folder, MoreVertical, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { basename } from "../../../acp/attachments";
 import type { SessionSummary } from "../../../acp/xai";
@@ -21,6 +21,7 @@ interface ConversationRowProps {
   onRename: () => void;
   onFork: () => void;
   onExport: () => void;
+  onArchive: () => void;
   onRemove: () => void;
 }
 
@@ -41,6 +42,7 @@ export function ConversationRow({
   onRename,
   onFork,
   onExport,
+  onArchive,
   onRemove,
 }: ConversationRowProps) {
   return (
@@ -103,6 +105,12 @@ export function ConversationRow({
             <Download size={13} />
             <span>Export</span>
           </button>
+          {session.kind === "chat" && (
+            <button type="button" role="menuitem" data-testid={`session-archive-${session.id}`} onClick={onArchive}>
+              {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+              <span>{session.archived ? "Unarchive" : "Archive"}</span>
+            </button>
+          )}
           <div className="session-menu-separator" role="separator" />
           <button
             type="button"

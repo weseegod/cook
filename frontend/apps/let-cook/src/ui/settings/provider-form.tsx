@@ -18,6 +18,7 @@ import {
 import { normalizeError } from "../../acp/errors";
 import { InfoTip } from "../components/info-tip";
 import { ToggleSwitch } from "../components/toggle-switch";
+import { ProviderLogo } from "./providers/provider-logo";
 
 interface EditorProps {
   preset: ProviderPreset;
@@ -282,7 +283,7 @@ export function PresetGrid({ presets, onPick }: { presets: ProviderPreset[]; onP
     <div className="preset-grid">
       {presets.map((preset) => (
         <button type="button" key={preset.id} className="preset-card" onClick={() => onPick(preset)} data-testid={`preset-${preset.id}`}>
-          <span className="preset-mark">{preset.label.slice(0, 2).toUpperCase()}</span>
+          <ProviderLogo id={preset.id} size={24} label={preset.label} />
           <span className="preset-card-copy">
             <strong>{preset.label}</strong>
             <small title={preset.baseUrl ?? "your own endpoint"}>{preset.baseUrl ?? "your own endpoint"}</small>
