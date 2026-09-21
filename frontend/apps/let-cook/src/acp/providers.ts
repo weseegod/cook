@@ -27,6 +27,8 @@ export interface ProviderSummary {
   envKey?: string | null;
   envKeyPresent: boolean;
   extraHeaders: Record<string, string>;
+  /** True when Connect stored an OAuth session rather than an API key. */
+  oauth?: boolean;
   models: ProviderModelLink[];
 }
 
@@ -111,6 +113,7 @@ export interface ProviderUpsertRequest {
   extraHeaders?: Record<string, string>;
   models: PresetModel[];
   setAsDefault?: boolean;
+  oauth?: boolean;
 }
 
 export interface ProviderUpsertResponse {

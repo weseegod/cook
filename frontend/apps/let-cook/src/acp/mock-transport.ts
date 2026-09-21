@@ -20,6 +20,7 @@ import {
   mockTaskCompleted,
   mockTaskOutput,
 } from "./mock-transport/events";
+import { completeMockOauth } from "./mock-transport/handlers/settings";
 import { dispatch } from "./mock-transport/handlers/registry";
 import { mockRequests, mockReset, mockState, persist, record, responses } from "./mock-transport/state";
 import type { MockControl } from "./mock-transport/types";
@@ -71,5 +72,6 @@ if (typeof window !== "undefined") {
     taskOutput: mockTaskOutput,
     goalUpdate,
     modelsUpdate: mockModelsUpdate,
+    completeOAuth: completeMockOauth,
   };
 }

@@ -1,9 +1,11 @@
 import { ArrowLeft, CheckCircle2, MessageSquareCode, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { isOauthProvider } from "../../acp/provider-presets";
 import { listProviders, setDefaultModel, type ProviderPreset } from "../../acp/providers";
 import { normalizeError } from "../../acp/errors";
 import { PresetGrid, ProviderEditor } from "../settings/provider-form";
+import { OauthDialog } from "../settings/providers/oauth-dialog";
 import { useProviderPresets } from "../settings/providers";
 
 /**
@@ -19,12 +21,14 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const connectedId = savedId && !savedId.startsWith("api:") ? savedId : null;
   const providers = useQuery({
     queryKey: ["providers", "onboarding"],
     queryFn: listProviders,
-    enabled: savedId !== null,
+    enabled: connectedId !== null,
   });
-  const saved = providers.data?.providers.find((provider) => provider.id === savedId) ?? null;
+  const saved = providers.data?.providers.find((provider) => provider.id === connectedId) ?? null;
+  const connectedModels = saved?.models ?? preset?.models ?? [];
 
   async function finish() {
     if (!defaultModel) {
@@ -60,7 +64,16 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
         </>
       )}
 
-      {preset && !savedId && (
+      {preset && !savedId && isOauthProvider(preset.id) && (
+        <OauthDialog
+          preset={preset}
+          onClose={() => setPreset(null)}
+          onConnected={() => setSavedId(preset.id)}
+          onUseApiKey={() => setSavedId(`api:${preset.id}`)}
+        />
+      )}
+
+      {preset && !savedId && !isOauthProvider(preset.id) && (
         <>
           <button className="ghost-button connect-back" onClick={() => setPreset(null)}><ArrowLeft size={15} /> All providers</button>
           <ProviderEditor
@@ -71,17 +84,28 @@ export function ConnectProvider({ onDone, onSkip }: { onDone: () => void; onSkip
         </>
       )}
 
-      {preset && savedId && saved && (
+      {preset && savedId?.startsWith("api:") && (
+        <>
+          <button className="ghost-button connect-back" onClick={() => setSavedId(null)}><ArrowLeft size={15} /> All providers</button>
+          <ProviderEditor
+            preset={preset}
+            onSaved={(id) => setSavedId(id)}
+            onCancel={() => { setPreset(null); setSavedId(null); }}
+          />
+        </>
+      )}
+
+      {preset && connectedId && (
         <div className="connect-step" data-testid="connect-default-step">
           <h2><CheckCircle2 size={17} /> {preset.label} is connected</h2>
           <p>Pick the model new conversations should start with.</p>
           <select
-            value={defaultModel || saved.models[0]?.id || ""}
+            value={defaultModel || connectedModels[0]?.id || ""}
             aria-label="Default model"
             onChange={(event) => setDefaultModelId(event.target.value)}
             data-testid="connect-default-model"
           >
-            {saved.models.map((model) => (
+            {connectedModels.map((model) => (
               <option key={model.id} value={model.id}>{model.name ?? model.id}</option>
             ))}
           </select>

@@ -3,6 +3,7 @@ mod bin_resolve;
 mod http;
 mod logging;
 mod provider_config;
+mod provider_oauth;
 mod workspace;
 
 use std::path::PathBuf;
@@ -226,6 +227,64 @@ async fn open_path(path: String) -> Result<(), String> {
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("refusing to open a non-http URL".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            let mut command = std::process::Command::new("open");
+            command.arg(&url);
+            command
+        };
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let mut command = std::process::Command::new("xdg-open");
+            command.arg(&url);
+            command
+        };
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "start", "", &url]);
+            command
+        };
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|error| format!("could not open {url}: {error}"))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn provider_oauth_start(id: String) -> Result<provider_oauth::OauthStart, String> {
+    provider_oauth::start(id).await
+}
+
+#[tauri::command]
+async fn provider_oauth_poll(id: String) -> Result<provider_oauth::OauthStatus, String> {
+    provider_oauth::poll(id).await
+}
+
+#[tauri::command]
+async fn provider_oauth_submit_code(id: String, code: String) -> Result<provider_oauth::OauthStatus, String> {
+    provider_oauth::submit_code(id, code).await
+}
+
+#[tauri::command]
+fn provider_oauth_cancel(id: String) -> Result<(), String> {
+    provider_oauth::cancel(id)
+}
+
+#[tauri::command]
+fn provider_oauth_logout(id: String) -> Result<(), String> {
+    provider_oauth::logout(id)
+}
+
 fn read_file_payload(path: &str) -> Result<FilePayload, String> {
     const MAX_BYTES: u64 = 25 * 1024 * 1024;
     let source = PathBuf::from(path);
@@ -446,6 +505,12 @@ pub fn run() {
             desktop_model_upsert,
             desktop_model_delete,
             desktop_model_set_default,
+            open_url,
+            provider_oauth_start,
+            provider_oauth_poll,
+            provider_oauth_submit_code,
+            provider_oauth_cancel,
+            provider_oauth_logout,
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {

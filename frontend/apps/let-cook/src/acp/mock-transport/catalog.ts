@@ -23,6 +23,7 @@ export function providerList() {
       envKey: provider.envKey ?? null,
       envKeyPresent: false,
       extraHeaders: presetFor(provider.id)?.extraHeaders ?? {},
+      oauth: provider.oauth === true,
       models: linkedModels(provider),
     })),
     models: state.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.id }))),

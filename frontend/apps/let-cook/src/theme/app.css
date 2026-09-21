@@ -250,6 +250,17 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .preset-card { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: #12161c; text-align: left; cursor: pointer; }
 .preset-card:hover { border-color: #59679e; background: #191e2c; }
 .preset-mark { flex: 0 0 30px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: #232a3f; color: #b9c2ff; font-size: 20px; }
+.provider-logo { flex: 0 0 auto; display: block; }
+.provider-logo-openai { color: var(--text); }
+.provider-logo-claude { color: #d97757; }
+.provider-logo-grok { overflow: hidden; border-radius: 5px; }
+.provider-logo-grok path:first-child { fill: #000; }
+.provider-logo-fallback { display: grid; place-items: center; border-radius: 6px; background: var(--accent-soft, #232a3f); color: var(--accent, #b9c2ff); font-size: 10px; font-weight: 650; letter-spacing: 0.02em; }
+.oauth-connect { display: grid; gap: 12px; }
+.oauth-user-code { display: grid; gap: 6px; margin: 0; }
+.oauth-user-code span { color: var(--muted); font-size: 12px; }
+.oauth-user-code code { display: inline-block; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 6px; font-size: 18px; letter-spacing: 0.12em; }
+.oauth-waiting { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 13px; }
 .preset-card strong, .preset-card small { display: block; }.preset-card strong { font-size: 12px; }.preset-card small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .connect-skip { align-self: center; }
 
@@ -1963,6 +1974,7 @@ body { font-size: 14px; }
 .provider-model-heading .provider-row-main strong { font-size: 12px; }
 .provider-model-heading .provider-row-main small { max-width: min(480px, 48vw); }
 .provider-title-line { display: flex; align-items: center; min-width: 0; gap: 8px; }
+.provider-title-line .provider-logo { flex: 0 0 auto; }
 .provider-title-line .badge { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-model-content { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-width: 0; gap: 12px; padding: 9px 11px; }
 .provider-models-summary { min-width: 0; }

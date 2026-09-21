@@ -81,6 +81,20 @@ export const VISIBLE_PROVIDER_IDS = new Set([
   "moonshot",
 ]);
 
+/** Providers whose Settings → Models Connect starts OAuth (ChatGPT, Claude, Grok). */
+export const OAUTH_PROVIDER_IDS = new Set(["openai", "anthropic", "xai"]);
+
+export function isOauthProvider(id: string): boolean {
+  return OAUTH_PROVIDER_IDS.has(id);
+}
+
+export function oauthProviderName(id: string): string {
+  if (id === "openai") return "ChatGPT";
+  if (id === "anthropic") return "Claude";
+  if (id === "xai") return "Grok";
+  return id;
+}
+
 export function isVisibleProviderPreset(preset: ProviderPreset): boolean {
   return VISIBLE_PROVIDER_IDS.has(preset.id);
 }

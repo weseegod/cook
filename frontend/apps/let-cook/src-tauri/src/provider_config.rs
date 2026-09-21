@@ -42,6 +42,7 @@ struct ProviderView {
     env_key: Option<String>,
     env_key_present: bool,
     extra_headers: std::collections::BTreeMap<String, String>,
+    oauth: bool,
     models: Vec<ModelView>,
 }
 
@@ -85,6 +86,8 @@ pub struct ProviderUpsert {
     models: Vec<SeedModel>,
     #[serde(default)]
     set_as_default: bool,
+    #[serde(default)]
+    oauth: bool,
 }
 
 impl ProviderUpsert {
@@ -94,6 +97,93 @@ impl ProviderUpsert {
 
     pub fn model_ids(&self) -> Vec<String> {
         self.models.iter().map(|model| model.id.clone()).collect()
+    }
+
+    /// Connect via OAuth: store the access token as the provider credential.
+    pub fn oauth(id: &str, access_token: &str) -> Self {
+        let (label, base_url, api_backend, extra_headers, models) = match id {
+            "anthropic" => (
+                "Anthropic",
+                "https://api.anthropic.com/v1",
+                "messages",
+                [
+                    ("anthropic-version".to_owned(), "2023-06-01".to_owned()),
+                    ("anthropic-beta".to_owned(), "oauth-2024-06-04".to_owned()),
+                ]
+                .into_iter()
+                .collect(),
+                vec![
+                    SeedModel {
+                        id: "claude-opus-4-6".into(),
+                        model: "claude-opus-4-6".into(),
+                        name: "Claude Opus".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "claude-sonnet-4-6".into(),
+                        model: "claude-sonnet-4-6".into(),
+                        name: "Claude Sonnet".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "claude-haiku-4-5".into(),
+                        model: "claude-haiku-4-5".into(),
+                        name: "Claude Haiku".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                ],
+            ),
+            _ => (
+                "OpenAI",
+                "https://api.openai.com/v1",
+                "chat_completions",
+                std::collections::BTreeMap::new(),
+                vec![
+                    SeedModel {
+                        id: "gpt-5".into(),
+                        model: "gpt-5".into(),
+                        name: "GPT-5".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "gpt-4.1".into(),
+                        model: "gpt-4.1".into(),
+                        name: "GPT-4.1".into(),
+                        input: vec!["text".into(), "image".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                    SeedModel {
+                        id: "o4-mini".into(),
+                        model: "o4-mini".into(),
+                        name: "o4-mini".into(),
+                        input: vec!["text".into()],
+                        context_window: None,
+                        max_completion_tokens: None,
+                    },
+                ],
+            ),
+        };
+        Self {
+            id: id.to_owned(),
+            name: Some(label.into()),
+            base_url: base_url.into(),
+            api_backend: api_backend.into(),
+            api_key: Some(access_token.to_owned()),
+            env_key: None,
+            extra_headers,
+            models,
+            set_as_default: true,
+            oauth: true,
+        }
     }
 }
 
@@ -214,11 +304,14 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
     } = target;
     let mut request = crate::http::client().get(&url);
     if let Some(key) = key.as_deref() {
-        request = if api_backend == "messages" {
+        request = if api_backend == "messages" && !key.starts_with("sk-ant-oat") {
             request.header("x-api-key", key)
         } else {
             request.header("authorization", format!("Bearer {key}"))
         };
+        if key.starts_with("sk-ant-oat") {
+            request = request.header("anthropic-beta", "oauth-2024-06-04");
+        }
     }
     for (name, value) in &extra_headers {
         request = request.header(name.as_str(), value.as_str());
@@ -396,6 +489,7 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
                 env_key,
                 env_key_present,
                 extra_headers,
+                oauth: string(table, "auth_method").as_deref() == Some("oauth"),
                 models: all_models
                     .iter()
                     .filter(|model| model.provider == id)
@@ -415,6 +509,23 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
         models: all_models,
         default_model,
     }
+}
+
+/// Drop the OAuth flag and stored token; models stay so the user can paste a key.
+pub fn clear_oauth(id: &str) -> Result<(), String> {
+    update(|doc| {
+        let Some(provider) = doc
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+            .and_then(|providers| providers.get_mut(id))
+            .and_then(Item::as_table_mut)
+        else {
+            return Ok(());
+        };
+        provider.remove("api_key");
+        provider.remove("auth_method");
+        Ok(())
+    })
 }
 
 pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
@@ -441,6 +552,11 @@ pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
                 headers.insert(name, toml_edit::value(value.as_str()));
             }
             provider.insert("extra_headers", Item::Table(headers));
+        }
+        if request.oauth {
+            provider.insert("auth_method", toml_edit::value("oauth"));
+        } else {
+            provider.remove("auth_method");
         }
         if let Some(key) = request
             .api_key

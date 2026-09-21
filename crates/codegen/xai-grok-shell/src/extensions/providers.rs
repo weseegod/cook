@@ -986,6 +986,9 @@ fn with_credentials(
         request = request.header(name, value);
     }
     match key {
+        Some(key) if key.starts_with("sk-ant-oat") => request
+            .bearer_auth(key)
+            .header("anthropic-beta", "oauth-2024-06-04"),
         Some(key) if api_backend == "messages" => request.header("x-api-key", key),
         Some(key) => request.bearer_auth(key),
         None => request,

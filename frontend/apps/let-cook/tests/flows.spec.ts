@@ -29,6 +29,9 @@ test.describe("first run", () => {
 
     // No provider and no agent credential: the connect flow replaces the chat.
     await expect(page.getByTestId("connect-provider")).toBeVisible();
+    await expect(page.getByTestId("preset-openai").locator(".provider-logo-openai")).toBeVisible();
+    await expect(page.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
+    await expect(page.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
     await expect(page.getByTestId("preset-deepseek")).toBeVisible();
     await expect(page.getByTestId("preset-ollama")).toHaveCount(0);
     await expect(page.getByTestId("preset-custom")).toHaveCount(0);
@@ -78,6 +81,7 @@ test.describe("first run", () => {
     const mock = api(page);
     await openWorkspace(page);
     await page.getByTestId("preset-openai").click();
+    await page.getByTestId("oauth-use-api-key").click();
     await page.getByLabel("API key").fill("sk-mock-0123456789abcdef");
     await page.getByTestId("provider-discover").click();
     await expect(page.getByTestId("provider-discovered")).toContainText("mock-discovered-model");
@@ -116,6 +120,7 @@ test.describe("first run", () => {
   test("surfaces a rejected credential instead of pretending it worked", async ({ page }) => {
     await openWorkspace(page, { testFails: true });
     await page.getByTestId("preset-openai").click();
+    await page.getByTestId("oauth-use-api-key").click();
     await page.getByLabel("API key").fill("sk-bad-key-0123456789");
     await page.getByTestId("provider-test").click();
     const result = page.getByTestId("provider-test-result");
@@ -205,13 +210,46 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByRole("tab", { name: "Models" }).click();
     await expect(page.locator("[data-testid^='provider-row-']")).toHaveCount(8);
     await expect(page.getByTestId("provider-row-openai")).toContainText("Connected · API key");
+    await expect(page.getByTestId("provider-row-openai").locator(".provider-logo-openai")).toBeVisible();
     await expect(page.getByTestId("provider-row-anthropic")).toContainText("Not connected");
+    await expect(page.getByTestId("provider-row-anthropic").locator(".provider-logo-claude")).toBeVisible();
+    await expect(page.getByTestId("provider-row-xai").locator(".provider-logo-grok")).toBeVisible();
     await page.getByTestId("provider-add").click();
     const dialog = page.getByRole("dialog", { name: "Add provider" });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId("preset-openai").locator(".provider-logo-openai")).toBeVisible();
+    await expect(dialog.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
+    await expect(dialog.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
     await expect(dialog.getByText("Choose a provider")).toHaveCount(0);
     await dialog.getByLabel("Close dialog").click();
     await expect(dialog).toHaveCount(0);
+  });
+
+  test("Connect on Claude starts OAuth and records Connected · OAuth", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-connect-anthropic").click();
+    const dialog = page.getByTestId("oauth-dialog-anthropic");
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator(".provider-logo-claude")).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Connect Claude" })).toBeVisible();
+    await dialog.getByTestId("oauth-code").fill("claude-code#state");
+    await page.getByTestId("oauth-submit").click();
+    await expect(page.getByTestId("provider-row-anthropic")).toContainText("Connected · OAuth");
+  });
+
+  test("Connect on Grok starts device login and records Connected · OAuth", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-connect-xai").click();
+    await expect(page.getByTestId("oauth-dialog-xai")).toBeVisible();
+    await expect(page.getByTestId("oauth-user-code")).toHaveText("GROK-1234");
+    await mock.completeOAuth("xai");
+    await expect(page.getByTestId("provider-row-xai")).toContainText("Connected · OAuth");
+    await expect(page.getByTestId("provider-signout-xai")).toBeVisible();
   });
 
   test("edits a provider's name, then removes it and its models from config", async ({ page }) => {
@@ -260,9 +298,9 @@ test.describe("chat, attachments and the model picker", () => {
 
     await expect(page.getByTestId("model-row-gpt-5")).toHaveCount(0);
     await expect(page.getByTestId("provider-connect-openai")).toBeVisible();
-    const state = await mock.state();
-    expect((state.providers as Array<{ id: string }>).map((provider) => provider.id)).toEqual(["deepseek"]);
-    expect(state.defaultModel).toBe("deepseek-chat");
+    const removed = await mock.state();
+    expect((removed.providers as Array<{ id: string }>).map((provider) => provider.id)).toEqual(["deepseek"]);
+    expect(removed.defaultModel).toBe("deepseek-chat");
   });
 
   test("shows model context, output and input and edits them in a popup", async ({ page }) => {

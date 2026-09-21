@@ -3,6 +3,8 @@ import fixture from "./provider-presets.fixture.json";
 import {
   PROVIDER_PRESETS,
   findPreset,
+  isOauthProvider,
+  oauthProviderName,
   formFromPreset,
   formFromProvider,
   formToUpsertRequest,
@@ -46,6 +48,11 @@ describe("preset catalog", () => {
     expect(findPreset("zai")?.models.map((model) => model.id)).toEqual(["glm-5.1", "glm-5", "glm-4.7"]);
     expect(findPreset("ollama")?.envKey).toBeNull();
     expect(findPreset("custom")?.baseUrl).toBeNull();
+    expect(isOauthProvider("openai")).toBe(true);
+    expect(isOauthProvider("anthropic")).toBe(true);
+    expect(isOauthProvider("xai")).toBe(true);
+    expect(isOauthProvider("deepseek")).toBe(false);
+    expect(oauthProviderName("openai")).toBe("ChatGPT");
   });
 
   it("mirrors the agent catalog exactly (ids, urls, env vars, seeds)", () => {

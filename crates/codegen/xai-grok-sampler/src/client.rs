@@ -511,8 +511,9 @@ impl SamplingClient {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if let Some(ref api_key) = config.api_key {
+            let anthropic_oauth = api_key.starts_with("sk-ant-oat");
             match config.auth_scheme {
-                AuthScheme::XApiKey => {
+                AuthScheme::XApiKey if !anthropic_oauth => {
                     let header_value = HeaderValue::from_str(api_key).map_err(|_| {
                         tracing::debug!(
                             api_key = %api_key,
@@ -524,7 +525,7 @@ impl SamplingClient {
                     })?;
                     headers.insert(HeaderName::from_static("x-api-key"), header_value);
                 }
-                AuthScheme::Bearer => {
+                AuthScheme::Bearer | AuthScheme::XApiKey => {
                     let bearer = format!("Bearer {}", api_key);
                     let header_value = HeaderValue::from_str(&bearer).map_err(|_| {
                         tracing::debug!(
@@ -536,6 +537,12 @@ impl SamplingClient {
                         )
                     })?;
                     headers.insert(AUTHORIZATION, header_value);
+                    if anthropic_oauth {
+                        headers.insert(
+                            HeaderName::from_static("anthropic-beta"),
+                            HeaderValue::from_static("oauth-2024-06-04"),
+                        );
+                    }
                 }
             }
         }
@@ -700,15 +707,22 @@ impl SamplingClient {
             headers.remove(AUTHORIZATION);
             headers.remove(HeaderName::from_static("x-api-key"));
             if let Some(fresh) = resolver.current_bearer() {
+                let anthropic_oauth = fresh.starts_with("sk-ant-oat");
                 match self.defaults.auth_scheme {
-                    AuthScheme::XApiKey => {
+                    AuthScheme::XApiKey if !anthropic_oauth => {
                         if let Ok(v) = HeaderValue::from_str(&fresh) {
                             headers.insert(HeaderName::from_static("x-api-key"), v);
                         }
                     }
-                    AuthScheme::Bearer => {
+                    AuthScheme::Bearer | AuthScheme::XApiKey => {
                         if let Ok(v) = HeaderValue::from_str(&format!("Bearer {fresh}")) {
                             headers.insert(AUTHORIZATION, v);
+                        }
+                        if anthropic_oauth {
+                            headers.insert(
+                                HeaderName::from_static("anthropic-beta"),
+                                HeaderValue::from_static("oauth-2024-06-04"),
+                            );
                         }
                     }
                 }
