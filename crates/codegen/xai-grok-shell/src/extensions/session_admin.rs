@@ -46,6 +46,8 @@ pub(crate) async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResul
     }
     match args.method.as_ref() {
         "x.ai/session/rename" => handle_session_rename(agent, args).await,
+        "x.ai/session/archive" => handle_session_archive(agent, args, true).await,
+        "x.ai/session/unarchive" => handle_session_archive(agent, args, false).await,
         "x.ai/session/delete" => handle_session_delete(agent, args).await,
         "x.ai/sessions/delete_all" => handle_delete_all_sessions(agent, args).await,
         "x.ai/session/update_mcp_servers" => handle_update_mcp_servers(agent, args).await,
@@ -408,6 +410,7 @@ async fn rename_chat_conversation(
     let body = UpdateConversationBody {
         title: Some(title.to_owned()),
         starred: None,
+        archived: None,
     };
     client
         .update_conversation(conversation_id, &body)
@@ -437,6 +440,49 @@ async fn rename_chat_conversation(
 }
 
 // session/delete
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionArchiveRequest {
+    session_id: String,
+    #[serde(default)]
+    kind: SessionKind,
+}
+
+async fn handle_session_archive(
+    agent: &MvpAgent,
+    args: &acp::ExtRequest,
+    archive: bool,
+) -> ExtResult {
+    let req: SessionArchiveRequest = parse_params(args)?;
+    if req.kind != SessionKind::Chat {
+        return Err(acp::Error::invalid_request().data("only chat conversations can be archived"));
+    }
+
+    let Some(client) = agent.conversations_client() else {
+        return Err(acp::Error::invalid_request().data(
+            "chat conversation archive requires the conversations lane (OIDC + chat feature)",
+        ));
+    };
+
+    let action = if archive { "archive" } else { "unarchive" };
+    let result = if archive {
+        client.archive_conversation(&req.session_id).await
+    } else {
+        client.unarchive_conversation(&req.session_id).await
+    };
+    result.map_err(|e| match e {
+        crate::remote::ConvError::NoOauth => acp::Error::invalid_request().data(format!(
+            "chat conversation {action} requires xAI OAuth credentials"
+        )),
+        other => {
+            acp::Error::internal_error().data(format!("chat conversation {action} failed: {other}"))
+        }
+    })?;
+
+    tracing::info!(session_id = %req.session_id, archive, "Chat conversation archive state changed");
+    to_raw_response(&serde_json::json!({ "success": true, "archived": archive }))
+}
 
 /// Delete a session from history.
 async fn handle_session_delete(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
@@ -499,9 +545,9 @@ async fn handle_session_delete(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtR
 /// A session that fails is counted and skipped rather than aborting the run: the caller reports
 /// both counts, so a partial wipe is visible instead of silently reported as complete.
 async fn handle_delete_all_sessions(agent: &MvpAgent, _args: &acp::ExtRequest) -> ExtResult {
-    let summaries = list_summaries(None).await.map_err(|e| {
-        acp::Error::internal_error().data(format!("failed to list sessions: {e}"))
-    })?;
+    let summaries = list_summaries(None)
+        .await
+        .map_err(|e| acp::Error::internal_error().data(format!("failed to list sessions: {e}")))?;
 
     // Resolved once: every session in one run shares the storage mode and the account.
     let needs_remote =
@@ -520,7 +566,9 @@ async fn handle_delete_all_sessions(agent: &MvpAgent, _args: &acp::ExtRequest) -
         // once `delete_session_history` returns.
         let plans = count_plan_files(&session_dir);
         // A session the agent still holds has to stop before its files go; a non-resident one is a no-op.
-        agent.teardown_live_session_before_delete(&summary.info.id).await;
+        agent
+            .teardown_live_session_before_delete(&summary.info.id)
+            .await;
 
         match crate::session::persistence::delete_session_history(
             &session_id,

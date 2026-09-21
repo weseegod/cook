@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleHelp, Folder, MessageSquarePlus, Pin, Search, Settings } from "lucide-react";
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
-import type { SessionSummary } from "../../acp/xai";
+import type { SessionListView, SessionSummary } from "../../acp/xai";
 import { DEFAULT_SESSION_TITLE, useSessionStore } from "../../state/session";
 import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "../chat/export-transcript";
 import {
@@ -20,6 +20,7 @@ import { ConversationRow } from "./session-sidebar/conversation-row";
 import { useRowMenuDismiss, rowMenuPosition, type RowMenu } from "./session-sidebar/row-menu";
 import { DeleteConversationDialog, RenameConversationDialog } from "./session-sidebar/session-dialogs";
 import { SessionSortMenu } from "./session-sidebar/session-sort-menu";
+import { SessionViewMenu } from "./session-sidebar/session-view-menu";
 import { useSidebarDrag } from "./session-sidebar/use-sidebar-drag";
 import { useSidebarResize } from "./session-sidebar/use-sidebar-resize";
 
@@ -36,31 +37,49 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
   const [error, setError] = useState<string | null>(null);
   const [prefs, setPrefs] = useState<ConversationPrefs>(loadPrefs);
   const [rowMenu, setRowMenu] = useState<RowMenu | null>(null);
+  const [view, setView] = useState<SessionListView>("conversations");
+  /** Tracks archive state for the open session when it is missing from the current list page. */
+  const [activeArchived, setActiveArchived] = useState(false);
   const rowMenuRef = useRef<HTMLDivElement>(null);
   const prefsRef = useRef(prefs);
 
   const sessions = useQuery({
-    queryKey: ["sessions"],
-    queryFn: () => acpClient.xai.listSessions(),
+    queryKey: ["sessions", view],
+    queryFn: () => acpClient.xai.listSessions("", view),
     enabled: useSessionStore.getState().connection === "ready",
   });
 
   const list = sessions.data ?? [];
+  const listedActive = useMemo(
+    () => list.find((session) => session.id === activeId),
+    [activeId, list],
+  );
+
+  useEffect(() => {
+    setActiveArchived(false);
+  }, [activeId]);
+
+  useEffect(() => {
+    if (listedActive) setActiveArchived(listedActive.archived === true);
+  }, [listedActive]);
+
   /**
    * The agent lists a conversation only once it has saved one, so the conversation the window has
    * open is shown from the start. That is where a brand-new chat reports its running turn, and it
    * disappears from the list on its own once the agent reports the real row.
    */
   const rows = useMemo(() => {
-    if (!activeId || list.some((session) => session.id === activeId)) return list;
+    if (!activeId || listedActive) return list;
+    // Keep the open row on the matching view only — never re-inject an archived chat into Conversations.
+    if (view === "archives" ? !activeArchived : activeArchived) return list;
     // An unnamed conversation keeps the list's own fallback title, which also stops the row from
     // reading exactly like the "New chat" button beside it.
     const title = activeTitle === DEFAULT_SESSION_TITLE ? "" : activeTitle;
     return [
-      { id: activeId, title, cwd: workspace ?? undefined, updatedAt: Date.now() },
+      { id: activeId, title, cwd: workspace ?? undefined, updatedAt: Date.now(), archived: activeArchived, kind: "build" as const },
       ...list,
     ];
-  }, [activeId, activeTitle, list, workspace]);
+  }, [activeArchived, activeId, activeTitle, list, listedActive, view, workspace]);
   const groups = useMemo(() => groupConversations(rows, prefs), [rows, prefs]);
   const groupKeyOf = useMemo(() => {
     const lookup = new Map<string, string>();
@@ -135,6 +154,26 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     }
     downloadMarkdown(exportFilename(session.title, session.id), markdown);
     useSessionStore.getState().set({ notice: "Exported conversation as Markdown." });
+  }
+
+  async function archive(session: SessionSummary) {
+    setRowMenu(null);
+    const nextArchived = !session.archived;
+    try {
+      if (nextArchived) {
+        await acpClient.xai.archiveSession(session.id);
+        useSessionStore.getState().set({ notice: "Conversation archived." });
+      } else {
+        await acpClient.xai.unarchiveSession(session.id);
+        useSessionStore.getState().set({ notice: "Conversation unarchived." });
+      }
+      if (session.id === activeId) setActiveArchived(nextArchived);
+      await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+    } catch (caught) {
+      useSessionStore.getState().set({
+        error: normalizeError(caught, nextArchived ? "Could not archive the conversation" : "Could not unarchive the conversation"),
+      });
+    }
   }
 
   function togglePin(session: SessionSummary) {
@@ -217,7 +256,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
         </button>
         <div className="session-list">
           <div className="session-list-heading">
-            <span className="session-list-title">Conversations</span>
+            <SessionViewMenu view={view} onChange={(next) => { setRowMenu(null); setView(next); }} />
             {rows.length > 0 && <small>{rows.length}</small>}
             <SessionSortMenu
               prefs={prefs}
@@ -263,6 +302,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                     onRename={() => void rename(session)}
                     onFork={() => void fork(session)}
                     onExport={() => exportSession(session)}
+                    onArchive={() => void archive(session)}
                     onRemove={() => void remove(session)}
                   />
                 );

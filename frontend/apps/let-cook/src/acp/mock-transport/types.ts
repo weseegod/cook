@@ -86,6 +86,8 @@ export interface MockSession {
   title: string;
   cwd: string;
   updatedAt: string;
+  kind?: "build" | "chat";
+  archived?: boolean;
 }
 
 /** One plan file as `x.ai/session/plans` reports it, in the agent's camelCase wire shape. */

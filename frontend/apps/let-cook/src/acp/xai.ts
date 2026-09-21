@@ -8,7 +8,11 @@ export interface SessionSummary {
   cwd?: string;
   updatedAt?: string | number;
   model?: string;
+  kind?: "build" | "chat";
+  archived?: boolean;
 }
+
+export type SessionListView = "conversations" | "archives";
 
 export interface ReasoningEffortOption {
   /** Presentation/input id; the backend accepts the canonical `value` on the wire. */
@@ -112,9 +116,21 @@ export class XaiClient {
     return request<T>(method, params);
   }
 
-  async listSessions(query = ""): Promise<SessionSummary[]> {
-    const value = await this.call<unknown>("x.ai/session/list", query ? { query } : {});
+  async listSessions(query = "", view: SessionListView = "conversations"): Promise<SessionSummary[]> {
+    const params = {
+      ...(query ? { query } : {}),
+      ...(view === "archives" ? { archived: true } : {}),
+    };
+    const value = await this.call<unknown>("x.ai/session/list", params);
     return extractArray(value, ["sessions", "items"]).map(normalizeSession);
+  }
+
+  archiveSession(sessionId: string) {
+    return this.call("x.ai/session/archive", { sessionId, kind: "chat" });
+  }
+
+  unarchiveSession(sessionId: string) {
+    return this.call("x.ai/session/unarchive", { sessionId, kind: "chat" });
   }
 
   async loadHistory(sessionId: string): Promise<unknown> {
@@ -202,12 +218,17 @@ function extractArray(value: unknown, keys: string[]): UnknownRecord[] {
 }
 
 function normalizeSession(item: UnknownRecord): SessionSummary {
+  const meta = isRecord(item._meta) ? item._meta : {};
+  const sessionMeta = isRecord(meta["x.ai/session"]) ? meta["x.ai/session"] : {};
+  const kind = item.kind === "chat" || sessionMeta.kind === "chat" ? "chat" : "build";
   return {
     id: String(item.id ?? item.sessionId ?? ""),
     title: stringValue(item.title ?? item.name ?? item.firstPrompt),
     cwd: stringValue(item.cwd ?? item.workingDirectory),
     updatedAt: (item.updatedAt ?? item.updated_at ?? item.timestamp) as string | number | undefined,
     model: stringValue(item.model ?? item.modelId),
+    kind,
+    archived: item.archived === true || sessionMeta.archived === true,
   };
 }
 
