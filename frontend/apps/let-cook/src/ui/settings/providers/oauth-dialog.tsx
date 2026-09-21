@@ -1,4 +1,4 @@
-import { ExternalLink, KeyRound, LoaderCircle, LogIn } from "lucide-react";
+import { Check, Copy, ExternalLink, KeyRound, LoaderCircle, LogIn } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   cancelProviderOauth,
@@ -11,6 +11,7 @@ import {
 import { normalizeError } from "../../../acp/errors";
 import type { ProviderPreset } from "../../../acp/providers";
 import { Dialog, DialogActions } from "../../components/dialog";
+import { copyText } from "../../chat/clipboard";
 import { oauthProviderName, ProviderLogo } from "./provider-logo";
 
 interface OauthDialogProps {
@@ -30,6 +31,7 @@ export function OauthDialog({ preset, onClose, onConnected, onUseApiKey }: Oauth
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
+  const [copied, setCopied] = useState(false);
   const closed = useRef(false);
 
   useEffect(() => {
@@ -110,6 +112,17 @@ export function OauthDialog({ preset, onClose, onConnected, onUseApiKey }: Oauth
     onClose();
   }
 
+  async function copyCode() {
+    if (!start?.userCode) return;
+    try {
+      await copyText(start.userCode);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      setCopied(false);
+    }
+  }
+
   return (
     <Dialog
       title={`Connect ${name}`}
@@ -119,12 +132,6 @@ export function OauthDialog({ preset, onClose, onConnected, onUseApiKey }: Oauth
     >
       <div className="oauth-connect" data-testid={`oauth-dialog-${preset.id}`}>
         <ProviderLogo id={preset.id} size={36} label={name} />
-        {start?.userCode && (
-          <p className="oauth-user-code">
-            <span>Enter this code</span>
-            <code data-testid="oauth-user-code">{start.userCode}</code>
-          </p>
-        )}
         {start?.needsCode && (
           <label className="field">
             <span>Authorization code</span>
@@ -144,9 +151,26 @@ export function OauthDialog({ preset, onClose, onConnected, onUseApiKey }: Oauth
           </p>
         )}
         {start && !start.needsCode && !error && (
-          <p className="oauth-waiting">
-            <LoaderCircle className="spin" size={15} /> Waiting for approval in the browser…
-          </p>
+          <div className="oauth-waiting">
+            <span className="oauth-waiting-status">
+              <LoaderCircle className="spin" size={15} /> Waiting for approval in the browser…
+            </span>
+            {start.userCode && (
+              <span className="oauth-user-code-inline">
+                <span>Code</span>
+                <code data-testid="oauth-user-code">{start.userCode}</code>
+                <button
+                  type="button"
+                  className="text-button oauth-copy-code"
+                  aria-label="Copy login code"
+                  data-testid="oauth-copy-code"
+                  onClick={() => void copyCode()}
+                >
+                  {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}
+                </button>
+              </span>
+            )}
+          </div>
         )}
         {start?.authorizeUrl && (
           <button type="button" className="ghost-button" onClick={() => void openExternalUrl(start.authorizeUrl)}>

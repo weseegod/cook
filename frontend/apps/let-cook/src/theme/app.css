@@ -257,10 +257,12 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .provider-logo-grok path:first-child { fill: #000; }
 .provider-logo-fallback { display: grid; place-items: center; border-radius: 6px; background: var(--accent-soft, #232a3f); color: var(--accent, #b9c2ff); font-size: 10px; font-weight: 650; letter-spacing: 0.02em; }
 .oauth-connect { display: grid; gap: 12px; }
-.oauth-user-code { display: grid; gap: 6px; margin: 0; }
-.oauth-user-code span { color: var(--muted); font-size: 12px; }
-.oauth-user-code code { display: inline-block; padding: 8px 12px; border: 1px dashed var(--border); border-radius: 6px; font-size: 18px; letter-spacing: 0.12em; }
-.oauth-waiting { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--muted); font-size: 13px; }
+.oauth-waiting { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 0; color: var(--muted); font-size: 13px; }
+.oauth-waiting-status { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.oauth-user-code-inline { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.oauth-user-code-inline > span { color: var(--muted); font-size: 12px; }
+.oauth-user-code-inline code { display: inline-block; padding: 5px 8px; border: 1px dashed var(--border); border-radius: 6px; color: var(--text); font-size: 15px; letter-spacing: 0.1em; white-space: nowrap; }
+.oauth-copy-code { display: inline-flex; align-items: center; gap: 4px; padding: 5px 7px; }
 .preset-card strong, .preset-card small { display: block; }.preset-card strong { font-size: 12px; }.preset-card small { margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.4; }
 .connect-skip { align-self: center; }
 

@@ -11,6 +11,8 @@ import {
   waitForCalls,
 } from "./support/harness";
 
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
 /**
  * End-to-end shell, chat and command flows through the shipped renderer over the recording mock
  * ACP transport.
@@ -269,6 +271,10 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByTestId("provider-connect-xai").click();
     await expect(page.getByTestId("oauth-dialog-xai")).toBeVisible();
     await expect(page.getByTestId("oauth-user-code")).toHaveText("GROK-1234");
+    const copyCode = page.getByTestId("oauth-copy-code");
+    await expect(copyCode).toHaveText("Copy");
+    await copyCode.click();
+    await expect(copyCode).toHaveText("Copied");
     await mock.completeOAuth("xai");
     await expect(page.getByTestId("provider-row-xai")).toContainText("Connected · OAuth");
     await expect(page.getByTestId("provider-signout-xai")).toBeVisible();

@@ -92,6 +92,7 @@ pub fn response_to_conversation_items(response: rs::Response) -> Vec<Conversatio
 impl From<&ConversationRequest> for rs::CreateResponse {
     fn from(req: &ConversationRequest) -> Self {
         let input = build_responses_input(req);
+        let instructions = build_responses_instructions(req);
         let tools = build_responses_tools(req);
 
         let tool_choice = req.tool_choice.as_ref().map(|tc| match tc {
@@ -125,7 +126,7 @@ impl From<&ConversationRequest> for rs::CreateResponse {
             conversation: None,
             include: None,
             input,
-            instructions: None,
+            instructions,
             max_output_tokens: req.max_output_tokens,
             max_tool_calls: None,
             metadata: None,
@@ -168,6 +169,24 @@ pub(super) fn build_responses_input(req: &ConversationRequest) -> rs::InputParam
     rs::InputParam::Items(items)
 }
 
+/// ChatGPT's Codex Responses endpoint accepts system guidance through the top-level
+/// `instructions` field, but rejects `role: "system"` items inside `input`.
+/// Keep the same Responses shape for every provider so a model switch cannot change the
+/// conversation semantics or send an invalid item to Codex.
+fn build_responses_instructions(req: &ConversationRequest) -> Option<String> {
+    let instructions: Vec<&str> = req
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ConversationItem::System(system) if !system.content.is_empty() => {
+                Some(system.content.as_ref())
+            }
+            _ => None,
+        })
+        .collect();
+    (!instructions.is_empty()).then(|| instructions.join("\n\n"))
+}
+
 /// Inject the `type: "reasoning_text"` discriminator the API requires.
 /// `async-openai`'s `ReasoningTextContent` has no `type` field, so it serializes to `{"text": ...}` and the API answers 400.
 /// Delete this once upstream grows the field.
@@ -193,13 +212,9 @@ pub fn patch_reasoning_text_types(body: &mut serde_json::Value) {
 
 fn conversation_item_to_input_items(item: &ConversationItem) -> Vec<rs::InputItem> {
     match item {
-        ConversationItem::System(s) => {
-            vec![rs::InputItem::EasyMessage(rs::EasyInputMessage {
-                r#type: rs::MessageType::Message,
-                role: rs::Role::System,
-                content: rs::EasyInputContent::Text(s.content.as_ref().to_owned()),
-            })]
-        }
+        // System instructions are emitted at the top level by `build_responses_instructions`.
+        // Keeping them out of `input` is required by the ChatGPT Codex Responses endpoint.
+        ConversationItem::System(_) => vec![],
         ConversationItem::User(u) => {
             let content = content_parts_to_easy_input_content(&u.content);
             vec![rs::InputItem::EasyMessage(rs::EasyInputMessage {
