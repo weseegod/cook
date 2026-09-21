@@ -42,6 +42,27 @@ describe("session conversation reset", () => {
     expect(useSessionStore.getState().planFiles).toEqual([]);
     expect(useSessionStore.getState().planFileView).toBeNull();
   });
+
+  it("clears plan mode so a new conversation does not inherit the previous session's mode chrome", () => {
+    useSessionStore.setState({ planMode: true, sessionId: "sess-plan" });
+    useSessionStore.getState().resetConversation("sess-new");
+    expect(useSessionStore.getState()).toMatchObject({
+      sessionId: "sess-new",
+      planMode: false,
+    });
+  });
+
+  it("clears the session id on a null reset so a workspace reconnect cannot prompt a dead id", () => {
+    useSessionStore.setState({
+      sessionId: "dead-session",
+      turnRunning: true,
+      workingSessions: { "dead-session": { startedAt: Date.now(), activity: null } },
+    });
+    useSessionStore.getState().resetConversation(null);
+    expect(useSessionStore.getState().sessionId).toBeNull();
+    expect(useSessionStore.getState().turnRunning).toBe(false);
+    expect(useSessionStore.getState().planMode).toBe(false);
+  });
 });
 
 describe("session transcript reducer", () => {

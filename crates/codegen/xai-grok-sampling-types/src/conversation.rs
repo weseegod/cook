@@ -963,8 +963,12 @@ impl ConversationResponse {
     /// Classify why the response is empty, if it is.
     ///
     /// Returns `Some(reason)` when the response has no visible content and no tool calls (the conditions that trigger resampling).
+    /// Streamed `AgentMessageChunk` text already handed to the caller (`message_chunks_emitted > 0`) is treated as non-empty so the sampler does not resample and concatenate another greeting onto the UI.
     pub fn empty_reason(&self) -> Option<crate::error::EmptyReason> {
         use crate::error::EmptyReason;
+        if self.message_chunks_emitted > 0 {
+            return None;
+        }
         let Some(a) = self.assistant() else {
             return Some(EmptyReason::NoVisibleContent);
         };
@@ -1493,6 +1497,29 @@ pub fn synthesized_reasoning_item(text: impl Into<String>) -> rs::ReasoningItem 
         encrypted_content: None,
         status: None,
     }
+}
+
+/// Splice streamed assistant text into items when the terminal Responses payload omitted message content.
+/// Mirrors [`inject_streaming_reasoning_fallback`]: leave items alone when an Assistant already has text or tool calls; otherwise fill an empty Assistant or append a new one.
+pub fn inject_streaming_text_fallback(items: &mut Vec<ConversationItem>, text: String) {
+    if text.is_empty() {
+        return;
+    }
+    let any_with_content = items.iter().any(|i| match i {
+        ConversationItem::Assistant(a) => !a.content.is_empty() || !a.tool_calls.is_empty(),
+        _ => false,
+    });
+    if any_with_content {
+        return;
+    }
+    if let Some(ConversationItem::Assistant(a)) = items
+        .iter_mut()
+        .find(|i| matches!(i, ConversationItem::Assistant(_)))
+    {
+        a.content = Arc::<str>::from(text);
+        return;
+    }
+    items.push(ConversationItem::assistant(text));
 }
 
 /// Splice a streaming-fallback reasoning text into a `Vec<ConversationItem>` produced by `response_to_conversation_items`.
@@ -4430,6 +4457,34 @@ mod tests {
             Some(crate::error::EmptyReason::NoVisibleContent)
         );
         assert!(resp.is_empty());
+    }
+
+    #[test]
+    fn empty_reason_none_when_message_chunks_already_streamed() {
+        let mut resp = make_response(ConversationItem::assistant(""));
+        resp.message_chunks_emitted = 4;
+        assert!(resp.empty_reason().is_none());
+        assert!(!resp.is_empty());
+    }
+
+    #[test]
+    fn inject_streaming_text_fallback_fills_empty_assistant() {
+        let mut items = vec![ConversationItem::assistant("")];
+        inject_streaming_text_fallback(&mut items, "Hi! How can I help?".into());
+        match items.as_slice() {
+            [ConversationItem::Assistant(a)] => assert_eq!(a.content.as_ref(), "Hi! How can I help?"),
+            other => panic!("expected one assistant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn inject_streaming_text_fallback_skips_when_assistant_has_text() {
+        let mut items = vec![ConversationItem::assistant("kept")];
+        inject_streaming_text_fallback(&mut items, "ignored".into());
+        match items.as_slice() {
+            [ConversationItem::Assistant(a)] => assert_eq!(a.content.as_ref(), "kept"),
+            other => panic!("expected one assistant, got {other:?}"),
+        }
     }
 
     #[test]

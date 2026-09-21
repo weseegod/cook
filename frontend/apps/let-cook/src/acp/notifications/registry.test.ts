@@ -93,6 +93,39 @@ describe("notification registry (C3)", () => {
     expect(notifyMocks.notifyTurnComplete).not.toHaveBeenCalled();
   });
 
+  it("ignores prompt_complete for a background session and only clears its working row", async () => {
+    useSessionStore.setState({
+      sessionId: "active",
+      turnRunning: true,
+      turnStartedAt: Date.now() - 500,
+      workingSessions: {
+        background: { startedAt: Date.now() - 2_000, activity: null },
+      },
+      blocks: [
+        {
+          type: "message",
+          id: "m-active",
+          turnId: "turn-active",
+          role: "assistant",
+          text: "still going",
+          images: [],
+          streaming: true,
+        },
+      ],
+    });
+    await dispatchNotification(
+      { method: "x.ai/session/prompt_complete", params: {} },
+      "x.ai/session/prompt_complete",
+      { sessionId: "background", stopReason: "end_turn" },
+    );
+    const state = useSessionStore.getState();
+    expect(state.turnRunning).toBe(true);
+    expect(state.turnStartedAt).not.toBeNull();
+    expect(state.workingSessions.background).toBeUndefined();
+    expect(state.blocks).toHaveLength(1);
+    expect(state.blocks[0]).toMatchObject({ id: "m-active", streaming: true });
+  });
+
   it("notifies once on prompt_complete when the document is hidden", async () => {
     notifyMocks.shouldNotifyTurnComplete.mockReturnValue(true);
     useSessionStore.setState({

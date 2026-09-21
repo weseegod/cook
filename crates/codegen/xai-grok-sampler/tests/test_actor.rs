@@ -1512,6 +1512,85 @@ async fn responses_doom_loop_does_not_resample_after_output_when_retry_only_befo
     );
 }
 
+/// Streamed `output_text.delta` must complete even when the terminal Response has empty `output`.
+/// Without this, luna/xhigh empty-classifies after handing text to the UI and retries, concatenating greetings.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_streamed_text_empty_terminal_completes_without_retry() {
+    let counter = Arc::new(AtomicU32::new(0));
+    let counter_handler = Arc::clone(&counter);
+    let app = Router::new().route(
+        "/v1/responses",
+        post(move || {
+            let counter = Arc::clone(&counter_handler);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let events = sse_events_to_axum(sse::responses_api_streamed_text_empty_terminal_events(
+                    &[
+                        "Hi! How can I help you today?",
+                        "Hi! What would you like to work on?",
+                    ],
+                    "gpt-5.6-luna",
+                ));
+                Sse::new(stream::iter(
+                    events.into_iter().map(Ok::<_, std::convert::Infallible>),
+                ))
+            }
+        }),
+    );
+    let server = MockServer::spawn(app).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let handle = SamplerActor::spawn(
+        responses_config(server.base_url(), None),
+        RetryPolicy::default(),
+        event_tx,
+    );
+
+    handle.submit(RequestId::from("req-luna-empty-terminal"), user_request("hi"));
+    let events = drain_until_terminal(&mut event_rx, Duration::from_secs(10)).await;
+    server.shutdown();
+
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, SamplingEvent::Retrying { .. })),
+        "streamed text must not trigger empty-response retries: {events:?}"
+    );
+    let text: String = events
+        .iter()
+        .filter_map(|e| match e {
+            SamplingEvent::ChannelToken {
+                channel: SamplingChannel::Text,
+                text,
+                ..
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        text,
+        "Hi! How can I help you today?Hi! What would you like to work on?"
+    );
+    match events.last().unwrap() {
+        SamplingEvent::Completed { response, .. } => {
+            assert!(
+                response.message_chunks_emitted >= 2,
+                "expected streamed chunks counted, got {}",
+                response.message_chunks_emitted
+            );
+            assert_eq!(
+                response.assistant().map(|a| a.content.as_ref()),
+                Some("Hi! How can I help you today?Hi! What would you like to work on?")
+            );
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+    assert_eq!(
+        counter.load(Ordering::SeqCst),
+        1,
+        "exactly one sample attempt"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for draining the event channel
 // ---------------------------------------------------------------------------

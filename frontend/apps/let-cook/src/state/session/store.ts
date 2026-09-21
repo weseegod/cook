@@ -183,6 +183,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       turnPausedMs: 0,
       questionOpenedAt: null,
       reasoningEffort: null,
+      planMode: false,
       usage: null,
       goal: null,
       goalClearedId: null,
