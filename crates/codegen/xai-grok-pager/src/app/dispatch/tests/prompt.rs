@@ -2744,6 +2744,7 @@ fn install_post_turn_review(app: &mut AppView, id: AgentId) {
         crate::views::plan_approval_view::PlanApprovalViewState::after_turn(
             "CreatePlan".to_owned(),
             "# Build it\n".to_owned(),
+            None,
             stashed,
         ),
     );

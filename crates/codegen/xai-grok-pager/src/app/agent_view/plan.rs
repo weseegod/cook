@@ -95,6 +95,14 @@ impl AgentView {
     /// The shell records the episode file in `plan_mode.json`; a session that has not started an
     /// episode yet (or one that predates per-episode files) resolves to the legacy `plan.md`.
     fn plan_file_path(&self) -> Option<std::path::PathBuf> {
+        if let Some(path) = self
+            .plan_approval_view
+            .as_ref()
+            .and_then(|pav| pav.plan_file_path.clone())
+            .filter(|path| path.is_absolute())
+        {
+            return Some(path);
+        }
         let dir = self.plan_session_dir()?;
         Some(dir.join(current_plan_relative_path(&dir)))
     }
@@ -355,9 +363,11 @@ impl AgentView {
             return;
         };
         let stashed = self.prompt.stash();
+        let plan_file_path = self.kept_plan.path().map(std::path::Path::to_path_buf);
         self.plan_approval_view = Some(PlanApprovalViewState::after_turn(
             "CreatePlan".to_owned(),
             content,
+            plan_file_path,
             stashed,
         ));
         self.show_plan_preview_if_available();
@@ -376,15 +386,23 @@ impl AgentView {
         let Some(content) = self.post_turn_review_plan_content() else {
             return;
         };
+        let plan_file_path = self.kept_plan.path().map(std::path::Path::to_path_buf);
+        let plan_file_name = crate::views::plan_approval_view::plan_file_name(
+            plan_file_path.as_deref().and_then(std::path::Path::to_str),
+        );
         {
             let Some(pav) = self.plan_approval_view.as_mut() else {
                 return;
             };
-            if pav.plan_content.as_deref() == Some(content.as_str()) {
+            if pav.plan_content.as_deref() == Some(content.as_str())
+                && pav.plan_file_path == plan_file_path
+            {
                 return;
             }
             pav.plan_content = Some(content);
             pav.has_plan = true;
+            pav.plan_file_path = plan_file_path;
+            pav.plan_file_name = plan_file_name;
         }
         self.show_plan_preview_if_available();
     }
@@ -402,20 +420,24 @@ impl AgentView {
     /// The user then always sees a decision surface (a/s/q) instead of a dead "Waiting on plan approval" line with a no-op Tab:plan.
     pub fn show_plan_preview(&mut self) {
         let plan_name = self.plan_display_name();
+        let plan_path = self.plan_file_path();
+        let viewer_path = plan_path
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(&plan_name));
         let body = self.plan_body_for_preview();
         let approval_empty = self
             .plan_approval_view
             .as_ref()
             .is_some_and(|p| !p.has_plan);
         let Some(mut viewer) = (if let Some(content) = body {
-            LineViewerState::open_markdown_content(&plan_name, content, None)
+            LineViewerState::open_markdown_content(viewer_path, content, None)
         } else if approval_empty {
             LineViewerState::open_markdown_content(
-                &plan_name,
+                viewer_path,
                 crate::views::plan_approval_view::EMPTY_PLAN_PLACEHOLDER.to_owned(),
                 None,
             )
-        } else if let Some(plan_path) = self.plan_file_path() {
+        } else if let Some(plan_path) = plan_path {
             LineViewerState::open_markdown(&plan_path, None)
         } else {
             None

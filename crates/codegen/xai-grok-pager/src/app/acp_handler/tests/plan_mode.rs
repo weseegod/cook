@@ -9,7 +9,8 @@
         {
             let agent = app.agents.get_mut(&AgentId(0)).unwrap();
             seed_pending_tool(agent, "create-plan-call", "CreatePlan");
-        }
+}
+
         let (ext, _rx) =
             make_exit_plan_ext_with_tool_call_id("create-plan-call", Some("# Cursor Plan"));
 
@@ -601,6 +602,13 @@
                 .and_then(|pav| pav.plan_content.as_deref()),
             Some("# Build it\n"),
         );
+        assert_eq!(
+            agent
+                .plan_approval_view
+                .as_ref()
+                .and_then(|pav| pav.plan_file_path.as_deref()),
+            Some(std::path::Path::new("/tmp/p.plan.md")),
+        );
         assert!(
             agent
                 .plan_approval_view
@@ -636,6 +644,13 @@
                 .as_ref()
                 .and_then(|pav| pav.plan_content.as_deref()),
             Some("# Build it\n"),
+        );
+        assert_eq!(
+            agent
+                .plan_approval_view
+                .as_ref()
+                .and_then(|pav| pav.plan_file_path.as_deref()),
+            Some(std::path::Path::new("/tmp/p.plan.md")),
         );
         assert!(
             agent
@@ -676,6 +691,13 @@
         );
         assert_eq!(
             agent.kept_plan.path(),
+            Some(std::path::Path::new("/tmp/second.plan.md")),
+        );
+        assert_eq!(
+            agent
+                .plan_approval_view
+                .as_ref()
+                .and_then(|pav| pav.plan_file_path.as_deref()),
             Some(std::path::Path::new("/tmp/second.plan.md")),
         );
     }
@@ -781,4 +803,3 @@
         );
         assert!(!test_agent(&app, AgentId(0)).kept_plan.is_kept());
     }
-

@@ -3332,7 +3332,7 @@ impl AgentView {
                     .plan_approval_view
                     .as_ref()
                     .is_some_and(|pav| !pav.comments.is_empty());
-            let viewer_hints = if in_plan_approval && on_comment {
+            let mut viewer_hints = if in_plan_approval && on_comment {
                 let mut h = vec![
                     HintItem::new(key!(Enter), "edit"),
                     HintItem::new(key!('x'), "delete"),
@@ -3411,6 +3411,9 @@ impl AgentView {
                 h.push(HintItem::new(key!(Esc), "cancel"));
                 h
             };
+            if is_plan_viewer && viewer.path.is_absolute() {
+                viewer_hints.push(HintItem::new(key!('Y'), "copy file path"));
+            }
             let input_bar_active = viewer.list_state.input_mode().is_some();
             if !(plan_prompt_focused || casual_commenting || viewer.fullscreen && input_bar_active)
             {
