@@ -239,7 +239,7 @@ async fn updates_chat_state_total_tokens_from_response_usage() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn preserves_total_tokens_when_response_has_no_usage() {
+async fn response_without_usage_preserves_context_and_marks_ledgers_incomplete() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -252,6 +252,22 @@ async fn preserves_total_tokens_when_response_has_no_usage() {
             actor.record_response_token_usage(&response_without_usage(), None);
 
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 99_999);
+            let prompt = actor
+                .chat_state_handle
+                .try_get_prompt_usage()
+                .await
+                .expect("chat-state alive")
+                .expect("missing usage opens the prompt ledger");
+            assert!(prompt.incomplete);
+            assert_eq!(prompt.totals.model_calls, 0);
+
+            let session = actor
+                .chat_state_handle
+                .try_get_session_usage()
+                .await
+                .expect("chat-state alive");
+            assert!(session.incomplete);
+            assert_eq!(session.totals.model_calls, 0);
         })
         .await;
 }

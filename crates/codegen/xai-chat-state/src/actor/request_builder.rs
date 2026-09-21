@@ -11,6 +11,9 @@ use crate::types::PruningConfig;
 /// `pub(super)` so `mutations.rs` can use the same string on the retained conversation.
 pub(super) const HARD_CLEAR_PLACEHOLDER: &str = "[Tool result omitted — too old]";
 
+/// Placeholder used by the opt-in step-aware pruning experiment.
+const STEP_BUDGET_PLACEHOLDER: &str = "[Tool result omitted — outside recent step budget]";
+
 /// Separator inserted between head and tail in soft-trimmed results.
 const SOFT_TRIM_SEPARATOR: &str = "\n\n[…trimmed…]\n\n";
 
@@ -123,6 +126,8 @@ pub(crate) fn should_prune(total_tokens: u64, context_window: std::num::NonZeroU
 
 /// Prune old, large tool results from the conversation in place.
 /// Turn age is estimated by walking backward and counting `User` items.
+/// When configured, tool-call-bearing assistant items also bound raw results
+/// within a single user turn by round count and cumulative character budget.
 pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: &PruningConfig) {
     if !config.enabled {
         return;
@@ -130,6 +135,10 @@ pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: 
 
     let mut turn_from_end: usize = 0;
     let mut seen_first_user = false;
+    let mut tool_round_from_end: usize = 0;
+    let mut recent_tool_result_chars: usize = 0;
+    let step_policy_enabled =
+        config.keep_last_n_tool_rounds > 0 || config.recent_tool_result_char_budget > 0;
 
     for item in conversation.iter_mut().rev() {
         if matches!(item, ConversationItem::User(_)) {
@@ -140,12 +149,41 @@ pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: 
             continue;
         }
 
+        if let ConversationItem::Assistant(assistant) = item {
+            if !assistant.tool_calls.is_empty() {
+                tool_round_from_end = tool_round_from_end.saturating_add(1);
+            }
+            continue;
+        }
+
         let ConversationItem::ToolResult(tool_result) = item else {
             continue;
         };
 
-        // Never prune recent turns.
-        if turn_from_end < config.keep_last_n_turns {
+        let content_len = tool_result.content.chars().count();
+        let recent_turn = turn_from_end < config.keep_last_n_turns;
+
+        // Preserve the legacy behavior unless the step-aware experiment is
+        // explicitly configured. Under the experiment, the active round is
+        // always retained; older rounds must fit both limits that are enabled.
+        if !step_policy_enabled && recent_turn {
+            continue;
+        }
+        if step_policy_enabled && recent_turn {
+            recent_tool_result_chars = recent_tool_result_chars.saturating_add(content_len);
+            let active_round = tool_round_from_end == 0;
+            let within_round_window = config.keep_last_n_tool_rounds == 0
+                || tool_round_from_end < config.keep_last_n_tool_rounds;
+            let within_char_budget = config.recent_tool_result_char_budget == 0
+                || recent_tool_result_chars <= config.recent_tool_result_char_budget;
+
+            if active_round || (within_round_window && within_char_budget) {
+                continue;
+            }
+
+            if tool_result.content.as_ref() != STEP_BUDGET_PLACEHOLDER {
+                tool_result.content = std::sync::Arc::<str>::from(STEP_BUDGET_PLACEHOLDER);
+            }
             continue;
         }
 
@@ -158,7 +196,6 @@ pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: 
         }
 
         // Soft trim: large tool results → keep head + tail.
-        let content_len = tool_result.content.chars().count();
         if content_len > config.soft_trim_threshold {
             let head = safe_char_slice(&tool_result.content, 0, config.soft_trim_head);
             let tail = safe_char_slice_tail(&tool_result.content, config.soft_trim_tail);
@@ -245,6 +282,18 @@ fn safe_char_slice_tail(s: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use xai_grok_sampling_types::ToolCall;
+
+    fn tool_round(id: usize, content_len: usize) -> [ConversationItem; 2] {
+        [
+            ConversationItem::assistant_tool_calls(vec![ToolCall {
+                id: format!("call_{id}").into(),
+                name: "bash".to_owned(),
+                arguments: "{}".into(),
+            }]),
+            ConversationItem::tool_result(format!("call_{id}"), "x".repeat(content_len)),
+        ]
+    }
 
     #[test]
     fn should_prune_gating() {
@@ -267,6 +316,57 @@ mod tests {
             panic!("expected one tool result: {conv:?}")
         };
         assert_eq!(tr.content.len(), 10_000);
+    }
+
+    #[test]
+    fn step_aware_pruning_bounds_many_tool_rounds_inside_one_user_turn() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            conv.extend(tool_round(id, 200));
+        }
+        let config = PruningConfig {
+            keep_last_n_turns: 3,
+            keep_last_n_tool_rounds: 3,
+            recent_tool_result_char_budget: 450,
+            ..Default::default()
+        };
+
+        prune_conversation(&mut conv, &config);
+
+        let results: Vec<_> = conv
+            .iter()
+            .filter_map(|item| match item {
+                ConversationItem::ToolResult(result) => Some(result.content.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(results.len(), 8, "tool-call pairing must be preserved");
+        assert_eq!(results[7].len(), 200, "active round must remain raw");
+        assert_eq!(results[6].len(), 200, "newest prior round fits the budget");
+        assert_eq!(
+            results[5], STEP_BUDGET_PLACEHOLDER,
+            "third-newest result crosses the 450-character budget"
+        );
+        assert!(
+            results[..6]
+                .iter()
+                .all(|result| *result == STEP_BUDGET_PLACEHOLDER)
+        );
+    }
+
+    #[test]
+    fn zero_step_limits_preserve_legacy_recent_turn_behavior() {
+        let mut conv = vec![ConversationItem::user("one long turn")];
+        for id in 0..8 {
+            conv.extend(tool_round(id, 8_000));
+        }
+
+        prune_conversation(&mut conv, &PruningConfig::default());
+
+        assert!(conv.iter().all(|item| match item {
+            ConversationItem::ToolResult(result) => result.content.len() == 8_000,
+            _ => true,
+        }));
     }
 
     #[test]

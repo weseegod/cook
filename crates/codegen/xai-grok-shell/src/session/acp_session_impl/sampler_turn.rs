@@ -2203,11 +2203,14 @@ impl SessionActor {
             self.tool_context.fail_task_output_usage_closed();
             self.chat_state_handle
                 .mark_usage_incomplete_nowait(true, true);
-        } else if self.tool_context.sampler_retry_only_before_output {
+        } else {
+            // A provider may omit usage on an otherwise successful response.
+            // Treat that as unknown spend for every main-loop call, not as a
+            // zero-token call. Retry-only turns need the same fail-closed
+            // ledger behavior, so they intentionally share this branch.
             self.chat_state_handle
                 .mark_usage_incomplete_nowait(true, true);
         }
-        // TODO: a `None` usage outside these contexts is left unmarked, so a genuine mid-turn omission understates spend with no incomplete flag
     }
 
     /// Persist one response's items without re-estimating model output when provider usage already includes it.

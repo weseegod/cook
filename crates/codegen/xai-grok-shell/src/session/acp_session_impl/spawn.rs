@@ -589,6 +589,8 @@ pub(crate) async fn spawn_session_actor(
     let actor_pruning_config = xai_chat_state::PruningConfig {
         enabled: session_pruning_config.enabled,
         keep_last_n_turns: session_pruning_config.keep_last_n_turns,
+        keep_last_n_tool_rounds: session_pruning_config.keep_last_n_tool_rounds,
+        recent_tool_result_char_budget: session_pruning_config.recent_tool_result_char_budget,
         soft_trim_threshold: session_pruning_config.soft_trim_threshold,
         soft_trim_head: session_pruning_config.soft_trim_head,
         soft_trim_tail: session_pruning_config.soft_trim_tail,

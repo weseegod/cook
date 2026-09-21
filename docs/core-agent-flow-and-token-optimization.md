@@ -1,9 +1,9 @@
 # Current core agent flow and token optimization
 
-Review date: **2026-09-21**. Code revision: `f26bad444d1e8221baf006a485abc8d3adc42678`.
+Review date: **2026-09-21**. Experiment base revision: `a8b1874dd099802bdae334733d2828a5697b05cf`.
 Scope: the core runtime shared by the TUI, headless mode, ACP, and desktop; the focus is the coding harness, context, and inference cost. The repository map is [ARCHITECTURE.md](../ARCHITECTURE.md).
 
-This is a code analysis and design proposal, **not a benchmark result or a runtime change**. It does not inspect chat history, credentials, or private configuration under `~/.cook`; therefore it cannot identify the largest token source in a real user session. Values marked as proposals are starting points for experiments, not existing configuration.
+This began as a code analysis and design proposal. Section 8.4 now records one isolated local-model microbenchmark and its opt-in runtime arm; it is **not** evidence of repository-wide cost savings. The analysis did not inspect chat history, credentials, or private configuration under `~/.cook`; therefore it cannot identify the largest token source in a real user session. Values marked as proposals remain starting points for broader experiments, not product-wide defaults.
 
 ## 1. Conclusion and priorities
 
@@ -369,7 +369,39 @@ cargo test -p xai-grok-shell --lib compaction
 cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types
 ```
 
-These are validation plans, **not commands run while writing this document**. Unit tests verify invariants; they do not prove token savings or coding quality, which require a separate benchmark.
+This command block was the validation plan at the original review. Section 8.4 distinguishes the checks and microbenchmark executed by the follow-up experiment. Unit tests verify invariants; they do not prove token savings or coding quality, which require a separate benchmark.
+
+### 8.4 Executed experiment: step-aware result retention
+
+The full implementation notes, reproduction commands, troubleshooting, limitations, rollback instructions, and follow-up plan are in [core-agent-token-optimization-experiment.md](core-agent-token-optimization-experiment.md).
+
+This branch implements an **opt-in** P1b arm without changing the legacy default. Two new `[compaction.pruning]` settings are zero/disabled by default:
+
+```toml
+[compaction.pruning]
+keep_last_n_tool_rounds = 6
+recent_tool_result_char_budget = 64000
+```
+
+When either setting is enabled, request-copy pruning counts assistant tool-call rounds inside the current user turn. It always retains the active round. Prior results remain raw only while they satisfy every enabled round/character limit; omitted content becomes an explicit placeholder while the tool result and call ID remain in place. Canonical persisted history is unchanged. The existing context-fullness gate still decides whether request pruning runs.
+
+The supporting P0 correction makes a successful main-loop response with missing provider usage mark both prompt and session usage incomplete. It preserves the prior model-reported context total and does not invent a zero-token model call. This closes the specific missing-usage gap identified in section 6.1 before interpreting experiment totals.
+
+#### Local model microbenchmark
+
+Date: **2026-09-21**. Model: local `Ternary-Bonsai-2-27B-PQ2_0.gguf` through llama.cpp's OpenAI-compatible endpoint (server alias `bonsai2`). Harness: [benchmark_step_pruning.sh](../scripts/benchmark_step_pruning.sh). Parameters: temperature 0, reasoning disabled, 160 output-token cap, three independent repetitions per arm.
+
+The synthetic fixture models one user prompt with eight tool rounds. Rounds 1–6 contain stale successful-build noise; rounds 7–8 contain the active failure, patch, and passing focused test. The optimized arm replaces rounds 1–6 with the same placeholder emitted by the runtime policy. The acceptance check asks the model to identify the test, expected/actual state, and whether the patch addresses the newest failure.
+
+| Result | Baseline | Step-aware arm |
+|---|---:|---:|
+| Repetitions with correct evidence/verdict | 3/3 | 3/3 |
+| Reported prompt tokens per run | 8,840 | 230 |
+| Reported completion tokens per run | 78 | 78 |
+| Reported total tokens per run | 8,918 | 308 |
+| Median wall time (range) | 2 s (2–3) | 2 s (2–3) |
+
+For this fixture, reported prompt input fell by **97.4%** while the answer stayed byte-identical across arms and repetitions. This is deliberately a stress microbenchmark for the confirmed single-user-turn retention problem. It does not measure end-to-end task success, cache economics, reread frequency, compaction, children, or cost per accepted repository task, so it does not justify enabling the settings globally. The next decision gate remains the 30–50 task suite in section 8.1.
 
 ## 9. Directions not to prioritize first
 

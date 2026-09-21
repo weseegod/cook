@@ -70,6 +70,12 @@ pub struct PruningConfig {
     pub enabled: bool,
     /// Number of recent turns whose tool results are never pruned.
     pub keep_last_n_turns: usize,
+    /// Number of recent tool rounds whose results may remain raw within a user turn.
+    /// Zero keeps the legacy user-turn-only behavior.
+    pub keep_last_n_tool_rounds: usize,
+    /// Character budget for raw results protected by the tool-round window.
+    /// Zero keeps the legacy user-turn-only behavior.
+    pub recent_tool_result_char_budget: usize,
     /// Character threshold above which old tool results are soft-trimmed.
     pub soft_trim_threshold: usize,
     /// Characters to keep from the start of a soft-trimmed result.
@@ -85,6 +91,8 @@ impl Default for PruningConfig {
         Self {
             enabled: true,
             keep_last_n_turns: 3,
+            keep_last_n_tool_rounds: 0,
+            recent_tool_result_char_budget: 0,
             soft_trim_threshold: 4000,
             soft_trim_head: 1500,
             soft_trim_tail: 1500,

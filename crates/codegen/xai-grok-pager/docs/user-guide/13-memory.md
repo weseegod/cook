@@ -427,10 +427,14 @@ You configure pruning under `[compaction]`, not `[memory]`, because it is a comp
 |-----|---------|-------------|
 | `enabled` | `true` | Enable tool-result pruning |
 | `keep_last_n_turns` | `3` | Number of recent turns whose tool results are never pruned |
+| `keep_last_n_tool_rounds` | `0` | Opt-in step-age limit inside one user turn; `0` preserves turn-only pruning |
+| `recent_tool_result_char_budget` | `0` | Opt-in raw-result character budget for recent tool rounds; `0` disables the budget |
 | `soft_trim_threshold` | `4000` | Character threshold above which old tool results are soft-trimmed |
 | `soft_trim_head` | `1500` | Characters kept from the start of a soft-trimmed result |
 | `soft_trim_tail` | `1500` | Characters kept from the end of a soft-trimmed result |
 | `hard_clear_age_turns` | `10` | Turn age after which tool results are replaced with a placeholder |
+
+When either step-aware setting is non-zero, Cook always retains the active tool round. Older rounds in recent user turns remain raw only while they satisfy every enabled step limit; omitted results keep their tool-call pairing and are replaced with an explicit placeholder. A cost-conscious experiment can start with `keep_last_n_tool_rounds = 6` and `recent_tool_result_char_budget = 64000` (about 16k tokens under the bytes/4 estimator).
 
 ---
 
