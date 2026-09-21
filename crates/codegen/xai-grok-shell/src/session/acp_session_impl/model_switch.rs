@@ -235,6 +235,14 @@ impl SessionActor {
             return Err(acp::Error::invalid_params()
                 .data("the session's current model does not support reasoning effort"));
         }
+        // Reject wire values the model's menu does not offer (e.g. `high` on bonsai).
+        if !self
+            .models_manager
+            .model_supports_reasoning_effort_value(&cfg.model, effort)
+        {
+            return Err(acp::Error::invalid_params()
+                .data("reasoning effort is not supported by the current model"));
+        }
         if let Some(routed) = self.models_manager.model_for_effort(&cfg.model, effort) {
             cfg.model = routed;
         }

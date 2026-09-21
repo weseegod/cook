@@ -14,6 +14,7 @@ import {
 } from "../../state/activity";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore, type TurnOutcome } from "../../state/session";
+import { trackWorking } from "../client/state";
 import type { NotificationEntry } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,6 +183,12 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/session/prompt_complete",
     handle: (ctx) => {
       const store = useSessionStore.getState();
+      const sessionId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : null;
+      // Background turn finished while another conversation is open — clear its list activity only.
+      if (sessionId && store.sessionId && sessionId !== store.sessionId) {
+        trackWorking(sessionId, null);
+        return;
+      }
       if (!store.turnRunning && store.turnStartedAt === null) return;
       const outcome = outcomeFromPromptComplete(ctx.params);
       store.finishTurn(outcome);

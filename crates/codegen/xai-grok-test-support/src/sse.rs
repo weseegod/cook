@@ -461,6 +461,70 @@ pub fn responses_api_completed_only_events(model: &str) -> Vec<SseEvent> {
     ]
 }
 
+/// Stream `output_text.delta` chunks, then complete with an empty `output` array.
+/// Reproduces the luna/xhigh bug where deltas reach the UI but the terminal Response is classified empty and retried.
+pub fn responses_api_streamed_text_empty_terminal_events(
+    deltas: &[&str],
+    model: &str,
+) -> Vec<SseEvent> {
+    let mut events = Vec::new();
+    let mut seq = 0u64;
+    events.push(SseEvent::data(
+        json!({
+            "type": "response.created",
+            "sequence_number": seq,
+            "response": {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1234567890,
+                "model": model,
+                "status": "in_progress",
+                "output": []
+            }
+        })
+        .to_string(),
+    ));
+    seq += 1;
+    for delta in deltas {
+        events.push(SseEvent::data(
+            json!({
+                "type": "response.output_text.delta",
+                "sequence_number": seq,
+                "item_id": "item_test",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": delta
+            })
+            .to_string(),
+        ));
+        seq += 1;
+    }
+    events.push(SseEvent::data(
+        json!({
+            "type": "response.completed",
+            "sequence_number": seq,
+            "response": {
+                "id": "resp_test",
+                "object": "response",
+                "created_at": 1234567890,
+                "model": model,
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "total_tokens": 15,
+                    "input_tokens_details": { "cached_tokens": 0 },
+                    "output_tokens_details": { "reasoning_tokens": 0 }
+                }
+            }
+        })
+        .to_string(),
+    ));
+    events.push(SseEvent::data("[DONE]"));
+    events
+}
+
 /// Responses API incomplete turn with no content: `response.created` then `response.incomplete`.
 pub fn responses_api_incomplete_only_events(model: &str) -> Vec<SseEvent> {
     vec![

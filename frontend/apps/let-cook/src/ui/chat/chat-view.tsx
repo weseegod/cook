@@ -7,6 +7,7 @@ import { useSessionStore } from "../../state/session";
 import { PlanDialog } from "./plan-dialog";
 import { PlanFileDialog } from "./plan-file-dialog";
 import { PromptSlot } from "./prompt-slot";
+import { QueueBar } from "./queue-bar";
 import { RecapDialog } from "./recap-dialog";
 import { RewindDialog } from "./rewind-dialog";
 import { SubagentTakeover } from "./subagent-takeover";
@@ -42,6 +43,7 @@ export function ChatView() {
       empty={<EmptyChat sessionId={sessionId} onDraft={draft} />}
       mainSlot={<PlanDialog />}
     >
+      <QueueBar />
       <TurnStatus />
       {error && <ChatError error={error} connection={connection} cwd={cwd} />}
       <PromptSlot />

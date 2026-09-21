@@ -536,9 +536,35 @@ impl SamplingError {
     /// Retry vetoes shared by every retry loop: the sampler actor's `classify_error` and one-shot callers like `/btw`.
     /// `x-should-retry: false`: the server says the request content caused the failure, not something transient;
     /// Context-length overflow: deterministic; re-sending the same payload always fails.
+    /// Request-shaped template/validation errors (e.g. llama.cpp rejecting an unsupported
+    /// `reasoning_effort`) are also deterministic — retrying the identical body cannot help.
     pub fn is_retry_vetoed(&self) -> bool {
-        self.should_retry_header() == Some(false) || self.is_context_length_error()
+        self.should_retry_header() == Some(false)
+            || self.is_context_length_error()
+            || self.is_non_retryable_request_shape_error()
     }
+
+    /// Deterministic request-shape failures that some local OpenAI-compatible servers
+    /// surface as HTTP 500 (Jinja chat-template exceptions) rather than 4xx.
+    pub fn is_non_retryable_request_shape_error(&self) -> bool {
+        let message = match self {
+            SamplingError::Api { message, .. } => message.as_str(),
+            SamplingError::StreamError { message, .. } => message.as_str(),
+            _ => return false,
+        };
+        message_looks_like_non_retryable_request_shape(message)
+    }
+}
+
+/// Shared detector for local-server template/validation failures that must not burn retries.
+fn message_looks_like_non_retryable_request_shape(message: &str) -> bool {
+    let m = message.to_ascii_lowercase();
+    m.contains("unexpected reasoning effort")
+        || m.contains("jinja exception")
+        || (m.contains("reasoning effort")
+            && (m.contains("supported types are") || m.contains("supported values")))
+        // Codex Responses: system roles in `input` are rejected deterministically.
+        || m.contains("system messages are not allowed")
 }
 
 impl From<reqwest::Error> for SamplingError {
@@ -930,6 +956,43 @@ mod tests {
             error_code: None,
         };
         assert!(!not_vetoed.is_retry_vetoed());
+    }
+
+    #[test]
+    fn retry_veto_covers_unexpected_reasoning_effort_jinja() {
+        let err = SamplingError::Api {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "Error: Jinja Exception: Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low.".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+            error_code: None,
+        };
+        assert!(
+            err.is_non_retryable_request_shape_error(),
+            "bonsai-style Jinja effort rejection must classify as request-shape"
+        );
+        assert!(
+            err.is_retry_vetoed(),
+            "must fail fast instead of burning max_retries on identical bodies"
+        );
+        assert!(
+            err.is_retryable(),
+            "HTTP 500 remains status-retryable; veto is what stops the loop"
+        );
+    }
+
+    #[test]
+    fn retry_veto_covers_codex_system_messages_not_allowed() {
+        let err = SamplingError::Api {
+            status: StatusCode::BAD_REQUEST,
+            message: "System messages are not allowed".into(),
+            model_metadata: None,
+            retry_after_secs: None,
+            should_retry: None,
+            error_code: None,
+        };
+        assert!(err.is_retry_vetoed());
     }
 
     #[test]

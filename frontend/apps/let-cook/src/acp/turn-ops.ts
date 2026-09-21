@@ -21,7 +21,7 @@ export function askBtw(sessionId: string, question: string) {
   return request<{ answer?: string }>("x.ai/btw", { sessionId, question });
 }
 
-/** `x.ai/interject` — queue a mid-turn interjection for the next safe drain point. */
+/** `x.ai/interject` — mid-turn steer for foreign clients / `/btw` paths (not Desktop queue chrome). */
 export async function interjectPrompt(sessionId: string, text: string): Promise<{ status?: string }> {
   const interjectionId = `inj-${crypto.randomUUID()}`;
   rememberSelfInterjection(interjectionId);
@@ -53,4 +53,35 @@ export function clearQueuedPrompts(sessionId: string) {
     sessionId,
     clientIdentifier: CAPABILITIES.clientIdentifier,
   });
+}
+
+/** `x.ai/queue/interject` — send-now / promote a held queue row. */
+export function sendQueuedPromptNow(sessionId: string, id: string, expectedVersion = 0, newText?: string) {
+  return notify("x.ai/queue/interject", {
+    sessionId,
+    id,
+    expectedVersion,
+    owner: CAPABILITIES.clientIdentifier,
+    ...(newText !== undefined ? { newText } : {}),
+  });
+}
+
+/** `x.ai/queue/hold_edit` — block drain while the client edits a row. */
+export function holdQueuedPromptEdit(sessionId: string, id: string) {
+  return notify("x.ai/queue/hold_edit", { sessionId, id });
+}
+
+/** `x.ai/queue/edit` — replace queued text in place (LWW; `queue/changed` is truth). */
+export function editQueuedPrompt(sessionId: string, id: string, newText: string) {
+  return notify("x.ai/queue/edit", {
+    sessionId,
+    id,
+    newText,
+    owner: CAPABILITIES.clientIdentifier,
+  });
+}
+
+/** `x.ai/queue/release_edit` — release hold; agent may promote when idle. */
+export function releaseQueuedPromptEdit(sessionId: string, id: string) {
+  return notify("x.ai/queue/release_edit", { sessionId, id });
 }

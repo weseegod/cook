@@ -352,10 +352,13 @@ pub(crate) fn resolve_model_catalog(
         }
     }
 
+    // Stamp only when the default model actually offers that wire value. A bare
+    // `supports_reasoning_effort = true` with an empty menu used to accept legacy
+    // `high`, which breaks local models whose templates only allow xhigh|medium|low.
     if let Some(effort) = cfg.models.default_reasoning_effort
         && let Some(default_id) = cfg.models.default.as_deref()
         && let Some(entry) = catalog.get_mut(default_id)
-        && entry.info.supports_reasoning_effort
+        && model_offers_reasoning_effort(&entry.info, effort)
     {
         stamp_effort(&mut entry.info, effort);
     }

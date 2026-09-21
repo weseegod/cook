@@ -14,9 +14,13 @@ import {
   askBtw,
   claimSelfInterjection,
   clearQueuedPrompts,
+  editQueuedPrompt,
+  holdQueuedPromptEdit,
   interjectPrompt,
+  releaseQueuedPromptEdit,
   rememberSelfInterjection,
   removeQueuedPrompt,
+  sendQueuedPromptNow,
 } from "./turn-ops";
 
 describe("turn-ops (P9)", () => {
@@ -52,6 +56,35 @@ describe("turn-ops (P9)", () => {
       sessionId: "s1",
       clientIdentifier: "grok-desktop",
     });
+  });
+
+  it("queue send-now / edit / hold / release are notifications", async () => {
+    await sendQueuedPromptNow("s1", "p1", 2);
+    await sendQueuedPromptNow("s1", "p1", 2, "edited");
+    await holdQueuedPromptEdit("s1", "p1");
+    await editQueuedPrompt("s1", "p1", "new text");
+    await releaseQueuedPromptEdit("s1", "p1");
+    expect(notify).toHaveBeenCalledWith("x.ai/queue/interject", {
+      sessionId: "s1",
+      id: "p1",
+      expectedVersion: 2,
+      owner: "grok-desktop",
+    });
+    expect(notify).toHaveBeenCalledWith("x.ai/queue/interject", {
+      sessionId: "s1",
+      id: "p1",
+      expectedVersion: 2,
+      owner: "grok-desktop",
+      newText: "edited",
+    });
+    expect(notify).toHaveBeenCalledWith("x.ai/queue/hold_edit", { sessionId: "s1", id: "p1" });
+    expect(notify).toHaveBeenCalledWith("x.ai/queue/edit", {
+      sessionId: "s1",
+      id: "p1",
+      newText: "new text",
+      owner: "grok-desktop",
+    });
+    expect(notify).toHaveBeenCalledWith("x.ai/queue/release_edit", { sessionId: "s1", id: "p1" });
   });
 
   it("claimSelfInterjection drops matching broadcast ids", () => {

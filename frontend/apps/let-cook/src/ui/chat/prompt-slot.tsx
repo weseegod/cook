@@ -3,12 +3,12 @@ import { PermissionModal } from "../permissions/permission-modal";
 import { InteractionModal } from "../permissions/interaction-modal";
 import { Composer } from "./composer";
 import { FollowUps } from "./follow-ups";
-import { QueueBar } from "./queue-bar";
 
 /**
  * Prompt-slot occupancy (catalog §9): one of Composer or a blocking card.
  * Composer stays mounted so a half-written draft and attachments survive the interruption.
  * Parked plan review is not a card — the composer stays live for request-changes.
+ * Queue pane lives above turn-status in ChatView (TUI §3 / §9.7), not here.
  */
 export function PromptSlot() {
   const pendingPermission = useSessionStore((state) => state.pendingPermission);
@@ -26,7 +26,6 @@ export function PromptSlot() {
         </>
       )}
       <div className={blocking ? "prompt-composer stashed" : "prompt-composer"}>
-        <QueueBar />
         <Composer />
         <FollowUps />
       </div>

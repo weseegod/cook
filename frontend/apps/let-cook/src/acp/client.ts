@@ -100,7 +100,27 @@ export class CookAcpClient {
     this.stopping = false;
     this.cwd = cwd;
     const store = useSessionStore.getState();
-    store.set({ connection: "starting", error: null, cwd });
+    const hadWorking =
+      store.turnRunning || Object.keys(store.workingSessions).length > 0;
+    // Best-effort cancel of the active turn before the process is killed — background turns die with it.
+    if (store.sessionId && hadWorking) {
+      try {
+        await notify("session/cancel", { sessionId: store.sessionId });
+      } catch {
+        // Process may already be gone.
+      }
+    }
+    this.promptCorrelation.clear();
+    store.resetConversation(null);
+    store.set({
+      connection: "starting",
+      error: null,
+      cwd,
+      workingSessions: {},
+      ...(hadWorking
+        ? { notice: "Switching workspace stopped in-progress conversations." }
+        : {}),
+    });
     await this.installListeners();
     try {
       this.stopping = true;
@@ -302,18 +322,20 @@ export class CookAcpClient {
     } finally {
       await this.inboundMessages;
       this.sessionUpdates.flushNow();
-      // N-pcomplete may already have finalized; finishTurn is idempotent on the marker.
-      if (useSessionStore.getState().turnStartedAt !== null) {
-        useSessionStore.getState().finishTurn(outcome);
-      }
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       this.promptCorrelation.end(promptId);
       trackWorking(sessionId, null);
       const store = useSessionStore.getState();
-      store.set({
-        turnRunning: this.pendingPromptRequests > 0,
-        queuedPromptCount: Math.max(0, store.queuedPromptCount - 1),
-      });
+      // A backgrounded conversation's prompt must not close (or reopen) the active turn.
+      if (store.sessionId === sessionId) {
+        if (store.turnStartedAt !== null) {
+          store.finishTurn(outcome);
+        }
+        store.set({
+          turnRunning: this.pendingPromptRequests > 0,
+          queuedPromptCount: Math.max(0, store.queuedPromptCount - 1),
+        });
+      }
       void this.refreshSessions();
       void pullUsage(this.xai);
     }

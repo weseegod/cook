@@ -195,6 +195,26 @@ export function mockSessionNotification(update: Record<string, unknown>, session
   notify("_x.ai/session_notification", { sessionId, update });
 }
 
+/** Broadcast `x.ai/queue/changed` for the Desktop queue pane (optionally replace mock rows). */
+export function mockQueueChanged(
+  entries?: Array<{ id: string; version: number; text: string; kind?: string; position?: number }>,
+  sessionId = "mock-session",
+): void {
+  if (entries) {
+    state.queueEntries = entries.map((entry, index) => ({
+      ...entry,
+      position: entry.position ?? index,
+    }));
+  }
+  notify("x.ai/queue/changed", {
+    sessionId,
+    entries: state.queueEntries.map((entry, index) => ({
+      ...entry,
+      position: entry.position ?? index,
+    })),
+  });
+}
+
 /**
  * A real `session/update` under an arbitrary session, `_meta` included — the shape a child session
  * streams its own turn in (a subagent carries its own `promptId`, which is not the parent's).

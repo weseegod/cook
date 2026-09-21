@@ -214,6 +214,14 @@ export interface MockState {
   subagents: Array<Record<string, unknown>>;
   /** Scheduled `/loop` tasks for scheduler delete tests. */
   schedules: Array<Record<string, unknown>>;
+  /** Held prompt queue for `x.ai/queue/changed` (Desktop queue pane). */
+  queueEntries: Array<{
+    id: string;
+    version: number;
+    text: string;
+    kind?: string;
+    position?: number;
+  }>;
 }
 
 export interface MockControl {
@@ -226,6 +234,11 @@ export interface MockControl {
   question(overrides?: Record<string, unknown>): number;
   plan(overrides?: Record<string, unknown>): number;
   sessionNotification(update: Record<string, unknown>, sessionId?: string): void;
+  /** Broadcast `x.ai/queue/changed` (optionally replacing mock queue rows first). */
+  queueChanged(
+    entries?: Array<{ id: string; version: number; text: string; kind?: string; position?: number }>,
+    sessionId?: string,
+  ): void;
   /** A plain `session/update` under any session, with `_meta` — how a child session streams. */
   sessionUpdate(sessionId: string, update: Record<string, unknown>, meta?: Record<string, unknown>): void;
   /** Patch the mocked working tree so a running turn's diffstat can be seen to move. */

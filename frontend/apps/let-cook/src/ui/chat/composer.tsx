@@ -2,7 +2,7 @@ import { CornerDownLeft, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
-import { askBtw, interjectPrompt } from "../../acp/turn-ops";
+import { askBtw, sendQueuedPromptNow } from "../../acp/turn-ops";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { planFeedback } from "../../state/plan-review";
@@ -21,6 +21,8 @@ import { useComposerAttachments } from "./composer/use-composer-attachments";
 import { useComposerFileSearch } from "./composer/use-composer-file-search";
 import { normalizeDisplayPath } from "./at-context";
 import { ModelPicker } from "./model-picker";
+import { cancelQueueEdit, saveQueueEdit } from "./queue-bar";
+import { isSendableWait, resolveTurnActivity } from "./turn-activity";
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
@@ -32,6 +34,9 @@ export function Composer() {
   const text = useSessionStore((state) => state.composerDraft);
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
+  const editingQueueEntry = useSessionStore((state) => state.editingQueueEntry);
+  const queuedEntries = useSessionStore((state) => state.queuedEntries);
+  const activity = useSessionStore((state) => state.activity);
   const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const interactionPending = useSessionStore((state) => Boolean(state.pendingPermission || state.pendingQuestion));
   const planReview = pendingQuestion?.kind === "plan";
@@ -148,7 +153,44 @@ export function Composer() {
       }
       return;
     }
-    if (!prompt && attachments.length === 0) return;
+    // Queue-edit mode: Save writes back via `x.ai/queue/edit`, never session/prompt.
+    if (editingQueueEntry && sessionId) {
+      if (!prompt) return;
+      const finish = beginWork();
+      setMenuClosed(false);
+      try {
+        await saveQueueEdit(sessionId, editingQueueEntry.id, prompt);
+      } catch (error) {
+        reportError(error);
+      } finally {
+        finish();
+        textarea.current?.focus();
+      }
+      return;
+    }
+    // Empty Enter on a sendable wait promotes the top held queue row (TUI §9.7).
+    if (!prompt && attachments.length === 0) {
+      if (!sessionId || queuedEntries.length === 0) return;
+      const goalVerifying = useSessionStore.getState().goal?.verifyingCompletion === true;
+      const resolved = resolveTurnActivity({
+        derived: activity,
+        turnRunning,
+        goalVerifying,
+        askDetail: pendingQuestion?.kind === "question" ? pendingQuestion.title ?? "" : null,
+      });
+      if (!isSendableWait(resolved)) return;
+      const top = queuedEntries[0];
+      const finish = beginWork();
+      try {
+        await sendQueuedPromptNow(sessionId, top.id, top.version);
+      } catch (error) {
+        reportError(error);
+      } finally {
+        finish();
+        textarea.current?.focus();
+      }
+      return;
+    }
     const slash = parseSlash(prompt);
     // Mid-turn `/btw` is a side question (C-btw), not a queued session/prompt.
     if (slash?.name.toLowerCase() === "btw" && turnRunning && attachments.length === 0) {
@@ -206,43 +248,6 @@ export function Composer() {
     }
   }
 
-  async function interject() {
-    const prompt = text.trim();
-    if (busy || blocked || !turnRunning || !sessionId || (!prompt && attachments.length === 0)) return;
-    enableFollow();
-    const finish = beginWork();
-    const sending = text;
-    setText("");
-    setAttachments([]);
-    setMenuClosed(false);
-    try {
-      // Optimistic local echo; N-interject drops the matching broadcast via interjectionId.
-      const turnId = useSessionStore.getState().transcriptCursor.turnId ?? `turn-inj-${crypto.randomUUID()}`;
-      useSessionStore.getState().set({
-        blocks: [
-          ...useSessionStore.getState().blocks,
-          {
-            type: "message",
-            id: `inj-local-${crypto.randomUUID()}`,
-            turnId,
-            role: "user",
-            text: sending,
-            images: [],
-            streaming: false,
-          },
-        ],
-        notice: null,
-        error: null,
-      });
-      await interjectPrompt(sessionId, sending);
-    } catch (error) {
-      reportError(error);
-    } finally {
-      finish();
-      textarea.current?.focus();
-    }
-  }
-
   function accept(entry: SlashEntry) {
     setText(`/${entry.name} `);
     setMenuClosed(true);
@@ -272,6 +277,11 @@ export function Composer() {
         accept(matching[Math.min(active, matching.length - 1)]);
         return;
       }
+    }
+    if (event.key === "Escape" && editingQueueEntry && sessionId) {
+      event.preventDefault();
+      void cancelQueueEdit(sessionId, editingQueueEntry.id).catch(reportError);
+      return;
     }
     if (matching.length === 0 && (event.key === "PageUp" || event.key === "PageDown")) {
       event.preventDefault();
@@ -449,21 +459,20 @@ export function Composer() {
               >
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Request changes
               </button>
+            ) : editingQueueEntry ? (
+              <button
+                type="button"
+                className="send-button"
+                data-testid="send-button"
+                disabled={blocked || !text.trim() || busy}
+                onClick={() => void submit()}
+              >
+                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Save
+              </button>
             ) : turnRunning ? (
-              <>
-                <button
-                  type="button"
-                  className="ghost-button"
-                  data-testid="interject-button"
-                  disabled={blocked || (!text.trim() && attachments.length === 0) || busy}
-                  onClick={() => void interject()}
-                >
-                  Interject
-                </button>
-                <button type="button" className="send-button" data-testid="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
-                  {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
-                </button>
-              </>
+              <button type="button" className="send-button" data-testid="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
+                {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
+              </button>
             ) : (
               <button type="button" className="send-button" disabled={blocked || !text.trim() || busy} onClick={() => void submit()} data-testid="send-button">
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Send

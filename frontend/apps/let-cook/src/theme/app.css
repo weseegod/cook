@@ -1574,8 +1574,10 @@ body { font-size: 14px; }
   flex: 0 0 auto;
   min-width: 0;
 }
-.agent-header-slot-todo, .agent-header-slot-tools { width: 28px; }
+.agent-header-slot-tools { width: 28px; }
 .agent-header-slot-goal { width: 240px; }
+.agent-header-slot-goal-checklist { width: 112px; }
+.agent-header-slot-goal-empty { width: 28px; }
 .agent-header-slot-diffstat { width: 64px; }
 .agent-header-slot-git { width: 148px; }
 .agent-header-slot-goal .goal-chip,
@@ -1591,6 +1593,7 @@ body { font-size: 14px; }
   .agent-header-left { gap: 4px; }
   .agent-header-right { gap: 5px; }
   .agent-header-slot-goal { width: 96px; }
+  .agent-header-slot-goal-checklist { width: 104px; }
   .agent-header-slot-diffstat { width: 48px; }
   .agent-header-slot-git { width: 96px; }
   .agent-header-slot-goal .goal-chip { padding-inline: 4px; }
@@ -1602,6 +1605,7 @@ body { font-size: 14px; }
   .agent-header { padding-inline: 8px; }
   .agent-header-right { gap: 4px; }
   .agent-header-slot-goal { width: 72px; }
+  .agent-header-slot-goal-checklist { width: 96px; }
   .agent-header-slot-diffstat { width: 44px; }
   .agent-header-slot-git { width: 76px; }
   .agent-header-left .agent-cwd { max-width: 68px; }
@@ -1626,20 +1630,11 @@ body { font-size: 14px; }
 }
 .agent-cwd span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-cwd:hover { color: var(--text); background: var(--raised-2); }
-.todo-toggle {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-}
-.todo-toggle:hover, .todo-toggle.active { color: var(--plan-accent, var(--accent)); background: var(--plan-accent-soft, var(--accent-soft)); }
 .todo-chip-root { position: relative; flex: 0 0 auto; }
+.checklist-chip { width: 100%; justify-content: center; }
+.checklist-chip-name { white-space: nowrap; }
+.checklist-chip-count { color: color-mix(in srgb, currentColor, transparent 25%); font-variant-numeric: tabular-nums; }
+.checklist-chip.active { border-color: var(--plan-accent); background: var(--plan-accent-soft); }
 .todo-menu {
   position: absolute;
   top: calc(100% + 3px);
@@ -2400,39 +2395,68 @@ body { font-size: 14px; }
   .plan-bar-copy { display: none; }
 }
 
-/* P9 follow-ups + queue */
-.queue-bar, .follow-ups {
+/* P9 follow-ups + queue (queue sits above turn-status, TUI §9.7) */
+.follow-ups {
   width: 100%;
   margin: 0 0 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .queue-bar {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-  padding: 8px 10px;
+  width: 100%;
+  margin: 0 0 4px;
+  padding: 4px 0 2px;
+  border: 0;
+  background: transparent;
 }
 .queue-bar-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 2px;
   color: var(--text-soft);
   font-size: 11px;
 }
-.queue-bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.queue-bar-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .queue-bar-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
   gap: 8px;
   align-items: center;
+  min-height: 22px;
   font-size: 12px;
 }
 .queue-bar-index { color: var(--muted); font-variant-numeric: tabular-nums; }
 .queue-bar-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-.follow-ups {
+.queue-bar-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  align-items: center;
+  gap: 4px;
+  opacity: 0.55;
+}
+.queue-bar-row:hover .queue-bar-actions,
+.queue-bar-row:focus-within .queue-bar-actions {
+  opacity: 1;
+}
+.queue-bar-chip {
+  border: 0;
+  background: transparent;
+  color: var(--text-soft);
+  font-size: 11px;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.queue-bar-chip:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--panel) 80%, transparent);
+}
+.queue-bar-chip:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 .follow-up-chip {
   max-width: 100%;

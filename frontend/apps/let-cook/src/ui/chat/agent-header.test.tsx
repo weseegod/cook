@@ -47,13 +47,21 @@ function publishGitStatus(status: GitStatusSummary | null, cwd = "/workspace") {
 beforeEach(() => {
   publishGitStatus(null);
   useToolsPanelStore.setState({ nonce: 0, target: null });
-  useSessionStore.setState({ cwd: "/workspace", blocks: [], usage: null, turnRunning: false });
+  useSessionStore.setState({
+    cwd: "/workspace",
+    blocks: [],
+    goal: null,
+    planEntries: [],
+    todoOverlayOpen: false,
+    usage: null,
+    turnRunning: false,
+  });
 });
 
 afterEach(() => {
   publishGitStatus(null);
   useToolsPanelStore.setState({ nonce: 0, target: null });
-  useSessionStore.setState({ cwd: null, blocks: [] });
+  useSessionStore.setState({ cwd: null, blocks: [], goal: null, planEntries: [], todoOverlayOpen: false });
 });
 
 describe("AgentHeader git chip", () => {
@@ -111,12 +119,27 @@ describe("AgentHeader layout", () => {
 
     const slots = Array.from(document.querySelectorAll(".agent-header-right > .agent-header-slot"));
     expect(slots.map((slot) => slot.className)).toEqual([
-      "agent-header-slot agent-header-slot-todo",
-      "agent-header-slot agent-header-slot-goal",
+      "agent-header-slot agent-header-slot-goal agent-header-slot-goal-empty",
       "agent-header-slot agent-header-slot-diffstat",
       "agent-header-slot agent-header-slot-git",
       "agent-header-slot agent-header-slot-tools",
     ]);
+  });
+
+  it("shows the checklist chip with completed progress when a plan exists without a goal", () => {
+    useSessionStore.setState({
+      planEntries: [
+        { content: "Done", status: "completed" },
+        { content: "In progress", status: "in_progress" },
+        { content: "Pending", status: "pending" },
+      ],
+    });
+    renderHeader();
+
+    const chip = screen.getByTestId("todo-toggle");
+    expect(chip).toHaveTextContent("Checklist");
+    expect(screen.getByTestId("todo-chip-count")).toHaveTextContent("1/3");
+    expect(chip.closest(".agent-header-slot")).toHaveClass("agent-header-slot-goal-checklist");
   });
 
   it("asks the shell for the Review panel when the line changes are clicked", async () => {
