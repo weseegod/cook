@@ -445,6 +445,38 @@ impl ChatStateActor {
         );
     }
 
+    /// Fold one side call (compaction) into the session ledger under its purpose.
+    /// Side calls belong to the session bill only: they are not attributable to
+    /// the open prompt's main-loop totals, and they never count as a turn.
+    pub(super) fn record_side_call_usage(
+        &mut self,
+        purpose: crate::usage::CallPurpose,
+        model_id: &str,
+        usage: &xai_grok_sampling_types::TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+    ) {
+        self.state.session_usage.record_side_call(
+            purpose,
+            model_id,
+            usage,
+            api_duration_ms,
+            cost_usd_ticks,
+        );
+    }
+
+    /// Record a call whose provider response omitted usage; see
+    /// [`crate::usage::UsageLedger::record_usage_missing`].
+    pub(super) fn record_usage_missing(&mut self, purpose: crate::usage::CallPurpose) {
+        if purpose.is_main_loop() {
+            self.state
+                .prompt_usage
+                .get_or_insert_default()
+                .record_usage_missing(purpose);
+        }
+        self.state.session_usage.record_usage_missing(purpose);
+    }
+
     pub(super) fn record_subagent_usage(
         &mut self,
         by_model: &[(String, crate::usage::UsageTotals)],

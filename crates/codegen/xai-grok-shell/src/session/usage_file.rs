@@ -51,6 +51,34 @@ pub struct UsageSummary {
     pub primary_model_id: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub model_usage: IndexMap<String, UsageSummary>,
+    /// Per-call-purpose totals, keyed by `CallPurpose::as_str`. Populated on the
+    /// session row only, so a compaction side call is visible next to the
+    /// main-loop turns it was triggered by.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub purpose_usage: IndexMap<String, PurposeUsage>,
+}
+
+/// One call purpose's contribution to the session bill.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurposeUsage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cached_read_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub model_calls: u64,
+    /// Completed calls whose provider response omitted usage. Unknown spend.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub usage_missing_calls: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -63,6 +91,21 @@ pub struct TurnUsage {
     pub usage: UsageSummary,
 }
 
+impl From<&xai_chat_state::UsageTotals> for PurposeUsage {
+    fn from(t: &xai_chat_state::UsageTotals) -> Self {
+        Self {
+            input_tokens: t.input_tokens,
+            output_tokens: t.output_tokens,
+            cached_read_tokens: t.cached_read_tokens,
+            cache_creation_tokens: t.cache_creation_tokens,
+            reasoning_tokens: t.reasoning_tokens,
+            total_tokens: t.total_tokens(),
+            model_calls: t.model_calls,
+            usage_missing_calls: t.usage_missing_calls,
+        }
+    }
+}
+
 impl UsageSummary {
     pub fn from_ledger(ledger: &UsageLedger) -> Self {
         let mut model_usage = IndexMap::new();
@@ -72,6 +115,11 @@ impl UsageSummary {
         let mut summary = Self::from_totals(&ledger.totals, ledger.incomplete);
         summary.primary_model_id = primary_model(&model_usage);
         summary.model_usage = model_usage;
+        summary.purpose_usage = ledger
+            .by_purpose
+            .iter()
+            .map(|(purpose, totals)| (purpose.as_str().to_owned(), PurposeUsage::from(totals)))
+            .collect();
         summary
     }
 
@@ -90,6 +138,7 @@ impl UsageSummary {
             turn_count: 0,
             primary_model_id: None,
             model_usage: IndexMap::new(),
+            purpose_usage: IndexMap::new(),
         }
     }
 
@@ -132,6 +181,7 @@ impl UsageSummary {
             turn_count: 0,
             primary_model_id: None,
             model_usage: IndexMap::new(),
+            purpose_usage: IndexMap::new(),
         }
     }
 
@@ -169,6 +219,7 @@ impl UsageSummary {
             turn_count: 0,
             primary_model_id: None,
             model_usage: IndexMap::new(),
+            purpose_usage: IndexMap::new(),
         }
     }
 

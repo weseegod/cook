@@ -114,6 +114,18 @@ pub enum ChatStateCommand {
         cost_usd_ticks: Option<i64>,
     },
 
+    /// Fold one side call (compaction) with its purpose. Never counts as a turn.
+    RecordSideCallUsage {
+        purpose: crate::usage::CallPurpose,
+        model_id: String,
+        usage: TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+    },
+
+    /// Record a completed call whose provider response omitted usage.
+    RecordUsageMissing { purpose: crate::usage::CallPurpose },
+
     /// Subagent usage into session (and prompt when attributable). Replies when applied.
     RecordSubagentUsage {
         by_model: Vec<(String, crate::usage::UsageTotals)>,

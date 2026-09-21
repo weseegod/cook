@@ -10,10 +10,11 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 ## 1. Outcome
 
-This experiment implemented two bounded changes:
+This experiment implemented three bounded changes:
 
 1. A P0 accounting correction: a successful model response that omits usage now marks both the open prompt ledger and the session ledger incomplete. Unknown usage is no longer silently indistinguishable from a free call.
 2. An opt-in P1 context arm: request-copy pruning can age tool results by tool round within one user turn and cap the recent raw-result characters. The legacy behavior remains the default because both new limits default to zero.
+3. A P0 side-call accounting increment: every model call now carries a purpose, and compaction samples fold their provider usage into the session bill. Before this, compaction spend reached no ledger at all. See section 12.
 
 The local `bonsai2-27b` microbenchmark used a synthetic eight-round tool trace. The optimized trace reduced reported prompt input from 8,840 to 230 tokens (97.4%) while returning the same correct evidence and verdict in all three repetitions. This proves the fixture works and that its newest evidence survived. It does **not** prove a 97.4% saving on real coding tasks.
 
@@ -45,6 +46,17 @@ This experiment does not:
 | `crates/codegen/xai-grok-pager/docs/user-guide/13-memory.md` | Document the settings and opt-in example. |
 | `scripts/benchmark_step_pruning.sh` | Reproducible local OpenAI-compatible A/B harness. |
 | `docs/core-agent-flow-and-token-optimization.md` | Record the experiment summary and measured result. |
+
+The side-call accounting increment in section 12 touches these files:
+
+| File | Change |
+|---|---|
+| `crates/codegen/xai-chat-state/src/usage.rs` | Add `CallPurpose`, `by_purpose`, `side_call_model_calls`, and `usage_missing_calls`. |
+| `crates/codegen/xai-chat-state/src/commands.rs`, `handle.rs`, `actor/mod.rs`, `actor/mutations.rs` | Carry a purpose into the ledger for side calls and for missing usage. |
+| `crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs` | Capture provider usage from all three streaming backends; record it with a purpose. |
+| `crates/codegen/xai-grok-shell/src/session/compaction.rs`, `helpers/full_replace_compaction.rs` | Label each compaction sample and report its usage. |
+| `crates/codegen/xai-grok-shell/src/session/usage_file.rs` | Publish a per-purpose breakdown in the persisted session usage report. |
+| `crates/codegen/xai-grok-shell/src/extensions/notification.rs`, `session/acp_session_impl/sampler_turn.rs` | Thread `usage_missing_calls`; count main-loop missing usage. |
 
 ## 4. Accounting correction
 
@@ -309,6 +321,8 @@ The first option returns to the legacy user-turn-only pruning behavior. The seco
 
 ### Step 1: finish the P0 baseline before judging savings
 
+Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The remaining Step 1 work (per-request component estimates and purpose labels for the recap, title, summary, memory, and goal side calls) is still open.
+
 Add a purpose and identity record for every model call without creating a second billing ledger. At minimum distinguish main loop, transient retry, compact single/pass 1/pass 2, goal roles, memory, suggestion, and child calls. Record:
 
 - session, prompt, request, attempt, parent/child, model, backend, profile;
@@ -414,3 +428,97 @@ git add \
   scripts/benchmark_step_pruning.sh
 git commit -m "experiment step-aware tool result pruning"
 ```
+
+## 12. P0 side-call accounting: purpose-labelled model calls
+
+Date: **2026-09-21**. Follow-up to the missing-usage correction in section 4.
+
+### The gap
+
+`UsageLedger` had no record of compaction at all. The module documented the omission as intentional ("Compaction and other side calls never call `record_main_loop_call`"), but nothing recorded them anywhere else either: `generate_session_compact` consumed the summary text out of the response stream and dropped the `usage` field on the floor. A session that compacted five times reported a bill that excluded all five summarizer calls, and nothing in the report distinguished "no compaction happened" from "compaction happened and was not counted."
+
+The same omission applies to the recap, title-refresh, turn-summary, memory, and goal-role helpers, which are not covered here.
+
+### What changed
+
+Every model call now carries a `CallPurpose`:
+
+| Purpose | Meaning |
+|---|---|
+| `MainLoop` | The main agent tool loop. The only purpose that advances `main_loop_model_calls`, which is the reported turn count. |
+| `CompactSingle` | One compaction sample through the single-pass / full-replace engine. |
+| `CompactPass1` | Two-pass pass 1, the speculative prefire summary. |
+| `CompactPass2` | Two-pass pass 2, the summary the successor actually sees. |
+| `Subagent` | Child work folded from a child session ledger. |
+
+The ledger folds side calls into the same `totals` and `by_model` it already kept, and adds `by_purpose` plus `side_call_model_calls`. A separate purpose row is what makes the session total reconcile: main-loop plus subagent plus side calls now equals the reported totals, and a compaction summary can no longer arrive as an unexplained gap.
+
+`UsageTotals` also gained `usage_missing_calls`. A call that completes and reports no usage is counted as unknown in both the totals and its purpose row. It never adds tokens, never adds a model call, and marks the session bill incomplete — the same rule the main-loop correction in section 4 applies.
+
+Separating pass 1 from pass 2 matters for the compaction experiment: prefire spend that a discarded NOTE₁ wastes is now attributable to `compact_pass1` instead of being merged into the cost of the summary that was used.
+
+### Capturing usage
+
+`generate_session_compact` now returns `usage` and `cost_usd_ticks` on `CompactOutput`. Extraction is per backend, matching the Layer-2 transforms in `xai-grok-sampler`:
+
+- **Chat Completions**: the final chunk's `usage`, last-write-wins because the wire value is cumulative; `cost_in_usd_ticks` when present.
+- **Responses**: the terminal `response.completed` frame's `usage`.
+- **Messages**: prompt input from `message_start`, output from the terminal `message_delta`. `prompt_tokens` is the sum of the uncached, cache-read, and cache-creation buckets, so it matches the main-loop convention.
+
+An all-zero Messages frame set is treated as unreported rather than as a free call.
+
+### Where a report shows it
+
+The persisted per-session usage report (`usage.json`) gained a `purposeUsage` map keyed by [`CallPurpose::as_str`](../crates/codegen/xai-chat-state/src/usage.rs). The session row now reads like:
+
+```json
+{
+  "session": {
+    "inputTokens": 1204000,
+    "modelCalls": 42,
+    "purposeUsage": {
+      "main_loop":      { "inputTokens": 1180000, "modelCalls": 40 },
+      "compact_single": { "inputTokens": 24000, "modelCalls": 2 }
+    }
+  }
+}
+```
+
+`main_loop` and the session's `turnCount` agree, and compaction is visible as its own line.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `cargo test -p xai-chat-state --lib` | 373 passed (369 before; 4 new ledger cases) |
+| `cargo test -p xai-grok-config-types --lib` | 75 passed |
+| `cargo test -p xai-grok-shell --lib` | 6993–6994 passed, 5–6 failed — the same failures occur on the base revision with these changes stashed |
+| `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types` | passed |
+
+New cases, by what they pin:
+
+- the ledger folds side calls into totals without advancing the turn count, and leaves unused purposes absent rather than as zero rows;
+- missing usage is counted per purpose and fabricates neither tokens nor model calls;
+- a Chat Completions compaction captures the final chunk's usage, and a stream with no usage leaves it `None`;
+- a Responses compaction captures the terminal frame's usage;
+- the Messages mapping folds cache buckets and rejects an all-zero frame set;
+- one round through the real full-replace sampler against a live SSE server lands in the session ledger as `compact_single` with `main_loop_model_calls` still zero;
+- the persisted session report breaks the bill down by purpose, keeps a row for usage that never arrived, and round-trips through serde under the `purposeUsage` key.
+
+### Failures observed that are not caused by this change
+
+Five `xai-grok-shell` tests fail on the branch tip before this increment (`609a216e`) with these changes stashed, and fail identically here: `goal_use_current_model_only_env_{true,false}`, both `validate_hooks_path_rejects_*` cases, and `parse_list_req_forces_kind_under_process_chat_mode_only`. A sixth, `set_consent_answer_is_monotonic_per_account`, shares a real on-disk config location and fails intermittently in a full parallel run on both revisions; it passes in isolation on both.
+
+The suite also overflows the stack in `agent::mvp_agent::tests::adopting_attach_waits_for_the_installed_actors_stamp` on this host. That reproduces on `609a216e` with these changes stashed, so it is not attributable here; `RUST_MIN_STACK=33554432` avoids it.
+
+### A verification case that was written and then removed
+
+An earlier revision also asserted the ledger from a real `SessionActor::run_compact` on the `compaction_inline_auto_compact_flow_tests` harness. It verified its target, but it made the suite worse: with that one test present, `agent::mvp_agent::tests::exhausted_fetch_decides_on_the_local_layers` failed in three of four full parallel runs, and passed in every run of `609a216e` and in every run with the test removed. It passes in isolation on both revisions, sets no environment variable, and mutates no shared state, so the mechanism was not root-caused — standing up one more full `SessionActor` beside a live mock server is enough to shift scheduling in a suite that already has order-sensitive tests. The case was dropped because the sampler-level test above already covers the recording call, and one extra hop through `run_compact` is not worth destabilizing a fragile suite. The finding is recorded rather than a `#[serial]` marker applied in the hope that it helps.
+
+### What this does not establish
+
+- The size of the previously invisible compaction spend on a real session is still unmeasured. Nothing here quantifies how much of a real bill was missing.
+- Side calls are folded into the session ledger only. They are still absent from the per-prompt ledger that the ACP wire reports, so a per-prompt `usage` figure remains a main-loop figure.
+- Recap, title-refresh, turn-summary, memory, and goal-role calls still reach no ledger. The purpose enum does not name them yet.
+- A compaction attempt that fails before completing is not recorded at all. Only completed samples are. A retry ladder that burns several failed attempts still under-counts; the design document's "record unknown, not zero" rule is not yet applied to failed streams.
+- Cost is captured only where the wire reports it, which in practice means Chat Completions. A compaction sample on the Responses or Messages backend folds its tokens with no cost, so a session whose only compaction ran there reports tokens without a price.

@@ -171,6 +171,33 @@ impl ChatStateHandle {
         });
     }
 
+    /// Fold one side call (compaction) into the session ledger under its purpose.
+    /// Fire-and-forget, like [`Self::record_model_call_usage`].
+    pub fn record_side_call_usage(
+        &self,
+        purpose: crate::usage::CallPurpose,
+        model_id: String,
+        usage: TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+    ) {
+        let _ = self.cmd_tx.send(ChatStateCommand::RecordSideCallUsage {
+            purpose,
+            model_id,
+            usage,
+            api_duration_ms,
+            cost_usd_ticks,
+        });
+    }
+
+    /// Record a completed call whose provider response omitted usage.
+    /// Fire-and-forget so it orders ahead of later commands on this handle.
+    pub fn record_usage_missing(&self, purpose: crate::usage::CallPurpose) {
+        let _ = self
+            .cmd_tx
+            .send(ChatStateCommand::RecordUsageMissing { purpose });
+    }
+
     /// Apply subagent usage; returns false if the actor did not acknowledge.
     pub async fn record_subagent_usage(
         &self,

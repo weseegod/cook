@@ -70,6 +70,9 @@ pub(crate) struct ShellCompactionSampler {
     wall_clock_budget_secs: u64,
     tool_choice: crate::util::config::CompactionToolChoice,
     cancel: tokio_util::sync::CancellationToken,
+    /// Session ledger sink for this sample's provider usage. Every attempt folds
+    /// here, including ones the engine later rejects as degenerate.
+    chat_state_handle: xai_chat_state::ChatStateHandle,
     state: Mutex<SamplerState>,
 }
 
@@ -89,6 +92,7 @@ impl ShellCompactionSampler {
         wall_clock_budget_secs: u64,
         tool_choice: crate::util::config::CompactionToolChoice,
         cancel: tokio_util::sync::CancellationToken,
+        chat_state_handle: xai_chat_state::ChatStateHandle,
     ) -> Self {
         Self {
             use_short_prompt,
@@ -104,6 +108,7 @@ impl ShellCompactionSampler {
             wall_clock_budget_secs,
             tool_choice,
             cancel,
+            chat_state_handle,
             state: Mutex::new(SamplerState::default()),
         }
     }
@@ -169,6 +174,14 @@ impl CompactionSampler for ShellCompactionSampler {
         {
             Ok(output) => {
                 let response = output.content.clone();
+                crate::session::helpers::session_compact::record_compaction_usage(
+                    &self.chat_state_handle,
+                    xai_chat_state::CallPurpose::CompactSingle,
+                    &self.sampling_config.model,
+                    output.usage.as_ref(),
+                    output.cost_usd_ticks,
+                    output.model_wait_ms(),
+                );
                 self.state.lock().unwrap().last_success = Some(output);
                 Ok(LlmCompactionOutput {
                     response,

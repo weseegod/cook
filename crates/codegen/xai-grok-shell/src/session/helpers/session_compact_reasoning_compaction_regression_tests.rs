@@ -847,3 +847,242 @@ async fn thin_partial_retries_on_stall() {
 
     let _ = shutdown_tx.send(());
 }
+
+/// ChatCompletions reports cumulative usage on the final chunk, which carries no choices.
+fn summary_stream_with_usage(usage: serde_json::Value) -> Vec<Event> {
+    vec![
+        Event::default().data(
+            json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1234567890,
+                "model": "test-model",
+                "choices": [{
+                    "index": 0,
+                    "delta": { "role": "assistant", "content": "<summary>ok</summary>" },
+                    "finish_reason": "stop"
+                }]
+            })
+            .to_string(),
+        ),
+        Event::default().data(
+            json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1234567890,
+                "model": "test-model",
+                "choices": [],
+                "usage": usage
+            })
+            .to_string(),
+        ),
+        Event::default().data("[DONE]"),
+    ]
+}
+
+async fn compact_once(events: Vec<Event>) -> CompactOutput {
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move || {
+            let events = events.clone();
+            async move {
+                let stream =
+                    stream::iter(events.into_iter().map(Ok::<_, std::convert::Infallible>));
+                Sse::new(stream).keep_alive(KeepAlive::default())
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+
+    let base_url = format!("http://{addr}/v1");
+    let config = test_config(&base_url);
+    let client = Client::new(config.clone()).unwrap();
+    let chat_history = vec![
+        ConversationItem::system("You are a helpful assistant."),
+        ConversationItem::user("Summarize the conversation so far."),
+    ];
+    let output = generate_session_compact(
+        chat_history,
+        0,
+        vec![],
+        vec![],
+        client,
+        acp::SessionId::new("test-session"),
+        &config,
+        std::time::Duration::from_secs(30),
+        0,
+        crate::util::config::CompactionToolChoice::Auto,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("compaction must succeed"));
+    let _ = shutdown_tx.send(());
+    output
+}
+
+/// Compaction must carry the summarizer's provider usage out to its caller;
+/// without it the session bill silently omits every compaction call.
+#[tokio::test]
+async fn chat_completions_compaction_captures_final_chunk_usage() {
+    let output = compact_once(summary_stream_with_usage(json!({
+        "prompt_tokens": 1_200,
+        "completion_tokens": 90,
+        "total_tokens": 1_290,
+        "prompt_tokens_details": { "cached_tokens": 1_000 },
+        "completion_tokens_details": { "reasoning_tokens": 12 },
+        "cost_in_usd_ticks": 42,
+    })))
+    .await;
+
+    let usage = output.usage.expect("final chunk usage is captured");
+    assert_eq!(usage.prompt_tokens, 1_200);
+    assert_eq!(usage.completion_tokens, 90);
+    assert_eq!(usage.total_tokens, 1_290);
+    assert_eq!(usage.cached_prompt_tokens, 1_000);
+    assert_eq!(usage.reasoning_tokens, 12);
+    assert_eq!(output.cost_usd_ticks, Some(42));
+}
+
+/// A stream that never reports usage must stay `None`: unknown spend is not zero.
+#[tokio::test]
+async fn chat_completions_compaction_leaves_usage_missing_when_unreported() {
+    let output = compact_once(summary_stream()).await;
+    assert!(output.usage.is_none());
+    assert!(output.cost_usd_ticks.is_none());
+}
+
+/// Anthropic splits prompt input across `message_start` and output across the
+/// terminal delta; the collapsed total must match the Layer-2 transform.
+#[test]
+fn messages_token_usage_folds_cache_buckets_and_rejects_all_zero() {
+    let usage = messages_token_usage(100, 900, 200, 50).expect("reported usage");
+    assert_eq!(usage.prompt_tokens, 1_200);
+    assert_eq!(usage.cached_prompt_tokens, 900);
+    assert_eq!(usage.cache_creation_prompt_tokens, 200);
+    assert_eq!(usage.completion_tokens, 50);
+    assert_eq!(usage.total_tokens, 1_250);
+
+    assert!(
+        messages_token_usage(0, 0, 0, 0).is_none(),
+        "an all-zero frame set is unreported, not a free call"
+    );
+}
+
+/// The Responses backend reports usage on the terminal `response.completed` frame.
+#[tokio::test]
+async fn responses_compaction_captures_completed_frame_usage() {
+    let events = vec![
+        Event::default().data(
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1234567890,
+                    "model": "test-model",
+                    "status": "in_progress",
+                    "output": []
+                }
+            })
+            .to_string(),
+        ),
+        Event::default().data(
+            json!({
+                "type": "response.output_text.delta",
+                "sequence_number": 1,
+                "item_id": "msg_test",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "<summary>ok</summary>"
+            })
+            .to_string(),
+        ),
+        Event::default().data(
+            json!({
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": {
+                    "id": "resp_test",
+                    "object": "response",
+                    "created_at": 1234567890,
+                    "model": "test-model",
+                    "status": "completed",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 2_000,
+                        "output_tokens": 120,
+                        "total_tokens": 2_120,
+                        "input_tokens_details": { "cached_tokens": 1_500 },
+                        "output_tokens_details": { "reasoning_tokens": 30 }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+    ];
+
+    let app = Router::new().route(
+        "/v1/responses",
+        post(move || {
+            let events = events.clone();
+            async move {
+                let stream =
+                    stream::iter(events.into_iter().map(Ok::<_, std::convert::Infallible>));
+                Sse::new(stream).keep_alive(KeepAlive::default())
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async {
+                let _ = shutdown_rx.await;
+            })
+            .await
+            .unwrap();
+    });
+
+    let base_url = format!("http://{addr}/v1");
+    let config = test_config_responses(&base_url);
+    let client = Client::new(config.clone()).unwrap();
+    let chat_history = vec![
+        ConversationItem::system("You are a helpful assistant."),
+        ConversationItem::user("Summarize the conversation so far."),
+    ];
+    let output = generate_session_compact(
+        chat_history,
+        0,
+        vec![],
+        vec![],
+        client,
+        acp::SessionId::new("test-session"),
+        &config,
+        std::time::Duration::from_secs(30),
+        0,
+        crate::util::config::CompactionToolChoice::Auto,
+        &tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .unwrap_or_else(|_| panic!("compaction must succeed"));
+
+    let usage = output.usage.expect("completed frame usage is captured");
+    assert_eq!(usage.prompt_tokens, 2_000);
+    assert_eq!(usage.completion_tokens, 120);
+    assert_eq!(usage.cached_prompt_tokens, 1_500);
+    assert_eq!(usage.reasoning_tokens, 30);
+
+    let _ = shutdown_tx.send(());
+}

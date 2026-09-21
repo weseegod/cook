@@ -53,7 +53,7 @@ pub use persistence::{
     PersistenceRecord, StripOutcome,
 };
 pub use types::*;
-pub use usage::{UsageLedger, UsageTotals};
+pub use usage::{CallPurpose, UsageLedger, UsageTotals};
 // Re-exported so `xai_chat_state::CompactionDetail` stays a working path for
 // existing callers.
 pub use xai_compaction_transcript::CompactionDetail;

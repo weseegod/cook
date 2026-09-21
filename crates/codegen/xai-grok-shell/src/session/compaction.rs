@@ -134,7 +134,13 @@ impl SessionActor {
     /// The prompt is already embedded, so this bypasses the single-pass sampler and calls `generate_session_compact` directly.
     /// Agent `RefCell` borrows are only taken for synchronous snapshots (never held across `.await`).
     /// A long-lived borrow would race with turn/compact/cancel and panic on double-borrow.
-    async fn two_pass_sample(&self, history: Vec<ConversationItem>) -> Option<CompactOutput> {
+    /// `purpose` labels the sample in the session ledger so prefire spend is not
+    /// folded as if it were the summary the successor sees.
+    async fn two_pass_sample(
+        &self,
+        history: Vec<ConversationItem>,
+        purpose: xai_chat_state::CallPurpose,
+    ) -> Option<CompactOutput> {
         let (client, sampling_config) = match self.prepare_compaction_sampling(false).await {
             Ok(pair) => pair,
             Err(e) => {
@@ -180,7 +186,17 @@ impl SessionActor {
         )
         .await
         {
-            Ok(out) => Some(out),
+            Ok(out) => {
+                crate::session::helpers::session_compact::record_compaction_usage(
+                    &self.chat_state_handle,
+                    purpose,
+                    &sampling_config.model,
+                    out.usage.as_ref(),
+                    out.cost_usd_ticks,
+                    out.model_wait_ms(),
+                );
+                Some(out)
+            }
             Err(e) => {
                 tracing::warn!(error = ?e, "two_pass: summarization sample failed");
                 None
@@ -282,7 +298,9 @@ impl SessionActor {
         let prompt = build_compaction_prompt(None, false);
         let pass1_history = build_two_pass_pass1_history(&prefix_prepared, &prompt);
         let started = std::time::Instant::now();
-        let out = self.two_pass_sample(pass1_history).await;
+        let out = self
+            .two_pass_sample(pass1_history, xai_chat_state::CallPurpose::CompactPass1)
+            .await;
         let pass1_latency_ms = started.elapsed().as_millis() as u64;
         let attempted = |outcome: PrefireOutcome, note1_chars: Option<usize>| PrefirePass1Run {
             outcome,
@@ -378,7 +396,9 @@ impl SessionActor {
         let pass2_history =
             build_two_pass_pass2_history(prefix, &prepared_tail, &cache.note1, &prompt);
         let started = std::time::Instant::now();
-        let mut out = self.two_pass_sample(pass2_history).await?;
+        let mut out = self
+            .two_pass_sample(pass2_history, xai_chat_state::CallPurpose::CompactPass2)
+            .await?;
         if is_degenerate_summary(&out.content) {
             tracing::Span::current().record("compaction_prefire_stale", true);
             tracing::info!(
@@ -1151,6 +1171,7 @@ impl SessionActor {
             wall_clock_budget_secs,
             self.compaction.tool_choice,
             cancel.clone(),
+            self.chat_state_handle.clone(),
         );
         let observer =
             crate::session::helpers::full_replace_compaction::ShellFullReplaceObserver::new(

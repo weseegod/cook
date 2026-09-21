@@ -2203,6 +2203,8 @@ impl SessionActor {
             self.tool_context.fail_task_output_usage_closed();
             self.chat_state_handle
                 .mark_usage_incomplete_nowait(true, true);
+            self.chat_state_handle
+                .record_usage_missing(xai_chat_state::CallPurpose::MainLoop);
         } else {
             // A provider may omit usage on an otherwise successful response.
             // Treat that as unknown spend for every main-loop call, not as a
@@ -2210,6 +2212,8 @@ impl SessionActor {
             // ledger behavior, so they intentionally share this branch.
             self.chat_state_handle
                 .mark_usage_incomplete_nowait(true, true);
+            self.chat_state_handle
+                .record_usage_missing(xai_chat_state::CallPurpose::MainLoop);
         }
     }
 

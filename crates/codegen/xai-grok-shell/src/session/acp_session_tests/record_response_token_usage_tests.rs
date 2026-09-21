@@ -409,3 +409,84 @@ async fn stashes_per_turn_usage_in_chat_state() {
         })
         .await;
 }
+
+/// A compaction sample is spend the session bill must show, but it is not a turn.
+/// A sample that reported no usage is visible as unknown, never folded as zero.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_usage_folds_as_a_side_call_and_missing_usage_stays_visible() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+
+            // One main-loop round so the turn count and the side call are distinguishable.
+            actor.record_response_token_usage(&response_with_usage(1_000), None);
+
+            crate::session::helpers::session_compact::record_compaction_usage(
+                &actor.chat_state_handle,
+                xai_chat_state::CallPurpose::CompactPass1,
+                "test-model",
+                Some(&TokenUsage {
+                    prompt_tokens: 30_000,
+                    completion_tokens: 500,
+                    total_tokens: 30_500,
+                    reasoning_tokens: 120,
+                    cached_prompt_tokens: 20_000,
+                    cache_creation_prompt_tokens: 0,
+                }),
+                Some(11),
+                Some(1_234),
+            );
+            // A second compaction that reported nothing: unknown spend, not zero.
+            crate::session::helpers::session_compact::record_compaction_usage(
+                &actor.chat_state_handle,
+                xai_chat_state::CallPurpose::CompactPass2,
+                "test-model",
+                None,
+                None,
+                None,
+            );
+
+            let session = actor
+                .chat_state_handle
+                .try_get_session_usage()
+                .await
+                .expect("session ledger");
+
+            // The session bill reconciles: main loop plus compaction.
+            assert_eq!(session.totals.input_tokens, 950 + 30_000);
+            assert_eq!(session.totals.output_tokens, 50 + 500);
+            assert_eq!(session.main_loop_model_calls, 1);
+            assert_eq!(session.side_call_model_calls, 1);
+            assert_eq!(session.totals.model_calls, 2);
+            assert_eq!(session.totals.usage_missing_calls, 1);
+            assert!(
+                session.incomplete,
+                "an unreported compaction makes the session bill incomplete"
+            );
+
+            let pass1 = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::CompactPass1)
+                .expect("pass 1 folded under its purpose");
+            assert_eq!(pass1.input_tokens, 30_000);
+            assert_eq!(pass1.api_duration_ms, 1_234);
+            assert_eq!(pass1.cost_usd_ticks, Some(11));
+            let pass2 = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::CompactPass2)
+                .expect("missing usage still creates the purpose row");
+            assert_eq!(pass2.model_calls, 0);
+            assert_eq!(pass2.usage_missing_calls, 1);
+            let main = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::MainLoop)
+                .expect("main loop row");
+            assert_eq!(main.model_calls, 1);
+            assert_eq!(main.usage_missing_calls, 0);
+        })
+        .await;
+}

@@ -192,6 +192,7 @@ impl PromptUsage {
             cost_usd_ticks: _,  // cost without usage cannot occur
             cost_is_partial: _,
             cost_missing_calls: _,
+            usage_missing_calls: _,
         } = self.totals;
         model_calls == 0
             && input_tokens == 0
@@ -238,6 +239,10 @@ pub struct PromptUsageModel {
     /// Internal accounting for `cost_is_partial` only; never on the public ACP wire.
     #[serde(default, skip_serializing)]
     pub cost_missing_calls: u64,
+    /// How many completed calls reported no usage at all, so their tokens are unknown.
+    /// Internal accounting: the public signal is `usageIsIncomplete`.
+    #[serde(default, skip_serializing)]
+    pub usage_missing_calls: u64,
 }
 
 /// One model call's token usage: the four Messages API `message.usage` fields plus `reasoning_tokens`.
@@ -271,6 +276,7 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
             api_duration_ms,
             cost_usd_ticks,
             cost_missing_calls,
+            usage_missing_calls,
         } = *t;
         Self {
             input_tokens,
@@ -284,6 +290,7 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
             cost_usd_ticks,
             cost_is_partial: t.cost_is_partial(),
             cost_missing_calls,
+            usage_missing_calls,
         }
     }
 }
@@ -343,7 +350,8 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
         api_duration_ms: _, // dropped: not part of the frozen headless shape
         cost_usd_ticks,
         cost_is_partial,
-        cost_missing_calls: _, // internal partiality count; the flag suffices
+        cost_missing_calls: _,  // internal partiality count; the flag suffices
+        usage_missing_calls: _, // internal: `usage_is_incomplete` is the public signal
     } = usage.totals;
     result.insert(
         "usage".into(),
@@ -389,6 +397,7 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
                 cost_usd_ticks,
                 cost_is_partial,
                 cost_missing_calls: _,
+                usage_missing_calls: _,
             } = *m;
             let mut entry = serde_json::json!({
                 "inputTokens": uncached_input_tokens(input_tokens, cached_read_tokens)

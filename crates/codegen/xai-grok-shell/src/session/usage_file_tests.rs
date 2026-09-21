@@ -253,3 +253,44 @@ fn covers_detects_same_process_vs_reset_ledger() {
     assert!(!smaller.covers(&bigger));
     assert!(smaller.covers(&UsageSummary::default()));
 }
+
+/// The persisted report must name the side calls that spend tokens outside the
+/// main loop, and must serialize the map under its camelCase key.
+#[test]
+fn session_report_breaks_usage_down_by_call_purpose() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(1_000, 100), Some(10), None);
+    ledger.record_side_call(
+        xai_chat_state::CallPurpose::CompactSingle,
+        "grok-4",
+        &tu(4_000, 200),
+        Some(2_000),
+        None,
+    );
+    ledger.record_usage_missing(xai_chat_state::CallPurpose::CompactPass1);
+
+    let summary = UsageSummary::from_ledger(&ledger);
+    let main = summary
+        .purpose_usage
+        .get("main_loop")
+        .expect("main loop row");
+    assert_eq!(main.input_tokens, 1_000);
+    assert_eq!(main.model_calls, 1);
+    let single = summary
+        .purpose_usage
+        .get("compact_single")
+        .expect("compaction row");
+    assert_eq!(single.input_tokens, 4_000);
+    assert_eq!(single.total_tokens, 4_200);
+    let pass1 = summary
+        .purpose_usage
+        .get("compact_pass1")
+        .expect("missing usage still gets a row");
+    assert_eq!(pass1.model_calls, 0);
+    assert_eq!(pass1.usage_missing_calls, 1);
+
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["purposeUsage"]["compact_single"]["modelCalls"], 1);
+    let round_tripped: UsageSummary = serde_json::from_value(json).expect("deserializes");
+    assert_eq!(round_tripped.purpose_usage, summary.purpose_usage);
+}
