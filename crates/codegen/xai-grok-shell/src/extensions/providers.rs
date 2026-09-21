@@ -905,7 +905,12 @@ async fn probe_credential(target: &ProbeTarget) -> TestResponse {
             .post(format!("{base}/responses"))
             .json(&serde_json::json!({
                 "model": model,
-                "input": "ping",
+                // ChatGPT's Codex Responses endpoint requires the structured input form;
+                // the public Responses API accepts it too, so keep the probe portable.
+                "input": [{
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "ping"}]
+                }],
                 "max_output_tokens": 16,
             })),
         Some(model) => client

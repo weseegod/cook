@@ -21,6 +21,9 @@ use toml_edit::{Array, DocumentMut, Item, Table, Value};
 const PROBE_BODY_LIMIT: u64 = 4 * 1024 * 1024;
 /// Mirrors the agent's discovery cap: one listing cannot offer hundreds of models.
 const PROBE_MODEL_LIMIT: usize = 200;
+/// ChatGPT OAuth tokens are scoped to the Codex backend, not the public Platform API.
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,10 +142,10 @@ impl ProviderUpsert {
                     },
                 ],
             ),
-            _ => (
+            "openai" => (
                 "OpenAI",
-                "https://api.openai.com/v1",
-                "chat_completions",
+                CHATGPT_CODEX_BASE_URL,
+                "responses",
                 std::collections::BTreeMap::new(),
                 vec![
                     SeedModel {
@@ -170,6 +173,13 @@ impl ProviderUpsert {
                         max_completion_tokens: None,
                     },
                 ],
+            ),
+            _ => (
+                "OpenAI",
+                OPENAI_API_BASE_URL,
+                "chat_completions",
+                std::collections::BTreeMap::new(),
+                Vec::new(),
             ),
         };
         Self {
@@ -240,8 +250,49 @@ pub struct ProbeModel {
 }
 
 pub fn list() -> Result<ProviderList, String> {
+    migrate_oauth_provider_routes()?;
     let doc = load()?;
     Ok(list_document(&doc))
+}
+
+/// Older Desktop builds persisted the ChatGPT OAuth bearer as an API key for the public
+/// Platform endpoint. That endpoint rejects ChatGPT OAuth with `model.request`/`api.model.read`
+/// scope errors. Repair the route in-place before returning settings data so the running agent
+/// and the picker converge on the Codex Responses endpoint.
+fn migrate_oauth_provider_routes() -> Result<(), String> {
+    let doc = load()?;
+    let Some(provider) = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .and_then(|providers| providers.get("openai"))
+        .and_then(Item::as_table)
+    else {
+        return Ok(());
+    };
+    let is_oauth = string(provider, "auth_method").as_deref() == Some("oauth");
+    if !is_oauth {
+        return Ok(());
+    }
+    let already_migrated = string(provider, "base_url").as_deref() == Some(CHATGPT_CODEX_BASE_URL)
+        && string(provider, "api_backend").as_deref() == Some("responses");
+    if already_migrated {
+        return Ok(());
+    }
+    update(|doc| {
+        let Some(provider) = doc
+            .get_mut("model_providers")
+            .and_then(Item::as_table_mut)
+            .and_then(|providers| providers.get_mut("openai"))
+            .and_then(Item::as_table_mut)
+        else {
+            return Ok(());
+        };
+        if string(provider, "auth_method").as_deref() == Some("oauth") {
+            provider.insert("base_url", toml_edit::value(CHATGPT_CODEX_BASE_URL));
+            provider.insert("api_backend", toml_edit::value("responses"));
+        }
+        Ok(())
+    })
 }
 
 /// Resolve a configured provider into a probe target. Blocking file IO; call it from a blocking task.
@@ -524,6 +575,10 @@ pub fn clear_oauth(id: &str) -> Result<(), String> {
         };
         provider.remove("api_key");
         provider.remove("auth_method");
+        if id == "openai" {
+            provider.insert("base_url", toml_edit::value(OPENAI_API_BASE_URL));
+            provider.insert("api_backend", toml_edit::value("chat_completions"));
+        }
         Ok(())
     })
 }
