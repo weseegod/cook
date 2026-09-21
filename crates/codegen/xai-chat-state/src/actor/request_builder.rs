@@ -107,7 +107,26 @@ impl ChatStateActor {
             self.state.total_tokens,
             self.state.sampling_config.context_window,
         ) {
-            prune_conversation(&mut items, &self.pruning_config);
+            let report = prune_conversation(&mut items, &self.pruning_config);
+            // The step-aware policy is opt-in and changes what the model sees inside a single
+            // user turn, so a run that used it has to say so: nothing else reports it, because
+            // the pruned request copy is never persisted.
+            if report.rounds_cleared_by_step_budget > 0 {
+                tracing::info!(
+                    rounds_cleared_by_step_budget = report.rounds_cleared_by_step_budget,
+                    soft_trimmed = report.soft_trimmed,
+                    hard_cleared = report.hard_cleared,
+                    chars_reclaimed = report.chars_reclaimed,
+                    "step-aware tool result pruning rewrote the request copy"
+                );
+            } else {
+                tracing::debug!(
+                    soft_trimmed = report.soft_trimmed,
+                    hard_cleared = report.hard_cleared,
+                    chars_reclaimed = report.chars_reclaimed,
+                    "pruned tool results in the request copy"
+                );
+            }
         }
         items
     }
@@ -124,13 +143,35 @@ pub(crate) fn should_prune(total_tokens: u64, context_window: std::num::NonZeroU
     total_tokens > context_window.get() / 2
 }
 
+/// What one pass of [`prune_conversation`] did to the request copy.
+///
+/// Counts results, not characters of prompt: only `chars_reclaimed` is a size, and it counts the
+/// characters dropped from replaced results, so it is an upper bound on what the turn saved.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct PruningReport {
+    /// Older rounds inside a recent turn cleared by the opt-in step budget.
+    pub rounds_cleared_by_step_budget: usize,
+    /// Results replaced with the head/tail trim.
+    pub soft_trimmed: usize,
+    /// Results replaced with the hard-clear placeholder.
+    pub hard_cleared: usize,
+    /// Characters removed from results, summed over every replacement above.
+    pub chars_reclaimed: usize,
+}
+
 /// Prune old, large tool results from the conversation in place.
 /// Turn age is estimated by walking backward and counting `User` items.
 /// When configured, tool-call-bearing assistant items also bound raw results
 /// within a single user turn by round count and cumulative character budget.
-pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: &PruningConfig) {
+pub(crate) fn prune_conversation(
+    conversation: &mut [ConversationItem],
+    config: &PruningConfig,
+) -> PruningReport {
+    let mut report = PruningReport::default();
+    let mut total_chars_before = 0usize;
+    let mut total_chars_after = 0usize;
     if !config.enabled {
-        return;
+        return report;
     }
 
     let mut turn_from_end: usize = 0;
@@ -182,6 +223,9 @@ pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: 
             }
 
             if tool_result.content.as_ref() != STEP_BUDGET_PLACEHOLDER {
+                total_chars_before += content_len;
+                total_chars_after += STEP_BUDGET_PLACEHOLDER.chars().count();
+                report.rounds_cleared_by_step_budget += 1;
                 tool_result.content = std::sync::Arc::<str>::from(STEP_BUDGET_PLACEHOLDER);
             }
             continue;
@@ -190,6 +234,9 @@ pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: 
         // Hard clear: very old tool results → replace entirely.
         if turn_from_end >= config.hard_clear_age_turns {
             if tool_result.content.as_ref() != HARD_CLEAR_PLACEHOLDER {
+                total_chars_before += content_len;
+                total_chars_after += HARD_CLEAR_PLACEHOLDER.chars().count();
+                report.hard_cleared += 1;
                 tool_result.content = std::sync::Arc::<str>::from(HARD_CLEAR_PLACEHOLDER);
             }
             continue;
@@ -199,10 +246,16 @@ pub(crate) fn prune_conversation(conversation: &mut [ConversationItem], config: 
         if content_len > config.soft_trim_threshold {
             let head = safe_char_slice(&tool_result.content, 0, config.soft_trim_head);
             let tail = safe_char_slice_tail(&tool_result.content, config.soft_trim_tail);
-            tool_result.content =
-                std::sync::Arc::<str>::from(format!("{head}{SOFT_TRIM_SEPARATOR}{tail}"));
+            let trimmed = format!("{head}{SOFT_TRIM_SEPARATOR}{tail}");
+            total_chars_before += content_len;
+            total_chars_after += trimmed.chars().count();
+            report.soft_trimmed += 1;
+            tool_result.content = std::sync::Arc::<str>::from(trimmed);
         }
     }
+
+    report.chars_reclaimed = total_chars_before.saturating_sub(total_chars_after);
+    report
 }
 
 // ============================================================================
@@ -352,6 +405,62 @@ mod tests {
                 .iter()
                 .all(|result| *result == STEP_BUDGET_PLACEHOLDER)
         );
+    }
+
+    #[test]
+    fn prune_report_counts_what_the_step_budget_cleared() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            conv.extend(tool_round(id, 200));
+        }
+        let config = PruningConfig {
+            keep_last_n_turns: 3,
+            keep_last_n_tool_rounds: 3,
+            recent_tool_result_char_budget: 450,
+            ..Default::default()
+        };
+
+        let report = prune_conversation(&mut conv, &config);
+
+        assert_eq!(report.rounds_cleared_by_step_budget, 6);
+        assert_eq!(report.soft_trimmed, 0);
+        assert_eq!(report.hard_cleared, 0);
+        assert_eq!(
+            report.chars_reclaimed,
+            6 * (200 - STEP_BUDGET_PLACEHOLDER.chars().count())
+        );
+    }
+
+    #[test]
+    fn prune_report_is_empty_when_pruning_is_disabled() {
+        let mut conv = vec![ConversationItem::tool_result("c1", "x".repeat(10_000))];
+        let config = PruningConfig {
+            enabled: false,
+            ..Default::default()
+        };
+
+        let report = prune_conversation(&mut conv, &config);
+
+        assert_eq!(report, PruningReport::default());
+        assert_eq!(report.chars_reclaimed, 0);
+    }
+
+    #[test]
+    fn prune_report_counts_legacy_replacements_and_reclaimed_chars() {
+        // Thirteen user turns, so the walk's turn age reaches past `hard_clear_age_turns`: the last
+        // three turns stay raw, the next seven are soft trimmed, and the two oldest are hard cleared.
+        let mut conv = Vec::new();
+        for turn in 0..13 {
+            conv.push(ConversationItem::user(format!("turn {turn}")));
+            conv.extend(tool_round(turn, 10_000));
+        }
+
+        let report = prune_conversation(&mut conv, &PruningConfig::default());
+
+        assert_eq!(report.rounds_cleared_by_step_budget, 0);
+        assert_eq!(report.soft_trimmed, 7);
+        assert_eq!(report.hard_cleared, 2);
+        assert!(report.chars_reclaimed > 0);
     }
 
     #[test]

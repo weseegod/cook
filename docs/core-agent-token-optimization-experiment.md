@@ -545,7 +545,7 @@ The persisted per-session usage report (`usage.json`) gained a `purposeUsage` ma
 }
 ```
 
-`main_loop` and the session's `turnCount` agree, and compaction is visible as its own line.
+`main_loop.modelCalls` is the figure the CLI reports as `numTurns`, and compaction is visible as its own line. It is not the report's `turnCount`: `turnCount` counts the user turns written to the report, so one user turn that takes six model calls has `turnCount` 1 and `main_loop.modelCalls` 6. The two agreed in the first one-call session this was checked on and diverge as soon as a loop runs longer (section 18 has a real example).
 
 **Correction (section 17).** Until the fold fix in section 17, this block reached the in-memory report but not the `usage.json` of a real session: the per-turn fold that writes the file dropped `purposeUsage`. Everything below describes the block as verified from `UsageSummary::from_ledger` directly, which was the case that was tested and passing while the file on disk had no such key.
 
