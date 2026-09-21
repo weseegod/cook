@@ -22,6 +22,17 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(20);
 const ERROR_BODY_LIMIT: usize = 400;
 /// Cap on discovered models merged into the catalog from one `/models` response.
 const MAX_DISCOVERED_MODELS: usize = 200;
+/// ChatGPT OAuth model discovery lives on the Codex backend and requires the client version.
+const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+
+fn models_list_url(base_url: &str) -> String {
+    let base_url = base_url.trim_end_matches('/');
+    if base_url == CHATGPT_CODEX_BASE_URL {
+        format!("{base_url}/models?client_version={}", xai_grok_version::VERSION)
+    } else {
+        format!("{base_url}/models")
+    }
+}
 
 // ── Entry point ─────────────────────────────────────────────────────
 
@@ -920,7 +931,7 @@ async fn probe_credential(target: &ProbeTarget) -> TestResponse {
                 "max_tokens": 1,
                 "messages": [{ "role": "user", "content": "ping" }],
             })),
-        None => client.get(format!("{base}/models")),
+        None => client.get(models_list_url(base)),
     };
 
     let request = with_credentials(request, &target.api_backend, key.as_deref(), &target.extra_headers);
@@ -928,7 +939,7 @@ async fn probe_credential(target: &ProbeTarget) -> TestResponse {
         .try_clone()
         .and_then(|r| r.build().ok())
         .map(|r| r.url().to_string())
-        .unwrap_or_else(|| format!("{base}/models"));
+        .unwrap_or_else(|| models_list_url(base));
 
     let sent = tokio::time::timeout(TEST_TIMEOUT, request.send()).await;
     let latency_ms = started.elapsed().as_millis();
@@ -1061,7 +1072,7 @@ async fn handle_discover_models(agent: &MvpAgent, args: &acp::ExtRequest) -> Ext
     let client = crate::http::shared_client();
     let base = target.base_url.trim_end_matches('/');
     let request = with_credentials(
-        client.get(format!("{base}/models")),
+        client.get(models_list_url(base)),
         &target.api_backend,
         key.as_deref(),
         &target.extra_headers,
@@ -1186,7 +1197,8 @@ async fn handle_discover_models(agent: &MvpAgent, args: &acp::ExtRequest) -> Ext
     })
 }
 
-/// OpenAI returns `{ "data": [ { "id": … } ] }`; Ollama's native shape is `{ "models": [ … ] }`.
+/// OpenAI returns `{ "data": [ { "id": … } ] }`; Codex returns `{ "models": [ { "slug": … } ] }`;
+/// Ollama's native shape is also `{ "models": [ … ] }`.
 fn parse_discovered_models(body: &serde_json::Value) -> Vec<DiscoveredModel> {
     let entries = body
         .get("data")
@@ -1194,14 +1206,25 @@ fn parse_discovered_models(body: &serde_json::Value) -> Vec<DiscoveredModel> {
         .or_else(|| body.get("models").and_then(|v| v.as_array()));
     let mut out: Vec<DiscoveredModel> = Vec::new();
     for entry in entries.into_iter().flatten() {
-        let id = ["id", "name", "model"]
+        if entry
+            .get("visibility")
+            .and_then(|value| value.as_str())
+            == Some("hide")
+        {
+            continue;
+        }
+        let explicit_id = ["id", "slug", "model"]
             .iter()
             .find_map(|key| entry.get(*key).and_then(|v| v.as_str()))
+            .map(str::trim);
+        let id = explicit_id
+            .or_else(|| entry.get("name").and_then(|v| v.as_str()))
             .map(str::trim)
             .filter(|id| !id.is_empty());
         let Some(id) = id else { continue };
         let name = entry
-            .get("name")
+            .get("display_name")
+            .or_else(|| explicit_id.and_then(|_| entry.get("name")))
             .and_then(|v| v.as_str())
             .map(str::to_owned)
             .filter(|n| n != id);

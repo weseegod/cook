@@ -25,6 +25,15 @@ const PROBE_MODEL_LIMIT: usize = 200;
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
 
+fn models_list_url(base_url: &str) -> String {
+    let base_url = base_url.trim_end_matches('/');
+    if base_url == CHATGPT_CODEX_BASE_URL {
+        format!("{base_url}/models?client_version={}", env!("CARGO_PKG_VERSION"))
+    } else {
+        format!("{base_url}/models")
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderList {
@@ -333,7 +342,7 @@ pub fn probe_target(id: &str) -> Result<ProbeTarget, String> {
         .unwrap_or_default();
     Ok(ProbeTarget {
         id,
-        url: format!("{}/models", base_url.trim_end_matches('/')),
+        url: models_list_url(&base_url),
         api_backend: string(table, "api_backend").unwrap_or_else(|| "chat_completions".to_owned()),
         key,
         extra_headers,
@@ -416,8 +425,9 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
     })
 }
 
-/// Parse the OpenAI-compatible `{ "data": [...] }` shape, OpenRouter metadata, and Google's
-/// `{ "models": [{ "name": "models/<id>" }] }`, in the order the provider reported them.
+/// Parse OpenAI-compatible `{ "data": [...] }`, Codex `{ "models": [{ "slug": ... }] }`,
+/// OpenRouter metadata, and Google's `{ "models": [{ "name": "models/<id>" }] }`, in the
+/// order the provider reported them.
 fn parse_models_listing(value: &serde_json::Value) -> Vec<ProbeModel> {
     let Some(entries) = value
         .get("data")
@@ -433,8 +443,20 @@ fn parse_models_listing(value: &serde_json::Value) -> Vec<ProbeModel> {
         if models.len() >= PROBE_MODEL_LIMIT {
             break;
         }
-        // OpenAI-compatible endpoints key the entry by `id`; Google lists `models/<id>` in `name`.
-        let explicit_id = entry.get("id").and_then(serde_json::Value::as_str);
+        // Codex uses `slug`/`display_name`; OpenAI-compatible endpoints use `id`/`name`, while
+        // Google lists `models/<id>` in `name`.
+        if entry
+            .get("visibility")
+            .and_then(serde_json::Value::as_str)
+            == Some("hide")
+        {
+            continue;
+        }
+        let explicit_id = entry
+            .get("id")
+            .or_else(|| entry.get("slug"))
+            .or_else(|| entry.get("model"))
+            .and_then(serde_json::Value::as_str);
         let Some(id) = explicit_id
             .or_else(|| entry.get("name").and_then(serde_json::Value::as_str))
             .map(|raw| raw.strip_prefix("models/").unwrap_or(raw).trim())
@@ -445,8 +467,10 @@ fn parse_models_listing(value: &serde_json::Value) -> Vec<ProbeModel> {
         if !seen.insert(id.to_owned()) {
             continue;
         }
-        let name = explicit_id
-            .and(entry.get("name").and_then(serde_json::Value::as_str))
+        let name = entry
+            .get("display_name")
+            .or_else(|| explicit_id.and_then(|_| entry.get("name")))
+            .and_then(serde_json::Value::as_str)
             .map(str::trim)
             .filter(|name| !name.is_empty() && *name != id)
             .map(str::to_owned);
@@ -1073,7 +1097,25 @@ fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table,
 
 #[cfg(test)]
 mod tests {
-    use super::{child_table, list_document, parse_models_listing, redact, write_model};
+    use super::{child_table, list_document, models_list_url, parse_models_listing, redact, write_model};
+
+    #[test]
+    fn codex_models_listing_uses_client_version_and_slug_metadata() {
+        let url = models_list_url("https://chatgpt.com/backend-api/codex/");
+        assert!(url.starts_with("https://chatgpt.com/backend-api/codex/models?client_version="));
+
+        let listing = serde_json::json!({
+            "models": [
+                {"slug": "gpt-5.6-luna", "display_name": "GPT-5.6-Luna", "context_window": 272000, "visibility": "list"},
+                {"slug": "gpt-reserve", "display_name": "GPT-Reserve", "visibility": "hide"}
+            ]
+        });
+        let models = parse_models_listing(&listing);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.6-luna");
+        assert_eq!(models[0].name.as_deref(), Some("GPT-5.6-Luna"));
+        assert_eq!(models[0].context_window, Some(272000));
+    }
 
     #[test]
     fn models_listing_reads_openai_and_top_provider_limits() {
