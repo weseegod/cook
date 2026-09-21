@@ -18,6 +18,8 @@ import hashlib
 import hmac
 import os
 import socket
+import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -25,6 +27,15 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+R2_REQUEST_TIMEOUT = float(os.environ.get("COOK_R2_REQUEST_TIMEOUT", "120"))
+R2_MAX_ATTEMPTS = int(os.environ.get("COOK_R2_MAX_ATTEMPTS", "5"))
+R2_RETRY_DELAY = float(os.environ.get("COOK_R2_RETRY_DELAY", "2"))
+# Single PUT of an ~80–200 MiB desktop archive can stall past a fixed timeout on
+# the self-hosted Mac uplink. Multipart keeps each request small enough to finish
+# (and retry) independently.
+R2_MULTIPART_THRESHOLD = int(os.environ.get("COOK_R2_MULTIPART_THRESHOLD", str(8 * 1024 * 1024)))
+R2_MULTIPART_PART_SIZE = int(os.environ.get("COOK_R2_MULTIPART_PART_SIZE", str(8 * 1024 * 1024)))
+RETRYABLE_HTTP_STATUS = {408, 425, 429, 500, 502, 503, 504}
 
 # Prefer IPv4. On some networks (including this release runner) AAAA/IPv6 to
 # Cloudflare R2 sits in SYN-SENT forever while A/IPv4 works.
@@ -150,13 +161,66 @@ def signed_request(
     return urllib.request.Request(url, data=data, method=method, headers=req_headers)
 
 
-def _call(req: urllib.request.Request) -> bytes:
-    try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            return resp.read()
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
-        raise SystemExit(f"error: R2 {req.get_method()} {req.full_url} -> {exc.code}: {detail}") from exc
+def _retry_delay(attempt: int, retry_after: str | None = None) -> float:
+    if retry_after:
+        try:
+            return max(0.0, min(float(retry_after), 30.0))
+        except ValueError:
+            pass
+    return min(R2_RETRY_DELAY * (2 ** (attempt - 1)), 30.0)
+
+
+def _timeout_for_size(nbytes: int) -> float:
+    # Floor at R2_REQUEST_TIMEOUT; grow for large bodies (~0.5 MiB/s assumed).
+    return max(R2_REQUEST_TIMEOUT, 60.0 + (nbytes / (512 * 1024)))
+
+
+def _call(
+    req: urllib.request.Request,
+    *,
+    timeout: float | None = None,
+    attempts: int | None = None,
+) -> tuple[bytes, dict[str, str]]:
+    """Run an R2 request with bounded retries.
+
+    Release uploads are large and the self-hosted Mac occasionally stalls while
+    sending to R2. Retrying overwrites the same object/part; without this, one
+    transient socket timeout fails the entire platform job.
+    """
+    timeout = R2_REQUEST_TIMEOUT if timeout is None else timeout
+    attempts = R2_MAX_ATTEMPTS if attempts is None else attempts
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                headers = {k.lower(): v for k, v in resp.headers.items()}
+                return resp.read(), headers
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            if exc.code not in RETRYABLE_HTTP_STATUS or attempt >= attempts:
+                raise SystemExit(
+                    f"error: R2 {req.get_method()} {req.full_url} -> {exc.code}: {detail}"
+                ) from exc
+            delay = _retry_delay(attempt, exc.headers.get("Retry-After"))
+            print(
+                f"warning: R2 {req.get_method()} {req.full_url} -> {exc.code} "
+                f"(attempt {attempt}/{attempts}); retrying in {delay:g}s",
+                file=sys.stderr,
+            )
+        except (OSError, urllib.error.URLError, TimeoutError) as exc:
+            if attempt >= attempts:
+                raise SystemExit(
+                    f"error: R2 {req.get_method()} {req.full_url} failed "
+                    f"after {attempt} attempts: {exc}"
+                ) from exc
+            delay = _retry_delay(attempt)
+            print(
+                f"warning: R2 {req.get_method()} {req.full_url} failed "
+                f"(attempt {attempt}/{attempts}): {exc}; "
+                f"retrying in {delay:g}s",
+                file=sys.stderr,
+            )
+        time.sleep(delay)
+    raise SystemExit(f"error: R2 {req.get_method()} {req.full_url} failed")
 
 
 def object_url(endpoint: str, bucket: str, key: str) -> str:
@@ -164,9 +228,25 @@ def object_url(endpoint: str, bucket: str, key: str) -> str:
     return f"{endpoint}/{bucket}/{key.lstrip('/')}"
 
 
-def put_object(local: Path, key: str, *, content_type: str, cache_control: str) -> None:
-    endpoint, access, secret, bucket = _require_env()
-    key = key.lstrip("/")
+def _multipart_upload_id(xml_body: bytes) -> str:
+    root = ET.fromstring(xml_body)
+    for child in root.iter():
+        if _strip_ns(child.tag) == "UploadId" and child.text:
+            return child.text
+    raise SystemExit("error: InitiateMultipartUpload response missing UploadId")
+
+
+def _put_object_simple(
+    local: Path,
+    key: str,
+    *,
+    endpoint: str,
+    access: str,
+    secret: str,
+    bucket: str,
+    content_type: str,
+    cache_control: str,
+) -> None:
     body = local.read_bytes()
     extra = {
         "content-type": content_type,
@@ -181,8 +261,117 @@ def put_object(local: Path, key: str, *, content_type: str, cache_control: str) 
         payload=body,
         extra_headers=extra,
     )
-    _call(req)
+    _call(req, timeout=_timeout_for_size(len(body)))
     print(f"  put s3://{bucket}/{key} ({len(body)} bytes)")
+
+
+def _put_object_multipart(
+    local: Path,
+    key: str,
+    *,
+    endpoint: str,
+    access: str,
+    secret: str,
+    bucket: str,
+    content_type: str,
+    cache_control: str,
+) -> None:
+    size = local.stat().st_size
+    init_req = signed_request(
+        "POST",
+        f"{object_url(endpoint, bucket, key)}?uploads",
+        access=access,
+        secret=secret,
+        payload_hash=EMPTY_SHA256,
+        extra_headers={
+            "content-type": content_type,
+            "cache-control": cache_control,
+        },
+    )
+    init_body, _ = _call(init_req)
+    upload_id = _multipart_upload_id(init_body)
+    print(f"  multipart s3://{bucket}/{key} ({size} bytes)")
+
+    etags: list[tuple[int, str]] = []
+    try:
+        with local.open("rb") as fh:
+            part_number = 1
+            while True:
+                chunk = fh.read(R2_MULTIPART_PART_SIZE)
+                if not chunk:
+                    break
+                qs = urllib.parse.urlencode(
+                    {"partNumber": str(part_number), "uploadId": upload_id}
+                )
+                part_req = signed_request(
+                    "PUT",
+                    f"{object_url(endpoint, bucket, key)}?{qs}",
+                    access=access,
+                    secret=secret,
+                    payload=chunk,
+                    extra_headers={"content-length": str(len(chunk))},
+                )
+                _, headers = _call(part_req, timeout=_timeout_for_size(len(chunk)))
+                etag = headers.get("etag", "").strip()
+                if not etag:
+                    raise SystemExit(f"error: UploadPart {part_number} missing ETag")
+                etags.append((part_number, etag))
+                print(f"    part {part_number} ({len(chunk)} bytes)")
+                part_number += 1
+
+        if not etags:
+            raise SystemExit("error: multipart upload produced no parts")
+
+        parts_xml = "".join(
+            f"<Part><PartNumber>{n}</PartNumber><ETag>{e}</ETag></Part>" for n, e in etags
+        )
+        complete_body = (
+            f"<CompleteMultipartUpload>{parts_xml}</CompleteMultipartUpload>".encode("utf-8")
+        )
+        complete_qs = urllib.parse.urlencode({"uploadId": upload_id})
+        complete_req = signed_request(
+            "POST",
+            f"{object_url(endpoint, bucket, key)}?{complete_qs}",
+            access=access,
+            secret=secret,
+            payload=complete_body,
+            extra_headers={"content-type": "application/xml"},
+        )
+        _call(complete_req)
+    except BaseException:
+        abort_qs = urllib.parse.urlencode({"uploadId": upload_id})
+        abort_req = signed_request(
+            "DELETE",
+            f"{object_url(endpoint, bucket, key)}?{abort_qs}",
+            access=access,
+            secret=secret,
+            payload_hash=EMPTY_SHA256,
+        )
+        try:
+            _call(abort_req, attempts=2)
+            print(f"  aborted multipart upload", flush=True)
+        except SystemExit:
+            pass
+        raise
+
+    print(f"  put s3://{bucket}/{key} ({size} bytes, {len(etags)} parts)")
+
+
+def put_object(local: Path, key: str, *, content_type: str, cache_control: str) -> None:
+    endpoint, access, secret, bucket = _require_env()
+    key = key.lstrip("/")
+    kwargs = {
+        "endpoint": endpoint,
+        "access": access,
+        "secret": secret,
+        "bucket": bucket,
+        "content_type": content_type,
+        "cache_control": cache_control,
+    }
+    if local.stat().st_size >= R2_MULTIPART_THRESHOLD:
+        _put_object_multipart(local, key, **kwargs)
+    else:
+        _put_object_simple(local, key, **kwargs)
 
 
 def delete_object(key: str) -> None:
@@ -211,7 +400,7 @@ def get_object(key: str, dest: Path) -> None:
     )
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
+        with urllib.request.urlopen(req, timeout=R2_REQUEST_TIMEOUT) as resp:
             size = 0
             with dest.open("wb") as out:
                 while True:
@@ -276,7 +465,7 @@ def list_keys(prefix: str) -> list[str]:
             secret=secret,
             payload_hash=EMPTY_SHA256,
         )
-        xml = _call(req)
+        xml, _ = _call(req)
         root = ET.fromstring(xml)
         truncated = False
         next_token = None
