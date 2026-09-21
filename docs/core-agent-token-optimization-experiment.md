@@ -414,7 +414,7 @@ Pin repository revision, permissions, model parameters, acceptance commands, and
 
 ### Step 3: compare baseline and step-aware arms
 
-Progress on 2026-09-21: `scripts/benchmark_step_pruning_live.sh` implements the paired comparison for one task, at a stricter setting than arm B below, and reports whether each arm engaged. Section 18 has the first paired numbers, the null control that shows what an unengaged arm looks like, and the run-to-run variance that makes three repetitions the floor. The arm matrix below is not implemented yet.
+Progress on 2026-09-21: `scripts/benchmark_step_pruning_live.sh` implements the paired comparison for one task, at a stricter setting than arm B below, and reports whether each arm engaged. Section 18 has three paired repetitions: the arm cut per-request tool-result tokens by 35% in all three and prompt tokens by 27% on average, fidelity held in all six runs, and the arm's own spread (a factor of 1.9 between its lowest and highest run) is why this is a direction rather than a rate. One arm worth of the matrix below is done at one stricter setting; arms A and C are not implemented, and the arms would need to run over the Step 2 corpus, not this single task.
 
 Use these initial arms:
 
@@ -996,14 +996,30 @@ Read naively, that says the step-aware arm sends twice the prompt. It says nothi
 
 At `CONTEXT_WINDOW=40000` the arm does engage. A single step-aware run logged 10 rewrite events, clearing 4 to 6 rounds each and reclaiming 31,696 and 47,544 characters on its two largest, while still returning both markers.
 
-### One paired run at that window
+### Three paired repetitions at that window
 
-| Arm | Loop calls | Billed input | Cache reads | Output | Measured requests | System + schemas | Tool-result tokens | Compaction | Prune events / rounds / chars | Fidelity | Wall |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| baseline | 13 | 286,909 | 250,601 | 1,071 | 13 | 155,610 | 110,396 | 2 calls / 54,482 | 0 / 0 / 0 | both markers | 180 s |
-| step-aware | 14 | 269,076 | 186,292 | 2,568 | 14 | 167,580 | 74,650 | 2 calls / 41,277 | 5 / 40 / 277,920 | both markers | 251 s |
+Three runs per arm, alternating arms within each pair, same corpus and prompt throughout:
 
-The step-aware arm is lower on every prompt column: billed input by 17,833 (6%), cache reads by 64,309 (26%), tool-result tokens by 35,746 (32%), compaction tokens by 13,205 (24%), and prompt tokens overall (input plus cache reads) by 15%. It also made one more model call and produced more output, and both arms compacted twice, so the arm's saving is a saving on what each request carried, not a saving from avoiding compaction.
+| Arm | Run | Loop calls | Billed input | Cache reads | Measured requests | System + schemas | Tool-result tokens | Tool-result per request | Compaction | Prune events / rounds / chars | Fidelity | Wall |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline | 1 | 13 | 286,664 | 252,248 | 13 | 155,610 | 110,396 | 8,492 | 2 calls / 54,251 | 0 / 0 / 0 | both markers | 177 s |
+| step-aware | 1 | 15 | 290,339 | 202,997 | 15 | 179,550 | 78,644 | 5,243 | 2 calls / 48,091 | 5 / 40 / 277,920 | both markers | 421 s |
+| baseline | 2 | 13 | 286,031 | 251,266 | 13 | 155,610 | 110,396 | 8,492 | 2 calls / 53,863 | 0 / 0 / 0 | both markers | 161 s |
+| step-aware | 2 | 8 | 154,928 | 107,840 | 8 | 95,760 | 44,289 | 5,536 | none | 1 / 5 / 31,812 | both markers | 107 s |
+| baseline | 3 | 13 | 290,304 | 253,978 | 13 | 155,610 | 110,396 | 8,492 | 2 calls / 53,996 | 0 / 0 / 0 | both markers | 173 s |
+| step-aware | 3 | 13 | 254,892 | 173,383 | 13 | 155,610 | 74,425 | 5,725 | 2 calls / 41,972 | 5 / 35 / 277,340 | both markers | 261 s |
+| **baseline mean** | | **13** | **287,666** | **252,497** | **13** | **155,610** | **110,396** | **8,492** | **2 calls / 54,037** | | | **170 s** |
+| **step-aware mean** | | **12** | **233,386** | **161,407** | **12** | **143,640** | **65,786** | **5,501** | **1.33 calls / 30,021** | | | **263 s** |
+
+What the three pairs show:
+
+- **The arm does what it is designed to do, on every request.** Tool-result tokens per request fall in all three runs, 8,492 to 5,243, 5,536, and 5,725 — a 35% reduction in the share of each request that is tool output. The baseline's figure is identical across its runs because the corpus and the read pattern are identical; the arm's varies only because the model's read pattern does.
+- **The totals move the same way in all three pairs.** Billed input falls in two of three (the exception is run 1, up 1%), cache reads fall in all three, and input plus cache reads falls in all three, 540,163 on average to 394,793, a 27% reduction in prompt tokens.
+- **Compaction is reduced, weakly.** The baseline compacted twice in every run; the step-aware arm compacted twice in two runs and not at all in the third. Run 2 is the case that separates "the arm sends less" from "the arm needs to compact less", and it is one run.
+- **Fidelity held.** All six runs returned both markers, so on this task the arm did not lose the evidence the answer needed.
+- **The magnitude is not pinned.** The step-aware arm's own totals range from 154,928 to 290,339 billed input, a factor of 1.9, driven by whether the model read several files per round or one. The baseline's range over the same three runs is 286,031 to 290,304. Three repetitions establish the direction; they do not establish a saving rate.
+
+The wall-clock column is reported and is not an acceptance criterion: the step-aware runs were slower on average (263 s to 170 s), including the fastest run of all six, so the column tracks the model's call count rather than the arm.
 
 ### Verification
 
@@ -1012,12 +1028,14 @@ The step-aware arm is lower on every prompt column: billed input by 17,833 (6%),
 | `cargo test -p xai-chat-state --lib` | 384 passed (381 before; 3 new `PruningReport` cases) |
 | `bash -n scripts/benchmark_step_pruning_live.sh` | clean |
 | Step-aware arm at `CONTEXT_WINDOW=40000`, instrumented | 10 rewrite events, 4–6 rounds each, 31,696/47,544 chars reclaimed, both markers returned |
+| Three paired repetitions at that window | arm fired in all three (1–5 events, 5–40 rounds, 31,812–277,920 chars); both markers in all six runs |
 | Same settings, `CONTEXT_WINDOW=60000` | no rewrite event: the gate never opened, which is why the first pair is a control and not a result |
 
 ### What this does not establish
 
-- **Run-to-run variance is larger than the effect.** A later step-aware run at the same settings as the paired run took 24 turns (the cap) and 487,217 billed input tokens, against 14 turns and 269,076 in the table above. The paired table is one sample per arm, so its direction is a hypothesis, not a rate; three repetitions per arm are the minimum before any saving is stated, and the harness supports `RUNS=n` for that.
-- Both arms compacted twice at this window, so nothing here separates "the arm sends less" from "the arm needs to compact less". Separating them needs a window where the baseline compacts and the step-aware arm does not.
+- **The rate is not pinned, and the arm's own spread is wide.** The step-aware arm's three runs span 154,928 to 290,339 billed input tokens; one earlier single-arm run at the same settings and corpus took the full 24-turn cap for 487,217 billed input tokens, well above every run in the table. Nine paired runs (three per arm, three arms) of plan Step 3 would be the smallest design that could state a rate with an interval, and this is three.
+- Compaction is only weakly separated: the baseline compacted twice in all three runs, and the step-aware arm skipped it in one of three. Nothing here prices "compaction avoided".
+- The arms do not run the same trajectory by construction — the model decides how many files to read per round — so this is a comparison of two policies in the wild, not a matched-pair experiment.
 - The task is one synthetic file-reading task, not the 30–50 task corpus of plan Step 2, and it measures a local 27B model on one machine. Nothing here transfers to a hosted model's pricing or to a different tool set.
 - Cost is not measured. The columns are tokens; with cached reads priced differently from uncached input, the token direction is not the cost direction.
 - Reread cost is not measured. `requests_measured` counts calls, not whether a call re-read content the arm had replaced, which is the failure mode plan Step 5 exists to find.
