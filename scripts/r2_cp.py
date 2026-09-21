@@ -17,6 +17,7 @@ import datetime as dt
 import hashlib
 import hmac
 import os
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +25,24 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
+
+# Prefer IPv4. On some networks (including this release runner) AAAA/IPv6 to
+# Cloudflare R2 sits in SYN-SENT forever while A/IPv4 works.
+_orig_getaddrinfo = socket.getaddrinfo
+
+
+def _ipv4_getaddrinfo(
+    host: str | bytes | None,
+    port: str | bytes | int | None,
+    family: int = 0,
+    type: int = 0,
+    proto: int = 0,
+    flags: int = 0,
+):
+    return _orig_getaddrinfo(host, port, socket.AF_INET, type, proto, flags)
+
+
+socket.getaddrinfo = _ipv4_getaddrinfo  # type: ignore[assignment]
 
 
 def _first_env(*names: str, default: str = "") -> str:
@@ -190,10 +209,46 @@ def get_object(key: str, dest: Path) -> None:
         secret=secret,
         payload_hash=EMPTY_SHA256,
     )
-    body = _call(req)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(body)
-    print(f"  get s3://{bucket}/{key} -> {dest} ({len(body)} bytes)")
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            size = 0
+            with dest.open("wb") as out:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    size += len(chunk)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise SystemExit(f"error: R2 GET {req.full_url} -> {exc.code}: {detail}") from exc
+    print(f"  get s3://{bucket}/{key} -> {dest} ({size} bytes)")
+
+
+def copy_object(src_key: str, dest_key: str, *, content_type: str, cache_control: str) -> None:
+    """Server-side copy within the same bucket (S3 CopyObject)."""
+    endpoint, access, secret, bucket = _require_env()
+    src_key = src_key.lstrip("/")
+    dest_key = dest_key.lstrip("/")
+    # CopySource is "/bucket/key"; path segments must be URI-encoded.
+    copy_source = f"/{bucket}/{_uri_encode(src_key, is_key=True)}"
+    extra = {
+        "x-amz-copy-source": copy_source,
+        "x-amz-metadata-directive": "REPLACE",
+        "content-type": content_type,
+        "cache-control": cache_control,
+    }
+    req = signed_request(
+        "PUT",
+        object_url(endpoint, bucket, dest_key),
+        access=access,
+        secret=secret,
+        payload_hash=EMPTY_SHA256,
+        extra_headers=extra,
+    )
+    _call(req)
+    print(f"  copy s3://{bucket}/{src_key} -> s3://{bucket}/{dest_key}")
 
 
 def _strip_ns(tag: str) -> str:
@@ -287,6 +342,12 @@ def main(argv: list[str] | None = None) -> int:
     p_prefix.add_argument("prefix")
     p_prefix.add_argument("dest_dir")
 
+    p_copy = sub.add_parser("copy", help="server-side copy within the bucket")
+    p_copy.add_argument("src_key")
+    p_copy.add_argument("dest_key")
+    p_copy.add_argument("--content-type", default="application/octet-stream")
+    p_copy.add_argument("--cache-control", default="public, max-age=31536000, immutable")
+
     args = parser.parse_args(argv)
     if args.cmd == "put":
         put_object(Path(args.local), args.key, content_type=args.content_type, cache_control=args.cache_control)
@@ -299,6 +360,13 @@ def main(argv: list[str] | None = None) -> int:
             print(key)
     elif args.cmd == "get-prefix":
         get_prefix(args.prefix, Path(args.dest_dir))
+    elif args.cmd == "copy":
+        copy_object(
+            args.src_key,
+            args.dest_key,
+            content_type=args.content_type,
+            cache_control=args.cache_control,
+        )
     return 0
 
 

@@ -40,18 +40,6 @@ trap 'rm -rf "$staging"' EXIT
 version_dir="$staging/v${version}"
 mkdir -p "$version_dir"
 
-if [[ "$mode" == "finalize" ]]; then
-  echo "==> Downloading v${version}/ from R2"
-  "${R2_CP[@]}" get-prefix "v${version}/" "$version_dir"
-  shopt -s nullglob
-  set -- "$version_dir"/*
-  shopt -u nullglob
-  [[ "$#" -ge 1 ]] || {
-    echo "error: R2 prefix v${version}/ is empty" >&2
-    exit 1
-  }
-fi
-
 copy_into_version() {
   local src="$1" dest_name="$2"
   local src_abs dest_abs
@@ -61,6 +49,68 @@ copy_into_version() {
     cp -f "$src" "$version_dir/$dest_name"
   fi
   echo "  staged $dest_name"
+}
+
+# Classify a release artifact basename into the slot variables below.
+# When stage_src is set, also copy the local file into version_dir.
+classify_artifact() {
+  local name="$1"
+  local stage_src="${2:-}"
+  local dest="$name"
+  stage_if_needed() {
+    if [[ -n "$stage_src" ]]; then
+      copy_into_version "$stage_src" "$1"
+    fi
+  }
+  case "$name" in
+    "cook-${version}-linux-x86_64"|"cook-${version}-linux-x86_64.sha256")
+      stage_if_needed "$name"
+      [[ "$name" == *.sha256 ]] || cli_linux="$name"
+      ;;
+    "cook-${version}-macos-aarch64"|"cook-${version}-macos-aarch64.sha256")
+      stage_if_needed "$name"
+      [[ "$name" == *.sha256 ]] || cli_mac_arm="$name"
+      ;;
+    "cook-${version}-macos-x86_64"|"cook-${version}-macos-x86_64.sha256")
+      stage_if_needed "$name"
+      [[ "$name" == *.sha256 ]] || cli_mac_intel="$name"
+      ;;
+    "cook-${version}-windows-x86_64"|"cook-${version}-windows-x86_64.exe"|"cook-${version}-windows-x86_64.sha256")
+      [[ "$name" == *.exe || "$name" == *.sha256 ]] || dest="cook-${version}-windows-x86_64"
+      stage_if_needed "$dest"
+      [[ "$dest" == *.sha256 ]] || cli_windows="$dest"
+      ;;
+    "let-cook-${version}-linux-x86_64.AppImage")
+      appimage="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-linux-x86_64.AppImage.sig")
+      appimage_sig="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-linux-x86_64.deb")
+      deb="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-linux-x86_64.deb.sig")
+      deb_sig="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-macos-aarch64.dmg")
+      dmg_arm="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-macos-aarch64.app.tar.gz")
+      archive_arm="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-macos-aarch64.app.tar.gz.sig")
+      archive_arm_sig="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-macos-x86_64.dmg")
+      dmg_intel="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-macos-x86_64.app.tar.gz")
+      archive_intel="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-macos-x86_64.app.tar.gz.sig")
+      archive_intel_sig="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-windows-x86_64-setup.exe")
+      nsis="$name"; stage_if_needed "$name" ;;
+    "let-cook-${version}-windows-x86_64-setup.exe.sig")
+      nsis_sig="$name"; stage_if_needed "$name" ;;
+    latest.json|install.sh|stable|alpha|assets.list)
+      echo "warning: skipping pointer/meta file: $name" >&2
+      ;;
+    *)
+      echo "warning: skipping unrecognized file: $name" >&2
+      ;;
+  esac
 }
 
 cli_linux=""
@@ -79,62 +129,36 @@ archive_intel=""
 archive_intel_sig=""
 nsis=""
 nsis_sig=""
+declare -A remote_names=()
 
-for file in "$@"; do
-  [[ -f "$file" ]] || { echo "error: not a file: $file" >&2; exit 1; }
-  [[ -s "$file" ]] || { echo "error: empty file: $file" >&2; exit 1; }
-  name="$(basename "$file")"
-  case "$name" in
-    "cook-${version}-linux-x86_64"|"cook-${version}-linux-x86_64.sha256")
-      copy_into_version "$file" "$name"
-      [[ "$name" == *.sha256 ]] || cli_linux="$name"
-      ;;
-    "cook-${version}-macos-aarch64"|"cook-${version}-macos-aarch64.sha256")
-      copy_into_version "$file" "$name"
-      [[ "$name" == *.sha256 ]] || cli_mac_arm="$name"
-      ;;
-    "cook-${version}-macos-x86_64"|"cook-${version}-macos-x86_64.sha256")
-      copy_into_version "$file" "$name"
-      [[ "$name" == *.sha256 ]] || cli_mac_intel="$name"
-      ;;
-    "cook-${version}-windows-x86_64"|"cook-${version}-windows-x86_64.exe"|"cook-${version}-windows-x86_64.sha256")
-      dest="$name"
-      [[ "$name" == *.exe || "$name" == *.sha256 ]] || dest="cook-${version}-windows-x86_64"
-      copy_into_version "$file" "$dest"
-      [[ "$dest" == *.sha256 ]] || cli_windows="$dest"
-      ;;
-    "let-cook-${version}-linux-x86_64.AppImage")
-      appimage="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-linux-x86_64.AppImage.sig")
-      appimage_sig="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-linux-x86_64.deb")
-      deb="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-linux-x86_64.deb.sig")
-      deb_sig="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-macos-aarch64.dmg")
-      dmg_arm="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-macos-aarch64.app.tar.gz")
-      archive_arm="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-macos-aarch64.app.tar.gz.sig")
-      archive_arm_sig="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-macos-x86_64.dmg")
-      dmg_intel="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-macos-x86_64.app.tar.gz")
-      archive_intel="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-macos-x86_64.app.tar.gz.sig")
-      archive_intel_sig="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-windows-x86_64-setup.exe")
-      nsis="$name"; copy_into_version "$file" "$name" ;;
-    "let-cook-${version}-windows-x86_64-setup.exe.sig")
-      nsis_sig="$name"; copy_into_version "$file" "$name" ;;
-    latest.json|install.sh|stable|alpha|assets.list)
-      echo "warning: skipping pointer/meta file in objects upload: $name" >&2
-      ;;
-    *)
-      echo "warning: skipping unrecognized file: $name" >&2
-      ;;
-  esac
-done
+if [[ "$mode" == "finalize" ]]; then
+  # Do not download the whole version prefix (GB of installers). List keys,
+  # pull only tiny .sig files for latest.json, and server-side-copy CLI
+  # binaries to the bucket root.
+  echo "==> Listing v${version}/ on R2"
+  mapfile -t remote_keys < <("${R2_CP[@]}" list "v${version}/")
+  [[ "${#remote_keys[@]}" -ge 1 ]] || {
+    echo "error: R2 prefix v${version}/ is empty" >&2
+    exit 1
+  }
+  echo "==> Fetching signatures for latest.json"
+  for key in "${remote_keys[@]}"; do
+    [[ "$key" == */ ]] && continue
+    name="$(basename "$key")"
+    remote_names["$name"]=1
+    classify_artifact "$name"
+    if [[ "$name" == *.sig ]]; then
+      echo "  fetching $name"
+      "${R2_CP[@]}" get "$key" "$version_dir/$name"
+    fi
+  done
+else
+  for file in "$@"; do
+    [[ -f "$file" ]] || { echo "error: not a file: $file" >&2; exit 1; }
+    [[ -s "$file" ]] || { echo "error: empty file: $file" >&2; exit 1; }
+    classify_artifact "$(basename "$file")" "$file"
+  done
+fi
 
 content_type_for() {
   case "$1" in
@@ -157,6 +181,14 @@ r2_put() {
   ct="$(content_type_for "$(basename "$file")")"
   cc="${3:-public, max-age=31536000, immutable}"
   "${R2_CP[@]}" put "$file" "$key" --content-type "$ct" --cache-control "$cc"
+}
+
+r2_copy() {
+  local src_key="$1" dest_key="$2"
+  local ct cc
+  ct="$(content_type_for "$(basename "$dest_key")")"
+  cc="${3:-public, max-age=31536000, immutable}"
+  "${R2_CP[@]}" copy "$src_key" "$dest_key" --content-type "$ct" --cache-control "$cc"
 }
 
 upload_version_objects() {
@@ -236,9 +268,16 @@ r2_put "$staging/alpha" "alpha" "public, max-age=60, must-revalidate"
 r2_put "$ROOT/scripts/install.sh" "install.sh" "public, max-age=60, must-revalidate"
 
 for cli in "$cli_linux" "$cli_mac_arm" "$cli_mac_intel" "$cli_windows"; do
-  r2_put "$version_dir/$cli" "$cli"
-  if [[ -f "$version_dir/${cli}.sha256" ]]; then
-    r2_put "$version_dir/${cli}.sha256" "${cli}.sha256"
+  if [[ "$mode" == "finalize" ]]; then
+    r2_copy "v${version}/${cli}" "$cli"
+    if [[ -n "${remote_names[${cli}.sha256]:-}" ]]; then
+      r2_copy "v${version}/${cli}.sha256" "${cli}.sha256"
+    fi
+  else
+    r2_put "$version_dir/$cli" "$cli"
+    if [[ -f "$version_dir/${cli}.sha256" ]]; then
+      r2_put "$version_dir/${cli}.sha256" "${cli}.sha256"
+    fi
   fi
 done
 
