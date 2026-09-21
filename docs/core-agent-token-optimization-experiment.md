@@ -10,7 +10,7 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 ## 1. Outcome
 
-This experiment implemented six bounded changes:
+This experiment implemented seven bounded changes:
 
 1. A P0 accounting correction: a successful model response that omits usage now marks both the open prompt ledger and the session ledger incomplete. Unknown usage is no longer silently indistinguishable from a free call.
 2. An opt-in P1 context arm: request-copy pruning can age tool results by tool round within one user turn and cap the recent raw-result characters. The legacy behavior remains the default because both new limits default to zero.
@@ -18,6 +18,7 @@ This experiment implemented six bounded changes:
 4. A second P0 side-call increment: the four auxiliary calls that reuse the parent prompt cache — recap, turn summary, title refresh, and `/btw` — now fold their usage into the session bill under their own purposes. See section 13.
 5. A third P0 side-call increment: the memory capture, dream, and flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and the image-description vision call are accounted too, through one shared fold. See section 14.
 6. A fourth P0 side-call increment: session title generation, the last call that reached no ledger, is accounted through a late-bound handle, because it runs in the persistence actor. See section 15. Every model call site in `xai-grok-shell` now reaches the session ledger.
+7. A Step 1 measurement increment: every completed main-loop call now records the estimated composition of the request it sent — system, tool schemas, user, injected reminders, compaction meta, images, assistant, reasoning replay, and tool results — and the persisted session report shows the shares. See section 16.
 
 Two of these increments changed only accounting; none changed what is sent to a model, which is why the pruning arm's measured result below is unaffected.
 
@@ -91,6 +92,16 @@ The title-generation increment in section 15 touches these files:
 | `crates/codegen/xai-grok-shell/src/session/summary.rs` | Read the cell at call time and pass the handle to the title call. |
 | `crates/codegen/xai-grok-shell/src/session/helpers/session_summary.rs` | Fold the title response under `SessionTitle`; accept an optional handle. |
 | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs` | Bind the handle once the chat-state actor exists. |
+
+The component-estimate increment in section 16 touches these files:
+
+| File | Change |
+|---|---|
+| `crates/codegen/xai-chat-state/src/request_components.rs` (new) | `RequestComponents`: the per-request estimate and its classifier. |
+| `crates/codegen/xai-chat-state/src/actor/state.rs` | Split the user-item estimate into `(text, images)` so both callers share one arithmetic. |
+| `crates/codegen/xai-chat-state/src/usage.rs`, `commands.rs`, `handle.rs`, `actor/{mod,mutations}.rs` | Record component sums on the session ledger. |
+| `crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs`, `sampler_turn.rs` | Estimate the request after stripping and clamping, and fold it with the call's usage. |
+| `crates/codegen/xai-grok-shell/src/session/usage_file.rs` | Publish a `requestComponents` block in the persisted session report. |
 
 ## 4. Accounting correction
 
@@ -355,7 +366,7 @@ The first option returns to the legacy user-turn-only pruning behavior. The seco
 
 ### Step 1: finish the P0 baseline before judging savings
 
-Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too, as are the memory capture/dream/flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and image description (sections 13 and 14), and finally session title generation (section 15). Every model call site in `xai-grok-shell` now folds its provider usage into the session ledger under a purpose, so the purpose half of Step 1 is done. The remaining Step 1 work is the per-request component estimates.
+Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too, as are the memory capture/dream/flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and image description (sections 13 and 14), and finally session title generation (section 15). Every model call site in `xai-grok-shell` now folds its provider usage into the session ledger under a purpose, and every completed main-loop call records the estimated composition of the request it sent (section 16), so **both halves of Step 1 are done**. The session report now reconciles in two dimensions: by call purpose, and by request component.
 
 Add a purpose and identity record for every model call without creating a second billing ledger. At minimum distinguish main loop, transient retry, compact single/pass 1/pass 2, goal roles, memory, suggestion, and child calls. Record:
 
@@ -732,3 +743,87 @@ New cases, by what they pin:
 - Duration is absent for this site and five others, and cost is absent wherever the wire does not report it.
 - These calls remain absent from the per-prompt ACP wire ledger, so a per-prompt `usage` figure is still a main-loop figure.
 - The audit covers `xai-grok-shell`'s own calls. Model calls made by other crates, and any future call site added without a purpose, are outside it.
+
+## 16. Per-request component estimates
+
+Date: **2026-09-21**. The other half of Step 1: what a prompt is *made of*, not just what it cost.
+
+### The gap
+
+The ledger said how many tokens a session spent but nothing about where they went. That is the wrong instrument for the step-aware pruning arm: pruning changes tool results specifically, so judging it needs to know what share of a prompt is tool results versus system prompt and tool schemas, which pruning cannot touch. Section 10 lists the intended components (system/rules, tool catalog, tool schemas, user, assistant/reasoning replay, tool results, images, compact summary) and nothing measured any of them.
+
+### What changed
+
+A new `xai_chat_state::RequestComponents` estimates one request's composition by walking its items and tool specs:
+
+| Bucket | Source |
+|---|---|
+| `system_tokens` | `System` items, including the primary system prompt |
+| `tool_schema_tokens` | the serialized `tools` specs on the request |
+| `user_tokens` | text of user items with `SyntheticReason::Human` |
+| `injected_tokens` | text of runtime-injected user items (reminders, project instructions, auto-continue, interjections) |
+| `compaction_meta_tokens` | text of `SyntheticReason::CompactionMeta` items: the compact summary and re-read file contents |
+| `image_tokens` | image parts on user items **and** on tool results |
+| `assistant_tokens` | assistant text plus tool-call arguments |
+| `reasoning_tokens` | replayed reasoning |
+| `tool_result_tokens` | tool results, including backend-hosted calls |
+
+Classification is by item type and `SyntheticReason`, never by parsing message text. That is what makes the compact summary separable at all: the compaction pipeline tags its injected items `CompactionMeta`, which is distinct from `SystemReminder`, `ProjectInstructions`, and the rest.
+
+Three decisions worth stating:
+
+- **Estimates, not provider counts.** These use the same bytes/4 arithmetic the context-budget code already uses. `total_tokens` is the sum of the buckets and covers items plus declared tool specs; hosted tools and provider-side framing are not estimated, so it is a composition estimate, not a bill.
+- **Component sums pair with billed input.** Every completed main-loop call folds its request's composition, so the sums cover the same calls `totals.input_tokens` covers and a bucket's share is comparable to the billed input. Because a prefix repeats across calls, both sides grow the same way; a share, not an absolute, is the readable number.
+- **Recorded with the response, not at request build.** Components are folded inside `record_response_token_usage`, so a call that completes with no reported usage still contributes its composition — the composition is known even when the cost is not. A request that never completes contributes nothing, matching the rule everywhere else in this experiment.
+
+`image_tokens` is deliberately wider than the shared budget estimator: it also counts images inline in tool results, which the budget estimate ignores but the provider still bills.
+
+The persisted session report gains a `requestComponents` block:
+
+```json
+{
+  "session": {
+    "inputTokens": 1204000,
+    "requestComponents": {
+      "requestsMeasured": 42,
+      "systemTokens": 62000,
+      "toolSchemaTokens": 210000,
+      "userTokens": 3400,
+      "injectedTokens": 51000,
+      "compactionMetaTokens": 88000,
+      "toolResultTokens": 742000,
+      "totalTokens": 1176400
+    }
+  }
+}
+```
+
+`requestsMeasured` matters as much as the buckets: it is the count of main-loop calls whose request was measured. If it is below the session's turn count, some calls contributed billed tokens with no measured request, and the shares describe only part of the bill. A ledger that measured no request omits the block entirely rather than reporting zeros, so "not measured" cannot be misread as "an empty prompt".
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `cargo test -p xai-chat-state --lib` | 381 passed (374 before; 7 new cases) |
+| `cargo test -p xai-grok-shell --lib` | 7001 passed, 5 failed — the same five failures occur on the base revision (see section 12) |
+| `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types` | passed |
+| `rustfmt --check` on the touched files, `git diff --check` | clean |
+
+New cases, by what they pin:
+
+- `components_split_by_item_type_and_synthetic_reason` puts one item of every kind in a single request and asserts each bucket, with expectations written against each literal's own length so the test pins the *classification* rather than re-deriving the arithmetic.
+- `every_other_synthetic_reason_lands_in_injected` and `images_are_split_out_of_their_user_item` pin the two classifications that are easy to get subtly wrong: a project-instruction item is not user text, and an image inside a user item is not user text.
+- `tool_result_images_are_counted` pins the deliberate divergence from the budget estimator.
+- `fold_sums_every_bucket` and `an_empty_request_is_all_zero` pin accumulation and the empty case.
+- `request_components_accumulate_and_never_touch_the_turn_count` pins at the ledger that components are estimates: they touch neither `totals.input_tokens` nor `main_loop_model_calls`.
+- `response_without_usage_preserves_context_and_marks_ledgers_incomplete` now also asserts that a no-usage call still contributes its composition.
+- `session_report_shows_the_request_composition` and `session_report_omits_request_composition_when_unmeasured` pin the report shape, the `requestComponents` key, the round trip, and the omitted-when-unmeasured rule.
+
+### What this does not establish
+
+- **The shell-side wiring is not covered by a turn-level test.** That `turn.rs` estimates the request *after* the image strip and token clamp (so the breakdown describes what is actually sent) and passes it into the recording call is verified by reading and by compilation. Everything downstream — the classifier, the ledger fold, the report — is tested. A turn-level test would need a full session plus a model server, the harness shape that made the suite unstable in section 12.
+- Nothing here says whether the pruning arm actually reduces the tool-result share. Measuring that is Step 3, and it is now measurable: the block reports the share per session.
+- The buckets are estimates in bytes/4 units. They will not sum to the provider's billed input, and the gap is not attributed anywhere.
+- Hosted tools are not estimated, so on a backend-searching turn the breakdown under-counts the request.
+- Components are recorded for main-loop calls only. Compaction, recap, memory, and the other side calls fold usage but not composition, so the block does not explain their prompts.
+- Component sums live on the session ledger only, not the per-prompt ledger the ACP wire reports.

@@ -31,6 +31,8 @@
 use indexmap::IndexMap;
 use xai_grok_sampling_types::TokenUsage;
 
+use crate::request_components::RequestComponents;
+
 /// Why a model call was issued.
 ///
 /// Only [`CallPurpose::MainLoop`] advances [`UsageLedger::main_loop_model_calls`]
@@ -221,6 +223,13 @@ pub struct UsageLedger {
     /// Completed side calls (compaction, recap, title refresh, turn summary).
     /// Never counted by `main_loop_model_calls`.
     pub side_call_model_calls: u64,
+    /// Estimated composition of the main-loop requests recorded here, summed bucket by bucket.
+    /// Estimates, not provider counts: the sum covers the same calls `totals` covers, so a
+    /// bucket's share is comparable to the billed input.
+    pub request_components: RequestComponents,
+    /// How many main-loop requests contributed to `request_components`.
+    /// Below `main_loop_model_calls` means some recorded turns had no measured request.
+    pub requests_measured: u64,
     /// Bill may under-count (drain timeout, nested subagent incomplete, apply failure).
     pub incomplete: bool,
 }
@@ -243,6 +252,14 @@ impl UsageLedger {
             .or_default()
             .fold_totals(&call);
         self.fold_entry(model_id, &call);
+    }
+
+    /// Fold the estimated composition of one main-loop request that was actually sent.
+    /// Recorded alongside the call's usage so the two always cover the same set of calls,
+    /// including calls whose provider response omitted usage.
+    pub fn record_request_components(&mut self, components: &RequestComponents) {
+        self.request_components.fold(components);
+        self.requests_measured = self.requests_measured.saturating_add(1);
     }
 
     /// Fold one side call that spends provider tokens outside the main tool loop.
@@ -482,6 +499,28 @@ mod tests {
             CallPurpose::ALL.iter().filter(|p| p.is_main_loop()).count(),
             1
         );
+    }
+
+    #[test]
+    fn request_components_accumulate_and_never_touch_the_turn_count() {
+        let mut ledger = UsageLedger::default();
+        ledger.record_request_components(&RequestComponents {
+            system_tokens: 100,
+            tool_result_tokens: 400,
+            ..Default::default()
+        });
+        ledger.record_request_components(&RequestComponents {
+            system_tokens: 100,
+            user_tokens: 5,
+            ..Default::default()
+        });
+
+        assert_eq!(ledger.request_components.system_tokens, 200);
+        assert_eq!(ledger.request_components.tool_result_tokens, 400);
+        assert_eq!(ledger.request_components.user_tokens, 5);
+        assert_eq!(ledger.requests_measured, 2);
+        assert_eq!(ledger.main_loop_model_calls, 0);
+        assert_eq!(ledger.totals.input_tokens, 0, "components are estimates");
     }
 
     #[test]

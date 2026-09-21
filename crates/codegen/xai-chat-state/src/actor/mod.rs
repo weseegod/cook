@@ -222,6 +222,9 @@ impl ChatStateActor {
             ChatStateCommand::RecordUsageMissing { purpose } => {
                 self.record_usage_missing(purpose);
             }
+            ChatStateCommand::RecordRequestComponents { components } => {
+                self.record_request_components(&components);
+            }
             ChatStateCommand::RecordSubagentUsage {
                 by_model,
                 attribute_to_prompt,

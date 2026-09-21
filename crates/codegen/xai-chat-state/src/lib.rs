@@ -34,6 +34,7 @@ pub mod events;
 pub mod handle;
 pub mod image_budget;
 pub mod persistence;
+pub mod request_components;
 pub mod types;
 pub mod usage;
 
@@ -52,6 +53,7 @@ pub use persistence::{
     ChatPersistence, MockChatPersistence, MockPersistenceReceiver, NullChatPersistence,
     PersistenceRecord, StripOutcome,
 };
+pub use request_components::RequestComponents;
 pub use types::*;
 pub use usage::{CallPurpose, UsageLedger, UsageTotals};
 // Re-exported so `xai_chat_state::CompactionDetail` stays a working path for

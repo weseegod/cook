@@ -4,6 +4,15 @@ use xai_grok_sampling_types::{
     BackendToolCallItem, BackendToolKind, ConversationItem, ConversationResponse, TokenUsage, rs,
 };
 
+/// A distinguishable request composition, so a test can assert the breakdown landed.
+fn components() -> xai_chat_state::RequestComponents {
+    xai_chat_state::RequestComponents {
+        system_tokens: 900,
+        tool_result_tokens: 4_000,
+        ..Default::default()
+    }
+}
+
 fn response_with_usage(total_tokens: u32) -> ConversationResponse {
     ConversationResponse {
         items: vec![ConversationItem::assistant("ok")],
@@ -95,7 +104,7 @@ async fn response_reasoning_does_not_inflate_model_reported_context() {
                 stop_sequence: None,
             };
 
-            actor.record_response_token_usage(&response, None);
+            actor.record_response_token_usage(&response, None, &components());
             let usage_reported = response.usage.is_some();
             actor
                 .record_response_items(response.items, usage_reported)
@@ -170,7 +179,7 @@ async fn response_without_usage_keeps_model_output_as_estimated_growth() {
                 stop_sequence: None,
             };
 
-            actor.record_response_token_usage(&response, None);
+            actor.record_response_token_usage(&response, None, &components());
             let usage_reported = response.usage.is_some();
             actor
                 .record_response_items(response.items, usage_reported)
@@ -212,7 +221,7 @@ async fn updates_chat_state_total_tokens_from_response_usage() {
             let _sync = actor.chat_state_handle.get_total_tokens().await;
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 0);
 
-            actor.record_response_token_usage(&response_with_usage(150_000), None);
+            actor.record_response_token_usage(&response_with_usage(150_000), None, &components());
 
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 150_000);
             let prompt = actor
@@ -249,7 +258,7 @@ async fn response_without_usage_preserves_context_and_marks_ledgers_incomplete()
             let actor = create_test_actor(99_999, 256_000, 85, gateway_tx, persistence_tx).await;
             let _sync = actor.chat_state_handle.get_total_tokens().await;
 
-            actor.record_response_token_usage(&response_without_usage(), None);
+            actor.record_response_token_usage(&response_without_usage(), None, &components());
 
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 99_999);
             let prompt = actor
@@ -268,6 +277,11 @@ async fn response_without_usage_preserves_context_and_marks_ledgers_incomplete()
                 .expect("chat-state alive");
             assert!(session.incomplete);
             assert_eq!(session.totals.model_calls, 0);
+            // The request's composition is known whatever the response reports, so an
+            // unknown-cost call still shows what was sent.
+            assert_eq!(session.request_components.tool_result_tokens, 4_000);
+            assert_eq!(session.request_components.system_tokens, 900);
+            assert_eq!(session.requests_measured, 1);
         })
         .await;
 }
@@ -302,7 +316,7 @@ async fn build_session_info_used_reflects_recorded_response() {
                 .push_user_message_and_ack(ConversationItem::user("hello hello hello hello"))
                 .await;
 
-            actor.record_response_token_usage(&response_with_usage(120_000), None);
+            actor.record_response_token_usage(&response_with_usage(120_000), None, &components());
 
             let info = actor.build_session_info().await;
             assert_eq!(info.context.used, 120_000);
@@ -396,7 +410,7 @@ async fn stashes_per_turn_usage_in_chat_state() {
             );
 
             // The fixture splits total 200_000 into prompt 199_950 and completion 50
-            actor.record_response_token_usage(&response_with_usage(200_000), None);
+            actor.record_response_token_usage(&response_with_usage(200_000), None, &components());
 
             let stashed = actor
                 .chat_state_handle
@@ -423,7 +437,7 @@ async fn compaction_usage_folds_as_a_side_call_and_missing_usage_stays_visible()
             let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
 
             // One main-loop round so the turn count and the side call are distinguishable.
-            actor.record_response_token_usage(&response_with_usage(1_000), None);
+            actor.record_response_token_usage(&response_with_usage(1_000), None, &components());
 
             crate::session::helpers::session_compact::record_compaction_usage(
                 &actor.chat_state_handle,

@@ -294,3 +294,60 @@ fn session_report_breaks_usage_down_by_call_purpose() {
     let round_tripped: UsageSummary = serde_json::from_value(json).expect("deserializes");
     assert_eq!(round_tripped.purpose_usage, summary.purpose_usage);
 }
+
+#[test]
+fn session_report_shows_the_request_composition() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(50_000, 200), Some(10), None);
+    ledger.record_main_loop_call("grok-4", &tu(30_000, 200), Some(10), None);
+    ledger.record_request_components(&xai_chat_state::RequestComponents {
+        system_tokens: 3_000,
+        tool_schema_tokens: 9_000,
+        user_tokens: 200,
+        tool_result_tokens: 40_000,
+        ..Default::default()
+    });
+    ledger.record_request_components(&xai_chat_state::RequestComponents {
+        system_tokens: 3_000,
+        tool_schema_tokens: 9_000,
+        user_tokens: 200,
+        tool_result_tokens: 12_000,
+        ..Default::default()
+    });
+
+    let summary = UsageSummary::from_ledger(&ledger);
+    let components = summary
+        .request_components
+        .as_ref()
+        .expect("components are reported");
+    assert_eq!(components.requests_measured, 2);
+    assert_eq!(components.system_tokens, 6_000);
+    assert_eq!(components.tool_schema_tokens, 18_000);
+    assert_eq!(components.tool_result_tokens, 52_000);
+    assert_eq!(
+        components.total_tokens,
+        components.system_tokens
+            + components.tool_schema_tokens
+            + components.user_tokens
+            + components.tool_result_tokens
+    );
+
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["requestComponents"]["toolResultTokens"], 52_000);
+    assert_eq!(json["requestComponents"]["requestsMeasured"], 2);
+    let round_tripped: UsageSummary = serde_json::from_value(json).expect("deserializes");
+    assert_eq!(round_tripped.request_components, summary.request_components);
+}
+
+/// A ledger that measured no request omits the block rather than reporting zeros, so a reader
+/// cannot mistake "not measured" for "an empty prompt".
+#[test]
+fn session_report_omits_request_composition_when_unmeasured() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(1_000, 100), Some(10), None);
+
+    let summary = UsageSummary::from_ledger(&ledger);
+    assert!(summary.request_components.is_none());
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert!(json.get("requestComponents").is_none(), "{json}");
+}

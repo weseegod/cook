@@ -198,6 +198,17 @@ impl ChatStateHandle {
             .send(ChatStateCommand::RecordUsageMissing { purpose });
     }
 
+    /// Record the estimated component composition of a main-loop request that was sent.
+    /// Fire-and-forget so it orders behind the call's own usage on this handle.
+    pub fn record_request_components(
+        &self,
+        components: crate::request_components::RequestComponents,
+    ) {
+        let _ = self
+            .cmd_tx
+            .send(ChatStateCommand::RecordRequestComponents { components });
+    }
+
     /// Apply subagent usage; returns false if the actor did not acknowledge.
     pub async fn record_subagent_usage(
         &self,

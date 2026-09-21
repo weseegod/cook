@@ -465,6 +465,17 @@ impl ChatStateActor {
         );
     }
 
+    /// Record the estimated composition of a sent main-loop request; see
+    /// [`crate::usage::UsageLedger::record_request_components`].
+    pub(super) fn record_request_components(
+        &mut self,
+        components: &crate::request_components::RequestComponents,
+    ) {
+        self.state
+            .session_usage
+            .record_request_components(components);
+    }
+
     /// Record a call whose provider response omitted usage; see
     /// [`crate::usage::UsageLedger::record_usage_missing`].
     pub(super) fn record_usage_missing(&mut self, purpose: crate::usage::CallPurpose) {

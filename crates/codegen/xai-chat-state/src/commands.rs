@@ -126,6 +126,11 @@ pub enum ChatStateCommand {
     /// Record a completed call whose provider response omitted usage.
     RecordUsageMissing { purpose: crate::usage::CallPurpose },
 
+    /// Record the estimated component composition of a main-loop request that was sent.
+    RecordRequestComponents {
+        components: crate::request_components::RequestComponents,
+    },
+
     /// Subagent usage into session (and prompt when attributable). Replies when applied.
     RecordSubagentUsage {
         by_model: Vec<(String, crate::usage::UsageTotals)>,

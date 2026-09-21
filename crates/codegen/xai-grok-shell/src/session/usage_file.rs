@@ -56,6 +56,57 @@ pub struct UsageSummary {
     /// main-loop turns it was triggered by.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub purpose_usage: IndexMap<String, PurposeUsage>,
+    /// Estimated composition of the main-loop requests that produced this bill, summed bucket by
+    /// bucket. Populated on the session row only. Estimates in bytes/4 units, so these reconcile
+    /// with `inputTokens` in shape but not exactly in value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_components: Option<RequestComponentUsage>,
+}
+
+/// Estimated component totals across every measured main-loop request.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestComponentUsage {
+    #[serde(default)]
+    pub requests_measured: u64,
+    #[serde(default)]
+    pub system_tokens: u64,
+    #[serde(default)]
+    pub tool_schema_tokens: u64,
+    #[serde(default)]
+    pub user_tokens: u64,
+    #[serde(default)]
+    pub injected_tokens: u64,
+    #[serde(default)]
+    pub compaction_meta_tokens: u64,
+    #[serde(default)]
+    pub image_tokens: u64,
+    #[serde(default)]
+    pub assistant_tokens: u64,
+    #[serde(default)]
+    pub reasoning_tokens: u64,
+    #[serde(default)]
+    pub tool_result_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+}
+
+impl From<(&xai_chat_state::RequestComponents, u64)> for RequestComponentUsage {
+    fn from((c, requests_measured): (&xai_chat_state::RequestComponents, u64)) -> Self {
+        Self {
+            requests_measured,
+            system_tokens: c.system_tokens,
+            tool_schema_tokens: c.tool_schema_tokens,
+            user_tokens: c.user_tokens,
+            injected_tokens: c.injected_tokens,
+            compaction_meta_tokens: c.compaction_meta_tokens,
+            image_tokens: c.image_tokens,
+            assistant_tokens: c.assistant_tokens,
+            reasoning_tokens: c.reasoning_tokens,
+            tool_result_tokens: c.tool_result_tokens,
+            total_tokens: c.total_tokens(),
+        }
+    }
 }
 
 /// One call purpose's contribution to the session bill.
@@ -120,6 +171,9 @@ impl UsageSummary {
             .iter()
             .map(|(purpose, totals)| (purpose.as_str().to_owned(), PurposeUsage::from(totals)))
             .collect();
+        summary.request_components = (ledger.requests_measured > 0).then(|| {
+            RequestComponentUsage::from((&ledger.request_components, ledger.requests_measured))
+        });
         summary
     }
 
@@ -139,6 +193,7 @@ impl UsageSummary {
             primary_model_id: None,
             model_usage: IndexMap::new(),
             purpose_usage: IndexMap::new(),
+            request_components: None,
         }
     }
 
@@ -182,6 +237,7 @@ impl UsageSummary {
             primary_model_id: None,
             model_usage: IndexMap::new(),
             purpose_usage: IndexMap::new(),
+            request_components: None,
         }
     }
 
@@ -220,6 +276,7 @@ impl UsageSummary {
             primary_model_id: None,
             model_usage: IndexMap::new(),
             purpose_usage: IndexMap::new(),
+            request_components: None,
         }
     }
 

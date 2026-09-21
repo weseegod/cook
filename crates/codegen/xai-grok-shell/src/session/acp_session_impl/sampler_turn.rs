@@ -1004,12 +1004,17 @@ impl SessionActor {
 
         Ok(sampling_client)
     }
-/// Build a compaction sampler, optionally routing through `[compactions] model`.
+    /// Build a compaction sampler, optionally routing through `[compactions] model`.
     pub(super) async fn prepare_compaction_sampling(
         &self,
         force_http1: bool,
-    ) -> Result<(xai_grok_sampler::SamplingClient, xai_grok_sampler::SamplerConfig), acp::Error>
-    {
+    ) -> Result<
+        (
+            xai_grok_sampler::SamplingClient,
+            xai_grok_sampler::SamplerConfig,
+        ),
+        acp::Error,
+    > {
         self.refresh_token_if_expired().await;
         let active_session_config = self.reconstruct_full_config().await;
         if let Some(slug) = self.compaction_model_slug.as_deref() {
@@ -1021,8 +1026,8 @@ impl SessionActor {
                     Some(self.max_retries),
                 );
                 cfg.force_http1 = force_http1;
-                let client =
-                    xai_grok_sampler::SamplingClient::new(cfg.clone()).map_err(|e| self.to_acp_error(e))?;
+                let client = xai_grok_sampler::SamplingClient::new(cfg.clone())
+                    .map_err(|e| self.to_acp_error(e))?;
                 return Ok((client, cfg));
             }
             tracing::warn!(
@@ -1032,8 +1037,8 @@ impl SessionActor {
         }
         let mut full_config = active_session_config;
         full_config.force_http1 = force_http1;
-        let sampling_client =
-            xai_grok_sampler::SamplingClient::new(full_config.clone()).map_err(|e| self.to_acp_error(e))?;
+        let sampling_client = xai_grok_sampler::SamplingClient::new(full_config.clone())
+            .map_err(|e| self.to_acp_error(e))?;
         Ok((sampling_client, full_config))
     }
     /// Push a fresh `SamplerConfig` into the per-session sampler actor
@@ -2184,7 +2189,12 @@ impl SessionActor {
         &self,
         response: &ConversationResponse,
         api_duration_ms: Option<u64>,
+        request_components: &xai_chat_state::RequestComponents,
     ) {
+        // The composition is known whatever the response reports, so it is recorded on every
+        // completed call, alongside usage and missing usage alike.
+        self.chat_state_handle
+            .record_request_components(*request_components);
         if let Some(ref u) = response.usage {
             self.tool_context
                 .record_task_model_output(u64::from(u.completion_tokens));

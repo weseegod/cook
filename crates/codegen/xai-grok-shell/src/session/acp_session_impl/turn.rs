@@ -2994,6 +2994,9 @@ impl SessionActor {
                 })),
             );
             let model_timer = std::time::Instant::now();
+            // Measured after every strip and clamp above, so the breakdown describes what is
+            // actually sent. Recorded with the response, so it covers exactly the completed calls.
+            let request_components = xai_chat_state::RequestComponents::from_request(&request);
             let model_sampler_outcome = self
                 .run_turn_via_sampler(
                     request.clone(),
@@ -3334,7 +3337,11 @@ impl SessionActor {
                     },
                 );
             }
-            self.record_response_token_usage(&response, Some(model_duration_ms));
+            self.record_response_token_usage(
+                &response,
+                Some(model_duration_ms),
+                &request_components,
+            );
             let response_completed = self.response_completed_update(&response);
             if let Some(mut pt) = prompt_timing.take() {
                 pt.record_stream_latency(latency.time_to_last_byte_ms);
