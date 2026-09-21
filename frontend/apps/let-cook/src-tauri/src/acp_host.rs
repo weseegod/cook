@@ -1,7 +1,7 @@
 //! ACP stdio mux + native Layer 1 reverse handlers (C5).
 //!
 //! Role: spawn/kill the agent sidecar, map JSON-RPC ids, coalesce notifications, and
-//! answer `fs/read_text_file` / `fs/write_text_file` with the sessions-root allow-path.
+//! answer `fs/read_text_file` / `fs/write_text_file` with the TUI-compatible permission policy.
 //! Terminal stub arms are intentionally absent while `terminal: false` (H-term / C1).
 
 use std::collections::HashMap;
@@ -9,7 +9,7 @@ use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::thread;
@@ -32,6 +32,9 @@ pub struct AcpHost {
     next_id: AtomicU64,
     generation: Arc<AtomicU64>,
     workspace: Arc<Mutex<Option<PathBuf>>>,
+    /// Mirrors Settings > General > Always approve. When enabled, ACP fs requests use the same
+    /// unrestricted local filesystem semantics as the CLI/TUI LocalFs backend.
+    always_approve: Arc<AtomicBool>,
     /// Cached `@` path inventory keyed by `(root, hidden)`. Invalidated when the workspace moves.
     index_cache: Mutex<Option<WorkspaceIndexCache>>,
     live_session: Mutex<Option<String>>,
@@ -51,6 +54,7 @@ impl Default for AcpHost {
             next_id: AtomicU64::new(1),
             generation: Arc::new(AtomicU64::new(0)),
             workspace: Arc::new(Mutex::new(None)),
+            always_approve: Arc::new(AtomicBool::new(false)),
             index_cache: Mutex::new(None),
             live_session: Mutex::new(None),
         }
@@ -166,6 +170,7 @@ impl AcpHost {
         let diagnostics = Arc::new(ChildDiagnostics::default());
 
         *self.workspace.lock() = Some(cwd.clone());
+        self.always_approve.store(false, Ordering::SeqCst);
         *self.index_cache.lock() = None;
         *self.runtime.lock() = Some(ChildRuntime {
             child: child.clone(),
@@ -181,6 +186,7 @@ impl AcpHost {
             stdin,
             self.pending.clone(),
             self.workspace.clone(),
+            self.always_approve.clone(),
             diagnostics.clone(),
             self.generation.clone(),
             generation,
@@ -245,6 +251,7 @@ impl AcpHost {
             let _ = child.wait();
         }
         self.fail_pending("ACP process stopped");
+        self.always_approve.store(false, Ordering::SeqCst);
         *self.index_cache.lock() = None;
     }
 
@@ -292,6 +299,11 @@ impl AcpHost {
         if let Some(cwd) = session_cwd {
             self.follow_workspace(&cwd);
         }
+        if matches!(method.as_str(), "session/new" | "session/load") {
+            if let Some(enabled) = yolo_mode_from_params(&params) {
+                self.always_approve.store(enabled, Ordering::SeqCst);
+            }
+        }
         let result = receiver
             .await
             .map_err(|_| "ACP response channel closed".to_owned())?;
@@ -303,6 +315,11 @@ impl AcpHost {
 
     pub fn notify(&self, method: String, params: Value) -> Result<(), String> {
         let cancelling = method == "session/cancel";
+        if is_yolo_mode_change(&method) {
+            if let Some(enabled) = yolo_mode_from_params(&params) {
+                self.always_approve.store(enabled, Ordering::SeqCst);
+            }
+        }
         let result = self.send_value(&json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -402,6 +419,23 @@ fn request_workspace<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
     params.get("cwd").and_then(Value::as_str)
 }
 
+fn yolo_mode_from_params(params: &Value) -> Option<bool> {
+    params
+        .get("yolo_mode")
+        .or_else(|| params.get("yoloMode"))
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            params
+                .get("_meta")
+                .and_then(|meta| meta.get("yoloMode"))
+                .and_then(Value::as_bool)
+        })
+}
+
+fn is_yolo_mode_change(method: &str) -> bool {
+    matches!(method, "x.ai/yolo_mode_changed" | "_x.ai/yolo_mode_changed")
+}
+
 fn write_message(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), String> {
     let mut stdin = stdin.lock();
     serde_json::to_writer(&mut *stdin, value).map_err(|error| error.to_string())?;
@@ -416,6 +450,7 @@ fn spawn_stdout_reader(
     stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<PendingResult>>>>,
     workspace: Arc<Mutex<Option<PathBuf>>>,
+    always_approve: Arc<AtomicBool>,
     diagnostics: Arc<ChildDiagnostics>,
     active_generation: Arc<AtomicU64>,
     generation: u64,
@@ -468,7 +503,7 @@ fn spawn_stdout_reader(
                 if route_pending_response(&message, &pending) {
                     continue;
                 }
-                if handle_host_request(&message, &stdin, &workspace) {
+                if handle_host_request(&message, &stdin, &workspace, &always_approve) {
                     continue;
                 }
                 forwarded.push(message);
@@ -587,14 +622,15 @@ fn exit_detail(
 /// Do not stub `terminal/*` while `clientCapabilities.terminal` is false — leave those
 /// for the renderer Layer 2 typed-decline path (`docs/desktop-app.md` §5.4).
 ///
-/// Sessions-root allow-path: `fs/*` may touch the workspace cwd **and** the agent's
-/// session store (`$COOK_HOME/sessions` / `$GROK_HOME/sessions` / `~/.cook/sessions`)
-/// so plan mode can write its plan file (`<session>/plan.md`, or `<session>/plans/<utc>.md`
-/// / `<slug>-<utc>.md` for each planning episode) outside any workspace.
+/// With Always approve off, `fs/*` may touch the workspace cwd **and** the agent's session store
+/// (`$COOK_HOME/sessions` / `$GROK_HOME/sessions` / `~/.cook/sessions`) so plan mode can write
+/// its plan file outside any workspace. With Always approve on, the host mirrors the CLI/TUI
+/// LocalFs backend and does not add a path allowlist.
 fn handle_host_request(
     message: &Value,
     stdin: &Arc<Mutex<ChildStdin>>,
     workspace: &Arc<Mutex<Option<PathBuf>>>,
+    always_approve: &Arc<AtomicBool>,
 ) -> bool {
     let Some(method) = message.get("method").and_then(Value::as_str) else {
         return false;
@@ -603,7 +639,7 @@ fn handle_host_request(
         return false;
     };
     let params = message.get("params").cloned().unwrap_or_else(|| json!({}));
-    let Some(outcome) = host_native_outcome(method, &params, workspace) else {
+    let Some(outcome) = host_native_outcome(method, &params, workspace, always_approve) else {
         return false;
     };
     let response = match outcome {
@@ -624,10 +660,11 @@ fn host_native_outcome(
     method: &str,
     params: &Value,
     workspace: &Arc<Mutex<Option<PathBuf>>>,
+    always_approve: &Arc<AtomicBool>,
 ) -> Option<Result<Value, String>> {
     match method {
-        "fs/read_text_file" => Some(read_text_file(params, workspace)),
-        "fs/write_text_file" => Some(write_text_file(params, workspace)),
+        "fs/read_text_file" => Some(read_text_file(params, workspace, always_approve)),
+        "fs/write_text_file" => Some(write_text_file(params, workspace, always_approve)),
         _ => None,
     }
 }
@@ -665,10 +702,26 @@ fn safe_workspace_path(
     raw: &str,
     workspace: &Arc<Mutex<Option<PathBuf>>>,
     writing: bool,
+    always_approve: &Arc<AtomicBool>,
 ) -> Result<PathBuf, String> {
     let root = workspace.lock().clone().ok_or("no active workspace")?;
+    if always_approve.load(Ordering::SeqCst) {
+        return Ok(unrestricted_path(raw, &root));
+    }
     let allowed = vec![root.clone(), agent_state_root()];
     safe_path(raw, &root, &allowed, writing)
+}
+
+/// Match `LocalFs`: absolute paths are used as-is, while relative paths resolve against the
+/// agent's current working directory. Do not canonicalize here; LocalFs intentionally lets the OS
+/// resolve `..` and symlinks during the actual read/write.
+fn unrestricted_path(raw: &str, base: &Path) -> PathBuf {
+    let requested = Path::new(raw);
+    if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        base.join(requested)
+    }
 }
 
 /// Resolve `raw` against `base` and require the result to land inside one of `allowed`.
@@ -713,12 +766,13 @@ fn safe_path(
 fn read_text_file(
     params: &Value,
     workspace: &Arc<Mutex<Option<PathBuf>>>,
+    always_approve: &Arc<AtomicBool>,
 ) -> Result<Value, String> {
     let raw = params
         .get("path")
         .and_then(Value::as_str)
         .ok_or("missing path")?;
-    let path = safe_workspace_path(raw, workspace, false)?;
+    let path = safe_workspace_path(raw, workspace, false, always_approve)?;
     let content = std::fs::read_to_string(&path)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     Ok(json!({ "content": content }))
@@ -727,6 +781,7 @@ fn read_text_file(
 fn write_text_file(
     params: &Value,
     workspace: &Arc<Mutex<Option<PathBuf>>>,
+    always_approve: &Arc<AtomicBool>,
 ) -> Result<Value, String> {
     let raw = params
         .get("path")
@@ -736,7 +791,13 @@ fn write_text_file(
         .get("content")
         .and_then(Value::as_str)
         .ok_or("missing content")?;
-    let path = safe_workspace_path(raw, workspace, true)?;
+    let path = safe_workspace_path(raw, workspace, true, always_approve)?;
+    if always_approve.load(Ordering::SeqCst) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("create {}: {error}", parent.display()))?;
+        }
+    }
     std::fs::write(&path, content).map_err(|error| format!("write {}: {error}", path.display()))?;
     Ok(json!({}))
 }
@@ -748,12 +809,28 @@ mod tests {
     #[test]
     fn host_does_not_stub_terminal_wait_for_exit() {
         let workspace = Arc::new(Mutex::new(None));
+        let always_approve = Arc::new(AtomicBool::new(false));
         assert!(
-            host_native_outcome("terminal/wait_for_exit", &json!({}), &workspace).is_none(),
+            host_native_outcome(
+                "terminal/wait_for_exit",
+                &json!({}),
+                &workspace,
+                &always_approve,
+            )
+            .is_none(),
             "terminal stubs must not return exitCode: 0 while terminal cap is false"
         );
-        assert!(host_native_outcome("terminal/create", &json!({}), &workspace).is_none());
-        assert!(host_native_outcome("x.ai/terminal/create", &json!({}), &workspace).is_none());
+        assert!(
+            host_native_outcome("terminal/create", &json!({}), &workspace, &always_approve)
+                .is_none()
+        );
+        assert!(host_native_outcome(
+            "x.ai/terminal/create",
+            &json!({}),
+            &workspace,
+            &always_approve,
+        )
+        .is_none());
     }
 
     /// Opening a conversation is what moves the host's workspace: the conversation list can point
@@ -806,7 +883,103 @@ mod tests {
     #[test]
     fn rejects_parent_traversal() {
         let root = Arc::new(Mutex::new(Some(std::env::temp_dir())));
-        assert!(safe_workspace_path("../secret", &root, false).is_err());
+        let always_approve = Arc::new(AtomicBool::new(false));
+        assert!(safe_workspace_path("../secret", &root, false, &always_approve).is_err());
+    }
+
+    #[test]
+    fn always_approve_allows_parent_traversal_and_absolute_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = Arc::new(Mutex::new(Some(workspace.path().to_path_buf())));
+        let always_approve = Arc::new(AtomicBool::new(true));
+
+        let absolute = outside.path().join("notes.md");
+        assert_eq!(
+            safe_workspace_path(absolute.to_str().unwrap(), &root, true, &always_approve,).unwrap(),
+            absolute
+        );
+        assert_eq!(
+            safe_workspace_path("../outside/notes.md", &root, true, &always_approve).unwrap(),
+            workspace.path().join("../outside/notes.md")
+        );
+    }
+
+    #[test]
+    fn always_approve_reads_and_writes_outside_workspace() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = Arc::new(Mutex::new(Some(workspace.path().to_path_buf())));
+        let always_approve = Arc::new(AtomicBool::new(true));
+        let path = outside.path().join("nested").join("notes.md");
+
+        let write = host_native_outcome(
+            "fs/write_text_file",
+            &json!({ "path": path, "content": "desktop-local-fs" }),
+            &root,
+            &always_approve,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(write, json!({}));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "desktop-local-fs");
+
+        let read = host_native_outcome(
+            "fs/read_text_file",
+            &json!({ "path": path }),
+            &root,
+            &always_approve,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(read, json!({ "content": "desktop-local-fs" }));
+    }
+
+    #[test]
+    fn always_approve_off_keeps_outside_workspace_rejected() {
+        let workspace = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let root = Arc::new(Mutex::new(Some(workspace.path().to_path_buf())));
+        let always_approve = Arc::new(AtomicBool::new(false));
+        let path = outside.path().join("notes.md");
+        std::fs::write(&path, "outside").unwrap();
+
+        let error = host_native_outcome(
+            "fs/read_text_file",
+            &json!({ "path": path }),
+            &root,
+            &always_approve,
+        )
+        .unwrap()
+        .unwrap_err();
+        assert!(
+            error.starts_with("path is outside the workspace:"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn parses_yolo_mode_from_session_and_toggle_payloads() {
+        assert_eq!(
+            yolo_mode_from_params(&json!({ "_meta": { "yoloMode": true } })),
+            Some(true)
+        );
+        assert_eq!(
+            yolo_mode_from_params(&json!({ "_meta": { "yoloMode": false } })),
+            Some(false)
+        );
+        assert_eq!(
+            yolo_mode_from_params(&json!({ "yolo_mode": true })),
+            Some(true)
+        );
+        assert_eq!(
+            yolo_mode_from_params(&json!({ "yoloMode": false })),
+            Some(false)
+        );
+        assert_eq!(yolo_mode_from_params(&json!({})), None);
+        assert!(is_yolo_mode_change("x.ai/yolo_mode_changed"));
+        assert!(is_yolo_mode_change("_x.ai/yolo_mode_changed"));
+        assert!(!is_yolo_mode_change("x.ai/other"));
     }
 
     #[test]

@@ -133,8 +133,8 @@ export class CookAcpClient {
       mcpServers: [],
       _meta: {
         clientIdentifier: CAPABILITIES.clientIdentifier,
+        yoloMode,
         ...(defaultModel ? { modelId: defaultModel } : {}),
-        ...(yoloMode ? { yoloMode: true } : {}),
       },
     };
     const response = await request<NewSessionResponse>("session/new", params);
@@ -163,8 +163,8 @@ export class CookAcpClient {
       mcpServers: [],
       _meta: {
         clientIdentifier: CAPABILITIES.clientIdentifier,
+        yoloMode,
         ...(defaultModel ? { modelId: defaultModel } : {}),
-        ...(yoloMode ? { yoloMode: true } : {}),
       },
     };
     await this.inboundMessages;
@@ -407,8 +407,8 @@ export class CookAcpClient {
           mcpServers: [],
           _meta: {
             clientIdentifier: CAPABILITIES.clientIdentifier,
+            yoloMode,
             ...(defaultModel ? { modelId: defaultModel } : {}),
-            ...(yoloMode ? { yoloMode: true } : {}),
           },
         } satisfies LoadSessionRequest);
       }

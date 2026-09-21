@@ -143,8 +143,8 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-mode | `session/set_mode` | C→A | `/plan` | `xai.ts` `setMode` (`plan` / `default`) | `ok` | protocol |
 | ACP-upd | `session/update` | A→C notif | `acp_handler` + `tracker.rs` | `client.ts` `handleMessages` → `session.ts` | `partial` (several tags dropped; §4) | protocol |
 | ACP-perm | `session/request_permission` | A→C | `handle_permission_request` | `client.ts` parks `pendingPermission` | `ok` | protocol |
-| ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (cwd + `~/.cook/sessions`; ignores line/limit) | `ok` | protocol |
-| ACP-fs-w | `fs/write_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `write_text_file` (same sandbox; **plan.md allow-path**) | `ok` | protocol |
+| ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (Always approve off: cwd + `~/.cook/sessions`; on: TUI `LocalFs`; ignores line/limit) | `ok` | protocol |
+| ACP-fs-w | `fs/write_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `write_text_file` (same conditional policy; **plan.md allow-path** when off) | `ok` | protocol |
 | ACP-t-c | `terminal/create` | A→C | not advertised by default; unhandled if it arrives | not advertised (`terminal: false`); no host stub | `ok` | protocol |
 | ACP-t-o | `terminal/output` | A→C | — | not advertised | `ok` | protocol |
 | ACP-t-w | `terminal/wait_for_exit` | A→C | honest `-32601` if advertised | not advertised | `ok` | protocol |
@@ -737,11 +737,11 @@ Two channels:
 
 | Channel | Direction | Desktop | Status |
 |---|---|---|---|
-| ACP `fs/read_text_file` / `write_text_file` | A→C | host, cwd + sessions-root allow-path | `ok` |
+| ACP `fs/read_text_file` / `write_text_file` | A→C | host; conditional TUI-compatible policy via Always approve | `ok` |
 | `x.ai/fs/{read_file,write_file,exists}` | C→A | Settings project files (`exists` unused) | `ok` / `partial` |
 | `x.ai/fs/{list,delete_file}` | C→A | missing | `gap` / `na` (Files panel is Tauri) |
 
-**Invariant:** listed plan contracts live under the agent session store, outside the workspace: `<session>/plan.md` is legacy-only; plan-mode and goal-plan episodes use `<session>/plans/<utc>.md`, published to `<slug>-<utc>.md`. Goal execution does not activate plan mode. `<session>/goal/plan.baseline.md` is private verifier state, never a C-plans row. ACP-fs-w must keep the session-store allow-path (`acp_host.rs` `agent_state_root`).
+**Invariant:** listed plan contracts live under the agent session store, outside the workspace: `<session>/plan.md` is legacy-only; plan-mode and goal-plan episodes use `<session>/plans/<utc>.md`, published to `<slug>-<utc>.md`. Goal execution does not activate plan mode. `<session>/goal/plan.baseline.md` is private verifier state, never a C-plans row. With Always approve off, ACP-fs-w must keep the session-store allow-path (`acp_host.rs` `agent_state_root`); with Always approve on, it follows TUI `LocalFs` semantics.
 
 ---
 
