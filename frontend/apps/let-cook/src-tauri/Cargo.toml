@@ -2,7 +2,7 @@
 
 [package]
 name = "let-cook"
-version = "1.0.37"
+version = "1.0.39"
 description = "Chat-first ACP desktop client for Cook"
 authors = ["Let Cook contributors"]
 edition = "2021"
