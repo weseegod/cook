@@ -349,6 +349,9 @@ Other trees:
 
 ## 5. Key flows
 
+Detailed core-agent flow, token-cost analysis, and proposed optimization roadmap:
+[`docs/core-agent-flow-and-token-optimization.md`](docs/core-agent-flow-and-token-optimization.md).
+
 ### 5.1 A conversation turn (TUI → agent → tools → back)
 
 1. User types in the pager → `AppView` → outbound `AcpAgentMessage` on the
