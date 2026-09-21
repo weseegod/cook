@@ -10,7 +10,7 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 ## 1. Outcome
 
-This experiment implemented seven bounded changes:
+This experiment implemented eight bounded changes:
 
 1. A P0 accounting correction: a successful model response that omits usage now marks both the open prompt ledger and the session ledger incomplete. Unknown usage is no longer silently indistinguishable from a free call.
 2. An opt-in P1 context arm: request-copy pruning can age tool results by tool round within one user turn and cap the recent raw-result characters. The legacy behavior remains the default because both new limits default to zero.
@@ -19,8 +19,9 @@ This experiment implemented seven bounded changes:
 5. A third P0 side-call increment: the memory capture, dream, and flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and the image-description vision call are accounted too, through one shared fold. See section 14.
 6. A fourth P0 side-call increment: session title generation, the last call that reached no ledger, is accounted through a late-bound handle, because it runs in the persistence actor. See section 15. Every model call site in `xai-grok-shell` now reaches the session ledger.
 7. A Step 1 measurement increment: every completed main-loop call now records the estimated composition of the request it sent — system, tool schemas, user, injected reminders, compaction meta, images, assistant, reasoning replay, and tool results — and the persisted session report shows the shares. See section 16.
+8. A report-integrity fix found by running a real session rather than the test suite: the per-turn fold in the persisted usage report dropped the per-purpose rows and the request composition, so both blocks were absent from every session's `usage.json` even though the ledger and the in-memory report had them. See section 17.
 
-Two of these increments changed only accounting; none changed what is sent to a model, which is why the pruning arm's measured result below is unaffected.
+Apart from the pruning arm in item 2, every increment changed only accounting or reporting; none changed what is sent to a model, which is why the pruning arm's measured result below is unaffected.
 
 The local `bonsai2-27b` microbenchmark used a synthetic eight-round tool trace. The optimized trace reduced reported prompt input from 8,840 to 230 tokens (97.4%) while returning the same correct evidence and verdict in all three repetitions. This proves the fixture works and that its newest evidence survived. It does **not** prove a 97.4% saving on real coding tasks.
 
@@ -102,6 +103,13 @@ The component-estimate increment in section 16 touches these files:
 | `crates/codegen/xai-chat-state/src/usage.rs`, `commands.rs`, `handle.rs`, `actor/{mod,mutations}.rs` | Record component sums on the session ledger. |
 | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs`, `sampler_turn.rs` | Estimate the request after stripping and clamping, and fold it with the call's usage. |
 | `crates/codegen/xai-grok-shell/src/session/usage_file.rs` | Publish a `requestComponents` block in the persisted session report. |
+
+The report-integrity fix in section 17 touches these files:
+
+| File | Change |
+|---|---|
+| `crates/codegen/xai-grok-shell/src/session/usage_file.rs` | Merge and subtract `purpose_usage` and `request_components` in the per-turn fold instead of dropping them. |
+| `crates/codegen/xai-grok-shell/src/session/usage_file_tests.rs` | Drive `apply_turn` and `retain_turns_through` rather than `from_ledger` alone. |
 
 ## 4. Accounting correction
 
@@ -366,7 +374,7 @@ The first option returns to the legacy user-turn-only pruning behavior. The seco
 
 ### Step 1: finish the P0 baseline before judging savings
 
-Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too, as are the memory capture/dream/flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and image description (sections 13 and 14), and finally session title generation (section 15). Every model call site in `xai-grok-shell` now folds its provider usage into the session ledger under a purpose, and every completed main-loop call records the estimated composition of the request it sent (section 16), so **both halves of Step 1 are done**. The session report now reconciles in two dimensions: by call purpose, and by request component.
+Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too, as are the memory capture/dream/flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and image description (sections 13 and 14), and finally session title generation (section 15). Every model call site in `xai-grok-shell` now folds its provider usage into the session ledger under a purpose, and every completed main-loop call records the estimated composition of the request it sent (section 16), so **both halves of Step 1 are done**. The session report now reconciles in two dimensions: by call purpose, and by request component. A live headless session then showed that the persisted report was dropping both blocks on the way to disk; section 17 fixes that, so the numbers Step 2 depends on are actually present in a real `usage.json`.
 
 Add a purpose and identity record for every model call without creating a second billing ledger. At minimum distinguish main loop, transient retry, compact single/pass 1/pass 2, goal roles, memory, suggestion, and child calls. Record:
 
@@ -446,6 +454,14 @@ cargo test -p xai-grok-config-types --lib
 cargo test -p xai-grok-shell --lib response_without_usage
 cargo test -p xai-grok-shell --lib memory_config_full_toml_parsing
 cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types
+
+# Check the report a real session writes to disk, not just the in-memory report type.
+# The sessionId in the JSON output is the argument to `usage`.
+# Expect purposeUsage and requestComponents on the session row (and on each turn row).
+cargo build -p xai-grok-pager-bin --bin xai-grok-pager
+cd /tmp && "$OLDPWD/target/debug/xai-grok-pager" -p 'reply with exactly "ready"' \
+  -m local/spark25 --output-format json
+"$OLDPWD/target/debug/xai-grok-pager" usage <sessionId>
 
 # Re-run the local A/B microbenchmark
 read -rsp 'Local model API key: ' BONSAI_API_KEY
@@ -530,6 +546,8 @@ The persisted per-session usage report (`usage.json`) gained a `purposeUsage` ma
 ```
 
 `main_loop` and the session's `turnCount` agree, and compaction is visible as its own line.
+
+**Correction (section 17).** Until the fold fix in section 17, this block reached the in-memory report but not the `usage.json` of a real session: the per-turn fold that writes the file dropped `purposeUsage`. Everything below describes the block as verified from `UsageSummary::from_ledger` directly, which was the case that was tested and passing while the file on disk had no such key.
 
 ### Verification
 
@@ -800,6 +818,8 @@ The persisted session report gains a `requestComponents` block:
 
 `requestsMeasured` matters as much as the buckets: it is the count of main-loop calls whose request was measured. If it is below the session's turn count, some calls contributed billed tokens with no measured request, and the shares describe only part of the bill. A ledger that measured no request omits the block entirely rather than reporting zeros, so "not measured" cannot be misread as "an empty prompt".
 
+**Correction (section 17).** As with `purposeUsage`, this block was dropped when the per-turn fold wrote a real session's `usage.json`, so the block above existed in memory and in the report type but not in the file on disk until section 17 fixed the fold.
+
 ### Verification
 
 | Check | Result |
@@ -821,9 +841,106 @@ New cases, by what they pin:
 
 ### What this does not establish
 
-- **The shell-side wiring is not covered by a turn-level test.** That `turn.rs` estimates the request *after* the image strip and token clamp (so the breakdown describes what is actually sent) and passes it into the recording call is verified by reading and by compilation. Everything downstream — the classifier, the ledger fold, the report — is tested. A turn-level test would need a full session plus a model server, the harness shape that made the suite unstable in section 12.
+- **The wiring from the turn into the report is verified by a live run; the ordering inside the turn is not.** A real headless session now persists a `requestComponents` block with `requestsMeasured` 1 after one main-loop call (exact numbers in section 17), so `turn.rs` estimating the request and folding it with the call's usage is confirmed end to end. What is still unpinned by an automated test is *when* the estimate is taken: that it is after the image strip and the token clamp, so the breakdown describes what is actually sent, is verified by reading. A turn-level test would need a full session plus a model server, the harness shape that made the suite unstable in section 12.
 - Nothing here says whether the pruning arm actually reduces the tool-result share. Measuring that is Step 3, and it is now measurable: the block reports the share per session.
 - The buckets are estimates in bytes/4 units. They will not sum to the provider's billed input, and the gap is not attributed anywhere.
 - Hosted tools are not estimated, so on a backend-searching turn the breakdown under-counts the request.
 - Components are recorded for main-loop calls only. Compaction, recap, memory, and the other side calls fold usage but not composition, so the block does not explain their prompts.
 - Component sums live on the session ledger only, not the per-prompt ledger the ACP wire reports.
+
+## 17. Report integrity: the per-turn fold dropped both accounting blocks
+
+Date: **2026-09-21**. Found by running a real session instead of the test suite. Fixes what sections 12 and 16 promised but did not deliver to a file on disk.
+
+### The gap
+
+The first live end-to-end check of the accounting work — a headless one-shot prompt against the local model, then reading the session's `usage.json` — showed a session row with these keys:
+
+```
+inputTokens, outputTokens, cachedReadTokens, cacheCreationTokens,
+reasoningTokens, totalTokens, modelCalls, turnCount, primaryModelId, modelUsage
+```
+
+`purposeUsage` (section 12) and `requestComponents` (section 16) were absent. Both are `skip_serializing_if`-guarded, so absent means empty and unmeasured, not "written as null". Every unit test passed while this was true, because every unit test called `UsageSummary::from_ledger` directly, which does populate both.
+
+The turn row of that same file did carry both blocks:
+
+```json
+"purposeUsage": { "main_loop": { "inputTokens": 15672, "modelCalls": 1, ... } },
+"requestComponents": { "requestsMeasured": 1, "systemTokens": 1314, "toolSchemaTokens": 10956, ... }
+```
+
+That contrast is the whole diagnosis: the data existed, and the step that copied the turn into the session totals was the one losing it.
+
+### Root cause
+
+A real session does not write the report straight from `from_ledger`. `persist_live_usage` builds a live `UsageSummary`, sends it as `PersistenceMsg::UsageTurn`, and `SessionUsageFile::apply_turn` converts it into a turn delta before writing:
+
+```
+live ──(prev_live? saturating_sub : clone)──► turn_usage ──saturating_add──► turn row + session row
+```
+
+Both folds ended in `saturating_add_row`/`saturating_sub_row`, and both of those constructed their result with `purpose_usage: IndexMap::new()` and `request_components: None` — the two fields added by sections 12 and 16 were never carried through. `saturating_add` and `saturating_sub` then restored only `primary_model_id`, `model_usage`, and `turn_count` on top of the row result.
+
+That explains the contrast above exactly. A first turn in a process has no `prev_live`, so its delta is `live.clone()` and its turn row keeps both blocks untouched; the session row is always a fold, so it always lost them. A turn after the first within a process takes the subtract path and loses them on the turn row too, as does the fold path that writes a late interjection into a turn already written. The session row was the surface that is wrong in every case, which is why the report looked empty rather than half-empty.
+
+Two fields were dropped rather than one because the same `_row` helpers serve both. The hardcoded `purpose_usage: IndexMap::new()` came in with section 12, before there was anything to lose; section 16 added its field to the same two constructors and inherited the hole.
+
+### What changed
+
+`PurposeUsage` and `RequestComponentUsage` gained the arithmetic the row folds need: `saturating_add`, `saturating_sub`, and `is_zero`. Two free functions merge purpose maps per key for the add path and take per-key deltas for the subtract path, dropping rows that come out zero, which is how `model_usage` already behaved — so a turn row names only the purposes that turn actually spent, and `purposeUsage` on the session row is the sum of the turn rows. Components merge the same way, with `requests_measured` added and subtracted alongside the buckets.
+
+The invariant is now that a turn row carries the purposes and the measured composition that turn contributed, and the session row is exactly their sum. That is not cosmetic: `retain_turns_through` rebuilds the session row by folding the retained turn rows, so a session row that carried data its turn rows did not would be silently truncated the next time a turn was dropped. Section 16's field comment ("populated on the session row only") described the old intent and was part of why the drop looked acceptable; both field comments now state the sum-of-turns rule.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `cargo test -p xai-grok-shell --lib session::usage_file` | 17 passed (14 before; 3 new cases) |
+| `cargo test -p xai-grok-shell --lib` | 7003 passed, 6 failed. Five are the base-revision failures listed in section 12; the sixth is `set_consent_answer_is_monotonic_per_account`, the intermittent one documented there, which passes in isolation on this revision |
+| `cargo build -p xai-grok-pager-bin --bin xai-grok-pager` | built, then used for the live run below |
+| `rustfmt --check` on both touched files, `git diff --check` | clean |
+
+The new cases deliberately drive the write path instead of `from_ledger`:
+
+- `persisted_turn_keeps_purpose_rows_and_request_composition` applies one turn from a ledger that has a main-loop call, a `compact_single` side call, and a measured request, then asserts both blocks on the turn row, both blocks on the session row, their presence in the serialized JSON under `purposeUsage`/`requestComponents`, and a full round trip;
+- `session_purpose_rows_stay_equal_to_the_sum_of_the_turns` applies two turns and pins the delta semantics (turn 2's row has no `title_refresh` key at all, and its own single measured request), the session sums, and — the case that would have caught this class of bug on its own — that `retain_turns_through` rebuilds a session row identical to the incrementally built one;
+- `late_fold_onto_a_written_turn_keeps_the_new_purpose_rows` covers the interjection path, where a later live ledger folds into a turn already written.
+
+### Live end-to-end run
+
+The check that found the bug, repeated on the fix, using the debug binary built from this revision against the local `llama-server`:
+
+```
+cook -p 'reply with exactly "ready"' -m local/spark25 --output-format json
+cook -c -p 'now reply with exactly "done"' -m local/spark25 --output-format json
+```
+
+(`cook` here is `target/debug/xai-grok-pager` from this revision; the installed `cook` on this machine is still the base revision, so it cannot be used to check any of this work.)
+
+The persisted `usage.json` now carries both blocks on the session row and on each turn row, and `cook usage <session-id>` renders them. The second command resumes the session in a new process, so its session row is the persisted turn folded with the new one — the add path that was dropping the fields — rather than a single clone. The numbers, which are the first real measurements this experiment has of the composition of an agent prompt:
+
+| Quantity | Turn 1 | Turn 2 | Session |
+|---|---|---|---|
+| billed input | 15,671 | 15,717 | 31,388 |
+| billed cache read | 0 | 15,690 | 15,690 |
+| `requestsMeasured` | 1 | 1 | 2 |
+| `systemTokens` | 1,314 | 1,314 | 2,628 |
+| `toolSchemaTokens` | 10,956 | 10,956 | 21,912 |
+| `userTokens` | 491 | 505 | 996 |
+| `injectedTokens` | 2,126 | 2,126 | 4,252 |
+| `assistantTokens` | 0 | 1 | 1 |
+| `reasoningTokens` | 0 | 14 | 14 |
+| `compactionMetaTokens`, `imageTokens`, `toolResultTokens` | 0 | 0 | 0 |
+| component `totalTokens` | 14,887 | 14,916 | 29,803 |
+
+Two things this shows. The session row is exactly the sum of the turn rows in every column, so the fold is correct rather than merely non-empty. And on a prompt that does no tool work at all, 12,270 of 15,671 billed input tokens — 78% — are system prompt plus tool schemas, which is the share the pruning arm cannot touch; `toolSchemaTokens` alone is 70% of the request. That is the number Step 3 needs in order to state a saving as a share of what is actually prunable.
+
+The second turn also drew a prefix cache read of 15,690 tokens from the local server, which is the first time this experiment observed the cache behavior section 10's Step 5 is about. It is a property of the local `llama-server` on a repeated prefix, not a provider measurement, and it is one session.
+
+### What this does not establish
+
+- The five base-revision test failures listed in section 12 are unchanged by this fix; they are not caused by it and not fixed by it.
+- The live run exercises the main-loop path with no compaction, so it does not confirm that a side call's purpose row survives the fold in production. That path is covered by the unit cases above (`compact_single`, `recap`, `title_refresh`) and by the report type's round trip, not by a live session, because forcing a real compaction against the local model was out of scope here.
+- The 78% fixed-overhead figure is one model's prompt on one machine: the tool schema share depends on the enabled tool set, and the system prompt on the harness version. It is a shape, not a constant.
+- Nothing in this section changes what is sent to a model or what is billed. It corrects what the report says about it.

@@ -351,3 +351,184 @@ fn session_report_omits_request_composition_when_unmeasured() {
     let json = serde_json::to_value(&summary).expect("serializes");
     assert!(json.get("requestComponents").is_none(), "{json}");
 }
+
+fn measured(system: u64, tool_result: u64) -> xai_chat_state::RequestComponents {
+    xai_chat_state::RequestComponents {
+        system_tokens: system,
+        tool_result_tokens: tool_result,
+        ..Default::default()
+    }
+}
+
+/// Persisting a turn folds the live ledger into a turn row and a session row, so both must keep
+/// the per-purpose rows and the request composition. Only the wire ledger used to carry them.
+#[test]
+fn persisted_turn_keeps_purpose_rows_and_request_composition() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(1_000, 100), Some(10), None);
+    ledger.record_side_call(
+        xai_chat_state::CallPurpose::CompactSingle,
+        "grok-4",
+        &tu(6_000, 300),
+        Some(20),
+        None,
+    );
+    ledger.record_request_components(&measured(3_000, 7_000));
+    let first = UsageSummary::from_ledger(&ledger);
+
+    let mut file = SessionUsageFile::new("sess-1");
+    file.apply_turn(1, "t1", &first, None);
+
+    let turn = file.turn(1).expect("turn row");
+    assert_eq!(turn.usage.purpose_usage["main_loop"].input_tokens, 1_000);
+    assert_eq!(
+        turn.usage.purpose_usage["compact_single"].input_tokens,
+        6_000
+    );
+    assert_eq!(
+        turn.usage
+            .request_components
+            .as_ref()
+            .unwrap()
+            .system_tokens,
+        3_000
+    );
+
+    assert_eq!(file.session.purpose_usage["main_loop"].input_tokens, 1_000);
+    assert_eq!(
+        file.session.purpose_usage["compact_single"].input_tokens,
+        6_000
+    );
+    let components = file
+        .session
+        .request_components
+        .as_ref()
+        .expect("session keeps the composition");
+    assert_eq!(components.requests_measured, 1);
+    assert_eq!(components.tool_result_tokens, 7_000);
+
+    let json = serde_json::to_value(&file).expect("serializes");
+    assert_eq!(
+        json["session"]["purposeUsage"]["compact_single"]["inputTokens"],
+        6_000
+    );
+    assert_eq!(
+        json["session"]["requestComponents"]["toolResultTokens"],
+        7_000
+    );
+    let round_tripped: SessionUsageFile = serde_json::from_value(json).expect("deserializes");
+    assert_eq!(round_tripped.session, file.session);
+    assert_eq!(round_tripped.turns, file.turns);
+}
+
+/// A turn row is a delta, so it names only the purposes that turn spent, and the session row stays
+/// equal to the sum of the turn rows because `retain_turns_through` rebuilds it that way.
+#[test]
+fn session_purpose_rows_stay_equal_to_the_sum_of_the_turns() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(1_000, 100), Some(10), None);
+    ledger.record_side_call(
+        xai_chat_state::CallPurpose::TitleRefresh,
+        "grok-4",
+        &tu(600, 40),
+        Some(5),
+        None,
+    );
+    ledger.record_request_components(&measured(3_000, 7_000));
+    let first = UsageSummary::from_ledger(&ledger);
+
+    let mut file = SessionUsageFile::new("sess-1");
+    file.apply_turn(1, "t1", &first, None);
+
+    ledger.record_main_loop_call("grok-4", &tu(2_000, 200), Some(10), None);
+    ledger.record_request_components(&measured(3_000, 1_000));
+    let second = UsageSummary::from_ledger(&ledger);
+    file.apply_turn(2, "t2", &second, Some(&first));
+
+    let turn2 = file.turn(2).expect("turn row");
+    assert!(!turn2.usage.purpose_usage.contains_key("title_refresh"));
+    assert_eq!(turn2.usage.purpose_usage["main_loop"].input_tokens, 2_000);
+    assert_eq!(
+        turn2
+            .usage
+            .request_components
+            .as_ref()
+            .unwrap()
+            .requests_measured,
+        1
+    );
+
+    assert_eq!(
+        file.session.purpose_usage["title_refresh"].input_tokens,
+        600
+    );
+    assert_eq!(file.session.purpose_usage["main_loop"].input_tokens, 3_000);
+    assert_eq!(
+        file.session
+            .request_components
+            .as_ref()
+            .unwrap()
+            .requests_measured,
+        2
+    );
+
+    let incremental = file.session.clone();
+    file.retain_turns_through(2);
+    assert_eq!(file.session.purpose_usage, incremental.purpose_usage);
+    assert_eq!(
+        file.session.request_components,
+        incremental.request_components
+    );
+
+    file.retain_turns_through(1);
+    assert_eq!(
+        file.session.purpose_usage["title_refresh"].input_tokens,
+        600
+    );
+    assert_eq!(file.session.purpose_usage["main_loop"].input_tokens, 1_000);
+    assert_eq!(
+        file.session
+            .request_components
+            .as_ref()
+            .unwrap()
+            .requests_measured,
+        1
+    );
+}
+
+/// A late interjection folds into the turn already written for the same prompt, so the side calls
+/// it triggered have to land on that turn as well as on the session.
+#[test]
+fn late_fold_onto_a_written_turn_keeps_the_new_purpose_rows() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(1_000, 100), Some(10), None);
+    let first = UsageSummary::from_ledger(&ledger);
+
+    let mut file = SessionUsageFile::new("sess-1");
+    file.apply_turn(1, "t1", &first, None);
+    assert!(file.session.purpose_usage["main_loop"].model_calls == 1);
+
+    ledger.record_side_call(
+        xai_chat_state::CallPurpose::Recap,
+        "grok-4",
+        &tu(4_000, 200),
+        Some(7),
+        None,
+    );
+    ledger.record_request_components(&measured(3_000, 5_000));
+    let continued = UsageSummary::from_ledger(&ledger);
+    file.apply_turn(1, "t1-late", &continued, Some(&first));
+
+    assert_eq!(file.turns.len(), 1);
+    let turn = file.turn(1).expect("turn row");
+    assert_eq!(turn.usage.purpose_usage["recap"].input_tokens, 4_000);
+    assert_eq!(file.session.purpose_usage["recap"].input_tokens, 4_000);
+    assert_eq!(
+        file.session
+            .request_components
+            .as_ref()
+            .unwrap()
+            .tool_result_tokens,
+        5_000
+    );
+}

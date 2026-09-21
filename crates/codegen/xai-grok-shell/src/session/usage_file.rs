@@ -51,14 +51,15 @@ pub struct UsageSummary {
     pub primary_model_id: Option<String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub model_usage: IndexMap<String, UsageSummary>,
-    /// Per-call-purpose totals, keyed by `CallPurpose::as_str`. Populated on the
-    /// session row only, so a compaction side call is visible next to the
-    /// main-loop turns it was triggered by.
+    /// Per-call-purpose totals, keyed by `CallPurpose::as_str`. A turn row holds the side calls
+    /// that turn triggered; the session row is the sum of the turn rows, so `retain_turns_through`
+    /// can rebuild it.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub purpose_usage: IndexMap<String, PurposeUsage>,
     /// Estimated composition of the main-loop requests that produced this bill, summed bucket by
-    /// bucket. Populated on the session row only. Estimates in bytes/4 units, so these reconcile
-    /// with `inputTokens` in shape but not exactly in value.
+    /// bucket. A turn row holds what that turn measured; the session row is the sum of the turns.
+    /// Estimates in bytes/4 units, so these reconcile with `inputTokens` in shape but not exactly
+    /// in value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_components: Option<RequestComponentUsage>,
 }
@@ -109,6 +110,71 @@ impl From<(&xai_chat_state::RequestComponents, u64)> for RequestComponentUsage {
     }
 }
 
+impl RequestComponentUsage {
+    fn saturating_add(&self, other: &Self) -> Self {
+        Self {
+            requests_measured: self
+                .requests_measured
+                .saturating_add(other.requests_measured),
+            system_tokens: self.system_tokens.saturating_add(other.system_tokens),
+            tool_schema_tokens: self
+                .tool_schema_tokens
+                .saturating_add(other.tool_schema_tokens),
+            user_tokens: self.user_tokens.saturating_add(other.user_tokens),
+            injected_tokens: self.injected_tokens.saturating_add(other.injected_tokens),
+            compaction_meta_tokens: self
+                .compaction_meta_tokens
+                .saturating_add(other.compaction_meta_tokens),
+            image_tokens: self.image_tokens.saturating_add(other.image_tokens),
+            assistant_tokens: self.assistant_tokens.saturating_add(other.assistant_tokens),
+            reasoning_tokens: self.reasoning_tokens.saturating_add(other.reasoning_tokens),
+            tool_result_tokens: self
+                .tool_result_tokens
+                .saturating_add(other.tool_result_tokens),
+            total_tokens: self.total_tokens.saturating_add(other.total_tokens),
+        }
+    }
+
+    fn saturating_sub(&self, other: &Self) -> Self {
+        Self {
+            requests_measured: self
+                .requests_measured
+                .saturating_sub(other.requests_measured),
+            system_tokens: self.system_tokens.saturating_sub(other.system_tokens),
+            tool_schema_tokens: self
+                .tool_schema_tokens
+                .saturating_sub(other.tool_schema_tokens),
+            user_tokens: self.user_tokens.saturating_sub(other.user_tokens),
+            injected_tokens: self.injected_tokens.saturating_sub(other.injected_tokens),
+            compaction_meta_tokens: self
+                .compaction_meta_tokens
+                .saturating_sub(other.compaction_meta_tokens),
+            image_tokens: self.image_tokens.saturating_sub(other.image_tokens),
+            assistant_tokens: self.assistant_tokens.saturating_sub(other.assistant_tokens),
+            reasoning_tokens: self.reasoning_tokens.saturating_sub(other.reasoning_tokens),
+            tool_result_tokens: self
+                .tool_result_tokens
+                .saturating_sub(other.tool_result_tokens),
+            total_tokens: self.total_tokens.saturating_sub(other.total_tokens),
+        }
+    }
+
+    /// True when this is a measurement of nothing, e.g. the delta of two identical ledgers.
+    fn is_zero(&self) -> bool {
+        self.requests_measured == 0
+            && self.system_tokens == 0
+            && self.tool_schema_tokens == 0
+            && self.user_tokens == 0
+            && self.injected_tokens == 0
+            && self.compaction_meta_tokens == 0
+            && self.image_tokens == 0
+            && self.assistant_tokens == 0
+            && self.reasoning_tokens == 0
+            && self.tool_result_tokens == 0
+            && self.total_tokens == 0
+    }
+}
+
 /// One call purpose's contribution to the session bill.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -154,6 +220,57 @@ impl From<&xai_chat_state::UsageTotals> for PurposeUsage {
             model_calls: t.model_calls,
             usage_missing_calls: t.usage_missing_calls,
         }
+    }
+}
+
+impl PurposeUsage {
+    fn saturating_add(&self, other: &Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens.saturating_add(other.input_tokens),
+            output_tokens: self.output_tokens.saturating_add(other.output_tokens),
+            cached_read_tokens: self
+                .cached_read_tokens
+                .saturating_add(other.cached_read_tokens),
+            cache_creation_tokens: self
+                .cache_creation_tokens
+                .saturating_add(other.cache_creation_tokens),
+            reasoning_tokens: self.reasoning_tokens.saturating_add(other.reasoning_tokens),
+            total_tokens: self.total_tokens.saturating_add(other.total_tokens),
+            model_calls: self.model_calls.saturating_add(other.model_calls),
+            usage_missing_calls: self
+                .usage_missing_calls
+                .saturating_add(other.usage_missing_calls),
+        }
+    }
+
+    fn saturating_sub(&self, other: &Self) -> Self {
+        Self {
+            input_tokens: self.input_tokens.saturating_sub(other.input_tokens),
+            output_tokens: self.output_tokens.saturating_sub(other.output_tokens),
+            cached_read_tokens: self
+                .cached_read_tokens
+                .saturating_sub(other.cached_read_tokens),
+            cache_creation_tokens: self
+                .cache_creation_tokens
+                .saturating_sub(other.cache_creation_tokens),
+            reasoning_tokens: self.reasoning_tokens.saturating_sub(other.reasoning_tokens),
+            total_tokens: self.total_tokens.saturating_sub(other.total_tokens),
+            model_calls: self.model_calls.saturating_sub(other.model_calls),
+            usage_missing_calls: self
+                .usage_missing_calls
+                .saturating_sub(other.usage_missing_calls),
+        }
+    }
+
+    fn is_zero(&self) -> bool {
+        self.input_tokens == 0
+            && self.output_tokens == 0
+            && self.cached_read_tokens == 0
+            && self.cache_creation_tokens == 0
+            && self.reasoning_tokens == 0
+            && self.total_tokens == 0
+            && self.model_calls == 0
+            && self.usage_missing_calls == 0
     }
 }
 
@@ -236,8 +353,11 @@ impl UsageSummary {
             turn_count: 0,
             primary_model_id: None,
             model_usage: IndexMap::new(),
-            purpose_usage: IndexMap::new(),
-            request_components: None,
+            purpose_usage: merge_purpose_usage(&self.purpose_usage, &other.purpose_usage),
+            request_components: merge_request_components(
+                self.request_components.as_ref(),
+                other.request_components.as_ref(),
+            ),
         }
     }
 
@@ -275,8 +395,11 @@ impl UsageSummary {
             turn_count: 0,
             primary_model_id: None,
             model_usage: IndexMap::new(),
-            purpose_usage: IndexMap::new(),
-            request_components: None,
+            purpose_usage: sub_purpose_usage(&self.purpose_usage, &other.purpose_usage),
+            request_components: sub_request_components(
+                self.request_components.as_ref(),
+                other.request_components.as_ref(),
+            ),
         }
     }
 
@@ -458,6 +581,60 @@ fn primary_model(model_usage: &IndexMap<String, UsageSummary>) -> Option<String>
         .iter()
         .max_by_key(|(_, row)| (row.model_calls, row.total_tokens))
         .map(|(name, _)| name.clone())
+}
+
+/// Purpose rows add per key, so a purpose that only one side saw still lands in the sum.
+fn merge_purpose_usage(
+    a: &IndexMap<String, PurposeUsage>,
+    b: &IndexMap<String, PurposeUsage>,
+) -> IndexMap<String, PurposeUsage> {
+    let mut out = a.clone();
+    for (purpose, row) in b {
+        let entry = out.entry(purpose.clone()).or_default();
+        *entry = entry.saturating_add(row);
+    }
+    out
+}
+
+/// Purpose deltas drop zero rows, matching how `model_usage` keeps only what a turn spent.
+fn sub_purpose_usage(
+    live: &IndexMap<String, PurposeUsage>,
+    previous: &IndexMap<String, PurposeUsage>,
+) -> IndexMap<String, PurposeUsage> {
+    let mut out = IndexMap::new();
+    for (purpose, row) in live {
+        let delta = match previous.get(purpose) {
+            Some(prev) => row.saturating_sub(prev),
+            None => row.clone(),
+        };
+        if !delta.is_zero() {
+            out.insert(purpose.clone(), delta);
+        }
+    }
+    out
+}
+
+fn merge_request_components(
+    a: Option<&RequestComponentUsage>,
+    b: Option<&RequestComponentUsage>,
+) -> Option<RequestComponentUsage> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(a), None) => Some(a.clone()),
+        (None, Some(b)) => Some(b.clone()),
+        (Some(a), Some(b)) => Some(a.saturating_add(b)),
+    }
+}
+
+fn sub_request_components(
+    live: Option<&RequestComponentUsage>,
+    previous: Option<&RequestComponentUsage>,
+) -> Option<RequestComponentUsage> {
+    let (Some(live), Some(previous)) = (live, previous) else {
+        return live.cloned();
+    };
+    let delta = live.saturating_sub(previous);
+    (!delta.is_zero()).then_some(delta)
 }
 
 fn merge_cost_ticks(a: Option<i64>, b: Option<i64>) -> Option<i64> {
