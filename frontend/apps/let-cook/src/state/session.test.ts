@@ -52,17 +52,19 @@ describe("session conversation reset", () => {
     });
   });
 
-  it("clears the session id on a null reset so a workspace reconnect cannot prompt a dead id", () => {
-    useSessionStore.setState({
-      sessionId: "dead-session",
-      turnRunning: true,
-      workingSessions: { "dead-session": { startedAt: Date.now(), activity: null } },
+    it("clears the session id on a null reset so a workspace reconnect cannot prompt a dead id", () => {
+      useSessionStore.setState({
+        sessionId: "dead-session",
+        turnRunning: true,
+        workingSessions: { "dead-session": { startedAt: Date.now(), activity: null } },
+        editingQueueEntry: { id: "q1", version: 0 },
+      });
+      useSessionStore.getState().resetConversation(null);
+      expect(useSessionStore.getState().sessionId).toBeNull();
+      expect(useSessionStore.getState().turnRunning).toBe(false);
+      expect(useSessionStore.getState().planMode).toBe(false);
+      expect(useSessionStore.getState().editingQueueEntry).toBeNull();
     });
-    useSessionStore.getState().resetConversation(null);
-    expect(useSessionStore.getState().sessionId).toBeNull();
-    expect(useSessionStore.getState().turnRunning).toBe(false);
-    expect(useSessionStore.getState().planMode).toBe(false);
-  });
 });
 
 describe("session transcript reducer", () => {

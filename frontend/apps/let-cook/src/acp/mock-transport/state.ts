@@ -163,6 +163,7 @@ function defaultState(): MockState {
     tasks: [],
     subagents: [],
     schedules: [],
+    queueEntries: [],
     ...seedFromWindow(),
     // Whatever the agent already wrote wins: the renderer's own memory is not the source of truth.
     ...persisted(),

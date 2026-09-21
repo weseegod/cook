@@ -1,4 +1,5 @@
 import { PanelLeftClose, PanelLeftOpen, PanelRight } from "lucide-react";
+import { useEffect } from "react";
 import { acpClient } from "../../acp/client";
 import { pickFolder } from "../../acp/host";
 import { useSessionStore } from "../../state/session";
@@ -13,7 +14,7 @@ import { TodoChip } from "./todo-chip";
  * Agent status bar (catalog §3.3): the workspace and its plans left, chips right. One
  * `margin-left: auto` on the right cluster — no ProcessStatus, no competing auto margins. The
  * right cluster uses fixed slots so optional status chips can appear without moving a neighbor:
- * plan checklist, goal, line changes, Git, then tools.
+ * goal (or the plan checklist when there is no goal), line changes, Git, then tools.
  */
 export function AgentHeader({
   sidebarOpen,
@@ -27,6 +28,14 @@ export function AgentHeader({
   onOpenTools: () => void;
 }) {
   const cwd = useSessionStore((state) => state.cwd);
+  const goal = useSessionStore((state) => state.goal);
+  const hasChecklist = useSessionStore((state) => state.planEntries.length > 0);
+  const setTodoOverlayOpen = useSessionStore((state) => state.setTodoOverlayOpen);
+  const hasGoal = goal !== null;
+
+  useEffect(() => {
+    if (hasGoal) setTodoOverlayOpen(false);
+  }, [hasGoal, setTodoOverlayOpen]);
 
   async function chooseWorkspace() {
     const selected = await pickFolder();
@@ -54,11 +63,8 @@ export function AgentHeader({
         <TasksChip />
       </div>
       <div className="agent-header-right">
-        <div className="agent-header-slot agent-header-slot-todo">
-          <TodoChip />
-        </div>
-        <div className="agent-header-slot agent-header-slot-goal">
-          <GoalStatus />
+        <div className={`agent-header-slot agent-header-slot-goal${hasGoal ? "" : hasChecklist ? " agent-header-slot-goal-checklist" : " agent-header-slot-goal-empty"}`}>
+          {hasGoal ? <GoalStatus /> : <TodoChip />}
         </div>
         <div className="agent-header-slot agent-header-slot-diffstat">
           <HeaderDiffstat />

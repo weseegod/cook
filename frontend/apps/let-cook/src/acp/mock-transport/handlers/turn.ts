@@ -1,9 +1,14 @@
 import { notify, state } from "../state";
+import { mockQueueChanged } from "../events";
 import type { MethodHandler } from "./registry";
 
 const emptyResponse: MethodHandler = ({ respond }) => {
     return respond({});
 };
+
+function queueBroadcast(sessionId: string) {
+  mockQueueChanged(undefined, sessionId);
+}
 
 export const turnHandlers: Record<string, MethodHandler> = {
   "x.ai/rewind/points": ({ respond }) => {
@@ -69,7 +74,33 @@ export const turnHandlers: Record<string, MethodHandler> = {
     });
     return respond({ result: { status: "queued" } });
   },
-  "x.ai/queue/remove": emptyResponse,
-  "x.ai/queue/clear": emptyResponse,
+  "x.ai/queue/remove": ({ p, sessionId, respond }) => {
+    const id = String(p.id ?? "");
+    state.queueEntries = state.queueEntries.filter((entry) => entry.id !== id);
+    queueBroadcast(String(p.sessionId ?? sessionId));
+    return respond({});
+  },
+  "x.ai/queue/clear": ({ p, sessionId, respond }) => {
+    state.queueEntries = [];
+    queueBroadcast(String(p.sessionId ?? sessionId));
+    return respond({});
+  },
+  "x.ai/queue/interject": ({ p, sessionId, respond }) => {
+    const id = String(p.id ?? "");
+    state.queueEntries = state.queueEntries.filter((entry) => entry.id !== id);
+    queueBroadcast(String(p.sessionId ?? sessionId));
+    return respond({});
+  },
+  "x.ai/queue/edit": ({ p, sessionId, respond }) => {
+    const id = String(p.id ?? "");
+    const newText = String(p.newText ?? "");
+    state.queueEntries = state.queueEntries.map((entry) =>
+      entry.id === id ? { ...entry, text: newText, version: entry.version + 1 } : entry,
+    );
+    queueBroadcast(String(p.sessionId ?? sessionId));
+    return respond({});
+  },
+  "x.ai/queue/hold_edit": emptyResponse,
+  "x.ai/queue/release_edit": emptyResponse,
   "x.ai/permissions/reset": emptyResponse,
 };

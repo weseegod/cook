@@ -169,6 +169,11 @@ export interface SessionState {
   queuedPromptCount: number;
   /** Full queue rows from `x.ai/queue/changed` (N-queue) for the queue bar. */
   queuedEntries: QueuedPromptEntry[];
+  /**
+   * Queue row currently loaded into the composer for edit (`hold_edit` active).
+   * Null when the composer is composing a normal / queued send.
+   */
+  editingQueueEntry: { id: string; version: number } | null;
   /** Follow-up chips from `x.ai/follow_ups` (N-follow). */
   followUps: FollowUpsState | null;
   composerDraft: string;

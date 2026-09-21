@@ -2,6 +2,7 @@ import { ListTodo } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useSessionStore } from "../../state/session";
 import { clampMenuToViewport } from "../components/anchored-menu";
+import { planEntryStatus } from "./plan-entries";
 import { PlanChecklist } from "./plan-list";
 
 /** Header checklist chip: the latest plan's todo pane in the same anchored-menu family as Plans. */
@@ -39,20 +40,28 @@ export function TodoChip() {
 
   if (entries.length === 0) return null;
 
+  const completed = entries.reduce<number>(
+    (count, entry) => count + (planEntryStatus(entry) === "completed" ? 1 : 0),
+    0,
+  );
+  const progress = `${completed}/${entries.length}`;
+
   return (
     <div className="todo-chip-root" ref={root}>
       <button
         type="button"
-        className={`todo-toggle${open ? " active" : ""}`}
+        className={`plan-chip checklist-chip${open ? " active" : ""}`}
         data-testid="todo-toggle"
-        title={open ? "Hide plan checklist" : "Show plan checklist"}
-        aria-label={open ? "Hide plan checklist" : "Show plan checklist"}
+        title={`${open ? "Hide" : "Show"} plan checklist (${progress} completed)`}
+        aria-label={`${open ? "Hide" : "Show"} plan checklist: ${progress} completed`}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-pressed={open}
         onClick={() => setOpen(!open)}
       >
-        <ListTodo size={14} />
+        <ListTodo size={12} aria-hidden="true" />
+        <span className="checklist-chip-name">Checklist</span>
+        <span className="checklist-chip-count" data-testid="todo-chip-count" aria-hidden="true">{progress}</span>
       </button>
       {open && (
         <div ref={menu} className="todo-menu" role="menu" data-testid="todo-overlay">

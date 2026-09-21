@@ -36,6 +36,8 @@ test.describe("goal and plan presentation", () => {
     await expect(page.getByText("Writing the plan.")).toBeVisible();
     await expect(page.locator(".plan-card")).toHaveCount(0);
     await expect(page.getByTestId("todo-overlay")).toHaveCount(0);
+    await expect(page.getByTestId("todo-toggle")).toContainText("Checklist");
+    await expect(page.getByTestId("todo-chip-count")).toHaveText("1/4");
     await page.getByTestId("todo-toggle").click();
     const overlay = page.getByTestId("todo-overlay");
     await expect(overlay).toBeVisible();
@@ -104,11 +106,60 @@ test.describe("goal and plan presentation", () => {
     await input.press("Enter");
     await expect(page.getByTestId("turn-status")).toBeVisible();
     await expect(input).toBeEnabled();
+    await expect(page.getByTestId("interject-button")).toHaveCount(0);
     await input.fill("follow up");
     await input.press("Enter");
     const prompts = await waitForCalls(page, "session/prompt", 2);
     expect((prompts.at(-1)?.params.prompt as Array<Record<string, unknown>>)).toEqual([{ type: "text", text: "follow up" }]);
     await expect(page.getByTestId("send-button")).toContainText("Queue");
+
+    // Agent queue list paints above turn-status (TUI §3 / §9.7).
+    await page.evaluate(() => window.__cookMock!.queueChanged([
+      { id: "q1", version: 0, text: "follow up", kind: "prompt", position: 0 },
+    ]));
+    const queue = page.getByTestId("queue-bar");
+    await expect(queue).toBeVisible();
+    await expect(queue).toContainText("follow up");
+    const queueBox = await queue.boundingBox();
+    const statusBox = await page.getByTestId("turn-status").boundingBox();
+    expect(queueBox && statusBox && queueBox.y < statusBox.y).toBe(true);
+    await expect(page.getByTestId("queue-send-now-q1")).toBeVisible();
+    await expect(page.getByTestId("queue-edit-q1")).toBeVisible();
+    await expect(page.getByTestId("queue-remove-q1")).toBeVisible();
+  });
+
+  test("queue pane can edit, send now, and remove held prompts", async ({ page }) => {
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 400 });
+    const input = page.getByTestId("composer-input");
+    await input.fill("hello");
+    await input.press("Enter");
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+    await page.evaluate(() => window.__cookMock!.queueChanged([
+      { id: "q-a", version: 1, text: "first queued", kind: "prompt", position: 0 },
+      { id: "q-b", version: 0, text: "second queued", kind: "prompt", position: 1 },
+    ]));
+    await expect(page.getByTestId("queue-bar")).toContainText("2 queued");
+
+    await page.getByTestId("queue-edit-q-a").click();
+    await expect(input).toHaveValue("first queued");
+    await expect(page.getByTestId("send-button")).toContainText("Save");
+    await input.fill("first queued edited");
+    await input.press("Enter");
+    await expect.poll(async () =>
+      (await api(page).requests()).some((entry) => entry.method === "x.ai/queue/edit"),
+    ).toBe(true);
+    await expect(input).toHaveValue("");
+
+    await page.getByTestId("queue-send-now-q-b").click();
+    await expect.poll(async () =>
+      (await api(page).requests()).filter((entry) => entry.method === "x.ai/queue/interject").length,
+    ).toBeGreaterThan(0);
+
+    await page.evaluate(() => window.__cookMock!.queueChanged([
+      { id: "q-c", version: 0, text: "drop me", kind: "prompt", position: 0 },
+    ]));
+    await page.getByTestId("queue-remove-q-c").click();
+    await expect(page.getByTestId("queue-bar")).toHaveCount(0);
   });
 
   test("shows an empty plan without an inline card and can quit it", async ({ page }) => {
@@ -160,6 +211,8 @@ test.describe("goal and plan presentation", () => {
 
     const chip = page.getByTestId("goal-chip");
     await expect(chip).toBeVisible();
+    // The Goal detail owns the same plan checklist, so the standalone header checklist is merged.
+    await expect(page.getByTestId("todo-toggle")).toHaveCount(0);
     await expect(chip).toContainText("Goal: Executing");
     await expect(chip).toContainText("/100k tokens");
 
@@ -326,4 +379,3 @@ test.describe("agent-driven surfaces", () => {
     await expect(page.getByTestId("memory-browser")).toBeVisible();
   });
 });
-
