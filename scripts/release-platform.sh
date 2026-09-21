@@ -96,6 +96,47 @@ if [[ -x "$ROOT/bin/protoc" ]]; then
   export PATH="$ROOT/bin:$PATH"
 fi
 
+# Prefetch the target ripgrep binary and point build.rs at it. Self-hosted
+# macOS has seen intermittent reqwest failures ("error sending request") when
+# cargo build scripts fetch BurntSushi/ripgrep from GitHub; curl --retry is
+# more reliable. Windows skips auto-bundling (zip archives), so leave unset.
+ensure_bundled_rg() {
+  case "$platform_arg" in
+    windows) return 0 ;;
+  esac
+  local rg_triple=""
+  case "$rust_target" in
+    aarch64-apple-darwin) rg_triple=aarch64-apple-darwin ;;
+    x86_64-apple-darwin) rg_triple=x86_64-apple-darwin ;;
+    x86_64-unknown-linux-gnu) rg_triple=x86_64-unknown-linux-musl ;;
+    aarch64-unknown-linux-gnu) rg_triple=aarch64-unknown-linux-gnu ;;
+    *)
+      echo "warning: no known ripgrep asset for $rust_target; build.rs will download" >&2
+      return 0
+      ;;
+  esac
+  local ver=15.0.0
+  local cache="$ROOT/target/tmp/release-bundle-rg"
+  local dest="$cache/rg-${ver}-${rg_triple}"
+  mkdir -p "$cache"
+  if [[ ! -x "$dest" ]]; then
+    local url="https://github.com/BurntSushi/ripgrep/releases/download/${ver}/ripgrep-${ver}-${rg_triple}.tar.gz"
+    local tgz="$cache/ripgrep-${ver}-${rg_triple}.tar.gz"
+    local extract_dir="$cache/ripgrep-${ver}-${rg_triple}"
+    echo "==> Prefetch ripgrep ${ver} (${rg_triple})"
+    curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "$tgz" "$url"
+    rm -rf "$extract_dir"
+    tar -xzf "$tgz" -C "$cache"
+    cp -f "$extract_dir/rg" "$dest"
+    chmod +x "$dest"
+  else
+    echo "==> Using cached ripgrep ${ver} (${rg_triple})"
+  fi
+  export GROK_SHELL_BUNDLE_RG_PATH="$dest"
+  export GROK_TOOLS_BUNDLE_RG_PATH="$dest"
+}
+ensure_bundled_rg
+
 mkdir -p "$OUT" "$DESKTOP_DIR/src-tauri/binaries"
 rm -rf "${OUT:?}/"*
 

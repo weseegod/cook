@@ -116,21 +116,7 @@ fn bundle_fd() -> Result<(), Box<dyn std::error::Error>> {
         "https://github.com/sharkdp/fd/releases/download/v{ver}/fd-v{ver}-{asset_triple}.tar.gz"
     );
 
-    let bytes: Vec<u8> = {
-        let resp = reqwest::blocking::get(&url).map_err(|e| {
-            format!(
-                "Failed to download fd: {e}\nSet GROK_TOOLS_BUNDLE_FD_PATH to a local fd for offline builds."
-            )
-        })?;
-        if !resp.status().is_success() {
-            return Err(format!(
-                "HTTP {} downloading fd. Set GROK_TOOLS_BUNDLE_FD_PATH for offline builds.",
-                resp.status()
-            )
-            .into());
-        }
-        resp.bytes()?.to_vec()
-    };
+    let bytes = download_with_retries(&url, "fd", "GROK_TOOLS_BUNDLE_FD_PATH")?;
 
     // Verify the tarball against the pinned per-asset hash before unpacking.
     let expected_sha = FD_TARBALL_SHA256
@@ -313,22 +299,7 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
         t = asset_triple
     );
 
-    let bytes: Vec<u8> = {
-        let resp = reqwest::blocking::get(&url).map_err(|e| {
-            format!(
-                "Failed to download ripgrep: {}\nSet GROK_TOOLS_BUNDLE_RG_PATH to a local rg for offline builds.",
-                e
-            )
-        })?;
-        if !resp.status().is_success() {
-            return Err(format!(
-                "HTTP {} downloading ripgrep. Set GROK_TOOLS_BUNDLE_RG_PATH for offline builds.",
-                resp.status()
-            )
-            .into());
-        }
-        resp.bytes()?.to_vec()
-    };
+    let bytes = download_with_retries(&url, "ripgrep", "GROK_TOOLS_BUNDLE_RG_PATH")?;
 
     let gz = flate2::read::GzDecoder::new(bytes.as_slice());
     let mut ar = tar::Archive::new(gz);
@@ -358,4 +329,40 @@ fn bundle_rg() -> Result<(), Box<dyn std::error::Error>> {
 
     compress_and_pin(&dest, "RG")?;
     Ok(())
+}
+
+/// Fetch `url` with a few retries. Self-hosted macOS runners have seen
+/// intermittent reqwest "error sending request" failures against GitHub.
+fn download_with_retries(
+    url: &str,
+    label: &str,
+    override_env: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    const ATTEMPTS: u32 = 4;
+    let mut last_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match reqwest::blocking::get(url) {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    last_err = format!("HTTP {}", resp.status());
+                } else {
+                    return Ok(resp.bytes()?.to_vec());
+                }
+            }
+            Err(e) => {
+                last_err = e.to_string();
+            }
+        }
+        if attempt < ATTEMPTS {
+            let secs = u64::from(attempt);
+            eprintln!(
+                "cargo:warning={label} download failed (attempt {attempt}/{ATTEMPTS}): {last_err}; retrying in {secs}s"
+            );
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+        }
+    }
+    Err(format!(
+        "Failed to download {label}: {last_err}\nSet {override_env} to a local binary for offline builds."
+    )
+    .into())
 }

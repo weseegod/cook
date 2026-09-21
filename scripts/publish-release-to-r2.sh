@@ -129,14 +129,28 @@ archive_intel=""
 archive_intel_sig=""
 nsis=""
 nsis_sig=""
-declare -A remote_names=()
+# Newline-separated basenames from R2 (finalize). Avoid `declare -A` — macOS
+# Actions runners use /bin/bash 3.2 which has no associative arrays.
+remote_names=""
+
+remote_has() {
+  case $'\n'"${remote_names}" in
+    *$'\n'"$1"$'\n'*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 if [[ "$mode" == "finalize" ]]; then
   # Do not download the whole version prefix (GB of installers). List keys,
   # pull only tiny .sig files for latest.json, and server-side-copy CLI
   # binaries to the bucket root.
   echo "==> Listing v${version}/ on R2"
-  mapfile -t remote_keys < <("${R2_CP[@]}" list "v${version}/")
+  # Avoid `mapfile` (bash 4+); macOS ships bash 3.2 as /bin/bash.
+  remote_keys=()
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    remote_keys+=("$key")
+  done < <("${R2_CP[@]}" list "v${version}/")
   [[ "${#remote_keys[@]}" -ge 1 ]] || {
     echo "error: R2 prefix v${version}/ is empty" >&2
     exit 1
@@ -145,7 +159,7 @@ if [[ "$mode" == "finalize" ]]; then
   for key in "${remote_keys[@]}"; do
     [[ "$key" == */ ]] && continue
     name="$(basename "$key")"
-    remote_names["$name"]=1
+    remote_names="${remote_names}${name}"$'\n'
     classify_artifact "$name"
     if [[ "$name" == *.sig ]]; then
       echo "  fetching $name"
@@ -270,7 +284,7 @@ r2_put "$ROOT/scripts/install.sh" "install.sh" "public, max-age=60, must-revalid
 for cli in "$cli_linux" "$cli_mac_arm" "$cli_mac_intel" "$cli_windows"; do
   if [[ "$mode" == "finalize" ]]; then
     r2_copy "v${version}/${cli}" "$cli"
-    if [[ -n "${remote_names[${cli}.sha256]:-}" ]]; then
+    if remote_has "${cli}.sha256"; then
       r2_copy "v${version}/${cli}.sha256" "${cli}.sha256"
     fi
   else

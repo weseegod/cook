@@ -100,22 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         t = asset_triple
     );
 
-    let bytes: Vec<u8> = {
-        let resp = reqwest::blocking::get(&url).map_err(|e| {
-            format!(
-                "Failed to download ripgrep: {}\nSet GROK_SHELL_BUNDLE_RG_PATH to a local rg for offline builds.",
-                e
-            )
-        })?;
-        if !resp.status().is_success() {
-            return Err(format!(
-                "HTTP {} downloading ripgrep. Set GROK_SHELL_BUNDLE_RG_PATH for offline builds.",
-                resp.status()
-            )
-            .into());
-        }
-        resp.bytes()?.to_vec()
-    };
+    let bytes = download_with_retries(&url)?;
 
     let gz = flate2::read::GzDecoder::new(bytes.as_slice());
     let mut ar = tar::Archive::new(gz);
@@ -154,4 +139,36 @@ fn is_bazel_build(manifest_dir: &Path) -> bool {
         || env::var_os("BAZEL_OUTPUT_BASE").is_some()
         || manifest_dir_str.contains("/execroot/")
         || manifest_dir_str.contains("/bazel-out/")
+}
+
+/// Fetch `url` with a few retries. Self-hosted macOS runners have seen
+/// intermittent reqwest "error sending request" failures against GitHub.
+fn download_with_retries(url: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    const ATTEMPTS: u32 = 4;
+    let mut last_err = String::new();
+    for attempt in 1..=ATTEMPTS {
+        match reqwest::blocking::get(url) {
+            Ok(resp) => {
+                if !resp.status().is_success() {
+                    last_err = format!("HTTP {}", resp.status());
+                } else {
+                    return Ok(resp.bytes()?.to_vec());
+                }
+            }
+            Err(e) => {
+                last_err = e.to_string();
+            }
+        }
+        if attempt < ATTEMPTS {
+            let secs = u64::from(attempt);
+            eprintln!(
+                "cargo:warning=ripgrep download failed (attempt {attempt}/{ATTEMPTS}): {last_err}; retrying in {secs}s"
+            );
+            std::thread::sleep(std::time::Duration::from_secs(secs));
+        }
+    }
+    Err(format!(
+        "Failed to download ripgrep: {last_err}\nSet GROK_SHELL_BUNDLE_RG_PATH to a local rg for offline builds."
+    )
+    .into())
 }
