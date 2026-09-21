@@ -25,6 +25,10 @@ pub(crate) struct SummaryConfig {
     /// Channel back to the persistence actor for sequential storage writes.
     /// Weak: a strong sender here would keep the actor's own channel and task alive.
     pub(crate) persistence_tx: mpsc::WeakUnboundedSender<PersistenceMsg>,
+    /// Late-bound ledger handle for the title call, filled by the session spawn once the
+    /// chat-state actor exists. Stays empty on paths that never bind one, which just means
+    /// the title call goes unaccounted instead of failing.
+    pub(crate) chat_state: std::sync::Arc<std::sync::OnceLock<xai_chat_state::ChatStateHandle>>,
 }
 
 /// Created once per persistence actor. The only public method is [`update`], which is called from the `ContentChunk` handler.
@@ -60,11 +64,17 @@ impl SummaryGenerator {
                 let sampling_client = self.config.sampling_client.clone();
                 let model = self.config.model.clone();
                 let persistence_tx = self.config.persistence_tx.clone();
+                let chat_state = self.config.chat_state.get().cloned();
 
                 // A background task runs the LLM call so the persistence actor keeps processing messages (updates, flushes)
                 tokio::spawn(async move {
-                    let mut title =
-                        generate_session_summary(content.clone(), sampling_client, &model).await;
+                    let mut title = generate_session_summary(
+                        content.clone(),
+                        sampling_client,
+                        &model,
+                        chat_state.as_ref(),
+                    )
+                    .await;
                     if title.trim().is_empty() {
                         title =
                             crate::session::helpers::session_summary::title_fallback_from_user_text(
@@ -222,6 +232,7 @@ mod tests {
             sampling_client,
             model: String::new(),
             persistence_tx: tx.downgrade(),
+            chat_state: std::sync::Arc::new(std::sync::OnceLock::new()),
         });
         assert!(generator.is_idle());
         generator.mark_done();
@@ -230,5 +241,123 @@ mod tests {
         assert!(generator.is_idle());
         generator.reset();
         assert!(generator.is_idle());
+    }
+
+    /// The generator reads the late-bound ledger handle at call time and folds the title call's
+    /// usage into the session ledger. End to end through `update`, a real chat-state actor, and a
+    /// real SSE response; the `GeneratedTitle` message orders the assertion after the ledger write.
+    #[tokio::test]
+    async fn update_folds_the_title_call_into_the_bound_ledger() {
+        use axum::Router;
+        use axum::response::sse::{Event, KeepAlive, Sse};
+        use axum::routing::post;
+        use futures_util::stream;
+        use serde_json::json;
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                let events = vec![
+                    Event::default().data(
+                        json!({
+                            "id": "chatcmpl-test",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "title-model",
+                            "choices": [{
+                                "index": 0,
+                                "delta": { "role": "assistant", "content": "Fix the auth bug" },
+                                "finish_reason": "stop"
+                            }]
+                        })
+                        .to_string(),
+                    ),
+                    Event::default().data(
+                        json!({
+                            "id": "chatcmpl-test",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "title-model",
+                            "choices": [],
+                            "usage": {
+                                "prompt_tokens": 300,
+                                "completion_tokens": 8,
+                                "total_tokens": 308,
+                                "cost_in_usd_ticks": 2
+                            }
+                        })
+                        .to_string(),
+                    ),
+                    Event::default().data("[DONE]"),
+                ];
+                let stream =
+                    stream::iter(events.into_iter().map(Ok::<_, std::convert::Infallible>));
+                Sse::new(stream).keep_alive(KeepAlive::default())
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        let (chat_event_tx, _chat_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let chat_state = xai_chat_state::ChatStateActor::spawn(
+            vec![],
+            xai_grok_sampling_types::SamplingConfig::default(),
+            Box::new(xai_chat_state::NullChatPersistence),
+            chat_event_tx,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let (persistence_tx, mut persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+        let cell = std::sync::Arc::new(std::sync::OnceLock::new());
+        // Production binds the handle after the chat-state actor exists and reads the cell at call
+        // time; bind before the first update so the ordering contract is exercised here too.
+        assert!(cell.set(chat_state.clone()).is_ok());
+        let mut generator = SummaryGenerator::new(SummaryConfig {
+            sampling_client: OaiCompatClient::new(xai_grok_sampler::SamplerConfig {
+                base_url: format!("http://{addr}/v1"),
+                api_key: Some("test-api-key".to_string()),
+                model: "title-model".to_string(),
+                context_window: 256_000,
+                ..Default::default()
+            })
+            .unwrap(),
+            model: "title-model".to_string(),
+            persistence_tx: persistence_tx.downgrade(),
+            chat_state: cell,
+        });
+
+        generator.update("fix the auth bug in login.rs".to_string());
+        let emitted =
+            tokio::time::timeout(std::time::Duration::from_secs(10), persistence_rx.recv())
+                .await
+                .expect("title generation finishes")
+                .expect("persistence channel open");
+        let _ = shutdown_tx.send(());
+        assert!(
+            matches!(emitted, PersistenceMsg::GeneratedTitle(_)),
+            "update must persist the generated title"
+        );
+
+        let session = chat_state
+            .try_get_session_usage()
+            .await
+            .expect("session ledger");
+        let title = session
+            .by_purpose
+            .get(&xai_chat_state::CallPurpose::SessionTitle)
+            .expect("session title row");
+        assert_eq!(title.input_tokens, 300);
+        assert_eq!(title.output_tokens, 8);
+        assert_eq!(title.model_calls, 1);
+        assert_eq!(session.main_loop_model_calls, 0);
     }
 }

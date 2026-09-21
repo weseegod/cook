@@ -70,11 +70,13 @@ pub enum CallPurpose {
     PromptSuggestion,
     /// The vision call that describes an attached image.
     ImageDescribe,
+    /// The first-pass session title generated from the opening user message.
+    SessionTitle,
 }
 
 impl CallPurpose {
     /// Every purpose, in reporting order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::MainLoop,
         Self::CompactSingle,
         Self::CompactPass1,
@@ -91,6 +93,7 @@ impl CallPurpose {
         Self::GoalEvaluator,
         Self::PromptSuggestion,
         Self::ImageDescribe,
+        Self::SessionTitle,
     ];
 
     /// Stable identifier for reports and telemetry. Also the label auxiliary
@@ -113,6 +116,7 @@ impl CallPurpose {
             Self::GoalEvaluator => "goal_evaluator",
             Self::PromptSuggestion => "prompt_suggestion",
             Self::ImageDescribe => "image_describe",
+            Self::SessionTitle => "session_title",
         }
     }
 
@@ -470,7 +474,8 @@ mod tests {
                 "laziness",
                 "goal_evaluator",
                 "prompt_suggestion",
-                "image_describe"
+                "image_describe",
+                "session_title"
             ]
         );
         assert_eq!(

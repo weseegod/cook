@@ -39,6 +39,7 @@ fn test_actor_inner(
             sampling_client,
             model: String::new(),
             persistence_tx: tx.downgrade(),
+            chat_state: std::sync::Arc::new(std::sync::OnceLock::new()),
         });
     if mark_summary_done {
         summary.mark_done();

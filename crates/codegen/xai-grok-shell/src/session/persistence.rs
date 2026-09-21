@@ -1313,6 +1313,10 @@ pub struct PersistenceHandle {
     pub tx: mpsc::UnboundedSender<PersistenceMsg>,
     noop: bool,
     disk_full_rx: watch::Receiver<bool>,
+    /// Late-bound chat-state handle for the session-title generator.
+    /// The persistence actor is built before the chat-state actor exists, so the session spawn
+    /// binds this once the chat-state actor is up and the title call can account for itself.
+    summary_chat_state: Arc<std::sync::OnceLock<xai_chat_state::ChatStateHandle>>,
 }
 
 fn actor_channel() -> (
@@ -1328,6 +1332,7 @@ fn actor_channel() -> (
         tx,
         noop: false,
         disk_full_rx,
+        summary_chat_state: Arc::new(std::sync::OnceLock::new()),
     };
     (handle, rx, weak, disk_full_tx)
 }
@@ -1376,6 +1381,7 @@ impl PersistenceHandle {
             tx,
             noop: false,
             disk_full_rx,
+            summary_chat_state: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -1385,7 +1391,19 @@ impl PersistenceHandle {
             tx,
             noop: true,
             disk_full_rx: watch::channel(false).1,
+            summary_chat_state: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Bind the chat-state handle the session-title generator accounts its model call against.
+    /// Called once by the session spawn after the chat-state actor is up; later calls are ignored.
+    pub(crate) fn bind_summary_chat_state(&self, handle: &xai_chat_state::ChatStateHandle) {
+        let _ = self.summary_chat_state.set(handle.clone());
+    }
+
+    /// The bound chat-state handle, or `None` before the session spawn has bound it.
+    fn summary_chat_state(&self) -> Option<&xai_chat_state::ChatStateHandle> {
+        self.summary_chat_state.get()
     }
 
     pub fn is_noop(&self) -> bool {
@@ -2773,6 +2791,7 @@ pub(crate) async fn new(
     }
 
     let (handle, rx, summary_tx, disk_full_tx) = actor_channel();
+    let summary_chat_state = handle.summary_chat_state.clone();
 
     let info_clone = info.clone();
     let storage: Arc<dyn StorageAdapter> = Arc::new(storage);
@@ -2791,6 +2810,7 @@ pub(crate) async fn new(
                     sampling_client,
                     model: session_summary_model,
                     persistence_tx: summary_tx,
+                    chat_state: summary_chat_state,
                 },
             ),
             registry_title_sync,
@@ -2883,6 +2903,7 @@ pub(crate) async fn new_with_explicit_dir(
     }
 
     let (handle, rx, summary_tx, disk_full_tx) = actor_channel();
+    let summary_chat_state = handle.summary_chat_state.clone();
 
     let info_clone = info.clone();
     let storage: Arc<dyn StorageAdapter> = Arc::new(storage);
@@ -2900,6 +2921,7 @@ pub(crate) async fn new_with_explicit_dir(
                     sampling_client,
                     model: session_summary_model,
                     persistence_tx: summary_tx,
+                    chat_state: summary_chat_state,
                 },
             ),
             registry_title_sync: None,
@@ -3017,6 +3039,7 @@ pub(crate) async fn load_light(
     };
 
     let (handle, rx, summary_tx, disk_full_tx) = actor_channel();
+    let summary_chat_state = handle.summary_chat_state.clone();
 
     let storage: Arc<dyn StorageAdapter> = Arc::new(storage);
     let remote_sync = init_remote_sync(&persisted_info.summary, storage_mode, auth_manager)?;
@@ -3028,6 +3051,7 @@ pub(crate) async fn load_light(
                 sampling_client,
                 model: session_summary_model,
                 persistence_tx: summary_tx,
+                chat_state: summary_chat_state,
             },
         );
         if has_title {

@@ -10,13 +10,16 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 ## 1. Outcome
 
-This experiment implemented five bounded changes:
+This experiment implemented six bounded changes:
 
 1. A P0 accounting correction: a successful model response that omits usage now marks both the open prompt ledger and the session ledger incomplete. Unknown usage is no longer silently indistinguishable from a free call.
 2. An opt-in P1 context arm: request-copy pruning can age tool results by tool round within one user turn and cap the recent raw-result characters. The legacy behavior remains the default because both new limits default to zero.
 3. A P0 side-call accounting increment: every model call now carries a purpose, and compaction samples fold their provider usage into the session bill. Before this, compaction spend reached no ledger at all. See section 12.
 4. A second P0 side-call increment: the four auxiliary calls that reuse the parent prompt cache — recap, turn summary, title refresh, and `/btw` — now fold their usage into the session bill under their own purposes. See section 13.
-5. A third P0 side-call increment: the memory capture, dream, and flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and the image-description vision call are accounted too, through one shared fold. See section 14. Session title generation is the only known call still unaccounted.
+5. A third P0 side-call increment: the memory capture, dream, and flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and the image-description vision call are accounted too, through one shared fold. See section 14.
+6. A fourth P0 side-call increment: session title generation, the last call that reached no ledger, is accounted through a late-bound handle, because it runs in the persistence actor. See section 15. Every model call site in `xai-grok-shell` now reaches the session ledger.
+
+Two of these increments changed only accounting; none changed what is sent to a model, which is why the pruning arm's measured result below is unaffected.
 
 The local `bonsai2-27b` microbenchmark used a synthetic eight-round tool trace. The optimized trace reduced reported prompt input from 8,840 to 230 tokens (97.4%) while returning the same correct evidence and verdict in all three repetitions. This proves the fixture works and that its newest evidence survived. It does **not** prove a 97.4% saving on real coding tasks.
 
@@ -78,6 +81,16 @@ The remaining-call increment in section 14 touches these files:
 | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/side_call.rs` | `record_auxiliary_call` now delegates to the shared fold. |
 | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/laziness.rs`, `goal.rs`, `memory_dream.rs`, `memory_capture.rs`, `recap.rs` | Route the classifier, evaluator, dream, flush, extraction, and prompt-suggestion calls through the fold. |
 | `crates/codegen/xai-grok-shell/src/session/image_describe.rs`, `acp_session_impl/prompt_build.rs` | Thread the ledger handle into the vision call and fold its usage. |
+
+The title-generation increment in section 15 touches these files:
+
+| File | Change |
+|---|---|
+| `crates/codegen/xai-chat-state/src/usage.rs` | Add the `SessionTitle` purpose. |
+| `crates/codegen/xai-grok-shell/src/session/persistence.rs` | Give `PersistenceHandle` a late-bound `summary_chat_state` cell and hand it to every `SummaryConfig`. |
+| `crates/codegen/xai-grok-shell/src/session/summary.rs` | Read the cell at call time and pass the handle to the title call. |
+| `crates/codegen/xai-grok-shell/src/session/helpers/session_summary.rs` | Fold the title response under `SessionTitle`; accept an optional handle. |
+| `crates/codegen/xai-grok-shell/src/session/acp_session_impl/spawn.rs` | Bind the handle once the chat-state actor exists. |
 
 ## 4. Accounting correction
 
@@ -342,7 +355,7 @@ The first option returns to the legacy user-turn-only pruning behavior. The seco
 
 ### Step 1: finish the P0 baseline before judging savings
 
-Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too, as are the memory capture/dream/flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and image description. See sections 13 and 14. Session title generation is the only known call still unaccounted, because it runs in the persistence actor with no chat-state handle. The remaining Step 1 work is the per-request component estimates.
+Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too, as are the memory capture/dream/flush calls, the laziness classifier, the goal evaluator, prompt suggestion, and image description (sections 13 and 14), and finally session title generation (section 15). Every model call site in `xai-grok-shell` now folds its provider usage into the session ledger under a purpose, so the purpose half of Step 1 is done. The remaining Step 1 work is the per-request component estimates.
 
 Add a purpose and identity record for every model call without creating a second billing ledger. At minimum distinguish main loop, transient retry, compact single/pass 1/pass 2, goal roles, memory, suggestion, and child calls. Record:
 
@@ -673,3 +686,49 @@ The remaining six sites have no test harness that produces a successful model re
 - Duration is absent for five of the seven sites, and cost is absent wherever the wire does not report it.
 - These calls remain absent from the per-prompt ACP wire ledger, so a per-prompt `usage` figure is still a main-loop figure.
 - The audit covers `xai-grok-shell`. Model calls made by other crates are out of scope and unaudited.
+
+## 15. P0 side-call accounting: session title generation
+
+Date: **2026-09-21**. Closes the last known unaccounted model call, so purpose coverage is complete.
+
+### The gap
+
+`session_summary::generate_session_summary` generates a session's first title from the opening user message, and it runs in the **persistence actor**, not the session actor. That placement is deliberate (it keeps the title call off the persistence actor's critical path via a spawned task), and it is exactly what made the call unaccountable: the persistence actor holds no chat-state handle, and it is constructed *before* the chat-state actor exists, so there is no point during setup where both are in hand.
+
+### What changed
+
+The handle is late-bound instead of plumbed.
+
+- `PersistenceHandle` gained `summary_chat_state`, an `Arc<OnceLock<ChatStateHandle>>`. `actor_channel()`, `noop()`, and the test-only `from_parts_for_test` each create an empty cell.
+- All three `persistence.rs` constructor sites that build a `SummaryConfig` clone that exact cell into it, so the generator shares the cell with the handle rather than owning a private one.
+- `spawn.rs` calls `persistence.bind_summary_chat_state(&chat_state_handle)` immediately after the chat-state actor is created. Later binds are ignored, so a rebind cannot repoint an already-bound ledger.
+- `SummaryGenerator::update` reads the cell when it spawns the title task and passes `Option<&ChatStateHandle>` down to `generate_session_summary`, which folds the response under the new `SessionTitle` purpose.
+
+An unbound cell degrades to an unaccounted call, never to an error or a lost title: the title path must not depend on accounting being wired.
+
+`CallPurpose` now has seventeen variants — the main loop, four compaction purposes, subagent folding, and eleven side-call purposes.
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `cargo test -p xai-chat-state --lib` | 374 passed |
+| `cargo test -p xai-grok-shell --lib` | 6999 passed, 5 failed — the same five failures occur on the base revision (see section 12) |
+| `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types` | passed |
+| `rustfmt --check` on the touched files, `git diff --check` | clean |
+
+New cases, by what they pin:
+
+- `generated_title_folds_usage_under_session_title` drives the real `generate_session_summary` against a real chat-state actor and a real SSE response, and asserts the `session_title` row's tokens, the cost, `side_call_model_calls == 1`, and an untouched turn count.
+- `generated_title_without_a_handle_falls_back_without_panicking` pins the degradation contract: no bound handle, no panic, and the caller still gets the fallback title.
+- `update_folds_the_title_call_into_the_bound_ledger` drives `SummaryGenerator::update` — the production caller, including the cell read and the clone into the spawned task — and orders its ledger assertion behind the `GeneratedTitle` message the actor emits, so it does not depend on a sleep.
+- `purpose_labels_are_stable` pins all seventeen strings.
+
+### What this does not establish
+
+- **The cell-sharing link between `PersistenceHandle` and `SummaryConfig` is not covered by a test.** It is a one-line clone at each of the three constructor sites, verified by reading and by compilation, but a future edit could substitute a fresh `OnceLock` and silently un-account the title call again. Everything downstream of the cell is tested.
+- The size of the newly attributed spend on a real session is unmeasured.
+- Failed attempts are still unrecorded across every purpose: only a completed call reaches `record_side_call_response`.
+- Duration is absent for this site and five others, and cost is absent wherever the wire does not report it.
+- These calls remain absent from the per-prompt ACP wire ledger, so a per-prompt `usage` figure is still a main-loop figure.
+- The audit covers `xai-grok-shell`'s own calls. Model calls made by other crates, and any future call site added without a purpose, are outside it.

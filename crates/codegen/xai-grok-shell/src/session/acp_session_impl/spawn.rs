@@ -608,6 +608,9 @@ pub(crate) async fn spawn_session_actor(
         tokio_util::sync::CancellationToken::new(),
     );
     drop(chat_state_guard);
+    // The persistence actor was built before this actor existed, so bind the handle now: the
+    // session-title generator accounts its model call against this ledger.
+    persistence.bind_summary_chat_state(&chat_state_handle);
     async {
         if (!initial_prompt_texts.is_empty()
             || initial_total_tokens > 0
@@ -1665,10 +1668,8 @@ pub(crate) async fn spawn_session_actor(
         .unwrap_or_default();
     effective_config.remote_settings = remote_settings.clone();
     let catalog_models = models_manager.models();
-    let provider_context = crate::agent::config::ProviderContext::from_catalog(
-        &catalog_models,
-        &primary_model_id,
-    );
+    let provider_context =
+        crate::agent::config::ProviderContext::from_catalog(&catalog_models, &primary_model_id);
     let compaction_model_slug = effective_config.compaction.model.clone();
     let goal_classifier_max_runs = effective_config.resolve_goal_classifier_max_runs().value;
     let goal_use_current_model_only = effective_config

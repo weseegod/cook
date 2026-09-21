@@ -137,6 +137,7 @@ pub async fn generate_session_summary(
     user_message: String,
     client: OaiCompatClient,
     model: &str,
+    chat_state: Option<&xai_chat_state::ChatStateHandle>,
 ) -> String {
     let clean_message = title_source_text(&user_message);
     let request = ConversationRequest::from_items(vec![
@@ -179,6 +180,17 @@ Just generate the session_title and nothing else"#,
 
     match client.conversation_collect(request).await {
         Ok(response) => {
+            // The title call spends provider tokens outside the main loop. `chat_state` is absent
+            // on paths that never bind one, which leaves the call unaccounted rather than failing.
+            if let Some(handle) = chat_state {
+                crate::session::side_call_usage::record_side_call_response(
+                    handle,
+                    xai_chat_state::CallPurpose::SessionTitle,
+                    model,
+                    &response,
+                    None,
+                );
+            }
             if let Some(a) = response.assistant()
                 && let Some(tool_call) = a.tool_calls.first()
                 && let Ok(result) = serde_json::from_str::<SessionTitle>(&tool_call.arguments)
@@ -404,5 +416,130 @@ mod tests {
             title_fallback_from_user_text("fix the auth bug in login.rs"),
             "fix the auth bug in login.rs",
         );
+    }
+
+    /// The title call spends provider tokens outside the main loop, so it must fold into the
+    /// session ledger under its own purpose and must not advance the reported turn count.
+    /// End to end through the real function, a real chat-state actor, and a real SSE response.
+    #[tokio::test]
+    async fn generated_title_folds_usage_under_session_title() {
+        use axum::Router;
+        use axum::response::sse::{Event, KeepAlive, Sse};
+        use axum::routing::post;
+        use futures_util::stream;
+        use serde_json::json;
+        use tokio::net::TcpListener;
+
+        let app = Router::new().route(
+            "/v1/chat/completions",
+            post(|| async {
+                let events = vec![
+                    Event::default().data(
+                        json!({
+                            "id": "chatcmpl-test",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "title-model",
+                            "choices": [{
+                                "index": 0,
+                                "delta": { "role": "assistant", "content": "Fix the auth bug" },
+                                "finish_reason": "stop"
+                            }]
+                        })
+                        .to_string(),
+                    ),
+                    Event::default().data(
+                        json!({
+                            "id": "chatcmpl-test",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "title-model",
+                            "choices": [],
+                            "usage": {
+                                "prompt_tokens": 300,
+                                "completion_tokens": 8,
+                                "total_tokens": 308,
+                                "cost_in_usd_ticks": 2
+                            }
+                        })
+                        .to_string(),
+                    ),
+                    Event::default().data("[DONE]"),
+                ];
+                let stream =
+                    stream::iter(events.into_iter().map(Ok::<_, std::convert::Infallible>));
+                Sse::new(stream).keep_alive(KeepAlive::default())
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = shutdown_rx.await;
+                })
+                .await
+                .unwrap();
+        });
+
+        let (chat_event_tx, _chat_event_rx) = tokio::sync::mpsc::unbounded_channel();
+        let handle = xai_chat_state::ChatStateActor::spawn(
+            vec![],
+            xai_grok_sampling_types::SamplingConfig::default(),
+            Box::new(xai_chat_state::NullChatPersistence),
+            chat_event_tx,
+            tokio_util::sync::CancellationToken::new(),
+        );
+        let client = crate::sampling::Client::new(xai_grok_sampler::SamplerConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_key: Some("test-api-key".to_string()),
+            model: "title-model".to_string(),
+            context_window: 256_000,
+            ..Default::default()
+        })
+        .unwrap();
+
+        super::generate_session_summary(
+            "fix the auth bug in login.rs".to_string(),
+            client,
+            "title-model",
+            Some(&handle),
+        )
+        .await;
+        let _ = shutdown_tx.send(());
+
+        let session = handle
+            .try_get_session_usage()
+            .await
+            .expect("session ledger");
+        let title = session
+            .by_purpose
+            .get(&xai_chat_state::CallPurpose::SessionTitle)
+            .expect("session title row");
+        assert_eq!(title.input_tokens, 300);
+        assert_eq!(title.output_tokens, 8);
+        assert_eq!(title.model_calls, 1);
+        assert_eq!(
+            session.main_loop_model_calls, 0,
+            "a title call is not a turn"
+        );
+        assert_eq!(session.side_call_model_calls, 1);
+        assert_eq!(session.totals.cost_usd_ticks, Some(2));
+    }
+
+    /// Without a bound handle the call still has to produce a title; it just goes unaccounted.
+    #[tokio::test]
+    async fn generated_title_without_a_handle_falls_back_without_panicking() {
+        let client =
+            crate::sampling::Client::new(xai_grok_sampler::SamplerConfig::default()).unwrap();
+        let title = super::generate_session_summary(
+            "fix the auth bug in login.rs".to_string(),
+            client,
+            "title-model",
+            None,
+        )
+        .await;
+        assert_eq!(title, "fix the auth bug in login.rs");
     }
 }
