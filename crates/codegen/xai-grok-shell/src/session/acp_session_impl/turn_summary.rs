@@ -92,8 +92,10 @@ impl SessionActor {
                 return;
             }
         };
-        super::side_call::log_prompt_cache_usage(
-            "turn_summary",
+        super::side_call::record_auxiliary_call(
+            &self.chat_state_handle,
+            xai_chat_state::CallPurpose::TurnSummary,
+            &setup.model,
             setup.client.api_backend(),
             &response,
         );

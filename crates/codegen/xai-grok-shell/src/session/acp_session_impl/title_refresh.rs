@@ -161,8 +161,10 @@ impl SessionActor {
                 return None;
             }
         };
-        super::side_call::log_prompt_cache_usage(
-            "title_refresh",
+        super::side_call::record_auxiliary_call(
+            &self.chat_state_handle,
+            xai_chat_state::CallPurpose::TitleRefresh,
+            &setup.model,
             setup.client.api_backend(),
             &response,
         );

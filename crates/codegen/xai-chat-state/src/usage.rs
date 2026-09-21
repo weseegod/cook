@@ -48,19 +48,32 @@ pub enum CallPurpose {
     CompactPass2,
     /// Child-agent work folded from a child session ledger.
     Subagent,
+    /// The `/recap` summary of earlier work.
+    Recap,
+    /// The per-turn narrative summary.
+    TurnSummary,
+    /// The session title refresh.
+    TitleRefresh,
+    /// The `/btw` side question.
+    Btw,
 }
 
 impl CallPurpose {
     /// Every purpose, in reporting order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 9] = [
         Self::MainLoop,
         Self::CompactSingle,
         Self::CompactPass1,
         Self::CompactPass2,
         Self::Subagent,
+        Self::Recap,
+        Self::TurnSummary,
+        Self::TitleRefresh,
+        Self::Btw,
     ];
 
-    /// Stable identifier for reports and telemetry.
+    /// Stable identifier for reports and telemetry. Also the label auxiliary
+    /// calls log their prompt-cache buckets under.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::MainLoop => "main_loop",
@@ -68,6 +81,10 @@ impl CallPurpose {
             Self::CompactPass1 => "compact_pass1",
             Self::CompactPass2 => "compact_pass2",
             Self::Subagent => "subagent",
+            Self::Recap => "recap",
+            Self::TurnSummary => "turn_summary",
+            Self::TitleRefresh => "title_refresh",
+            Self::Btw => "btw",
         }
     }
 
@@ -169,7 +186,8 @@ pub struct UsageLedger {
     pub by_purpose: IndexMap<CallPurpose, UsageTotals>,
     /// Main-agent loop rounds for `num_turns` (subagents excluded).
     pub main_loop_model_calls: u64,
-    /// Completed side calls (compaction). Never counted by `main_loop_model_calls`.
+    /// Completed side calls (compaction, recap, title refresh, turn summary).
+    /// Never counted by `main_loop_model_calls`.
     pub side_call_model_calls: u64,
     /// Bill may under-count (drain timeout, nested subagent incomplete, apply failure).
     pub incomplete: bool,
@@ -411,12 +429,35 @@ mod tests {
                 "compact_single",
                 "compact_pass1",
                 "compact_pass2",
-                "subagent"
+                "subagent",
+                // The four auxiliary labels are the strings those calls already log their
+                // prompt-cache buckets under, so this list must not drift from them.
+                "recap",
+                "turn_summary",
+                "title_refresh",
+                "btw"
             ]
         );
         assert_eq!(
             CallPurpose::ALL.iter().filter(|p| p.is_main_loop()).count(),
             1
         );
+    }
+
+    #[test]
+    fn auxiliary_purposes_fold_outside_the_main_loop() {
+        for purpose in [
+            CallPurpose::Recap,
+            CallPurpose::TurnSummary,
+            CallPurpose::TitleRefresh,
+            CallPurpose::Btw,
+        ] {
+            assert!(!purpose.is_main_loop(), "{purpose:?} is not the main loop");
+            let mut ledger = UsageLedger::default();
+            ledger.record_side_call(purpose, "m", &TokenUsage::default(), None, None);
+            assert_eq!(ledger.main_loop_model_calls, 0);
+            assert_eq!(ledger.side_call_model_calls, 1);
+            assert_eq!(ledger.by_purpose[&purpose].model_calls, 1);
+        }
     }
 }

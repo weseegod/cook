@@ -10,11 +10,12 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 ## 1. Outcome
 
-This experiment implemented three bounded changes:
+This experiment implemented four bounded changes:
 
 1. A P0 accounting correction: a successful model response that omits usage now marks both the open prompt ledger and the session ledger incomplete. Unknown usage is no longer silently indistinguishable from a free call.
 2. An opt-in P1 context arm: request-copy pruning can age tool results by tool round within one user turn and cap the recent raw-result characters. The legacy behavior remains the default because both new limits default to zero.
 3. A P0 side-call accounting increment: every model call now carries a purpose, and compaction samples fold their provider usage into the session bill. Before this, compaction spend reached no ledger at all. See section 12.
+4. A second P0 side-call increment: the four auxiliary calls that reuse the parent prompt cache — recap, turn summary, title refresh, and `/btw` — now fold their usage into the session bill under their own purposes. See section 13.
 
 The local `bonsai2-27b` microbenchmark used a synthetic eight-round tool trace. The optimized trace reduced reported prompt input from 8,840 to 230 tokens (97.4%) while returning the same correct evidence and verdict in all three repetitions. This proves the fixture works and that its newest evidence survived. It does **not** prove a 97.4% saving on real coding tasks.
 
@@ -57,6 +58,15 @@ The side-call accounting increment in section 12 touches these files:
 | `crates/codegen/xai-grok-shell/src/session/compaction.rs`, `helpers/full_replace_compaction.rs` | Label each compaction sample and report its usage. |
 | `crates/codegen/xai-grok-shell/src/session/usage_file.rs` | Publish a per-purpose breakdown in the persisted session usage report. |
 | `crates/codegen/xai-grok-shell/src/extensions/notification.rs`, `session/acp_session_impl/sampler_turn.rs` | Thread `usage_missing_calls`; count main-loop missing usage. |
+
+The auxiliary side-call increment in section 13 touches these files:
+
+| File | Change |
+|---|---|
+| `crates/codegen/xai-chat-state/src/usage.rs` | Add the `Recap`, `TurnSummary`, `TitleRefresh`, and `Btw` purposes. |
+| `crates/codegen/xai-grok-shell/src/session/acp_session_impl/side_call.rs` | Add `record_auxiliary_call`, which logs the prompt-cache buckets and folds the usage under the call's purpose. |
+| `crates/codegen/xai-grok-shell/src/session/acp_session_impl/recap.rs`, `turn_summary.rs`, `title_refresh.rs` | Route all four auxiliary calls through it. |
+| `crates/codegen/xai-grok-shell/src/session/acp_session_tests/recap_display_only_tests.rs` | Assert the `/btw` ledger row from the existing end-to-end case. |
 
 ## 4. Accounting correction
 
@@ -321,7 +331,7 @@ The first option returns to the legacy user-turn-only pruning behavior. The seco
 
 ### Step 1: finish the P0 baseline before judging savings
 
-Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The remaining Step 1 work (per-request component estimates and purpose labels for the recap, title, summary, memory, and goal side calls) is still open.
+Progress on 2026-09-21: the confirmed gap — compaction spend reaching no ledger — is closed for the compaction purposes. See section 12. The four auxiliary calls that reuse the parent prompt cache (recap, title refresh, turn summary, `/btw`) are closed too. See section 13. The remaining Step 1 work is per-request component estimates plus purpose labels for the memory, dream, laziness, image-description, goal-evaluator, session-title, and prompt-suggestion calls.
 
 Add a purpose and identity record for every model call without creating a second billing ledger. At minimum distinguish main loop, transient retry, compact single/pass 1/pass 2, goal roles, memory, suggestion, and child calls. Record:
 
@@ -519,6 +529,76 @@ An earlier revision also asserted the ledger from a real `SessionActor::run_comp
 
 - The size of the previously invisible compaction spend on a real session is still unmeasured. Nothing here quantifies how much of a real bill was missing.
 - Side calls are folded into the session ledger only. They are still absent from the per-prompt ledger that the ACP wire reports, so a per-prompt `usage` figure remains a main-loop figure.
-- Recap, title-refresh, turn-summary, memory, and goal-role calls still reach no ledger. The purpose enum does not name them yet.
+- Recap, title-refresh, turn-summary, memory, and goal-role calls still reach no ledger. The purpose enum does not name them yet. Section 13 closes this for recap, title refresh, turn summary, and `/btw`; the rest are still open.
 - A compaction attempt that fails before completing is not recorded at all. Only completed samples are. A retry ladder that burns several failed attempts still under-counts; the design document's "record unknown, not zero" rule is not yet applied to failed streams.
 - Cost is captured only where the wire reports it, which in practice means Chat Completions. A compaction sample on the Responses or Messages backend folds its tokens with no cost, so a session whose only compaction ran there reports tokens without a price.
+
+## 13. P0 side-call accounting: the four prompt-cache-sharing auxiliary calls
+
+Date: **2026-09-21**. Completes section 12 for the auxiliary calls that reuse the parent turn's prompt cache.
+
+### The gap
+
+Section 12 gave the ledger a purpose for compaction but left the auxiliary calls unaccounted. Four of them already shared the same request skeleton (recap, turn summary, title refresh, `/btw`) and already logged their provider-reported prompt-cache buckets under a fixed label, but nothing anywhere recorded the tokens or the cost. A session that ran six recaps, a title refresh per checkpoint, and a turn summary after every turn reported a bill that excluded every one of them.
+
+The omission was invisible in a second way: the report could not distinguish a session that made no auxiliary calls from one whose auxiliary spend was dropped.
+
+### What changed
+
+`CallPurpose` gained four variants, and `record_auxiliary_call` in `session/acp_session_impl/side_call.rs` is now the single entry point for these calls. It logs the prompt-cache buckets exactly as before and folds the response's usage into the session ledger under the call's purpose.
+
+| Call site | Purpose | Model source |
+|---|---|---|
+| `recap.rs` `/btw` side question | `btw` | the session's sampling config |
+| `recap.rs` recap summary | `recap` | the session's sampling config |
+| `turn_summary.rs` per-turn narrative | `turn_summary` | `SideCallSetup::model` |
+| `title_refresh.rs` title refresh | `title_refresh` | `SideCallSetup::model` |
+
+Three properties are deliberate:
+
+- **The purpose string is the existing tracing label.** `record_auxiliary_call` passes `purpose.as_str()` to the same `log_prompt_cache_usage` these sites already called, and the four new strings are byte-identical to the labels that were in the source. The `auxiliary call prompt cache usage` log line is unchanged, so the accounting change adds no new telemetry vocabulary.
+- **A response without usage is counted as missing.** Same rule as section 12: the purpose row's `usage_missing_calls` advances, no tokens and no `model_calls` are invented, and the session bill is marked incomplete. The call happened and cost something, so it must not read as free.
+- **Nothing advances the turn count.** All four fold into `side_call_model_calls` and their own `by_purpose` row; `main_loop_model_calls` — the reported turn count — is untouched.
+
+Duration is passed as `None` because none of the four sites has a start timestamp in scope, so `api_duration_ms` stays 0 for these rows. That is a gap, not a measurement of zero.
+
+### Where a report shows it
+
+The `purposeUsage` map from section 12 now carries the auxiliary rows:
+
+```json
+{
+  "session": {
+    "modelCalls": 42,
+    "purposeUsage": {
+      "main_loop":    { "inputTokens": 1180000, "modelCalls": 40 },
+      "recap":        { "inputTokens": 41000, "modelCalls": 1 },
+      "title_refresh":{ "inputTokens": 9200, "modelCalls": 1 }
+    }
+  }
+}
+```
+
+### Verification
+
+| Check | Result |
+|---|---|
+| `cargo test -p xai-chat-state --lib` | 374 passed (373 before; 1 new ledger case, 1 label case extended) |
+| `cargo test -p xai-grok-shell --lib` | 6995 passed, 5 failed — the same five failures occur on the base revision (see section 12) |
+| `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types` | passed |
+| `rustfmt --check` on the six touched files | clean |
+
+New and extended cases, by what they pin:
+
+- `auxiliary_call_usage_folds_under_its_own_purpose` drives `record_auxiliary_call` through a real `ChatStateActor` twice, once with usage and once without, and asserts the recap row's tokens, the title-refresh row's `usage_missing_calls`, `side_call_model_calls == 1`, `main_loop_model_calls == 0`, and that the session bill is incomplete.
+- `auxiliary_purposes_fold_outside_the_main_loop` pins `is_main_loop() == false` for all four, so none can be routed through `record_main_loop_call` without tripping the ledger's debug assertion.
+- `purpose_labels_are_stable` now pins all nine strings, with a note that the four auxiliary labels must not drift from the tracing labels.
+- `side_question_projects_agent_messages_without_mutating_history` was the existing end-to-end `/btw` case against `MockInferenceServer`; it now also asserts the session ledger. This is the check that the wiring is real rather than only type-correct: the purpose reaches the ledger from an actual `handle_side_question` call, through the actual model response, with the history left byte-identical. No new actor or server was stood up for it, which matters given the suite instability recorded in section 12.
+
+### What this does not establish
+
+- The size of the previously invisible auxiliary spend on a real session is still unmeasured.
+- The remaining model calls outside the main loop still reach no ledger: memory capture, the two memory-dream calls, the laziness judge, image description, the goal evaluator, session title generation, and prompt suggestion. The goal evaluator already detects and marks missing usage but records nothing when usage is present, so its spend is invisible either way.
+- Failed auxiliary attempts are still unrecorded. Only a completed call reaches `record_auxiliary_call`, and `/btw`'s retry ladder in particular can burn several attempts that appear nowhere.
+- Duration is absent for all four, and cost is absent wherever the wire does not report it.
+- As in section 12, these calls remain absent from the per-prompt ACP wire ledger, so a per-prompt `usage` figure is still a main-loop figure.
