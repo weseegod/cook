@@ -43,7 +43,14 @@ export function modelCatalog() {
         name: model.name ?? model.id,
         provider: provider.id,
         inputModalities: model.input ?? ["text"],
-        _meta: { totalContextTokens: model.contextWindow ?? 300_000, maxCompletionTokens: model.maxCompletionTokens ?? 64_000, apiModel: model.model ?? model.id },
+        _meta: {
+          totalContextTokens: model.contextWindow ?? 300_000,
+          maxCompletionTokens: model.maxCompletionTokens ?? 64_000,
+          apiModel: model.model ?? model.id,
+          ...(model.supportsReasoningEffort ? { supportsReasoningEffort: true } : {}),
+          ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+          ...(model.reasoningEfforts ? { reasoningEfforts: model.reasoningEfforts } : {}),
+        },
       });
     }
   }

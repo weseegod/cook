@@ -240,6 +240,7 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       input: Array.isArray(p.input) ? p.input.map(String) : ["text"],
       contextWindow: typeof p.contextWindow === "number" ? p.contextWindow : undefined,
       maxCompletionTokens: typeof p.maxCompletionTokens === "number" ? p.maxCompletionTokens : undefined,
+      supportsReasoningEffort: p.supportsReasoningEffort === true,
     };
     provider.models = [...provider.models.filter((model) => model.id !== modelId), next];
     notify("x.ai/models/update", modelCatalog());

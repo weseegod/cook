@@ -101,11 +101,21 @@ export const sessionHandlers: Record<string, MethodHandler> = {
   },
   "session/set_model": ({ p, respond }) => {
     const modelId = String(p.modelId ?? "");
-    if (!modelCatalog().availableModels.some((model) => model.id === modelId)) {
+    const model = modelCatalog().availableModels.find((entry) => entry.id === modelId);
+    if (!model) {
       return respond({ error: `unknown model \`${modelId}\`` });
     }
     state.defaultModel = modelId;
     notify("x.ai/models/update", modelCatalog());
+    const meta = (p._meta ?? {}) as Record<string, unknown>;
+    notify("_x.ai/session_notification", {
+      sessionId: "mock-session",
+      update: {
+        sessionUpdate: "model_changed",
+        model_id: modelId,
+        ...(typeof meta.reasoningEffort === "string" ? { reasoning_effort: meta.reasoningEffort } : {}),
+      },
+    });
     return respond({ _meta: { model: modelId } });
   },
   "session/set_mode": ({ p, sessionId, respond }) => {

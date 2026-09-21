@@ -1,9 +1,8 @@
-import { ChevronDown, CornerDownLeft, FileText, LoaderCircle, Plus, X } from "lucide-react";
+import { CornerDownLeft, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
 import { askBtw, interjectPrompt } from "../../acp/turn-ops";
-import { groupByProvider, providerDisplayName } from "../../acp/xai";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { planFeedback } from "../../state/plan-review";
@@ -21,6 +20,7 @@ import { SLASH_HOST } from "./composer/slash-host";
 import { useComposerAttachments } from "./composer/use-composer-attachments";
 import { useComposerFileSearch } from "./composer/use-composer-file-search";
 import { normalizeDisplayPath } from "./at-context";
+import { ModelPicker } from "./model-picker";
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
@@ -397,22 +397,13 @@ export function Composer() {
         />
         <div className="composer-footer">
           <div className="composer-info" data-testid="composer-info">
-            <label className="composer-model" title={selectedModel || "Select model"}>
-              <select
-                value={selectedModel}
-                disabled={models.length === 0}
-                onChange={(event) => void acpClient.setModel(event.target.value).catch(reportError)}
-                aria-label="Model"
-              >
-                {!selectedModelKnown && <option value={selectedModel} disabled>{models.length === 0 ? "Loading models…" : selectedModel || "Select model"}</option>}
-                {groupByProvider(models).map(([provider, entries]) => (
-                  <optgroup key={provider} label={providerDisplayName(provider)}>
-                    {entries.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}
-                  </optgroup>
-                ))}
-              </select>
-              <ChevronDown size={12} aria-hidden="true" />
-            </label>
+            <ModelPicker
+              models={models}
+              selectedModel={selectedModel}
+              selectedModelKnown={selectedModelKnown}
+              disabled={blocked}
+              onSelect={(modelId, reasoningEffort) => acpClient.setModel(modelId, reasoningEffort)}
+            />
             {planMode && <span className="composer-flag" data-testid="composer-plan-flag">plan</span>}
             <ContextChip />
           </div>

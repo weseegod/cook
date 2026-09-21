@@ -18,6 +18,7 @@ import {
   pullPlanFiles,
   pullUsage,
   pushDefaultModel,
+  preferredReasoningEffort,
   readSessionInfo,
   resolveParkedPlan,
   sendModelChoice,
@@ -142,6 +143,9 @@ export class CookAcpClient {
         clientIdentifier: CAPABILITIES.clientIdentifier,
         yoloMode,
         ...(defaultModel ? { modelId: defaultModel } : {}),
+        ...(defaultModel && preferredReasoningEffort(defaultModel)
+          ? { reasoningEffort: preferredReasoningEffort(defaultModel) }
+          : {}),
       },
     };
     const response = await request<NewSessionResponse>("session/new", params);
@@ -151,7 +155,13 @@ export class CookAcpClient {
     const catalog = await hydrateModelCatalog(modelCatalog((response as unknown as { models?: unknown }).models));
     if (catalog.models.length > 0) {
       useCatalogStore.getState().setModelCatalog(catalog);
-      useSessionStore.getState().set({ modelId: catalog.currentModelId });
+      const activeModel = catalog.models.find((model) => model.id === catalog.currentModelId);
+      useSessionStore.getState().set({
+        modelId: catalog.currentModelId,
+        reasoningEffort: catalog.currentModelId
+          ? preferredReasoningEffort(catalog.currentModelId) ?? activeModel?.reasoningEffort ?? null
+          : null,
+      });
     }
     await this.refreshCommands();
     void pullUsage(this.xai);
@@ -172,6 +182,9 @@ export class CookAcpClient {
         clientIdentifier: CAPABILITIES.clientIdentifier,
         yoloMode,
         ...(defaultModel ? { modelId: defaultModel } : {}),
+        ...(defaultModel && preferredReasoningEffort(defaultModel)
+          ? { reasoningEffort: preferredReasoningEffort(defaultModel) }
+          : {}),
       },
     };
     await this.inboundMessages;
@@ -202,7 +215,13 @@ export class CookAcpClient {
     const catalog = await hydrateModelCatalog(modelCatalog(response?.models));
     if (catalog.models.length > 0) {
       useCatalogStore.getState().setModelCatalog(catalog);
-      useSessionStore.getState().set({ modelId: catalog.currentModelId });
+      const activeModel = catalog.models.find((model) => model.id === catalog.currentModelId);
+      useSessionStore.getState().set({
+        modelId: catalog.currentModelId,
+        reasoningEffort: catalog.currentModelId
+          ? preferredReasoningEffort(catalog.currentModelId) ?? activeModel?.reasoningEffort ?? null
+          : null,
+      });
     }
     await this.refreshCommands();
     void pullUsage(this.xai);
@@ -311,8 +330,8 @@ export class CookAcpClient {
     trackWorking(sessionId, null);
   }
 
-  async setModel(modelId: string): Promise<void> {
-    await sendModelChoice(modelId);
+  async setModel(modelId: string, reasoningEffort?: string): Promise<void> {
+    await sendModelChoice(modelId, reasoningEffort);
     await pullUsage(this.xai);
   }
 
@@ -418,6 +437,9 @@ export class CookAcpClient {
             clientIdentifier: CAPABILITIES.clientIdentifier,
             yoloMode,
             ...(defaultModel ? { modelId: defaultModel } : {}),
+            ...(defaultModel && preferredReasoningEffort(defaultModel)
+              ? { reasoningEffort: preferredReasoningEffort(defaultModel) }
+              : {}),
           },
         } satisfies LoadSessionRequest);
       }

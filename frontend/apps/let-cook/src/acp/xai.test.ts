@@ -1,7 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { mergeConfiguredModels, modelCatalog, providerDisplayName } from "./xai";
+import { mergeConfiguredModels, modelCatalog, providerDisplayName, reasoningEffortOptions } from "./xai";
 
 describe("model catalog normalization", () => {
+  it("normalizes reasoning metadata and exposes fallback levels", () => {
+    const catalog = modelCatalog({
+      availableModels: [
+        {
+          id: "o4-mini",
+          _meta: {
+            supportsReasoningEffort: true,
+            reasoningEffort: "medium",
+            reasoningEfforts: [{ id: "balanced", value: "medium", label: "Balanced" }, "low"],
+          },
+        },
+        { id: "gpt-5", _meta: { supportsReasoningEffort: true } },
+        { id: "gpt-4.1", _meta: { reasoningEfforts: ["high"] } },
+      ],
+    });
+
+    expect(catalog.models[0]).toMatchObject({
+      supportsReasoningEffort: true,
+      reasoningEffort: "medium",
+      reasoningEfforts: [
+        { id: "balanced", value: "medium", label: "Balanced" },
+        { id: "low", value: "low", label: "Low" },
+      ],
+    });
+    expect(reasoningEffortOptions(catalog.models[1]).map((option) => option.value)).toEqual(["xhigh", "high", "medium", "low"]);
+    expect(reasoningEffortOptions(catalog.models[2])).toEqual([]);
+  });
+
   it("uses configured provider ownership for unnamespaced OpenAI models", () => {
     const catalog = modelCatalog({
       currentModelId: "gpt-5",

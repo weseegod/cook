@@ -217,6 +217,8 @@ pub struct ModelUpsert {
     input: Vec<String>,
     context_window: Option<u64>,
     max_completion_tokens: Option<u32>,
+    #[serde(default = "default_reasoning_enabled")]
+    supports_reasoning_effort: bool,
 }
 
 impl ModelUpsert {
@@ -586,6 +588,10 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
     }
 }
 
+fn default_reasoning_enabled() -> bool {
+    true
+}
+
 /// Drop the OAuth flag and stored token; models stay so the user can paste a key.
 pub fn clear_oauth(id: &str) -> Result<(), String> {
     update(|doc| {
@@ -681,6 +687,7 @@ pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
                 &seed.input,
                 seed.context_window,
                 seed.max_completion_tokens,
+                None,
             )?;
         }
         if request.set_as_default {
@@ -734,6 +741,7 @@ pub fn upsert_model(request: ModelUpsert) -> Result<(), String> {
             &request.input,
             request.context_window,
             request.max_completion_tokens,
+            Some(request.supports_reasoning_effort),
         )
     })
 }
@@ -862,6 +870,7 @@ fn write_model(
     input: &[String],
     context_window: Option<u64>,
     max_completion_tokens: Option<u32>,
+    supports_reasoning_effort: Option<bool>,
 ) -> Result<(), String> {
     let id = checked_id(id, "model id")?;
     if !models.contains_key(id) {
@@ -898,6 +907,9 @@ fn write_model(
     }
     if let Some(value) = max_completion_tokens {
         table.insert("max_completion_tokens", toml_edit::value(i64::from(value)));
+    }
+    if let Some(value) = supports_reasoning_effort {
+        table.insert("supports_reasoning_effort", toml_edit::value(value));
     }
     Ok(())
 }
@@ -1207,6 +1219,7 @@ api_backend = "chat_completions"
             &input,
             Some(32_768),
             Some(2_000),
+            None,
         )
         .expect("write local model");
 
@@ -1234,6 +1247,7 @@ api_backend = "chat_completions"
             &input,
             Some(65_536),
             Some(4_096),
+            None,
         )
         .expect("edit local model");
         let edited = list_document(&doc)

@@ -6,6 +6,7 @@
  */
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { desktopCommand, isTauriRuntime, request } from "./host";
+import type { ReasoningEffortOption } from "./xai";
 
 export interface ProviderModelLink {
   id: string;
@@ -15,6 +16,8 @@ export interface ProviderModelLink {
   contextWindow?: number;
   maxCompletionTokens?: number;
   supportsReasoningEffort?: boolean;
+  reasoningEffort?: string;
+  reasoningEfforts?: ReasoningEffortOption[];
 }
 
 export interface ProviderSummary {
@@ -178,6 +181,7 @@ export interface ModelUpsertRequest {
   input: string[];
   contextWindow?: number;
   maxCompletionTokens?: number;
+  supportsReasoningEffort?: boolean;
 }
 
 export function upsertModel(params: ModelUpsertRequest) {

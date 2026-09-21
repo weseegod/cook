@@ -10,6 +10,15 @@ export interface SessionSummary {
   model?: string;
 }
 
+export interface ReasoningEffortOption {
+  /** Presentation/input id; the backend accepts the canonical `value` on the wire. */
+  id: string;
+  value: string;
+  label: string;
+  description?: string;
+  default?: boolean;
+}
+
 export interface ModelSummary {
   id: string;
   /** Routing slug sent to the provider; may differ from the catalog id. */
@@ -20,6 +29,10 @@ export interface ModelSummary {
   /** Whether the agent's catalog marks this model as the configured default. */
   isDefault?: boolean;
   supportsReasoningEffort?: boolean;
+  /** The effort currently advertised by the model catalog (usually its default). */
+  reasoningEffort?: string;
+  /** Per-model selectable effort menu, when the agent advertises one. */
+  reasoningEfforts?: ReasoningEffortOption[];
   /** The model's context window in tokens, as `_meta.totalContextTokens` reports it. */
   contextWindow?: number;
   /** Maximum completion/output tokens configured for this model. */
@@ -201,6 +214,7 @@ function normalizeSession(item: UnknownRecord): SessionSummary {
 function normalizeModel(item: UnknownRecord): ModelSummary {
   const meta = isRecord(item._meta) ? item._meta : {};
   const modalities = item.inputModalities ?? meta.inputModalities ?? item.input;
+  const reasoningEfforts = normalizeReasoningEfforts(item.reasoningEfforts ?? meta.reasoningEfforts);
   const id = String(item.id ?? item.modelId ?? item.model ?? "");
   return {
     id,
@@ -210,11 +224,51 @@ function normalizeModel(item: UnknownRecord): ModelSummary {
     provider: stringValue(item.provider ?? item.modelProvider) ?? (id.includes("/") ? id.split("/", 1)[0] : "xai"),
     inputModalities: Array.isArray(modalities) ? modalities.map(String) : undefined,
     isDefault: item.isDefault === true || item.default === true,
-    supportsReasoningEffort: meta.supportsReasoningEffort === true,
+    supportsReasoningEffort: meta.supportsReasoningEffort === true || item.supportsReasoningEffort === true,
+    reasoningEffort: stringValue(meta.reasoningEffort ?? item.reasoningEffort),
+    ...(reasoningEfforts ? { reasoningEfforts } : {}),
     contextWindow: numberValue(meta.totalContextTokens ?? meta.total_context_tokens),
     maxCompletionTokens: numberValue(meta.maxCompletionTokens ?? meta.max_completion_tokens),
     apiModel: stringValue(meta.apiModel ?? meta.api_model ?? item.model),
   };
+}
+
+const FALLBACK_REASONING_EFFORTS: ReasoningEffortOption[] = [
+  { id: "xhigh", value: "xhigh", label: "Xhigh", description: "Extended reasoning" },
+  { id: "high", value: "high", label: "High", description: "Heavy reasoning" },
+  { id: "medium", value: "medium", label: "Medium", description: "Balanced reasoning" },
+  { id: "low", value: "low", label: "Low", description: "Faster, lighter reasoning" },
+];
+
+function humanizeReasoningId(value: string): string {
+  return value.length > 0 ? value[0].toUpperCase() + value.slice(1) : value;
+}
+
+function normalizeReasoningEfforts(value: unknown): ReasoningEffortOption[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = value.flatMap((entry): ReasoningEffortOption[] => {
+    if (typeof entry === "string" && entry.trim()) {
+      const normalized = entry.trim();
+      return [{ id: normalized, value: normalized, label: humanizeReasoningId(normalized) }];
+    }
+    if (!isRecord(entry) || typeof entry.value !== "string" || !entry.value.trim()) return [];
+    const canonical = entry.value.trim();
+    const optionId = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : canonical;
+    return [{
+      id: optionId,
+      value: canonical,
+      label: typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : humanizeReasoningId(optionId),
+      ...(typeof entry.description === "string" && entry.description.trim() ? { description: entry.description.trim() } : {}),
+      ...(entry.default === true ? { default: true } : {}),
+    }];
+  });
+  return options.length > 0 ? options : undefined;
+}
+
+/** The menu exposed by the agent, or its documented fallback for older catalogs. */
+export function reasoningEffortOptions(model: ModelSummary | null | undefined): ReasoningEffortOption[] {
+  if (!model?.supportsReasoningEffort) return [];
+  return model.reasoningEfforts?.length ? model.reasoningEfforts : FALLBACK_REASONING_EFFORTS;
 }
 
 /**
@@ -254,6 +308,8 @@ export function mergeConfiguredModels(catalog: ModelCatalog, configured?: Provid
       contextWindow: model.contextWindow,
       maxCompletionTokens: model.maxCompletionTokens,
       supportsReasoningEffort: model.supportsReasoningEffort,
+      reasoningEffort: model.reasoningEffort,
+      reasoningEfforts: model.reasoningEfforts,
       configured: true,
     });
   }
@@ -272,6 +328,8 @@ export function mergeConfiguredModels(catalog: ModelCatalog, configured?: Provid
       contextWindow: configuredModel.contextWindow ?? existing?.contextWindow,
       maxCompletionTokens: configuredModel.maxCompletionTokens ?? existing?.maxCompletionTokens,
       supportsReasoningEffort: configuredModel.supportsReasoningEffort ?? existing?.supportsReasoningEffort,
+      reasoningEffort: existing?.reasoningEffort ?? configuredModel.reasoningEffort,
+      reasoningEfforts: existing?.reasoningEfforts ?? configuredModel.reasoningEfforts,
     });
   }
 

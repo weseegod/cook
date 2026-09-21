@@ -13,6 +13,9 @@ export interface MockSeedModel {
   input?: string[];
   contextWindow?: number;
   maxCompletionTokens?: number;
+  supportsReasoningEffort?: boolean;
+  reasoningEffort?: string;
+  reasoningEfforts?: Array<string | { id?: string; value: string; label?: string; description?: string; default?: boolean }>;
 }
 
 export interface MockProvider {

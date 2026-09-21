@@ -146,11 +146,32 @@ test.describe("chat, attachments and the model picker", () => {
     const prompt = await waitForCalls(page, "session/prompt");
     expect(prompt[0].params.prompt).toEqual([{ type: "text", text: "What changed?" }]);
 
-    const groups = await page
-      .locator(".composer-model optgroup")
-      .evaluateAll((nodes) => nodes.map((node) => (node as HTMLOptGroupElement).label));
-    expect(groups).toEqual(["openai"]);
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.getByRole("menu", { name: "Models" })).toBeVisible();
+    await expect(page.locator(".composer-model-picker-group-label").first()).toHaveText("OpenAI");
     expect(errors).toEqual([]);
+  });
+
+  test("opens reasoning levels on hover and sends the selected level", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+
+    await page.getByPlaceholder("Ask Cook anything…").fill("start a session");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await page.getByRole("button", { name: "Model" }).click();
+    const modelRow = page.locator("[data-model-picker-item]").filter({ hasText: "GPT-5" }).first();
+    await modelRow.hover();
+    await expect(page.getByRole("menu", { name: "GPT-5 reasoning levels" })).toBeVisible();
+    await page.getByRole("menuitemradio", { name: "Deep" }).click();
+
+    const request = await waitForCalls(page, "session/set_model");
+    expect(request.at(-1)?.params).toMatchObject({
+      sessionId: "mock-session",
+      modelId: "gpt-5",
+      _meta: { reasoningEffort: "high" },
+    });
+    await expect(page.getByRole("button", { name: /Model/ })).toContainText("high");
   });
 
   test("keeps composer input stable while a delayed stream is running", async ({ page }) => {
@@ -177,9 +198,10 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByTestId("provider-add-model-openai").click();
     await page.getByLabel("Model ID for openai").fill("gpt-custom");
     await page.getByLabel("Model display name").fill("GPT Custom");
+    await expect(page.getByLabel("Reasoning")).toBeChecked();
     await page.getByTestId("model-save").click();
     const upserts = await waitForCalls(page, "x.ai/models/upsert");
-    expect(upserts.at(-1)?.params).toMatchObject({ id: "gpt-custom", providerId: "openai", contextWindow: 300000, maxCompletionTokens: 64000, input: ["text"] });
+    expect(upserts.at(-1)?.params).toMatchObject({ id: "gpt-custom", providerId: "openai", contextWindow: 300000, maxCompletionTokens: 64000, input: ["text"], supportsReasoningEffort: true });
     await expect(page.getByTestId("model-row-gpt-custom")).toContainText("GPT Custom");
     await expect(page.getByTestId("model-row-gpt-custom")).toContainText("gpt-custom");
 
@@ -329,16 +351,17 @@ test.describe("chat, attachments and the model picker", () => {
   test("re-lists the catalog when the agent broadcasts an empty models update", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
-    const picker = page.getByLabel("Model");
-    await expect(picker).toHaveValue("gpt-5");
+    const picker = page.getByRole("button", { name: "Model" });
+    await expect(picker).toContainText("GPT-5");
     const listed = (await waitForCalls(page, "x.ai/models/list")).length;
 
     // The machine-wide form of `x.ai/models/update` has no payload: it says the catalog moved on
     // disk. Adopting it as a catalog would leave the picker empty and the selection dangling.
     await mock.modelsUpdate();
     await waitForCalls(page, "x.ai/models/list", listed + 1);
-    await expect(picker).toHaveValue("gpt-5");
-    await expect(picker.locator("option")).toHaveCount(2);
+    await expect(picker).toContainText("GPT-5");
+    await picker.click();
+    await expect(page.locator("[data-model-picker-item]")).toHaveCount(2);
   });
 
   test("attaches an image as a base64 image part with its media type", async ({ page }) => {
@@ -493,7 +516,8 @@ test.describe("slash commands", () => {
 
     // No session yet, and the picker still works: the choice rides `session/new`'s `_meta.modelId`.
     await expect(page.getByLabel("Model")).toBeEnabled();
-    await page.getByLabel("Model").selectOption("o4-mini");
+    await page.getByLabel("Model").click();
+    await page.getByRole("menuitem", { name: "o4-mini" }).click();
 
     await composer(page).fill("What changed?");
     await page.getByTestId("send-button").click();
@@ -502,7 +526,7 @@ test.describe("slash commands", () => {
     const created = (await waitForCalls(page, "session/new"))[0];
     expect(created.params._meta).toMatchObject({ modelId: "o4-mini" });
     expect((await mock.state()).defaultModel).toBe("o4-mini");
-    await expect(page.getByLabel("Model")).toHaveValue("o4-mini");
+    await expect(page.getByLabel("Model")).toContainText("o4-mini");
   });
 
   test("keeps a default the agent cannot write, and says where it applies", async ({ page }) => {
@@ -516,7 +540,7 @@ test.describe("slash commands", () => {
     await page.getByTestId("palette-item-model-o4-mini").click();
 
     await expect(page.getByTestId("notice-banner")).toContainText("applies to this window only");
-    await expect(page.locator(".composer-model select")).toHaveValue("o4-mini");
+    await expect(page.getByLabel("Model")).toContainText("o4-mini");
 
     await composer(page).fill("What changed?");
     await page.getByTestId("send-button").click();
@@ -643,4 +667,3 @@ test.describe("minimum window", () => {
     expect(errors).toEqual([]);
   });
 });
-

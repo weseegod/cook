@@ -130,6 +130,8 @@ export interface SessionState {
   turnPausedMs: number;
   questionOpenedAt: number | null;
   modelId: string | null;
+  /** Effective reasoning effort for the active session, when the selected model supports it. */
+  reasoningEffort: string | null;
   planMode: boolean;
   usage: Record<string, unknown> | null;
   /** Goal orchestration state from `x.ai/session_notification`; `null` before a goal exists. */
