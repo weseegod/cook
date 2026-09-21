@@ -41,8 +41,15 @@ import {
   stopProcess,
   type RpcMessage,
 } from "./host";
-import { modelCatalog, XaiClient, type SessionInfo } from "./xai";
+import { mergeConfiguredModels, modelCatalog, XaiClient, type ModelCatalog, type SessionInfo } from "./xai";
+import { listProviders } from "./providers";
 import { readLocal } from "../ui/storage";
+
+/** Add Desktop/config provider metadata without making an optional provider extension fatal. */
+async function hydrateModelCatalog(catalog: ModelCatalog): Promise<ModelCatalog> {
+  const configured = await listProviders().catch(() => null);
+  return mergeConfiguredModels(catalog, configured);
+}
 
 export { elicitInteraction };
 export { CAPABILITIES } from "./handshake";
@@ -141,7 +148,7 @@ export class CookAcpClient {
     this.promptCorrelation.clear();
     useSessionStore.getState().resetConversation(response.sessionId);
     // `session/new` reports the catalog it spawned with, which is authoritative for this session.
-    const catalog = modelCatalog((response as unknown as { models?: unknown }).models);
+    const catalog = await hydrateModelCatalog(modelCatalog((response as unknown as { models?: unknown }).models));
     if (catalog.models.length > 0) {
       useCatalogStore.getState().setModelCatalog(catalog);
       useSessionStore.getState().set({ modelId: catalog.currentModelId });
@@ -192,7 +199,7 @@ export class CookAcpClient {
     }
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
-    const catalog = modelCatalog(response?.models);
+    const catalog = await hydrateModelCatalog(modelCatalog(response?.models));
     if (catalog.models.length > 0) {
       useCatalogStore.getState().setModelCatalog(catalog);
       useSessionStore.getState().set({ modelId: catalog.currentModelId });
@@ -306,10 +313,12 @@ export class CookAcpClient {
 
   async setModel(modelId: string): Promise<void> {
     await sendModelChoice(modelId);
+    await pullUsage(this.xai);
   }
 
   async setDefaultModel(modelId: string): Promise<void> {
     await pushDefaultModel(modelId);
+    await pullUsage(this.xai);
   }
 
   async setYolo(enabled: boolean): Promise<void> {
@@ -349,7 +358,7 @@ export class CookAcpClient {
   }
 
   async refreshModels(): Promise<void> {
-    useCatalogStore.getState().setModelCatalog(await this.xai.listModels());
+    useCatalogStore.getState().setModelCatalog(await hydrateModelCatalog(await this.xai.listModels()));
   }
 
   async refreshCommands(): Promise<void> {

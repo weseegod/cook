@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
 import { askBtw, interjectPrompt } from "../../acp/turn-ops";
-import { groupByProvider } from "../../acp/xai";
+import { groupByProvider, providerDisplayName } from "../../acp/xai";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { planFeedback } from "../../state/plan-review";
@@ -406,7 +406,7 @@ export function Composer() {
               >
                 {!selectedModelKnown && <option value={selectedModel} disabled>{models.length === 0 ? "Loading models…" : selectedModel || "Select model"}</option>}
                 {groupByProvider(models).map(([provider, entries]) => (
-                  <optgroup key={provider} label={provider}>
+                  <optgroup key={provider} label={providerDisplayName(provider)}>
                     {entries.map((model) => <option key={model.id} value={model.id}>{model.name ?? model.id}</option>)}
                   </optgroup>
                 ))}

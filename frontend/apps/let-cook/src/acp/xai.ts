@@ -1,4 +1,6 @@
 import { notify, request } from "./host";
+import { PROVIDER_PRESETS } from "./provider-presets";
+import type { ProviderList } from "./providers";
 
 export interface SessionSummary {
   id: string;
@@ -226,6 +228,63 @@ export function modelCatalog(value: unknown): ModelCatalog {
   };
 }
 
+/**
+ * Restore provider/config metadata that the agent's model catalog can omit.
+ *
+ * The ACP catalog is intentionally provider-agnostic for many ids, so an unnamespaced `gpt-*`
+ * entry otherwise falls through to the historical `xai` default in `normalizeModel`. Explicit
+ * `[model.*]` rows are the source of truth for Desktop and are also available from the browser
+ * mock, which makes this merge useful to both transports.
+ */
+export function mergeConfiguredModels(catalog: ModelCatalog, configured?: ProviderList | null): ModelCatalog {
+  if (!configured) return catalog;
+
+  const configuredModels = new Map<string, ModelSummary>();
+  const explicit = configured.models?.length ? configured.models : configured.providers.flatMap((provider) =>
+    provider.models.map((model) => ({ ...model, provider: provider.id })),
+  );
+  for (const model of explicit) {
+    if (!model.id) continue;
+    configuredModels.set(model.id, {
+      id: model.id,
+      apiModel: model.model,
+      name: model.name,
+      provider: model.provider,
+      inputModalities: model.input,
+      contextWindow: model.contextWindow,
+      maxCompletionTokens: model.maxCompletionTokens,
+      supportsReasoningEffort: model.supportsReasoningEffort,
+      configured: true,
+    });
+  }
+
+  const models = new Map(catalog.models.map((model) => [model.id, model]));
+  for (const [id, configuredModel] of configuredModels) {
+    const existing = models.get(id);
+    models.set(id, {
+      ...existing,
+      ...configuredModel,
+      // The ACP catalog may know richer runtime metadata than config.toml. Keep it when the
+      // configured row does not specify a value, while always trusting its provider ownership.
+      name: configuredModel.name ?? existing?.name,
+      apiModel: configuredModel.apiModel ?? existing?.apiModel,
+      inputModalities: configuredModel.inputModalities ?? existing?.inputModalities,
+      contextWindow: configuredModel.contextWindow ?? existing?.contextWindow,
+      maxCompletionTokens: configuredModel.maxCompletionTokens ?? existing?.maxCompletionTokens,
+      supportsReasoningEffort: configuredModel.supportsReasoningEffort ?? existing?.supportsReasoningEffort,
+    });
+  }
+
+  const currentModelId = catalog.currentModelId || configured.defaultModel || null;
+  return {
+    currentModelId,
+    models: [...models.values()].map((model) => ({
+      ...model,
+      isDefault: model.id === currentModelId || model.isDefault,
+    })),
+  };
+}
+
 /** Map an ACP `available_commands_update` payload to the same shape `x.ai/commands/list` returns. */
 export function commandsFromUpdate(availableCommands: unknown): CommandSummary[] {
   if (!Array.isArray(availableCommands)) return [];
@@ -249,6 +308,10 @@ export function groupByProvider<T extends { provider?: string }>(models: T[]): A
     groups.set(key, [...(groups.get(key) ?? []), model]);
   }
   return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+}
+
+export function providerDisplayName(provider: string): string {
+  return PROVIDER_PRESETS.find((preset) => preset.id === provider)?.label ?? provider;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {

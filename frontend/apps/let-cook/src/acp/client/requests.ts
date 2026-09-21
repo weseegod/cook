@@ -37,9 +37,15 @@ export async function sendModelChoice(modelId: string): Promise<void> {
   if (sessionId) await request("session/set_model", { sessionId, modelId });
   writeLocal("defaultModel", modelId);
   useSessionStore.getState().set({ modelId });
-  useCatalogStore.getState().setModelCatalog({
+  const catalog = useCatalogStore.getState();
+  const selected = catalog.models.find((model) => model.id === modelId);
+  const usage = useSessionStore.getState().usage;
+  if (usage && selected?.contextWindow) {
+    useSessionStore.getState().set({ usage: { ...usage, size: selected.contextWindow } });
+  }
+  catalog.setModelCatalog({
     currentModelId: modelId,
-    models: useCatalogStore.getState().models,
+    models: catalog.models,
   });
 }
 
