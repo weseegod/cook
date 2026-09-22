@@ -1544,6 +1544,61 @@ mod tests {
         assert_eq!(d3.3.as_deref(), Some("b-args"));
     }
 
+    /// Lesson 4 lock: the Responses transform must forward tool-call progress as it arrives.
+    /// The rest of the stream is withheld until a delta is observed, so a transform that buffers
+    /// the whole generation before emitting anything stalls here instead of emitting deltas at the end.
+    #[tokio::test]
+    async fn a_tool_call_delta_reaches_the_consumer_before_the_terminal_event() {
+        let (release, hold) = tokio::sync::oneshot::channel::<()>();
+        let raw = stream::iter([Ok(function_call_added_event(0, "call_a", "tool_a"))])
+            .chain(stream::once(async move {
+                let _ = hold.await;
+                Ok(function_call_args_delta_event(0, "a-args"))
+            }))
+            .chain(stream::iter([Ok(completed_event())]))
+            .boxed();
+
+        let mut stream = Box::pin(stream_responses(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ));
+        let mut release = Some(release);
+        let mut events = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
+                Ok(Some(event)) => {
+                    if matches!(event, SamplingEvent::ToolCallDelta { .. })
+                        && let Some(tx) = release.take()
+                    {
+                        let _ = tx.send(());
+                    }
+                    events.push(event);
+                    if matches!(
+                        events.last(),
+                        Some(SamplingEvent::Completed { .. } | SamplingEvent::Failed { .. })
+                    ) {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => panic!(
+                    "timed out waiting for a ToolCallDelta: the transform buffered the stream instead of forwarding tool-call progress"
+                ),
+            }
+        }
+        assert!(
+            release.is_none(),
+            "expected a ToolCallDelta before the terminal event"
+        );
+        assert!(
+            matches!(events.last(), Some(SamplingEvent::Completed { .. })),
+            "{events:?}"
+        );
+    }
+
     #[tokio::test]
     async fn doom_loop_collector_signals_land_on_completed_response() {
         use xai_grok_sampling_types::doom_loop::{

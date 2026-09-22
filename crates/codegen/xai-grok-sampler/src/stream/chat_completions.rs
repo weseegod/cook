@@ -1839,6 +1839,92 @@ mod tests {
         }
     }
 
+    /// Lesson 4 lock: tool-call progress must reach the consumer while the response is still open.
+    /// The second chunk is withheld until a delta is observed, so an adapter that buffers the whole
+    /// generation before emitting anything stalls here instead of emitting deltas at the end.
+    async fn a_tool_call_delta_precedes_the_terminal_event(adapter: ChatCompletionsAdapter) {
+        let (release, hold) = tokio::sync::oneshot::channel::<()>();
+        let first = make_chunk(vec![ChatChunkDelta {
+            tool_calls: vec![ChunkToolCallDelta {
+                index: 0,
+                id: Some("call_1".into()),
+                kind: Some("function".into()),
+                function: Some(ToolCallFunctionDelta {
+                    name: Some("grep".into()),
+                    arguments: Some("{\"path\":".into()),
+                }),
+            }],
+            ..Default::default()
+        }]);
+        let mut last = final_chunk(FinishReason::ToolCalls);
+        last.choices[0].delta.tool_calls = vec![ChunkToolCallDelta {
+            index: 0,
+            id: None,
+            kind: None,
+            function: Some(ToolCallFunctionDelta {
+                name: None,
+                arguments: Some("\"src\"}".into()),
+            }),
+        }];
+        let raw = stream::iter([Ok(first)])
+            .chain(stream::once(async move {
+                let _ = hold.await;
+                Ok(last)
+            }))
+            .boxed();
+
+        let mut stream = Box::pin(stream_chat_completions_with_adapter(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            adapter,
+            Vec::new(),
+        ));
+        let mut release = Some(release);
+        let mut events = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
+                Ok(Some(event)) => {
+                    if matches!(event, SamplingEvent::ToolCallDelta { .. })
+                        && let Some(tx) = release.take()
+                    {
+                        let _ = tx.send(());
+                    }
+                    events.push(event);
+                    if matches!(
+                        events.last(),
+                        Some(SamplingEvent::Completed { .. } | SamplingEvent::Failed { .. })
+                    ) {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => panic!(
+                    "timed out waiting for a ToolCallDelta ({adapter:?}): the transform buffered the stream instead of forwarding tool-call progress"
+                ),
+            }
+        }
+        assert!(
+            release.is_none(),
+            "expected a ToolCallDelta before the terminal event ({adapter:?})"
+        );
+        assert!(
+            matches!(events.last(), Some(SamplingEvent::Completed { .. })),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn standard_adapter_emits_tool_call_deltas_before_completing() {
+        a_tool_call_delta_precedes_the_terminal_event(ChatCompletionsAdapter::Standard).await;
+    }
+
+    #[tokio::test]
+    async fn xiaomi_adapter_emits_tool_call_deltas_before_completing() {
+        a_tool_call_delta_precedes_the_terminal_event(ChatCompletionsAdapter::XiaomiMimo).await;
+    }
+
     #[tokio::test]
     async fn model_metadata_yielded_after_stream_started() {
         let raw = stream::iter(Vec::<Result<ChatCompletionChunk, SamplingError>>::new()).boxed();

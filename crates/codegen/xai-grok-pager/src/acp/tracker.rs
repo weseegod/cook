@@ -163,13 +163,18 @@ pub struct WritingToolCall {
     pub tool_name: Option<String>,
     /// 1-based position within the sample's tool calls.
     pub ordinal: std::num::NonZeroU32,
+    /// `true` once the name map is full and this index is beyond it, so the exact position is no longer
+    /// derivable from the bounded map. The label then renders as a lower bound (`(65+)`) instead of
+    /// freezing on a number that never moves again.
+    pub ordinal_is_lower_bound: bool,
 }
 impl WritingToolCall {
     /// User-facing spinner label.
     pub fn label(&self) -> String {
-        let ordinal = match self.ordinal.get() {
-            1 => String::new(),
-            n => format!(" ({n})"),
+        let ordinal = match (self.ordinal.get(), self.ordinal_is_lower_bound) {
+            (1, false) => String::new(),
+            (n, false) => format!(" ({n})"),
+            (n, true) => format!(" ({n}+)"),
         };
         match self.tool_name.as_deref() {
             Some(name) if xai_grok_tools::is_task_tool_id(name) => {
@@ -411,6 +416,9 @@ pub struct AcpUpdateTracker {
     /// `None` marks an index observed before its name arrived (it still ranks for ordinals).
     /// Cleared together with `writing_tool_call`.
     writing_tool_names: HashMap<u32, Option<String>>,
+    /// Name of the active call whose index fell outside [`Self::writing_tool_names`] (one slot: only the
+    /// write being labeled is past the cap). Cleared together with `writing_tool_call`.
+    writing_tool_name_unremembered: Option<(u32, String)>,
     /// Pending ACP commands from the most recent `AvailableCommandsUpdate`.
     /// Consumed by the caller via `take_pending_acp_commands()`.
     /// The caller is responsible for copying to `AgentSession.available_commands` and bumping `available_commands_generation`.
@@ -703,13 +711,18 @@ impl AcpUpdateTracker {
         let now = std::time::Instant::now();
         let retry_cleared = self.retry_activity.take().is_some();
         let expired = self.has_stale_tool_call_write();
-        if self.writing_tool_names.len() < MAX_WRITING_TOOL_NAMES
-            || self.writing_tool_names.contains_key(&tool_index)
-        {
+        // Whether this index fits in the bounded name map (already there, or there is still room) decides
+        // whether its position is an exact count or a lower bound past the cap.
+        let remembered = self.writing_tool_names.contains_key(&tool_index)
+            || self.writing_tool_names.len() < MAX_WRITING_TOOL_NAMES;
+        if remembered {
             let entry = self.writing_tool_names.entry(tool_index).or_insert(None);
             if let Some(name) = name {
                 *entry = Some(name.to_string());
             }
+        } else if let Some(name) = name.filter(|name| !name.is_empty()) {
+            // Past the map cap the ordinal is only a lower bound, but the active call still has a name worth showing.
+            self.writing_tool_name_unremembered = Some((tool_index, name.to_string()));
         }
         let observed_before = self
             .writing_tool_names
@@ -718,9 +731,20 @@ impl AcpUpdateTracker {
             .count() as u32;
         let ordinal = std::num::NonZeroU32::new(observed_before.saturating_add(1))
             .unwrap_or(std::num::NonZeroU32::MIN);
+        let tool_name = self
+            .writing_tool_names
+            .get(&tool_index)
+            .cloned()
+            .flatten()
+            .or_else(|| {
+                self.writing_tool_name_unremembered
+                    .as_ref()
+                    .and_then(|(index, name)| (*index == tool_index).then(|| name.clone()))
+            });
         let next = WritingToolCall {
-            tool_name: self.writing_tool_names.get(&tool_index).cloned().flatten(),
+            tool_name,
             ordinal,
+            ordinal_is_lower_bound: !remembered,
         };
         let changed =
             expired || self.writing_tool_call.as_ref().map(|(writing, _)| writing) != Some(&next);
@@ -983,6 +1007,7 @@ impl AcpUpdateTracker {
         if is_agent_output && !matches!(&update, acp::SessionUpdate::ToolCallUpdate(_)) {
             self.writing_tool_call = None;
             self.writing_tool_names.clear();
+            self.writing_tool_name_unremembered = None;
         }
         let changed = match update {
             acp::SessionUpdate::AgentMessageChunk(chunk) => {
@@ -1046,6 +1071,7 @@ impl AcpUpdateTracker {
         self.hooks_running = None;
         self.writing_tool_call = None;
         self.writing_tool_names.clear();
+        self.writing_tool_name_unremembered = None;
         self.suppressed_tools.clear();
         self.blocking_waits.clear();
         self.orphan_updates.clear();

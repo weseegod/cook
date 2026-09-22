@@ -2740,6 +2740,27 @@ fn writing_tool_call_ordinal_counts_parallel_calls() {
     assert!(tracker.note_tool_call_arguments_delta(Some("write"), 0));
     assert_eq!(label(&tracker), "Writing file…");
 }
+/// Past the name-map cap the exact position is no longer derivable, so the label widens to a
+/// lower bound instead of freezing on "(65)" for every later call in a runaway response.
+#[test]
+fn writing_tool_call_ordinal_saturates_as_a_lower_bound_past_the_name_cap() {
+    let mut tracker = AcpUpdateTracker::new();
+    let label = |tracker: &AcpUpdateTracker| {
+        let Some(TurnActivity::WritingToolCall(writing)) = tracker.activity() else {
+            panic!("expected WritingToolCall activity");
+        };
+        writing.label()
+    };
+    for index in 0..MAX_WRITING_TOOL_NAMES as u32 {
+        tracker.note_tool_call_arguments_delta(Some("write"), index);
+    }
+    assert_eq!(label(&tracker), "Writing file (64)…");
+    // The 65th distinct index no longer fits in the bounded map, so the label states a lower bound.
+    tracker.note_tool_call_arguments_delta(Some("write"), MAX_WRITING_TOOL_NAMES as u32);
+    assert_eq!(label(&tracker), "Writing file (65+)…");
+    tracker.note_tool_call_arguments_delta(Some("write"), 500);
+    assert_eq!(label(&tracker), "Writing file (65+)…");
+}
 #[test]
 fn waiting_payload_and_writing_churn_are_not_phase_transitions() {
     let wait = |subject: Option<&str>| {
@@ -2797,6 +2818,7 @@ fn waiting_payload_and_writing_churn_are_not_phase_transitions() {
         Some(TurnActivity::WritingToolCall(WritingToolCall {
             tool_name: name.map(str::to_string),
             ordinal: std::num::NonZeroU32::new(ordinal).unwrap(),
+            ordinal_is_lower_bound: false,
         }))
     };
     assert!(!is_phase_transition(
