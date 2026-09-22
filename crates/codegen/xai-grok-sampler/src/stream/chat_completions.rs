@@ -177,6 +177,58 @@ fn strip_xml_embedded_in_json_arguments(arguments: &str) -> Option<String> {
     useful.then(|| value.to_string())
 }
 
+/// An unclosed JSON string often runs up to an XML tag, with a literal `\n` (the two
+/// characters, not a newline) where llama.cpp separated the tags. Close the string at the
+/// marker and keep that object. The stuffed envelopes are the same ramble `complete_json_prefix`
+/// already refuses to execute.
+fn salvage_truncated_json_before_xml(arguments: &str) -> Option<String> {
+    let at = earliest_xml_argument_marker(arguments)?;
+    let mut head = arguments[..at].trim_end();
+    while let Some(stripped) = head.strip_suffix("\\n") {
+        head = stripped.trim_end();
+    }
+    if !head.starts_with('{') {
+        return None;
+    }
+    let mut closed = head.to_owned();
+    let mut in_string = false;
+    let mut escape = false;
+    let mut depth = 0i32;
+    for ch in closed.chars() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    if in_string {
+        closed.push('"');
+    }
+    while depth > 0 {
+        closed.push('}');
+        depth -= 1;
+    }
+    strip_xml_embedded_in_json_arguments(&closed).or_else(|| {
+        let value: serde_json::Value = serde_json::from_str(&closed).ok()?;
+        let object = value.as_object()?;
+        let useful = object
+            .values()
+            .any(|field| matches!(field, serde_json::Value::String(text) if !text.is_empty()));
+        useful.then(|| value.to_string())
+    })
+}
+
 /// MiMo sometimes emits a complete structured argument object and then keeps generating an XML
 /// tool envelope in the same string. Prefer the already-complete structured call: executing the
 /// appended envelopes as siblings can turn one intended action into dozens of unrelated calls.
@@ -211,6 +263,9 @@ fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -
             }
         } else if let Some(prefix) = complete_json_prefix(call.arguments.as_ref()) {
             call.arguments = std::sync::Arc::<str>::from(prefix);
+            out.push(call);
+        } else if let Some(salvaged) = salvage_truncated_json_before_xml(call.arguments.as_ref()) {
+            call.arguments = std::sync::Arc::<str>::from(salvaged);
             out.push(call);
         } else {
             embedded.push_str(call.arguments.as_ref());
@@ -1296,6 +1351,51 @@ mod tests {
                     "debris-only arguments must not run: {:?}",
                     response.tool_calls()
                 );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// The generation hits the token cap inside a JSON string, after llama.cpp has already
+    /// written a literal `\n</parameter>` and more envelopes. Keep the command before that
+    /// marker. Do not execute the stuffed sibling calls.
+    #[tokio::test]
+    async fn standard_path_salvages_an_unclosed_json_string_before_an_xml_marker() {
+        let arguments = r#"{"command":"cat secret.txt > out.txt\n</parameter><parameter=description>copy</parameter></function></tool_call><tool_call><function=run_terminal_command>\n<parameter=command>\nxxd out.txt</parameter></function></tool_call>"#;
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::Length),
+        ];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::Standard,
+            vec!["run_terminal_command".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "stuffed calls must not run: {calls:?}");
+                assert_eq!(calls[0].name, "run_terminal_command");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(calls[0].arguments.as_ref()).expect("salvaged arguments");
+                assert_eq!(parsed["command"], "cat secret.txt > out.txt");
+                assert!(!calls[0].arguments.contains("</parameter>"));
             }
             other => panic!("expected Completed, got {other:?}"),
         }

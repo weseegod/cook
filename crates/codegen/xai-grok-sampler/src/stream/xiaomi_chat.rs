@@ -203,13 +203,51 @@ fn longest_tool_prefix_suffix(text: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// llama.cpp inserts either a real newline or the two-character JSON escape `\n` between tags.
+fn skip_xml_separators(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        if index + 1 < bytes.len() && bytes[index] == b'\\' && bytes[index + 1] == b'n' {
+            index += 2;
+            continue;
+        }
+        break;
+    }
+    &text[index..]
+}
+
+fn trim_xml_separators(text: &str) -> &str {
+    let start = skip_xml_separators(text);
+    let bytes = start.as_bytes();
+    let mut end = bytes.len();
+    loop {
+        if end > 0 && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+            continue;
+        }
+        if end >= 2 && bytes[end - 2] == b'\\' && bytes[end - 1] == b'n' {
+            end -= 2;
+            continue;
+        }
+        break;
+    }
+    &start[..end]
+}
+
 fn parse_envelope(envelope: &str, allowed_tools: &HashSet<String>) -> Option<RecoveredToolCall> {
     // llama.cpp streams the envelope as argument deltas and often inserts a
     // newline between the tags. Trim so `<tool_call>\n<function=...>` still parses.
-    let inner = envelope
-        .strip_prefix(TOOL_OPEN)?
-        .strip_suffix(TOOL_CLOSE)?
-        .trim();
+    let inner = skip_xml_separators(
+        envelope
+            .strip_prefix(TOOL_OPEN)?
+            .strip_suffix(TOOL_CLOSE)?
+            .trim(),
+    );
     let function = inner.strip_prefix(FUNCTION_OPEN)?;
     let name_end = function.find('>')?;
     let name = function[..name_end].trim();
@@ -224,7 +262,7 @@ fn parse_envelope(envelope: &str, allowed_tools: &HashSet<String>) -> Option<Rec
     let mut arguments = Map::new();
     while cursor < params.len() {
         let rest = &params[cursor..];
-        let skipped = rest.len() - rest.trim_start().len();
+        let skipped = rest.len() - skip_xml_separators(rest).len();
         cursor += skipped;
         let rest = &params[cursor..];
         if rest.is_empty() {
@@ -240,7 +278,7 @@ fn parse_envelope(envelope: &str, allowed_tools: &HashSet<String>) -> Option<Rec
         }
         let value_start = key_end + 1;
         let value_end = parameter[value_start..].find(PARAM_CLOSE)? + value_start;
-        let raw_value = parameter[value_start..value_end].trim();
+        let raw_value = trim_xml_separators(&parameter[value_start..value_end]);
         let value =
             serde_json::from_str(raw_value).unwrap_or_else(|_| Value::String(raw_value.to_owned()));
         arguments.insert(key.to_owned(), value);
@@ -277,6 +315,18 @@ mod tests {
 
     fn allowed_read() -> HashSet<String> {
         ["read_file"].into_iter().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn parses_envelope_when_llama_inserts_a_json_escaped_newline_between_tags() {
+        let input = "<tool_call>\\n<function=read_file>\\n<parameter=target_file>\\ntask.txt</parameter>\\n</function>\\n</tool_call>";
+        let extraction = extract_tool_calls(input, &allowed_read(), true);
+        assert_eq!(extraction.calls.len(), 1);
+        assert_eq!(extraction.calls[0].name, "read_file");
+        assert_eq!(
+            extraction.calls[0].arguments,
+            r#"{"target_file":"task.txt"}"#
+        );
     }
 
     #[test]
