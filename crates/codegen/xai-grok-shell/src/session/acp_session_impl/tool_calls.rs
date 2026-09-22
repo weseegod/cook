@@ -403,10 +403,22 @@ impl SessionActor {
         &self,
         tool_calls: Vec<crate::sampling::types::ToolCallResponse>,
     ) -> Result<ToolLoop, acp::Error> {
+        let (control, _) = self.execute_tool_calls_reported(tool_calls).await?;
+        Ok(control)
+    }
+
+    /// Execute a tool batch and also report preparation failures to the owning turn loop.
+    /// The ordinary wrapper above intentionally keeps the long-standing control-flow API used by
+    /// tests and callers that do not need loop-stationarity accounting.
+    pub(super) async fn execute_tool_calls_reported(
+        &self,
+        tool_calls: Vec<crate::sampling::types::ToolCallResponse>,
+    ) -> Result<(ToolLoop, ToolExecutionReport), acp::Error> {
         if let Some(cfg) = self.chat_state_handle.get_sampling_config().await {
             tracing::Span::current().record("model_id", cfg.model.as_str());
         }
         let mut final_result: Option<ToolLoop> = None;
+        let mut execution_report = ToolExecutionReport::default();
         let mut deferred_followups: Vec<ConversationItem> = Vec::new();
         let tool_calls = self.reject_excess_media_gen_calls(tool_calls).await?;
         if !tool_calls.is_empty() {
@@ -414,18 +426,29 @@ impl SessionActor {
                 let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
                 let (body, tail) = split_exit_plan_tail(tool_calls, kind_of);
                 if !body.is_empty() {
-                    self.execute_tool_calls_batch(body, &mut deferred_followups, &mut final_result)
-                        .await?;
+                    self.execute_tool_calls_batch(
+                        body,
+                        &mut deferred_followups,
+                        &mut final_result,
+                        &mut execution_report,
+                    )
+                    .await?;
                 }
                 if !tail.is_empty() {
-                    self.execute_tool_calls_batch(tail, &mut deferred_followups, &mut final_result)
-                        .await?;
+                    self.execute_tool_calls_batch(
+                        tail,
+                        &mut deferred_followups,
+                        &mut final_result,
+                        &mut execution_report,
+                    )
+                    .await?;
                 }
             } else {
                 self.execute_tool_calls_batch(
                     tool_calls,
                     &mut deferred_followups,
                     &mut final_result,
+                    &mut execution_report,
                 )
                 .await?;
             }
@@ -449,9 +472,9 @@ impl SessionActor {
         self.drain_interjections_at_safe_point().await;
         self.flush_pending_skill_reminders().await;
         if let Some(final_result) = final_result {
-            return Ok(final_result);
+            return Ok((final_result, execution_report));
         }
-        Ok(ToolLoop::Continue)
+        Ok((ToolLoop::Continue, execution_report))
     }
     /// Per-name media-gen counts that exceed this session's cap.
     pub(super) fn media_gen_over_cap(
@@ -541,6 +564,7 @@ impl SessionActor {
         tool_calls: Vec<crate::sampling::types::ToolCallResponse>,
         deferred_followups: &mut Vec<ConversationItem>,
         final_result: &mut Option<ToolLoop>,
+        execution_report: &mut ToolExecutionReport,
     ) -> Result<(), acp::Error> {
         if self.permissions.is_auto_mode() {
             let conversation = self.chat_state_handle.get_conversation().await;
@@ -599,6 +623,9 @@ impl SessionActor {
             match self.prepare_tool_call(call, deferred_followups).await? {
                 Ok(prepared) => approved.push(prepared),
                 Err(tool_loop) => {
+                    if matches!(&tool_loop, ToolLoop::ToolParsingError) {
+                        execution_report.tool_parsing_errors += 1;
+                    }
                     self.events.tool_finished();
                     if let Some((server, tool)) =
                         crate::session::mcp_servers::parse_mcp_tool_name(&call_name)

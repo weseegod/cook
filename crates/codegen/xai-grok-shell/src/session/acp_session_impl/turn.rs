@@ -2657,6 +2657,7 @@ impl SessionActor {
         let mut tool_turn_count: usize = 1;
         let mut loop_index: u32 = 0;
         let mut identical_tool_calls = IdenticalToolCallRun::default();
+        let mut tool_argument_errors = ToolArgumentErrorRun::default();
         let mut todo_gate_fires: u32 = 0;
         let mut length_salvage_streak = LengthSalvageStreak::default();
         let mut auth_retry_schedule = AuthRetrySchedule::new();
@@ -2700,6 +2701,46 @@ impl SessionActor {
         loop {
             self.emit_event(crate::session::events::Event::LoopStarted { loop_index });
             loop_index += 1;
+            if tool_argument_errors.should_stop() {
+                let consecutive_cycles = tool_argument_errors.consecutive_cycles;
+                tracing::warn!(
+                    session_id = %self.session_info.id,
+                    consecutive_cycles,
+                    "tool argument error loop: ending turn after repeated parse/schema failures"
+                );
+                xai_grok_telemetry::unified_log::warn(
+                    "shell.turn.tool_argument_error_loop_stop",
+                    Some(self.session_info.id.0.as_ref()),
+                    Some(serde_json::json!({
+                        "loop_index": loop_index,
+                        "consecutive_cycles": consecutive_cycles,
+                    })),
+                );
+                self.finalize_turn_bookkeeping(
+                    req_id,
+                    std::mem::take(&mut turn_span_totals),
+                    turn_sampling,
+                )
+                .await;
+                return Ok(TurnOutcome::StationarityEnded);
+            }
+            if tool_argument_errors.take_nudge() {
+                let consecutive_cycles = tool_argument_errors.consecutive_cycles;
+                tracing::warn!(
+                    session_id = %self.session_info.id,
+                    consecutive_cycles,
+                    "tool argument error loop: nudging model to emit valid independent calls"
+                );
+                xai_grok_telemetry::unified_log::warn(
+                    "shell.turn.tool_argument_error_loop_nudge",
+                    Some(self.session_info.id.0.as_ref()),
+                    Some(serde_json::json!({
+                        "loop_index": loop_index,
+                        "consecutive_cycles": consecutive_cycles,
+                    })),
+                );
+                self.push_system_reminder(TOOL_ARGUMENT_ERROR_NUDGE);
+            }
             if identical_tool_calls.run_len >= identical_tool_calls.hard_stop_threshold() {
                 let run_len = identical_tool_calls.run_len;
                 let tool_name = identical_tool_calls.tool_name.clone();
@@ -3771,10 +3812,13 @@ impl SessionActor {
                 .await;
             let execute_tool_calls_result = {
                 let _tool_phase = turn_phases.begin_tool_blocking();
-                self.execute_tool_calls(tool_call_responses).await
+                self.execute_tool_calls_reported(tool_call_responses).await
             };
+            if let Ok((_, report)) = &execute_tool_calls_result {
+                tool_argument_errors.observe(report.had_tool_parsing_error());
+            }
             match execute_tool_calls_result {
-                Ok(ToolLoop::PermissionReject { tool_name, reason }) => {
+                Ok((ToolLoop::PermissionReject { tool_name, reason }, _)) => {
                     return Ok(TurnOutcome::Cancelled {
                         category: Some(
                             crate::session::events::CancellationCategory::PermissionRejected,
@@ -3786,8 +3830,8 @@ impl SessionActor {
                         }),
                     });
                 }
-                Ok(ToolLoop::HookDenied { .. }) => {}
-                Ok(ToolLoop::Cancelled) => {
+                Ok((ToolLoop::HookDenied { .. }, _)) => {}
+                Ok((ToolLoop::Cancelled, _)) => {
                     return Ok(TurnOutcome::Cancelled {
                         category: Some(
                             crate::session::events::CancellationCategory::PermissionCancelled,
@@ -3795,7 +3839,7 @@ impl SessionActor {
                         context: None,
                     });
                 }
-                Ok(ToolLoop::FollowupMessage(followup_message)) => {
+                Ok((ToolLoop::FollowupMessage(followup_message), _)) => {
                     self.add_followup_message_as_user_turn(&followup_message)
                         .await;
                     continue;
@@ -3831,6 +3875,86 @@ impl SessionActor {
 }
 /// Discard an egregious (2x cap) media-gen generation and re-sample this many times; later over-caps in the same turn use first-K.
 const MAX_MEDIA_GEN_OVER_CAP_RESAMPLES: u32 = 1;
+const NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES: u32 = 2;
+const MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES: u32 = 4;
+const _: () =
+    assert!(NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES < MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES);
+const TOOL_ARGUMENT_ERROR_NUDGE: &str = "Tool arguments have failed JSON/schema validation in \
+     consecutive steps. Emit each tool as a separate native tool call with one complete JSON \
+     object matching that tool's schema. Do not concatenate calls, nest one tool's arguments \
+     inside another, or repeat the malformed calls. If you cannot form a valid call, stop and \
+     explain the blocker.";
+
+#[derive(Default)]
+struct ToolArgumentErrorRun {
+    consecutive_cycles: u32,
+    nudged: bool,
+}
+
+impl ToolArgumentErrorRun {
+    fn observe(&mut self, had_tool_parsing_error: bool) -> u32 {
+        if had_tool_parsing_error {
+            self.consecutive_cycles = self.consecutive_cycles.saturating_add(1);
+        } else {
+            self.consecutive_cycles = 0;
+            self.nudged = false;
+        }
+        self.consecutive_cycles
+    }
+
+    fn take_nudge(&mut self) -> bool {
+        let fire =
+            self.consecutive_cycles >= NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES && !self.nudged;
+        self.nudged |= fire;
+        fire
+    }
+
+    fn should_stop(&self) -> bool {
+        self.consecutive_cycles >= MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES
+    }
+}
+
+#[cfg(test)]
+mod tool_argument_error_run_tests {
+    use super::{
+        MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES, NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES,
+        ToolArgumentErrorRun,
+    };
+
+    #[test]
+    fn nudges_after_two_error_cycles_and_stops_after_four() {
+        let mut run = ToolArgumentErrorRun::default();
+        for cycle in 1..=MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES {
+            assert_eq!(run.observe(true), cycle);
+            if cycle < NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES {
+                assert!(!run.take_nudge());
+            } else if cycle == NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES {
+                assert!(run.take_nudge());
+            } else {
+                assert!(!run.take_nudge(), "the run is nudged only once");
+            }
+            assert_eq!(
+                run.should_stop(),
+                cycle >= MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES
+            );
+        }
+    }
+
+    #[test]
+    fn clean_cycle_resets_count_and_nudge_state() {
+        let mut run = ToolArgumentErrorRun::default();
+        assert_eq!(run.observe(true), 1);
+        assert_eq!(run.observe(true), 2);
+        assert!(run.take_nudge());
+
+        assert_eq!(run.observe(false), 0);
+        assert!(!run.should_stop());
+        assert_eq!(run.observe(true), 1);
+        assert_eq!(run.observe(true), 2);
+        assert!(run.take_nudge(), "a new error run receives its own nudge");
+    }
+}
+
 /// Tool kinds whose identical repeats are almost never productive, so they get tighter thresholds than everything else.
 /// A production turn repeated one `ToolKind::Plan` call (`todo_write`) with byte-identical arguments 12 times (224 in the turn).
 /// Names are client-renameable and vary by toolset (`read_file`, `hashline_read`, `Read`; `todo_write`, `todowrite`); the registered kind does not.

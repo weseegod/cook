@@ -18,6 +18,63 @@ use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
 use crate::types::RequestId;
 
+type ToolCallParts = (String, String, String);
+
+/// Accumulates streamed Chat Completions tool calls while tolerating providers that restart the
+/// wire `index` at zero for a later call in the same response. The provider call id is the stable
+/// identity; wire indices are only routing hints for argument-only continuation chunks.
+#[derive(Default)]
+struct ToolCallAccumulator {
+    calls: BTreeMap<u32, ToolCallParts>,
+    active_by_wire_index: BTreeMap<u32, u32>,
+    next_logical_index: u64,
+}
+
+impl ToolCallAccumulator {
+    fn resolve_logical_index(&mut self, wire_index: u32, incoming_id: Option<&str>) -> (u32, bool) {
+        if let Some(&logical_index) = self.active_by_wire_index.get(&wire_index) {
+            let current_id = self
+                .calls
+                .get(&logical_index)
+                .map(|parts| parts.0.as_str())
+                .unwrap_or_default();
+            let starts_new_call = incoming_id
+                .is_some_and(|id| !id.is_empty() && !current_id.is_empty() && id != current_id);
+            if !starts_new_call {
+                return (logical_index, false);
+            }
+
+            let logical_index = self.allocate_logical_index();
+            self.active_by_wire_index.insert(wire_index, logical_index);
+            return (logical_index, true);
+        }
+
+        // Preserve compliant provider indices when possible. This keeps existing event consumers
+        // byte-for-byte compatible for ordinary 0,1,2... parallel calls.
+        let logical_index = if self.calls.contains_key(&wire_index) {
+            self.allocate_logical_index()
+        } else {
+            self.calls.entry(wire_index).or_default();
+            self.next_logical_index = self.next_logical_index.max(u64::from(wire_index) + 1);
+            wire_index
+        };
+        self.active_by_wire_index.insert(wire_index, logical_index);
+        (logical_index, false)
+    }
+
+    fn allocate_logical_index(&mut self) -> u32 {
+        while let Ok(candidate) = u32::try_from(self.next_logical_index) {
+            if !self.calls.contains_key(&candidate) {
+                self.calls.entry(candidate).or_default();
+                self.next_logical_index += 1;
+                return candidate;
+            }
+            self.next_logical_index += 1;
+        }
+        panic!("exhausted logical tool-call indices")
+    }
+}
+
 /// The output stream emits exactly one terminal event per request.
 /// Callers must not consume past the terminal event (the implementation `return`s after yielding it).
 pub fn stream_chat_completions<'a>(
@@ -62,9 +119,10 @@ pub fn stream_chat_completions<'a>(
 
         let mut content_acc = String::new();
         let mut reasoning_acc = String::new();
-        // Tool call deltas keyed by positional index; each entry is (id, name, arguments_buffer)
-        // The first chunk for an index carries the id and name and starts the arguments buffer; later chunks append to arguments only
-        let mut tool_call_acc: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
+        // The first chunk for a logical call carries the id and name and starts the arguments
+        // buffer; later chunks append to it. Some OpenAI-compatible providers reuse a wire index
+        // for a new id, so the accumulator normalizes wire indices into logical indices.
+        let mut tool_call_acc = ToolCallAccumulator::default();
 
         // Index counter spanning text and reasoning chunks (matches the shell's chunk_index used for notification correlation)
         let mut chunk_index: u64 = 0;
@@ -182,9 +240,21 @@ pub fn stream_chat_completions<'a>(
                 for tc_delta in delta.tool_calls.into_iter() {
                     chunk_has_content = true;
 
+                    let wire_index = tc_delta.index;
+                    let (logical_index, remapped) = tool_call_acc
+                        .resolve_logical_index(wire_index, tc_delta.id.as_deref());
+                    if remapped {
+                        tracing::warn!(
+                            request_id = %request_id,
+                            wire_index,
+                            logical_index,
+                            "chat completions provider reused a tool-call index for a new id; remapping the call"
+                        );
+                    }
                     let entry = tool_call_acc
-                        .entry(tc_delta.index)
-                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+                        .calls
+                        .get_mut(&logical_index)
+                        .expect("resolved logical tool-call index must exist");
 
                     let mut id_for_event: Option<String> = None;
                     let mut name_for_event: Option<String> = None;
@@ -207,7 +277,7 @@ pub fn stream_chat_completions<'a>(
 
                     yield SamplingEvent::ToolCallDelta {
                         request_id: request_id.clone(),
-                        tool_index: tc_delta.index,
+                        tool_index: logical_index,
                         id: id_for_event,
                         name: name_for_event,
                         arguments_delta: args_for_event,
@@ -230,7 +300,7 @@ pub fn stream_chat_completions<'a>(
         }
 
         // ── Build the final response ─────────────────────────────────
-        let tool_calls: Vec<ToolCall> = tool_call_acc
+        let tool_calls: Vec<ToolCall> = tool_call_acc.calls
             .into_values()
             .map(|(id, name, arguments)| ToolCall {
                 id: std::sync::Arc::<str>::from(id),
@@ -672,6 +742,174 @@ mod tests {
                 assert_eq!(nth(calls, 0).name, "do_thing");
                 assert_eq!(nth(calls, 0).arguments.as_ref(), "{\"x\":1}");
                 assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Xiaomi-compatible streams have been observed starting a later tool call with a fresh id
+    /// while reusing wire index zero. The calls must remain separate instead of inheriting one
+    /// another's argument fragments.
+    #[tokio::test]
+    async fn reused_wire_index_with_new_id_starts_a_new_logical_tool_call() {
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_wait".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("get_task_output".into()),
+                        arguments: Some("{\"task_ids\":[\"task-1\"],".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: None,
+                    kind: None,
+                    function: Some(ToolCallFunctionDelta {
+                        name: None,
+                        arguments: Some("\"timeout_ms\":600000}".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_todo".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("todo_write".into()),
+                        arguments: Some("{\"todos\":[".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: None,
+                    kind: None,
+                    function: Some(ToolCallFunctionDelta {
+                        name: None,
+                        arguments: Some("{\"id\":\"1\",\"status\":\"completed\"}]}".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        let logical_indices: Vec<u32> = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ToolCallDelta { tool_index, .. } => Some(*tool_index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(logical_indices, vec![0, 0, 1, 1]);
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].id.as_ref(), "call_wait");
+                assert_eq!(calls[0].name, "get_task_output");
+                assert_eq!(
+                    calls[0].arguments.as_ref(),
+                    "{\"task_ids\":[\"task-1\"],\"timeout_ms\":600000}"
+                );
+                assert_eq!(calls[1].id.as_ref(), "call_todo");
+                assert_eq!(calls[1].name, "todo_write");
+                assert_eq!(
+                    calls[1].arguments.as_ref(),
+                    "{\"todos\":[{\"id\":\"1\",\"status\":\"completed\"}]}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compliant_parallel_tool_indices_remain_unchanged_when_interleaved() {
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![
+                    ChunkToolCallDelta {
+                        index: 0,
+                        id: Some("call_a".into()),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("tool_a".into()),
+                            arguments: Some("{\"a\":".into()),
+                        }),
+                    },
+                    ChunkToolCallDelta {
+                        index: 1,
+                        id: Some("call_b".into()),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("tool_b".into()),
+                            arguments: Some("{\"b\":".into()),
+                        }),
+                    },
+                ],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![
+                    ChunkToolCallDelta {
+                        index: 1,
+                        function: Some(ToolCallFunctionDelta {
+                            arguments: Some("2}".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ChunkToolCallDelta {
+                        index: 0,
+                        function: Some(ToolCallFunctionDelta {
+                            arguments: Some("1}".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }]),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        let logical_indices: Vec<u32> = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ToolCallDelta { tool_index, .. } => Some(*tool_index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(logical_indices, vec![0, 1, 1, 0]);
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].arguments.as_ref(), "{\"a\":1}");
+                assert_eq!(calls[1].arguments.as_ref(), "{\"b\":2}");
             }
             other => panic!("expected Completed, got {other:?}"),
         }

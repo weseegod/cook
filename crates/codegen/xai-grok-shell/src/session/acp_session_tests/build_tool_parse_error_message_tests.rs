@@ -1,3 +1,4 @@
+use super::support::*;
 use super::*;
 
 /// Regression test: exact incident that caused kimi-k2.5 / OpenRouter sessions to fail with 400 errors on every retry.
@@ -132,4 +133,40 @@ fn test_non_ascii_arguments_truncated_safely() {
     assert!(msg.contains("(truncated)"));
     // The prefix in the message must be valid UTF-8 (implicit: String is always UTF-8)
     assert!(!msg.is_empty());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn reported_execution_counts_schema_errors_and_keeps_tool_result_pairing() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, gateway_rx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            spawn_gateway_loop(gateway_rx);
+            let malformed = ToolCallResponse {
+                id: "call_bad_read".to_string(),
+                kind: "function".to_string(),
+                function: crate::sampling::types::ToolCallFunction::new(
+                    "read_file",
+                    r#"{"task_ids":["wrong-schema"]}"#,
+                ),
+            };
+
+            let (control, report) = actor
+                .execute_tool_calls_reported(vec![malformed])
+                .await
+                .expect("malformed tool call should be reported, not fail the session");
+
+            assert!(matches!(control, ToolLoop::Continue));
+            assert_eq!(report.tool_parsing_errors, 1);
+            let result = tool_result_text(&actor, "call_bad_read").await;
+            assert!(
+                result.contains("Failed to parse arguments for tool `read_file`"),
+                "the paired tool result should explain the schema failure: {result}"
+            );
+        })
+        .await;
 }
