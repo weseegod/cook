@@ -17,7 +17,7 @@ One phase, one matrix, one commit. Do not start the next phase in the same commi
 - The `model → tools → model` loop.
 - Defaults. The step-aware arm stays opt-in at zero. `two_pass_compaction` and `compaction_verbatim_input` stay at their current registry defaults until a later phase’s matrix says a change does not drop task success.
 - Per-model context window. Do not retune it from this plan. The live harness may still *set* a window so that an arm under test actually engages; that is a harness parameter, recorded per run, not a new product default.
-- Provider Batch API off the coding loop. Section 9 of the design document is the rule. DeepSeek’s official price page has no Batch API. MiMo’s 50% batch tier is for frozen eval, labeling, and regression, not for a tool round that the next edit waits on.
+- Provider Batch API off the coding loop. Section 9 of the design document is the rule. Whether a model may use Batch API at all is the user’s `[model.*]` row in `~/.cook/config.toml`, same kind of switch as `supports_reasoning_effort`. Cook does not ship a hardcoded list of which ids have a discount.
 
 ## 2. Local setup
 
@@ -159,23 +159,56 @@ Matrix, one short headless turn per model (`-p 'reply with exactly "ready"'`, `-
 | `cache_field_honest` | If the server sent cached tokens, the report shows them and the uncached remainder, and the remainder is not negative. If it did not, `cacheFieldPresent` is false and there is no zero standing in for the miss |
 | `no_double_count` | One model call in the prompt does not appear as two purposes |
 
-## 8. Phase 5 — batch only for a frozen eval, and only on a model that discounts it
+## 8. Phase 5 — `supports_batch_api` on the model row
 
-No batch client on the coding loop. No waiting for DeepSeek off-peak. No `previous_response_id` work. This phase is a capability flag the eval harness can read, default false for every model.
+No batch client on the coding loop. No waiting for DeepSeek off-peak. No `previous_response_id` work. No table inside the binary that marks MiMo on and DeepSeek or Grok off. Prices change, and the user already picks the model in `~/.cook/config.toml`.
 
-The flag is true only for a model whose current price table has a batch discount. As of 2026-09-22 that includes MiMo `mimo-v2.6-pro` and `mimo-v2.6-flash` (50%), and the four xAI ids in the design document (20%). It is false for `grok-4.7`, `grok-4.6`, and both DeepSeek ids. Local models have no batch discount; the flag is false for `bonsai2`, `qwen38-27b`, and `spark25`.
+Add one optional bool on `[model."<id>"]`, next to `supports_reasoning_effort`. Same file, same resolution path (`ModelInfo` / `Config::new_from_toml_cfg`). Name: `supports_batch_api`.
 
-A true flag does not by itself send traffic. The only caller allowed to read it is an eval harness whose prompt is a frozen snapshot and whose next line does not edit a live tree. The interactive session must not branch on the flag.
+```toml
+[model."mimo-v2.6-pro"]
+model = "mimo-v2.6-pro"
+model_provider = "xiaomi"
+context_window = 1000000
+supports_reasoning_effort = true
+supports_batch_api = true
+
+[model."deepseek/deepseek-flash"]
+model = "deepseek-flash"
+model_provider = "deepseek"
+context_window = 1000000
+supports_reasoning_effort = true
+supports_batch_api = false
+
+[model."local/spark25"]
+model = "spark25"
+model_provider = "local"
+context_window = 32768
+supports_reasoning_effort = false
+# omitted supports_batch_api means false
+```
+
+| Value | Meaning |
+|---|---|
+| omitted | `false`. This model never uses Batch API |
+| `false` | Same, and an explicit false wins over any later default. Do not auto-default this to true for any `api_backend`. Messages auto-defaults `supports_reasoning_effort`; it must not auto-default `supports_batch_api` |
+| `true` | The user says this model accepts Batch API and they want the discount on calls that are allowed to wait |
+
+`true` does not send the coding loop to `/v1/batches`. The interactive session does not branch on the flag. The only caller that may read it is an eval harness whose prompt is a frozen snapshot and whose next line does not edit a live tree. That call still has to meet the four conditions in section 9 of the design document: the user turned the flag on, the call does not gate the next tool step, the prompt is the realtime prompt, and nobody is waiting on a stream or a permission prompt. A flag left on for a local llama.cpp model does not create a batch endpoint. The harness checks the flag, then the server either accepts the job or the call fails visibly. It does not fall through into a silent realtime rewrite of the prompt.
+
+Parse and store the field where `supports_reasoning_effort` is parsed and stored. Document it beside that field in `docs/byok-models.md`. Do not put a discount percent in the toml. The percent is the provider’s bill, not something Cook should recompute from a stale table.
 
 Matrix:
 
 | Cell | Pass |
 |---|---|
-| Rust: flag table | The three local ids and DeepSeek and `grok-4.7` resolve false. The two MiMo v2.6 ids resolve true. An unknown id resolves false |
-| `loop_stays_realtime`, all three local models | One headless turn. The sampler log shows `/v1/chat/completions` or `/v1/responses`, and does not show `/v1/batches`. The answer is still the one the prompt asked for |
-| Prompt identity | The eval path, if invoked in a unit test, is given the same messages the realtime path would send. The test fails if the batch body drops tools or the evidence lines |
+| Rust: omitted | A `[model.*]` block with no `supports_batch_api` resolves false, including a MiMo id and a DeepSeek id |
+| Rust: explicit | `supports_batch_api = false` resolves false. `= true` resolves true. The model id string is not consulted |
+| Rust: no backend default | `api_backend = "messages"` without the key still resolves false |
+| `loop_stays_realtime`, all three local models | Home config sets `supports_batch_api = true` on that local model. One headless turn. The sampler log shows `/v1/chat/completions` or `/v1/responses`, and does not show `/v1/batches`. The answer is still the one the prompt asked for |
+| Prompt identity | The eval path, in a unit test, reads the flag from the resolved model. With the flag true it is given the same messages the realtime path would send. The test fails if the batch body drops tools or the evidence lines. With the flag false the eval path does not build a batch body |
 
-Do not run a hosted MiMo batch in this phase. The local matrix cannot see a 50% discount, and it should not pretend to.
+Do not run a hosted batch in this phase. The local matrix cannot see a discount, and it should not pretend to. Turning the flag on for `bonsai2`, `qwen38-27b`, or `spark25` is only the negative test above.
 
 ## 9. Phase 6 — independent reads in one realtime response
 

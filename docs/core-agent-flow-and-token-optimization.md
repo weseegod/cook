@@ -420,6 +420,8 @@ Batch API (xAI `/v1/batches`, and the same shape at OpenAI and Anthropic) change
 
 The interactive loop fails conditions 2 and 4. The next tool round depends on the previous result, so each round would be a new batch. Compaction, the goal verifier, and the permission classifier also fail condition 2 when their result feeds the next coding step. Recap, `/btw`, turn summary, and title refresh already share the parent prompt-cache key; moving them to batch can drop a hot prefix for a discount that is smaller than the miss they would create.
 
+The switch is not a price table in the binary. It is `supports_batch_api` on that model’s `[model."<id>"]` row in `~/.cook/config.toml`, the same kind of field as `supports_reasoning_effort`. Omitted or `false` means never. `true` means the user allows Batch API for calls that already meet the four conditions. The coding loop ignores it. Phase 5 of the v2 experiment document is the implementation.
+
 Prices checked on **2026-09-22**. They will change; the rule does not.
 
 | Provider | Batch discount | What to do in this runtime |
