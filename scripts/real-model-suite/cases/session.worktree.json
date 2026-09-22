@@ -1,0 +1,30 @@
+{
+  "id": "session.worktree",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell/src/session/worktree.rs",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Edit(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--worktree",
+    "suite-wt"
+  ],
+  "prompt": "prompts/session.worktree.txt",
+  "expect_tools": [
+    "search_replace"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "file_unchanged",
+    "worktree_edit",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

@@ -1,0 +1,1 @@
+Fetch {{FETCH_URL}} with web_fetch and reply with its exact body.

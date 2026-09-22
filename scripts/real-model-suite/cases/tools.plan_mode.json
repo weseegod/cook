@@ -1,0 +1,25 @@
+{
+  "id": "tools.plan_mode",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 180,
+  "permission": "approve",
+  "allow": [],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.plan_mode.txt",
+  "expect_tools": [
+    "enter_plan_mode",
+    "exit_plan_mode"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "file_unchanged",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

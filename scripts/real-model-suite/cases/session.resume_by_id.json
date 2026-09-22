@@ -1,0 +1,20 @@
+{
+  "id": "session.resume_by_id",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell/src/session",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/session.resume_by_id.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "checks": [
+    "resumed"
+  ]
+}

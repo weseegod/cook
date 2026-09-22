@@ -1,0 +1,35 @@
+{
+  "id": "agents.codex_apply_patch",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Edit(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--tools",
+    "apply_patch"
+  ],
+  "prompt": "prompts/agents.codex_apply_patch.txt",
+  "expect_tools": [
+    "apply_patch"
+  ],
+  "forbid_tools": [],
+  "files": [
+    {
+      "path": "note.txt",
+      "equals": "first\nDONE-EDIT\nlast\n"
+    }
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "file_equals",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

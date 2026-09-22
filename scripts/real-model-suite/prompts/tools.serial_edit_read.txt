@@ -1,0 +1,1 @@
+Replace REPLACE_ME with DONE-EDIT in {{WORKDIR}}/note.txt, then read the file back and reply with the new line.

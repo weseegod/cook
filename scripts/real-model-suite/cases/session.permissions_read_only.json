@@ -1,0 +1,27 @@
+{
+  "id": "session.permissions_read_only",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "dont_ask",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/session.permissions_read_only.txt",
+  "expect_tools": [
+    "search_replace"
+  ],
+  "denial_required": false,
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "denied",
+    "file_unchanged",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

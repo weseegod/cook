@@ -1,0 +1,28 @@
+{
+  "id": "tools.feedback_noop",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.feedback_noop.txt",
+  "expect_tools": [
+    "send_feedback"
+  ],
+  "forbid_tools": [],
+  "text_contains": [
+    "sent"
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains",
+    "no_external_http",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

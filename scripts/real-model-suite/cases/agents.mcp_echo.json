@@ -1,0 +1,26 @@
+{
+  "id": "agents.mcp_echo",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 10,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/agents.mcp_echo.txt",
+  "expect_tools": [
+    "use_tool"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

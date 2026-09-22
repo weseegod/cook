@@ -1,0 +1,11 @@
+{
+  "id": "cli.inspect",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "inspect",
+      "--json"
+    ]
+  ]
+}

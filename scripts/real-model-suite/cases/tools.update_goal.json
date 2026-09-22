@@ -1,0 +1,26 @@
+{
+  "id": "tools.update_goal",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.update_goal.txt",
+  "expect_tools": [
+    "update_goal"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

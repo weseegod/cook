@@ -1,0 +1,28 @@
+{
+  "id": "session.streaming_json",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--output-format",
+    "streaming-json"
+  ],
+  "prompt": "prompts/session.streaming_json.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "streaming_json",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

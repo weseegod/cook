@@ -1,0 +1,33 @@
+{
+  "id": "session.compaction",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-agent/src/compaction.rs",
+  "needs_model": true,
+  "max_turns": 30,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "context_window": 8192,
+  "fixture": {
+    "file_bytes": 8000
+  },
+  "prompt": "prompts/session.compaction.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "marker_suffix": "-LAST",
+  "purpose_any": ["compact_single", "compact_pass1", "compact_pass2"],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "purpose_present",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

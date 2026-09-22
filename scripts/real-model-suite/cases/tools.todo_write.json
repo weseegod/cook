@@ -1,0 +1,29 @@
+{
+  "id": "tools.todo_write",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.todo_write.txt",
+  "expect_tools": [
+    "todo_write"
+  ],
+  "forbid_tools": [],
+  "text_contains": [
+    "alpha",
+    "beta"
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "todo_record",
+    "text_contains",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

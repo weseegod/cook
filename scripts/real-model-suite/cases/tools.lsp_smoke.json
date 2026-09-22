@@ -1,0 +1,24 @@
+{
+  "id": "tools.lsp_smoke",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.lsp_smoke.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "text_nonempty",
+    "lsp_smoke",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

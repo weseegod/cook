@@ -1,0 +1,34 @@
+{
+  "id": "tools.list_dir",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.list_dir.txt",
+  "expect_tools": [
+    "list_dir"
+  ],
+  "forbid_tools": [],
+  "text_contains": [
+    "alpha.txt",
+    "beta.txt",
+    "gamma.txt"
+  ],
+  "text_not_contains": [
+    "delta.txt"
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

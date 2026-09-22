@@ -1,0 +1,1 @@
+Use the task tool to spawn one subagent whose only job is to read {{MARKER_FILE}} and return the line. Reply with that line.

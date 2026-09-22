@@ -1,0 +1,1 @@
+List {{WORKDIR}} with the directory tool and reply with the names alpha.txt, beta.txt, and gamma.txt.

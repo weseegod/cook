@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}}. Create a scheduled task with interval 60s whose prompt is that exact line, list schedules, then delete that task. Do not set durable true.

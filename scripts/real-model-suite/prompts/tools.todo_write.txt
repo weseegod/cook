@@ -1,0 +1,1 @@
+Record two todos, “alpha” and “beta”, and mark alpha completed, using the todo tool. Reply with both words.

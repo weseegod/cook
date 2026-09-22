@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}}, then edit {{WORKDIR}}/note.txt by replacing REPLACE_ME with DONE-EDIT.

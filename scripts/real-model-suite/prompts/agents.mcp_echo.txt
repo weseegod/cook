@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}}. Use search_tool to find echo, then use_tool to echo the exact line and reply with it.

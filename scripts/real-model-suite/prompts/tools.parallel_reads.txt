@@ -1,0 +1,1 @@
+Read {{WORKDIR}}/secret1.txt, secret2.txt, and secret3.txt. You may read them together. Reply with all three exact lines.

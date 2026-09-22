@@ -1,0 +1,21 @@
+{
+  "id": "session.title_side_call",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 2,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/session.title_side_call.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "text_nonempty",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

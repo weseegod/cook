@@ -670,3 +670,37 @@ Wall clock on MiMo, one model, no parallelism: `tools` about 30–50 minutes, `s
 - Session directories are `$COOK_HOME/sessions/<encode_cwd_dirname(cwd)>/<sessionId>/` and need `summary.json`.
 - Empty completions retry once at 8192 tokens, except `session.max_turns`.
 - The five known `xai-grok-shell` lib failures (`goal_use_current_model_only_env_true`, `goal_use_current_model_only_env_overrides_config_false`, `validate_hooks_path_rejects_outside_grok_home`, `validate_hooks_path_rejects_traversal_attack`, `parse_list_req_forces_kind_under_process_chat_mode_only`) are pre-existing. A new failing test name is in scope. The consent monotonicity test flakes under parallel `cargo test` and is not a suite regression when it fails only in the full parallel run.
+
+## 15. Implementation status and handoff (2026-09-22)
+
+Current phase: **`tools`**. The harness is implemented; the full tools phase still needs to be run to completion.
+
+Completed:
+
+- [x] Added the runner, pure scorer, model/home/invocation/fixture helpers, and ACP driver under `scripts/real-model-suite/`.
+- [x] Added all 60 case definitions and 45 prompt templates for the `cli`, `tools`, `session`, and `agents` phases.
+- [x] Added isolated `COOK_HOME` and fixture repositories, model lifecycle cleanup, timeout handling, one-time completion-cap retry, artifact collection, `score.txt`, and `failures.md`.
+- [x] Added scorer self-tests and documented the observed `chat_history.jsonl` tool-call argument shape and stock-profile tool aliases.
+- [x] Ran the standalone `cli` phase. Twelve independent CLI cases passed. `cli.export`, `cli.sessions_after`, and `cli.usage` were correctly marked `unsupported dependency sampler.noop not run`; run them through `--phase all` after a model session exists.
+- [x] Added a sampler regression fix and unit test for a complete JSON argument object followed by appended XML tool envelopes. The focused sampler tests pass and the debug pager binary builds.
+- [x] Started real-model validation of the tools phase and confirmed `sampler.noop` and `tools.ask_user_headless` pass.
+
+Remaining for the next implementer:
+
+- [ ] Run the complete tools phase. The last run was intentionally interrupted at `tools.feedback_noop`; it is not a valid full-phase score.
+- [ ] Stabilize `sampler.xml_arguments`: it passed one earlier attempt but failed the last attempt with `no successful read_file`.
+- [ ] Fix or classify `tools.bash`: one attempt timed out and the last attempt exited with status 1.
+- [ ] Run and fix the unscored tools cases from `tools.feedback_noop` onward. An earlier partial attempt reached `tools.feedback_noop` and reported no successful `send_feedback`.
+- [ ] Once tools is green, run and fix `session`, then `agents`.
+- [ ] Run `--phase all` so the three session-dependent CLI cases are scored with a model-created session.
+- [ ] Run the broader crate tests before declaring the suite complete. A separate `xai-grok-agent` library run had one new failure, `prompt::template::tests::test_encrypted_templates_not_stale`, which still needs triage.
+
+Resume with:
+
+```bash
+cargo build -p xai-grok-pager-bin --bin xai-grok-pager
+python3 scripts/real-model-suite/score.py --self-test
+scripts/real-model-suite/run.sh --phase tools --keep
+```
+
+The most recent interrupted artifacts are under `/tmp/cook-real-tools-final.aIMFdy` on the machine that produced this handoff. Do not treat that directory's `score.txt` as a complete phase result and do not commit it.

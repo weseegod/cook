@@ -1,0 +1,1 @@
+Read only lines 20 through 20 of {{MARKER_FILE}} and reply with the exact line.

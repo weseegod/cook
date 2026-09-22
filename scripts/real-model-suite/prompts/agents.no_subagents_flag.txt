@@ -1,0 +1,1 @@
+Use a subagent to read {{MARKER_FILE}} and return the line. Reply with that line.

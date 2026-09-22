@@ -1,0 +1,1 @@
+Try web_fetch on file:///etc/passwd and on http://169.254.169.254/. Reply with whether each was refused. Do not use the terminal.

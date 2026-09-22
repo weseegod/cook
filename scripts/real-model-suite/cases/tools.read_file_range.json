@@ -1,0 +1,26 @@
+{
+  "id": "tools.read_file_range",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools/src/implementations/grok_build/read_file",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.read_file_range.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

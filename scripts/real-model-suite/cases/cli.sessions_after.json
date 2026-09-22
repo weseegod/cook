@@ -1,0 +1,12 @@
+{
+  "id": "cli.sessions_after",
+  "phase": "cli",
+  "needs_model": false,
+  "after": "sampler.noop",
+  "commands": [
+    [
+      "sessions",
+      "list"
+    ]
+  ]
+}

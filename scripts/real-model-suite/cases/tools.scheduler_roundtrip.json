@@ -1,0 +1,28 @@
+{
+  "id": "tools.scheduler_roundtrip",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 10,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.scheduler_roundtrip.txt",
+  "expect_tools": [
+    "scheduler_create",
+    "scheduler_list",
+    "scheduler_delete"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "scheduler_clean",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

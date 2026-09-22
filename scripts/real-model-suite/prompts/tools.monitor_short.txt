@@ -1,0 +1,1 @@
+Use monitor on a command that prints the exact line from {{MARKER_FILE}} and exits. Set persistent to false. Reply with the line.
