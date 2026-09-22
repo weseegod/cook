@@ -410,6 +410,51 @@ Matrix, one normal headless coding prompt per model, long enough to read a file 
 
 Disabling a side call is out of scope until a matrix with the call forced off matches `task_still_correct` on all three models and on the task class that call exists for. Goal verification on a long task is in that protected class.
 
+### Phase 7 results, and the three-model re-run of phases 4–6 (2026-09-22)
+
+The earlier phase 4, 5, and 6 tables above stay as the bonsai2-only runs. This section does not copy those numbers onto the other models. It is a new matrix on `bonsai2-27b`, `mimo26-9b`, and `spark25-4b`, one model at a time, `supports_batch_api = true` only in that run's home. Side calls stayed on. The acceptance line was `ACCEPT-7741-READY` inside `task.txt` (not in the prompt). The marker files were `MARKER-HEAVY-A-4419`, `MARKER-HEAVY-B-8820`, `MARKER-HEAVY-C-1937`. Empty assistant text was retried once at completion cap 8192; the cap below is the one that was scored.
+
+What the failing cell changed:
+
+- First capture: every cell passed except `mimo26-9b` `task_still_correct` (empty answer, cap 8192, stop `max turns`). llama.cpp had streamed MiMo's `<tool_call>` envelopes inside `function.arguments`. Those strings are not JSON, so the call ran as `{}`.
+- Fix: the Chat Completions stream recovers an allowed tool envelope from an argument string that is not JSON, including the newline llama.cpp inserts before `</function>`. Valid-JSON sibling calls are kept. No default flipped. No side call disabled. No batch client.
+- Re-run after that fix: no failing cell, so there was no second product change.
+
+Phase 4 cells on the coding turn's `usage.json` (server reported the cache field on every model, so no `unreported` cell):
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `report_shape` | `purposeUsage` `main_loop`, `requestComponents` measured 2 | `session_title` + `main_loop`, measured 3 | `main_loop`, measured 2 | yes ×3 |
+| `cache_field_honest` | reported, `uncachedInputTokens` 13461 | reported, 14186 | reported, 13523 | yes ×3 |
+| `no_double_count` | purpose calls 2 = session calls 2 | 4 = 4 | 2 = 2 | yes ×3 |
+
+Phase 5 cells on the same turn (`supports_batch_api = true`):
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `loop_stays_realtime` | `/v1/chat/completions`, no `/v1/batches` | same | same | yes ×3 |
+| task still correct | answer contains `ACCEPT-7741-READY`, cap 2048 | same, cap 2048 | same, cap 2048 | yes ×3 |
+
+Phase 6 cells (parallel prompt allows one response; serial control is one read at a time):
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `three_markers` | 3/3, cap 2048 | 3/3, cap 8192 (2048 answer was empty) | 3/3, cap 2048 | yes ×3 |
+| `no_quality_drop` | 3/3, cap 2048 | 3/3, cap 2048 | 3/3, cap 2048 | yes ×3 |
+
+Phase 7 cells on the coding turn. `no_new_uuid_policy` records conv ids; this phase did not change how they are assigned. No purpose used a fresh id (`fresh=none`); each request reused the parent id.
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `purposes_listed` | `main_loop` only, 2 calls; no zero row | `session_title`, `main_loop`, 4 calls; no zero row | `main_loop` only, 2 calls; no zero row | yes ×3 |
+| `task_still_correct` | acceptance line present | acceptance line present | acceptance line present | yes ×3 |
+| `no_new_uuid_policy` | parent `01a0c854-85e4-7452-8cb7-9b9598ddf179`, fresh none | parent `01a0c855-b986-7560-9b25-0077456c06d9`, fresh none | parent `01a0c85d-b382-77f2-a5e0-58f69b29d1aa`, fresh none | yes ×3 |
+
+Notes:
+
+- Score file for the passing re-run: the pass 3 capture. The first capture (mimo empty) is kept separately and is not mixed into the table above.
+- Raw logs: `~/.grok/long-running-background-tasks/heavy-matrix-pass3-20260922-155609/`.
+
 ## 11. What is deliberately not a phase
 
 - Raising or lowering the product context window. It is already per model.
