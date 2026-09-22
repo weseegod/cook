@@ -16,11 +16,24 @@ const PARAM_OPEN: &str = "<parameter=";
 const PARAM_CLOSE: &str = "</parameter>";
 const CODE_FENCE: &str = "```";
 const RUNAWAY_REPEAT_THRESHOLD: usize = 3;
+/// Bytes buffered for one in-flight call before the adapter stops reading: an open `<tool_call>`
+/// envelope held back from `content`, or one call's accumulated `tool_calls[].arguments`. A model
+/// past this is not progressing, so waiting for the completion budget only looks like a hang.
+pub(super) const IN_FLIGHT_CALL_CEILING_BYTES: usize = 32 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct RecoveredToolCall {
     pub(super) name: String,
     pub(super) arguments: String,
+}
+
+/// Why the adapter stopped reading before the provider ended the stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SalvageReason {
+    /// The same closed envelope arrived [`RUNAWAY_REPEAT_THRESHOLD`] times.
+    RepeatedEnvelope,
+    /// One call buffered more than [`IN_FLIGHT_CALL_CEILING_BYTES`].
+    OversizeCall,
 }
 
 #[derive(Debug, Default)]
@@ -30,7 +43,16 @@ pub(super) struct XiaomiMimoAdapter {
     recovered_calls: Vec<RecoveredToolCall>,
     sanitized_content: String,
     emitted_content_len: usize,
+    held_bytes: usize,
     runaway: bool,
+}
+
+/// One scan of the raw content: what is safe to show, which calls are complete, and how much of
+/// a still-open envelope is being held back.
+struct Extraction {
+    sanitized: String,
+    calls: Vec<RecoveredToolCall>,
+    held_bytes: usize,
 }
 
 impl XiaomiMimoAdapter {
@@ -43,24 +65,35 @@ impl XiaomiMimoAdapter {
 
     pub(super) fn push_text(&mut self, text: &str) -> String {
         self.raw_content.push_str(text);
-        let (sanitized, calls) = extract_tool_calls(&self.raw_content, &self.allowed_tools, false);
-        self.runaway = has_repeated_tail(&calls, RUNAWAY_REPEAT_THRESHOLD);
-        self.sanitized_content = sanitized;
-        self.recovered_calls = calls;
+        let extraction = extract_tool_calls(&self.raw_content, &self.allowed_tools, false);
+        self.runaway = has_repeated_tail(&extraction.calls, RUNAWAY_REPEAT_THRESHOLD);
+        self.held_bytes = extraction.held_bytes;
+        self.sanitized_content = extraction.sanitized;
+        self.recovered_calls = extraction.calls;
         let visible = self.sanitized_content[self.emitted_content_len..].to_owned();
         self.emitted_content_len = self.sanitized_content.len();
         visible
     }
 
-    pub(super) fn should_salvage(&self) -> bool {
-        self.runaway
+    pub(super) fn salvage_reason(&self) -> Option<SalvageReason> {
+        if self.runaway {
+            Some(SalvageReason::RepeatedEnvelope)
+        } else if self.held_bytes > IN_FLIGHT_CALL_CEILING_BYTES {
+            Some(SalvageReason::OversizeCall)
+        } else {
+            None
+        }
     }
 
-    pub(super) fn finish(mut self) -> (String, Vec<RecoveredToolCall>, bool) {
-        let (sanitized, calls) = extract_tool_calls(&self.raw_content, &self.allowed_tools, true);
-        let tail = sanitized[self.emitted_content_len..].to_owned();
-        self.sanitized_content = sanitized;
-        self.recovered_calls = calls;
+    /// Complete the adapter. `finalize` is the stream ending normally, where text held for an
+    /// unclosed envelope is still worth showing. A stream the adapter cut passes `false`: that
+    /// text was never shown, and emitting it now is the raw-XML transcript the hold exists to
+    /// prevent.
+    pub(super) fn finish(mut self, finalize: bool) -> (String, Vec<RecoveredToolCall>, bool) {
+        let extraction = extract_tool_calls(&self.raw_content, &self.allowed_tools, finalize);
+        let tail = extraction.sanitized[self.emitted_content_len..].to_owned();
+        self.sanitized_content = extraction.sanitized;
+        self.recovered_calls = extraction.calls;
         let calls = if self.runaway {
             collapse_repeated_tail(self.recovered_calls)
         } else {
@@ -98,9 +131,10 @@ fn extract_tool_calls(
     content: &str,
     allowed_tools: &HashSet<String>,
     finalizing: bool,
-) -> (String, Vec<RecoveredToolCall>) {
+) -> Extraction {
     let mut sanitized = String::with_capacity(content.len());
     let mut calls = Vec::new();
+    let mut held_bytes = 0;
     let mut cursor = 0;
     let mut in_code_fence = false;
 
@@ -128,6 +162,8 @@ fn extract_tool_calls(
                 let Some(relative_end) = content[start..].find(TOOL_CLOSE) else {
                     if finalizing {
                         sanitized.push_str(&content[start..]);
+                    } else {
+                        held_bytes = content.len() - start;
                     }
                     break;
                 };
@@ -145,6 +181,7 @@ fn extract_tool_calls(
                     sanitized.push_str(rest);
                 } else {
                     let held = longest_tool_prefix_suffix(rest);
+                    held_bytes = held;
                     sanitized.push_str(&rest[..rest.len() - held]);
                 }
                 break;
@@ -152,7 +189,11 @@ fn extract_tool_calls(
         }
     }
 
-    (sanitized, calls)
+    Extraction {
+        sanitized,
+        calls,
+        held_bytes,
+    }
 }
 
 fn longest_tool_prefix_suffix(text: &str) -> usize {
@@ -220,7 +261,7 @@ pub(super) fn recover_tool_calls_from_text(
     if !content.contains(TOOL_OPEN) {
         return Vec::new();
     }
-    extract_tool_calls(content, allowed_tools, true).1
+    extract_tool_calls(content, allowed_tools, true).calls
 }
 
 #[cfg(test)]
@@ -241,22 +282,25 @@ mod tests {
     #[test]
     fn parses_envelope_when_llama_inserts_a_newline_after_tool_call() {
         let input = "<tool_call>\n<function=read_file><parameter=target_file>task.txt</parameter>\n</function>\n</tool_call>";
-        let (text, calls) = extract_tool_calls(input, &allowed_read(), true);
-        assert_eq!(text, "");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "read_file");
-        assert_eq!(calls[0].arguments, r#"{"target_file":"task.txt"}"#);
+        let extraction = extract_tool_calls(input, &allowed_read(), true);
+        assert_eq!(extraction.sanitized, "");
+        assert_eq!(extraction.calls.len(), 1);
+        assert_eq!(extraction.calls[0].name, "read_file");
+        assert_eq!(
+            extraction.calls[0].arguments,
+            r#"{"target_file":"task.txt"}"#
+        );
     }
 
     #[test]
     fn extracts_parameters_and_preserves_surrounding_prose() {
         let input = "before <tool_call><function=wait><parameter=task_ids>[\"t1\"]</parameter><parameter=timeout_ms>600000</parameter></function></tool_call> after";
-        let (text, calls) = extract_tool_calls(input, &allowed(), true);
-        assert_eq!(text, "before  after");
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "wait");
+        let extraction = extract_tool_calls(input, &allowed(), true);
+        assert_eq!(extraction.sanitized, "before  after");
+        assert_eq!(extraction.calls.len(), 1);
+        assert_eq!(extraction.calls[0].name, "wait");
         assert_eq!(
-            calls[0].arguments,
+            extraction.calls[0].arguments,
             r#"{"task_ids":["t1"],"timeout_ms":600000}"#
         );
     }
@@ -266,9 +310,30 @@ mod tests {
         let fenced = "```xml\n<tool_call><function=wait></function></tool_call>\n```";
         let unknown = "<tool_call><function=delete_everything></function></tool_call>";
         let input = format!("{fenced}{unknown}");
-        let (text, calls) = extract_tool_calls(&input, &allowed(), true);
-        assert_eq!(text, input);
-        assert!(calls.is_empty());
+        let extraction = extract_tool_calls(&input, &allowed(), true);
+        assert_eq!(extraction.sanitized, input);
+        assert!(extraction.calls.is_empty());
+    }
+
+    /// The held count is the open envelope, not every byte the scan consumed.
+    #[test]
+    fn counts_only_the_still_open_envelope_as_held() {
+        let block = "<tool_call><function=wait><parameter=task_ids>[\"t1\"]</parameter></function></tool_call>";
+        let closed = extract_tool_calls(&format!("{block}prose"), &allowed(), false);
+        assert_eq!(closed.sanitized, "prose");
+        assert_eq!(closed.held_bytes, 0);
+
+        let open = extract_tool_calls(
+            &format!("prose{block}<tool_call><function=wait>"),
+            &allowed(),
+            false,
+        );
+        assert_eq!(open.sanitized, "prose");
+        assert_eq!(
+            open.held_bytes,
+            "<tool_call><function=wait>".len(),
+            "only the unclosed envelope is held"
+        );
     }
 
     #[test]
@@ -277,8 +342,11 @@ mod tests {
         let mut adapter = XiaomiMimoAdapter::new(["wait".to_owned()]);
         let visible = adapter.push_text(&format!("{block}{block}{block}"));
         assert!(visible.is_empty());
-        assert!(adapter.should_salvage());
-        let (tail, calls, runaway) = adapter.finish();
+        assert_eq!(
+            adapter.salvage_reason(),
+            Some(SalvageReason::RepeatedEnvelope)
+        );
+        let (tail, calls, runaway) = adapter.finish(true);
         assert!(tail.is_empty());
         assert!(runaway);
         assert_eq!(calls.len(), 1);
@@ -289,9 +357,9 @@ mod tests {
         let block = "<tool_call><function=wait><parameter=task_ids>[\"t1\"]</parameter></function></tool_call>";
         let mut adapter = XiaomiMimoAdapter::new(["wait".to_owned()]);
         assert!(adapter.push_text(&format!("{block}{block}")).is_empty());
-        assert!(!adapter.should_salvage());
+        assert_eq!(adapter.salvage_reason(), None);
 
-        let (_, calls, runaway) = adapter.finish();
+        let (_, calls, runaway) = adapter.finish(true);
         assert!(!runaway);
         assert_eq!(calls.len(), 2);
     }
@@ -307,11 +375,27 @@ mod tests {
             " after"
         );
 
-        let (tail, calls, runaway) = adapter.finish();
+        let (tail, calls, runaway) = adapter.finish(true);
         assert!(tail.is_empty());
         assert!(!runaway);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "wait");
         assert_eq!(calls[0].arguments, r#"{"timeout_ms":100}"#);
+    }
+
+    #[test]
+    fn an_open_envelope_past_the_ceiling_asks_to_be_cut() {
+        let mut adapter = XiaomiMimoAdapter::new(["read_file".to_owned()]);
+        adapter.push_text("<tool_call><function=read_file><parameter=target_file>");
+        assert_eq!(adapter.salvage_reason(), None);
+
+        adapter.push_text(&"x".repeat(IN_FLIGHT_CALL_CEILING_BYTES));
+        assert_eq!(adapter.salvage_reason(), Some(SalvageReason::OversizeCall));
+
+        // Cut: the held envelope is dropped rather than shown as raw XML.
+        let (tail, calls, runaway) = adapter.finish(false);
+        assert!(tail.is_empty());
+        assert!(calls.is_empty());
+        assert!(!runaway);
     }
 }
