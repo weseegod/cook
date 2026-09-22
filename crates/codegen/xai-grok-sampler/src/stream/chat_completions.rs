@@ -10,7 +10,7 @@ use futures_util::StreamExt;
 use futures_util::stream::{BoxStream, Stream};
 
 use xai_grok_sampling_types::{
-    AssistantItem, ChatCompletionChunk, ConversationItem, ConversationResponse,
+    AssistantItem, ChatCompletionChunk, ConversationItem, ConversationResponse, FinishReason,
     ResponseModelMetadata, SamplingError, StopReason, TokenUsage, ToolCall,
 };
 
@@ -129,20 +129,38 @@ fn arguments_are_json(arguments: &str) -> bool {
     serde_json::from_str::<serde::de::IgnoredAny>(arguments).is_ok()
 }
 
+/// MiMo sometimes emits a complete structured argument object and then keeps generating an XML
+/// tool envelope in the same string. Prefer the already-complete structured call: executing the
+/// appended envelopes as siblings can turn one intended action into dozens of unrelated calls.
+fn complete_json_prefix(arguments: &str) -> Option<&str> {
+    let mut values = serde_json::Deserializer::from_str(arguments)
+        .into_iter::<serde_json::Value>();
+    let value = values.next()?.ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    let offset = values.byte_offset();
+    let tail = arguments.get(offset..)?.trim_start();
+    (tail.contains("<tool_call>")).then(|| &arguments[..offset])
+}
+
 fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -> Vec<ToolCall> {
-    let embedded: String = calls
-        .iter()
-        .filter(|call| !arguments_are_json(call.arguments.as_ref()))
-        .map(|call| call.arguments.as_ref())
-        .collect();
+    let mut embedded = String::new();
+    let mut out = Vec::new();
+    for mut call in calls {
+        if arguments_are_json(call.arguments.as_ref()) {
+            out.push(call);
+        } else if let Some(prefix) = complete_json_prefix(call.arguments.as_ref()) {
+            call.arguments = std::sync::Arc::<str>::from(prefix);
+            out.push(call);
+        } else {
+            embedded.push_str(call.arguments.as_ref());
+        }
+    }
     let recovered = recover_tool_calls_from_text(&embedded, allowed);
     if recovered.is_empty() {
-        return calls;
+        return out;
     }
-    let mut out: Vec<ToolCall> = calls
-        .into_iter()
-        .filter(|call| arguments_are_json(call.arguments.as_ref()))
-        .collect();
     for (index, recovered) in recovered.into_iter().enumerate() {
         let already = out.iter().any(|call| {
             call.name == recovered.name
@@ -311,6 +329,13 @@ pub fn stream_chat_completions_with_adapter<'a>(
             for choice in chunk.choices.into_iter() {
                 first_choice_seen = true;
                 if let Some(fr) = choice.finish_reason {
+                    if let FinishReason::Unknown(other) = &fr {
+                        tracing::warn!(
+                            request_id = %request_id,
+                            finish_reason = %other,
+                            "provider reported an unrecognized finish reason; ending the turn as a clean stop"
+                        );
+                    }
                     finish_reason = Some(fr.into());
                     chunk_has_content = true;
                 }
@@ -683,6 +708,34 @@ mod tests {
         }
     }
 
+    /// A provider-specific finish reason must end the turn, not fail it: the chunk carrying it is
+    /// the last one, so failing the parse discards an already-streamed response (session 01a0c8a1).
+    #[tokio::test]
+    async fn unknown_finish_reason_completes_the_turn_instead_of_failing() {
+        let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
+            Ok(text_chunk("partial answer")),
+            Ok(final_chunk(FinishReason::Unknown(
+                "repetition_truncation".to_string(),
+            ))),
+        ];
+        let raw = stream::iter(chunks).boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), "partial answer");
+                assert_eq!(response.stop_reason, Some(StopReason::Stop));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn text_only_stream_emits_first_token_then_channel_tokens_then_completed() {
         let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
@@ -994,6 +1047,49 @@ mod tests {
                 assert_eq!(calls.len(), 1, "recovered calls: {calls:?}");
                 assert_eq!(calls[0].name, "read_file");
                 assert_eq!(calls[0].arguments.as_ref(), r#"{"target_file":"task.txt"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn standard_path_keeps_complete_json_prefix_and_ignores_appended_xml_calls() {
+        let arguments = concat!(
+            "{\"command\":\"printf ok\"}",
+            "<tool_call><function=read_file><parameter=target_file>secret.txt</parameter>",
+            "</function></tool_call>"
+        );
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::ToolCalls),
+        ];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::Standard,
+            vec!["run_terminal_command".into(), "read_file".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "calls: {calls:?}");
+                assert_eq!(calls[0].name, "run_terminal_command");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"command":"printf ok"}"#);
             }
             other => panic!("expected Completed, got {other:?}"),
         }

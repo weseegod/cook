@@ -575,8 +575,8 @@ pub(crate) async fn generate_session_compact(
                                 timing.record_delta();
                                 content.push_str(delta_content);
                             }
-                            if let Some(fr) = choice.finish_reason {
-                                let sr = xai_grok_sampling_types::StopReason::from(fr);
+                            if let Some(fr) = &choice.finish_reason {
+                                let sr = xai_grok_sampling_types::StopReason::from(fr.clone());
                                 truncated =
                                     matches!(sr, xai_grok_sampling_types::StopReason::Length);
                                 stop_reason = Some(sr.as_ref().to_string());
