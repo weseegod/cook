@@ -133,8 +133,7 @@ fn arguments_are_json(arguments: &str) -> bool {
 /// tool envelope in the same string. Prefer the already-complete structured call: executing the
 /// appended envelopes as siblings can turn one intended action into dozens of unrelated calls.
 fn complete_json_prefix(arguments: &str) -> Option<&str> {
-    let mut values = serde_json::Deserializer::from_str(arguments)
-        .into_iter::<serde_json::Value>();
+    let mut values = serde_json::Deserializer::from_str(arguments).into_iter::<serde_json::Value>();
     let value = values.next()?.ok()?;
     if !value.is_object() {
         return None;
@@ -147,6 +146,7 @@ fn complete_json_prefix(arguments: &str) -> Option<&str> {
 fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -> Vec<ToolCall> {
     let mut embedded = String::new();
     let mut out = Vec::new();
+    let mut unresolved = Vec::new();
     for mut call in calls {
         if arguments_are_json(call.arguments.as_ref()) {
             out.push(call);
@@ -155,10 +155,14 @@ fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -
             out.push(call);
         } else {
             embedded.push_str(call.arguments.as_ref());
+            unresolved.push(call);
         }
     }
     let recovered = recover_tool_calls_from_text(&embedded, allowed);
     if recovered.is_empty() {
+        // No XML to promote: keep the wire calls. Dropping them turned a Length
+        // stop with truncated JSON (or a raw path) into an empty MaxTokensTruncation.
+        out.extend(unresolved);
         return out;
     }
     for (index, recovered) in recovered.into_iter().enumerate() {
@@ -913,6 +917,57 @@ mod tests {
             SamplingEvent::Completed { response, .. } => {
                 assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
                 assert_eq!(response.tool_calls().len(), 1);
+            }
+            other => panic!("expected Completed(ToolCalls), got {other:?}"),
+        }
+    }
+
+    /// A Length stop whose arguments are neither JSON nor an XML envelope must still
+    /// keep the wire call. Dropping it left `stop_reason=Length` with no tools, which
+    /// `LengthPolicy` turns into fatal `MaxTokensTruncation`.
+    #[tokio::test]
+    async fn length_stop_keeps_non_json_non_xml_tool_arguments() {
+        let tool_chunk = make_chunk(vec![ChatChunkDelta {
+            role: None,
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![ChunkToolCallDelta {
+                index: 0,
+                id: Some("call_read".into()),
+                kind: Some("function".into()),
+                function: Some(ToolCallFunctionDelta {
+                    name: Some("read_file".into()),
+                    arguments: Some(
+                        "/tmp/workdir/secret.txt</parameter></function></tool_call>".into(),
+                    ),
+                }),
+            }],
+            tool_call_id: None,
+        }]);
+        let raw = stream::iter::<Vec<Result<ChatCompletionChunk, SamplingError>>>(vec![
+            Ok(tool_chunk),
+            Ok(final_chunk(FinishReason::Length)),
+        ])
+        .boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "calls: {calls:?}");
+                assert_eq!(calls[0].name, "read_file");
+                assert!(
+                    calls[0].arguments.contains("secret.txt"),
+                    "kept arguments: {}",
+                    calls[0].arguments
+                );
             }
             other => panic!("expected Completed(ToolCalls), got {other:?}"),
         }
