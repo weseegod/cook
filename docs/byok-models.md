@@ -38,6 +38,7 @@ name = "Display Name"                 # hiện trong /model
 context_window = 128000
 max_completion_tokens = 8192
 supports_reasoning_effort = true      # optional
+supports_batch_api = false            # optional: Batch API eligibility, default false
 input = ["text", "image"]             # optional: ["text"] | ["text", "image"]
 ```
 
@@ -54,6 +55,7 @@ input = ["text", "image"]             # optional: ["text"] | ["text", "image"]
 | `name` | Tên hiển thị trong picker |
 | `context_window` | Dùng cho auto-compact; nên set đúng provider |
 | `max_completion_tokens` | Max tokens mỗi response |
+| `supports_batch_api` | Opt-in model chấp nhận Batch API (dành cho eval harness). Default `false`; không backend nào tự bật. Loop tương tác không bao giờ đọc flag này và không bao giờ gọi `/v1/batches` |
 | `input` | Input model nhận được: `["text"]` (chỉ text) hoặc `["text", "image"]` (đọc được ảnh). Không khai báo = chưa biết → xử lý như nhận ảnh (an toàn, không regression). Xem mục 2.1 |
 
 ### Key có dấu chấm (`.`)
@@ -139,6 +141,7 @@ name = "DeepSeek New"
 context_window = 1000000
 max_completion_tokens = 64000
 supports_reasoning_effort = true
+supports_batch_api = false            # optional, mặc định false
 ```
 
 ### Cách B — Provider hoàn toàn mới

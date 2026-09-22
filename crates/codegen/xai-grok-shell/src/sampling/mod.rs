@@ -1,6 +1,9 @@
 pub mod conversation;
 pub mod error;
+pub mod eval_batch;
 pub mod types;
+
+pub use self::eval_batch::{EvalBatchConditions, eval_batch_request};
 
 // `Client` is the legacy alias used throughout the shell; it points at the sampler crate's `SamplingClient`
 // The two have identical method sets, so call sites compile unchanged

@@ -3714,6 +3714,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 supported_in_api: m.supported_in_api,
                 reasoning_effort: m.reasoning_effort,
                 supports_reasoning_effort: m.supports_reasoning_effort,
+                supports_batch_api: false,
                 reasoning_efforts: m.reasoning_efforts,
                 variants: m.variants,
                 supports_backend_search: m.supports_backend_search,
@@ -3775,6 +3776,10 @@ pub struct ModelEntryConfig {
     pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_reasoning_effort: bool,
+    /// Per-model opt-in for Batch API eligibility (eval harness only). The interactive loop
+    /// never reads it and no backend auto-defaults it to true; omitted means false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub supports_batch_api: bool,
     /// Per-model reasoning-effort menu (source of truth).
     /// The two legacy fields above are derived from this list when it is non-empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -3881,6 +3886,7 @@ impl Default for ModelEntryConfig {
             auth_scheme: None,
             reasoning_effort: None,
             supports_reasoning_effort: false,
+            supports_batch_api: false,
             reasoning_efforts: Vec::new(),
             variants: Vec::new(),
             extra_headers: IndexMap::new(),
@@ -3963,6 +3969,7 @@ pub struct ConfigModelOverride {
     pub supported_in_api: Option<bool>,
     pub reasoning_effort: Option<ReasoningEffort>,
     pub supports_reasoning_effort: Option<bool>,
+    pub supports_batch_api: Option<bool>,
     pub reasoning_efforts: Vec<ReasoningEffortOption>,
     pub supports_backend_search: Option<bool>,
     /// Aliases must be registered in `config_model_override_parse::ALIASES`; serde rejects a table that contains both spellings otherwise.
@@ -4067,6 +4074,10 @@ impl ConfigModelOverride {
             && matches!(entry.info.api_backend, ApiBackend::Messages)
         {
             entry.info.supports_reasoning_effort = true;
+        }
+        // Batch API eligibility is user opt-in only: no backend auto-defaults it.
+        if let Some(v) = self.supports_batch_api {
+            entry.info.supports_batch_api = v;
         }
         if !self.reasoning_efforts.is_empty() {
             entry.info.reasoning_efforts = self.reasoning_efforts.clone();
@@ -4173,6 +4184,9 @@ pub struct ModelInfo {
     pub reasoning_effort: Option<ReasoningEffort>,
     /// When true, the UI shows effort controls for this model.
     pub supports_reasoning_effort: bool,
+    /// Per-model Batch API eligibility (eval harness only); the interactive loop never reads it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub supports_batch_api: bool,
     /// Per-model reasoning-effort menu (source of truth); legacy fields derived from it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning_efforts: Vec<ReasoningEffortOption>,
@@ -4244,6 +4258,7 @@ impl ModelInfo {
             supported_in_api: true,
             reasoning_effort: None,
             supports_reasoning_effort: false,
+            supports_batch_api: false,
             reasoning_efforts: Vec::new(),
             variants: Vec::new(),
             supports_backend_search: false,
@@ -4287,6 +4302,7 @@ impl ModelInfo {
             supported_in_api: entry.supported_in_api,
             reasoning_effort: entry.reasoning_effort,
             supports_reasoning_effort: entry.supports_reasoning_effort,
+            supports_batch_api: entry.supports_batch_api,
             reasoning_efforts: entry.reasoning_efforts.clone(),
             variants: entry.variants.clone(),
             supports_backend_search: entry.supports_backend_search,
@@ -5038,6 +5054,7 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 supported_in_api: true,
                 reasoning_effort: None,
                 supports_reasoning_effort: false,
+                supports_batch_api: false,
                 reasoning_efforts: Vec::new(),
                 variants: Vec::new(),
                 supports_backend_search: false,
@@ -5306,6 +5323,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             supported_in_api: true,
             reasoning_effort: None,
             supports_reasoning_effort: false,
+            supports_batch_api: false,
             reasoning_efforts: Vec::new(),
             variants: Vec::new(),
             supports_backend_search: false,

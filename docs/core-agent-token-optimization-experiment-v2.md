@@ -330,6 +330,34 @@ Matrix:
 
 Do not run a hosted batch in this phase. The local matrix cannot see a discount, and it should not pretend to. Turning the flag on for `bonsai2`, `mimo26-9b`, or `spark25` is only the negative test above.
 
+### Phase 5 results (2026-09-22)
+
+What shipped:
+
+- `supports_batch_api` on `[model."<id>"]` in `config.toml`, parsed and stored exactly where `supports_reasoning_effort` is: `ModelEntryConfig` (serde default false), the TOML override (`Option<bool>`), merged into `ModelInfo`. Documented beside `supports_reasoning_effort` in `docs/byok-models.md`.
+- No backend auto-defaults it. The `api_backend = "messages"` auto-default exists only for `supports_reasoning_effort` and was deliberately not replicated.
+- The interactive loop does not read the flag. The only reader is the gate helper `sampling::eval_batch::eval_batch_request`, a future eval harness's entry point: the gate is closed unless the resolved model has the flag and none of the design-doc section 9 conditions fail (no gating tool step, nobody waiting on a stream, no permission prompt open). The body is built from the same conversation items the realtime path would send, via the shipped `conversation_to_chat_messages` mapping, with the same tools. There is no batch client anywhere in the tree (`grep v1/batches|batch_api|BatchApi` matched nothing before this phase; the flag is plumbed, not an endpoint).
+
+Rust cells (no model), all through `Config::new_from_toml_cfg` + `resolve_model_list`:
+
+| Cell | Result | Pass |
+|---|---|---|
+| omitted | `[model."mimo-v2.6-pro"]` and `[model."deepseek/deepseek-flash"]` without the key both resolve false (the id string is not consulted) | yes |
+| explicit | `= false` resolves false, `= true` resolves true, both on a resolved model | yes |
+| no backend default | `api_backend = "messages"` without the key still resolves false | yes |
+| prompt identity | flag read from the resolved model; flag true → batch body messages equal `conversation_to_chat_messages` of the realtime items, evidence lines and both tool definitions survive; flag false → no batch body; any section-9 condition set → no batch body | yes |
+
+Matrix, one model (bonsai2-27b per the run's instruction), one headless turn `-p 'reply with exactly "ready"' --output-format json` with home config setting `supports_batch_api = true` on `local/bonsai2`, sampler wire log captured via `RUST_LOG=xai_grok_sampler=debug`:
+
+| Cell | Result | Pass |
+|---|---|---|
+| `loop_stays_realtime` | Wire log shows the sampler request `url=http://127.0.0.1:8080/v1/chat/completions` and contains no `/v1/batches` | yes |
+| task still correct | Answer contains `ready` | yes |
+
+Notes:
+
+- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase5-20260922-143511/` (`run.log`, `wire.log`, home `config.toml`, `out.json`).
+
 ## 9. Phase 6 — independent reads in one realtime response
 
 This is the batch that can reduce token count: several reads that do not depend on each other, issued in one model response, executed together. It is not Batch API. Section 3.5 of the design document already has the runner (`FuturesUnordered`). This phase does not add a new executor.

@@ -2060,6 +2060,89 @@ fn model_chat_completions_backend_does_not_auto_default_supports_reasoning_effor
         "ChatCompletions backend must not auto-default supports_reasoning_effort=true",
     );
 }
+/// `supports_batch_api` is user opt-in only: omitted means false for every model id —
+/// MiMo and DeepSeek included. Resolution never consults the id string.
+#[test]
+fn model_batch_api_omitted_resolves_false_for_any_model_id() {
+    let raw_config: toml::Value = toml::from_str(
+        r#"
+            [model."mimo-v2.6-pro"]
+            model = "mimo-v2.6-pro"
+            base_url = "https://api.example.com/v1"
+            context_window = 200000
+
+            [model."deepseek/deepseek-flash"]
+            model = "deepseek-flash"
+            base_url = "https://api.example.com/v1"
+            context_window = 200000
+            "#,
+    )
+    .unwrap();
+    let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+    let resolved = resolve_model_list(&cfg, None);
+    for id in ["mimo-v2.6-pro", "deepseek/deepseek-flash"] {
+        let model = resolved
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} should exist"));
+        assert!(
+            !model.info.supports_batch_api,
+            "omitted supports_batch_api must resolve false for {id}",
+        );
+    }
+}
+/// Explicit `supports_batch_api` resolves verbatim; the id string is not consulted.
+#[test]
+fn model_batch_api_explicit_values_resolve_verbatim() {
+    let raw_config: toml::Value = toml::from_str(
+        r#"
+            [model."deepseek/deepseek-flash"]
+            model = "deepseek-flash"
+            base_url = "https://api.example.com/v1"
+            context_window = 200000
+            supports_batch_api = false
+
+            [model."mimo-v2.6-pro"]
+            model = "mimo-v2.6-pro"
+            base_url = "https://api.example.com/v1"
+            context_window = 200000
+            supports_batch_api = true
+            "#,
+    )
+    .unwrap();
+    let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+    let resolved = resolve_model_list(&cfg, None);
+    let off = resolved
+        .get("deepseek/deepseek-flash")
+        .expect("model should exist");
+    let on = resolved.get("mimo-v2.6-pro").expect("model should exist");
+    assert!(
+        !off.info.supports_batch_api,
+        "explicit false resolves false"
+    );
+    assert!(on.info.supports_batch_api, "explicit true resolves true");
+}
+/// No backend auto-defaults `supports_batch_api`. Messages auto-defaults
+/// `supports_reasoning_effort`; it must not leak into batch eligibility.
+#[test]
+fn model_batch_api_messages_backend_does_not_auto_default() {
+    let raw_config: toml::Value = toml::from_str(
+        r#"
+            [model.my-claude]
+            model = "grok-4.5"
+            base_url = "https://messages.example.com"
+            context_window = 200000
+            api_backend = "messages"
+            "#,
+    )
+    .unwrap();
+    let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+    let resolved = resolve_model_list(&cfg, None);
+    let model = resolved.get("my-claude").expect("model should exist");
+    assert!(
+        !model.info.supports_batch_api,
+        "api_backend=\"messages\" without the key must still resolve supports_batch_api=false",
+    );
+}
 #[test]
 fn model_api_backend_defaults_to_chat_completions() {
     let raw_config: toml::Value = toml::from_str(
