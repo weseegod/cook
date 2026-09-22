@@ -129,6 +129,54 @@ fn arguments_are_json(arguments: &str) -> bool {
     serde_json::from_str::<serde::de::IgnoredAny>(arguments).is_ok()
 }
 
+/// Markers llama.cpp inserts when a MiMo XML envelope is concatenated into a JSON string.
+const XML_ARGUMENT_MARKERS: &[&str] = &[
+    "<tool_call>",
+    "</tool_call>",
+    "</function>",
+    "</parameter>",
+    "<function=",
+    "<parameter=",
+];
+
+fn earliest_xml_argument_marker(value: &str) -> Option<usize> {
+    XML_ARGUMENT_MARKERS
+        .iter()
+        .filter_map(|marker| value.find(marker))
+        .min()
+}
+
+/// A JSON object can still parse when an XML envelope was written inside a string value.
+/// Cut each contaminated string at the marker so the tool does not execute the envelope.
+/// Returns `None` when nothing was contaminated. An empty string means the object had no
+/// remaining argument text and must not be executed.
+fn strip_xml_embedded_in_json_arguments(arguments: &str) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let object = value.as_object_mut()?;
+    let mut contaminated = false;
+    for field in object.values_mut() {
+        let serde_json::Value::String(text) = field else {
+            continue;
+        };
+        let Some(at) = earliest_xml_argument_marker(text) else {
+            continue;
+        };
+        contaminated = true;
+        *text = text[..at].trim_end().to_owned();
+    }
+    if !contaminated {
+        return None;
+    }
+    object.retain(|_, field| match field {
+        serde_json::Value::String(text) => !text.is_empty(),
+        _ => true,
+    });
+    let useful = object
+        .values()
+        .any(|field| matches!(field, serde_json::Value::String(text) if !text.is_empty()));
+    useful.then(|| value.to_string())
+}
+
 /// MiMo sometimes emits a complete structured argument object and then keeps generating an XML
 /// tool envelope in the same string. Prefer the already-complete structured call: executing the
 /// appended envelopes as siblings can turn one intended action into dozens of unrelated calls.
@@ -149,7 +197,18 @@ fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -
     let mut unresolved = Vec::new();
     for mut call in calls {
         if arguments_are_json(call.arguments.as_ref()) {
-            out.push(call);
+            // XML after a closing brace is handled by `complete_json_prefix` and is not
+            // promoted. XML inside a string still parses, and executing it writes the
+            // envelope into the tool. Strip that text; do not run the inner envelopes
+            // as extra calls (one stuffed blob can contain dozens of unrelated tools).
+            match strip_xml_embedded_in_json_arguments(call.arguments.as_ref()) {
+                Some(cleaned) => {
+                    call.arguments = std::sync::Arc::<str>::from(cleaned);
+                    out.push(call);
+                }
+                None if earliest_xml_argument_marker(call.arguments.as_ref()).is_some() => {}
+                None => out.push(call),
+            }
         } else if let Some(prefix) = complete_json_prefix(call.arguments.as_ref()) {
             call.arguments = std::sync::Arc::<str>::from(prefix);
             out.push(call);
@@ -1145,6 +1204,98 @@ mod tests {
                 assert_eq!(calls.len(), 1, "calls: {calls:?}");
                 assert_eq!(calls[0].name, "run_terminal_command");
                 assert_eq!(calls[0].arguments.as_ref(), r#"{"command":"printf ok"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// llama.cpp can close a JSON string only after it has already written an XML envelope into
+    /// the value. The object parses, so the prefix splitter never runs, and the tool executes the
+    /// envelope (a path or a shell command full of `</parameter>`). Keep the text before the
+    /// marker and do not promote the stuffed envelopes as extra calls.
+    #[tokio::test]
+    async fn standard_path_strips_xml_envelopes_embedded_inside_json_strings() {
+        let arguments = r#"{"command":"printf MARKER > out.txt\n</parameter></function></tool_call><tool_call><function=search_replace><parameter=file_path>out.txt</parameter></function></tool_call>","description":"write marker"}"#;
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::ToolCalls),
+        ];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::Standard,
+            vec!["run_terminal_command".into(), "search_replace".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(
+                    calls.len(),
+                    1,
+                    "stuffed envelopes must not become calls: {calls:?}"
+                );
+                assert_eq!(calls[0].name, "run_terminal_command");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(calls[0].arguments.as_ref()).expect("cleaned arguments");
+                assert_eq!(parsed["command"], "printf MARKER > out.txt");
+                assert_eq!(parsed["description"], "write marker");
+                assert!(!calls[0].arguments.contains("</parameter>"));
+                assert!(!calls[0].arguments.contains("<tool_call>"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn standard_path_drops_a_json_call_whose_strings_are_only_xml_debris() {
+        let arguments = r#"{"command":"</parameter>\n<parameter=description>Test</parameter></function></tool_call>"}"#;
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::Stop),
+        ];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::Standard,
+            vec!["run_terminal_command".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert!(
+                    response.tool_calls().is_empty(),
+                    "debris-only arguments must not run: {:?}",
+                    response.tool_calls()
+                );
             }
             other => panic!("expected Completed, got {other:?}"),
         }
