@@ -244,7 +244,23 @@ pub struct TodoWriteInput {
     pub merge: bool,
 
     #[schemars(description = "Array of todo items to write to the workspace")]
+    #[serde(deserialize_with = "deserialize_todos")]
     pub todos: Vec<TodoUpdate>,
+}
+
+/// Some models send `todos` as a JSON string of the array instead of the array itself.
+fn deserialize_todos<'de, D>(deserializer: D) -> Result<Vec<TodoUpdate>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let value = match value {
+        serde_json::Value::String(text) => {
+            serde_json::from_str(&text).map_err(serde::de::Error::custom)?
+        }
+        other => other,
+    };
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 /// New-architecture `TodoWrite` tool. State: `State<TodoState>` — persisted across calls via
@@ -360,6 +376,18 @@ mod tests {
     use crate::types::output::TodoWriteOutput;
     use crate::types::resources::Resources;
     use crate::types::tool_metadata::test_ctx;
+
+    #[test]
+    fn todos_json_string_parses_as_the_array() {
+        let input: TodoWriteInput = serde_json::from_str(
+            r#"{"todos":"[{\"id\":\"1\",\"content\":\"write out.txt\",\"status\":\"completed\"}]"}"#,
+        )
+        .unwrap();
+        assert_eq!(input.todos.len(), 1);
+        assert_eq!(input.todos[0].id, "1");
+        assert_eq!(input.todos[0].content.as_deref(), Some("write out.txt"));
+        assert_eq!(input.todos[0].status, Some(TodoStatus::Completed));
+    }
 
     // -- Helpers --
 

@@ -236,6 +236,9 @@ pub struct BashToolInput {
     pub timeout: Option<u64>,
 
     /// One sentence explanation as to why this command needs to be run and how it contributes to the goal.
+    /// Omitted when a truncated tool call kept `command` and lost this field. The runtime already
+    /// falls back to the command text for an empty label.
+    #[serde(default)]
     #[schemars(
         description = "One sentence explanation as to why this command needs to be run and how it contributes to the goal."
     )]
@@ -2089,6 +2092,14 @@ impl xai_tool_runtime::Tool for BashTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_without_description_still_parses() {
+        let input: BashToolInput =
+            serde_json::from_str(r#"{"command":"cat secret.txt > out.txt"}"#).unwrap();
+        assert_eq!(input.command, "cat secret.txt > out.txt");
+        assert!(input.description.is_empty());
+    }
+
     #[test]
     fn bash_timeout_schema_defaults_to_120s() {
         let schema = serde_json::to_value(schemars::schema_for!(BashToolInput)).unwrap();
