@@ -3,7 +3,7 @@
 //! Consumes a raw `ChatCompletionChunk` stream and produces [`SamplingEvent`]s.
 //! Pure: no I/O, no shell coupling.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
@@ -17,7 +17,9 @@ use xai_grok_sampling_types::{
 use crate::ChatCompletionsAdapter;
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
-use crate::stream::xiaomi_chat::{RecoveredToolCall, XiaomiMimoAdapter};
+use crate::stream::xiaomi_chat::{
+    RecoveredToolCall, XiaomiMimoAdapter, recover_tool_calls_from_text,
+};
 use crate::types::RequestId;
 
 type ToolCallParts = (String, String, String);
@@ -118,6 +120,45 @@ fn select_xiaomi_calls(
         .collect()
 }
 
+/// llama.cpp puts MiMo's literal XML envelopes in `tool_calls[].function.arguments`.
+/// Those strings are not JSON, so the next-request sanitizer used to replace them with
+/// `{}` and the tool ran with no path. Recover the envelopes and keep any sibling call
+/// whose arguments were already valid JSON.
+fn arguments_are_json(arguments: &str) -> bool {
+    serde_json::from_str::<serde::de::IgnoredAny>(arguments).is_ok()
+}
+
+fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -> Vec<ToolCall> {
+    let embedded: String = calls
+        .iter()
+        .filter(|call| !arguments_are_json(call.arguments.as_ref()))
+        .map(|call| call.arguments.as_ref())
+        .collect();
+    let recovered = recover_tool_calls_from_text(&embedded, allowed);
+    if recovered.is_empty() {
+        return calls;
+    }
+    let mut out: Vec<ToolCall> = calls
+        .into_iter()
+        .filter(|call| arguments_are_json(call.arguments.as_ref()))
+        .collect();
+    for (index, recovered) in recovered.into_iter().enumerate() {
+        let already = out.iter().any(|call| {
+            call.name == recovered.name
+                && json_arguments_equal(&call.arguments, &recovered.arguments)
+        });
+        if already {
+            continue;
+        }
+        out.push(ToolCall {
+            id: std::sync::Arc::<str>::from(format!("embedded_xml_{index}")),
+            name: recovered.name,
+            arguments: std::sync::Arc::<str>::from(recovered.arguments),
+        });
+    }
+    out
+}
+
 fn json_arguments_equal(left: &str, right: &str) -> bool {
     match (
         serde_json::from_str::<serde_json::Value>(left),
@@ -197,6 +238,7 @@ pub fn stream_chat_completions_with_adapter<'a>(
         // Xiaomi's index-reuse workaround is isolated behind its selected adapter.
         let mut standard_tool_calls: BTreeMap<u32, ToolCallParts> = BTreeMap::new();
         let mut xiaomi_tool_calls = XiaomiToolCallAccumulator::default();
+        let allowed_recovery: HashSet<String> = allowed_tool_names.iter().cloned().collect();
         let mut xiaomi_adapter = (adapter == ChatCompletionsAdapter::XiaomiMimo)
             .then(|| XiaomiMimoAdapter::new(allowed_tool_names));
 
@@ -447,6 +489,7 @@ pub fn stream_chat_completions_with_adapter<'a>(
                 .map(parts_into_tool_call)
                 .collect()
         };
+        let tool_calls = promote_embedded_xml_calls(tool_calls, &allowed_recovery);
 
         // Tool calls override the stop reason, even an explicit `length`.
         // NOTE: the Messages backend has the opposite precedence: Length wins there
@@ -881,6 +924,51 @@ mod tests {
                 assert_eq!(nth(calls, 0).name, "do_thing");
                 assert_eq!(nth(calls, 0).arguments.as_ref(), "{\"x\":1}");
                 assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Local llama.cpp streams MiMo's XML envelopes as `function.arguments` chunks, including a
+    /// newline after `<tool_call>`. The standard adapter must recover the call instead of keeping
+    /// the non-JSON argument string.
+    #[tokio::test]
+    async fn standard_path_recovers_xml_envelopes_stuffed_into_tool_arguments() {
+        let arguments = concat!(
+            "{\"target_directory\":\"</parameter>\\n</function></tool_call>",
+            "<tool_call>\n<function=read_file><parameter=target_file>task.txt</parameter>\n</function>\n</tool_call>"
+        );
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_list".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("list_dir".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::ToolCalls),
+        ];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::Standard,
+            vec!["read_file".into(), "list_dir".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "recovered calls: {calls:?}");
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"target_file":"task.txt"}"#);
             }
             other => panic!("expected Completed, got {other:?}"),
         }

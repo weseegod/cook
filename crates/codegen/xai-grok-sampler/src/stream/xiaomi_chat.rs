@@ -163,22 +163,35 @@ fn longest_tool_prefix_suffix(text: &str) -> usize {
 }
 
 fn parse_envelope(envelope: &str, allowed_tools: &HashSet<String>) -> Option<RecoveredToolCall> {
-    let inner = envelope.strip_prefix(TOOL_OPEN)?.strip_suffix(TOOL_CLOSE)?;
+    // llama.cpp streams the envelope as argument deltas and often inserts a
+    // newline between the tags. Trim so `<tool_call>\n<function=...>` still parses.
+    let inner = envelope
+        .strip_prefix(TOOL_OPEN)?
+        .strip_suffix(TOOL_CLOSE)?
+        .trim();
     let function = inner.strip_prefix(FUNCTION_OPEN)?;
     let name_end = function.find('>')?;
     let name = function[..name_end].trim();
     if name.is_empty() || !allowed_tools.contains(name) {
         return None;
     }
-    let params = function[name_end + 1..].strip_suffix(FUNCTION_CLOSE)?;
+    // A newline before `</function>` is part of the same llama.cpp chunking.
+    let body = function[name_end + 1..].trim();
+    let close_at = body.rfind(FUNCTION_CLOSE)?;
+    let params = body[..close_at].trim();
     let mut cursor = 0;
     let mut arguments = Map::new();
     while cursor < params.len() {
         let rest = &params[cursor..];
-        if rest.trim().is_empty() {
+        let skipped = rest.len() - rest.trim_start().len();
+        cursor += skipped;
+        let rest = &params[cursor..];
+        if rest.is_empty() {
             break;
         }
-        let parameter = rest.strip_prefix(PARAM_OPEN)?;
+        let Some(parameter) = rest.strip_prefix(PARAM_OPEN) else {
+            return None;
+        };
         let key_end = parameter.find('>')?;
         let key = parameter[..key_end].trim();
         if key.is_empty() {
@@ -199,6 +212,17 @@ fn parse_envelope(envelope: &str, allowed_tools: &HashSet<String>) -> Option<Rec
     })
 }
 
+/// Tool calls MiMo stuffed into a Chat Completions `arguments` string instead of `content`.
+pub(super) fn recover_tool_calls_from_text(
+    content: &str,
+    allowed_tools: &HashSet<String>,
+) -> Vec<RecoveredToolCall> {
+    if !content.contains(TOOL_OPEN) {
+        return Vec::new();
+    }
+    extract_tool_calls(content, allowed_tools, true).1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,6 +232,20 @@ mod tests {
             .into_iter()
             .map(str::to_owned)
             .collect()
+    }
+
+    fn allowed_read() -> HashSet<String> {
+        ["read_file"].into_iter().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn parses_envelope_when_llama_inserts_a_newline_after_tool_call() {
+        let input = "<tool_call>\n<function=read_file><parameter=target_file>task.txt</parameter>\n</function>\n</tool_call>";
+        let (text, calls) = extract_tool_calls(input, &allowed_read(), true);
+        assert_eq!(text, "");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].name, "read_file");
+        assert_eq!(calls[0].arguments, r#"{"target_file":"task.txt"}"#);
     }
 
     #[test]
