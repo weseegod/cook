@@ -857,6 +857,10 @@ impl From<FinishReason> for StopReason {
             FinishReason::Length => StopReason::Length,
             FinishReason::ToolCalls | FinishReason::FunctionCall => StopReason::ToolCalls,
             FinishReason::ContentFilter => StopReason::ContentFilter,
+            // A provider-specific verdict still ends a usable generation; the stream is not
+            // corrupt, so the turn ends cleanly instead of failing on an unrecognized value.
+            // The caller logs the wire string.
+            FinishReason::Unknown(_) => StopReason::Stop,
         }
     }
 }
@@ -1481,6 +1485,9 @@ impl xai_grok_compaction::CompactionItem for ConversationItem {
             Role::User => CompactionRole::User,
             Role::Assistant => CompactionRole::Assistant,
             Role::Tool => CompactionRole::Tool,
+            // Unknown wire roles are instruction-like rather than human prompts. Keeping them in
+            // the system bucket prevents compaction from rewriting them as user intent.
+            Role::Unknown(_) => CompactionRole::System,
         }
     }
 
@@ -3579,6 +3586,11 @@ mod tests {
             StopReason::from(FinishReason::ContentFilter),
             StopReason::ContentFilter
         );
+        // A provider-specific verdict is still a usable generation: end cleanly, never fail the request.
+        assert_eq!(
+            StopReason::from(FinishReason::Unknown("repetition_truncation".to_string())),
+            StopReason::Stop
+        );
     }
 
     #[test]
@@ -4859,7 +4871,7 @@ mod tests {
             1,
             "trailing reasoning has no assistant to attach to"
         );
-        assert_eq!(msgs.first().map(|m| m.role), Some(Role::User));
+        assert_eq!(msgs.first().map(|m| m.role.clone()), Some(Role::User));
     }
 
     #[test]

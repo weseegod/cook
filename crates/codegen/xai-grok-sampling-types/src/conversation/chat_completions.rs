@@ -62,6 +62,15 @@ impl From<ChatRequestMessage> for ConversationItem {
                     ..Default::default()
                 })
             }
+            // An unknown role can only arrive on the response side; a response message is the
+            // assistant's, so its content and calls still belong there rather than being dropped.
+            Role::Unknown(_) => ConversationItem::Assistant(AssistantItem {
+                content: Arc::<str>::from(msg.text_content()),
+                tool_calls: Vec::new(),
+                model_id: msg.model_id,
+                model_fingerprint: None,
+                reasoning_effort: None,
+            }),
         }
     }
 }

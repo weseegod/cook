@@ -346,13 +346,17 @@ impl ChatRequestMessage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
     User,
     Assistant,
     Tool,
+    /// Catch-all so a role this client does not know (`developer` on some OpenAI-compatible servers, or anything newer) does not fail the message parse.
+    /// Preserves the wire string. Must stay the LAST variant: serde tries the named variants above first.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
 /// Calculate how many chat messages to keep for a given target prompt index (0-based, inclusive).
@@ -467,7 +471,7 @@ pub struct ChatChoice {
     pub finish_reason: Option<FinishReason>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
@@ -475,6 +479,11 @@ pub enum FinishReason {
     ToolCalls,
     ContentFilter,
     FunctionCall,
+    /// Catch-all so a provider-specific stop value — MiMo's `repetition_truncation`, for one — never fails the chunk parse and discards an already-streamed response.
+    /// Preserves the wire string for logging and faithful re-serialization.
+    /// Must stay the LAST variant: serde tries the named variants above first.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1694,5 +1703,61 @@ mod tests {
         let inner: &dyn TraceContext = &*cloned_trace;
         let downcast = inner.as_any().downcast_ref::<TestTrace>().unwrap();
         assert_eq!(downcast.0, "trace-data");
+    }
+
+    /// A provider-specific wire value must not fail the parse: the chunk carrying it is the one
+    /// that ends an already-streamed response, so losing it discards the whole generation.
+    #[test]
+    fn finish_reason_catches_unknown_wire_values() {
+        let parse = |raw: &str| -> FinishReason {
+            serde_json::from_str(&format!("\"{raw}\""))
+                .unwrap_or_else(|e| panic!("finish_reason {raw:?} must parse: {e}"))
+        };
+        assert_eq!(parse("stop"), FinishReason::Stop);
+        assert_eq!(parse("length"), FinishReason::Length);
+        assert_eq!(parse("tool_calls"), FinishReason::ToolCalls);
+        assert_eq!(parse("content_filter"), FinishReason::ContentFilter);
+        assert_eq!(parse("function_call"), FinishReason::FunctionCall);
+        // MiMo reports its own repetition cutoff this way (observed in session 01a0c8a1).
+        assert_eq!(
+            parse("repetition_truncation"),
+            FinishReason::Unknown("repetition_truncation".to_string())
+        );
+        assert_eq!(
+            serde_json::to_string(&FinishReason::Unknown("repetition_truncation".into())).unwrap(),
+            "\"repetition_truncation\"",
+            "catch-all must re-serialize the wire string faithfully"
+        );
+
+        // The catch-all has to work through the chunk field it is parsed from in production.
+        let chunk: ChatCompletionChunk = serde_json::from_str(
+            r#"{"id":"c1","object":"chat.completion.chunk","created":0,"model":"mimo-v2.6-flash","choices":[{"index":0,"delta":{},"finish_reason":"repetition_truncation"}]}"#,
+        )
+        .expect("a chunk with an unknown finish reason must parse");
+        assert_eq!(
+            chunk.choices[0].finish_reason,
+            Some(FinishReason::Unknown("repetition_truncation".to_string()))
+        );
+    }
+
+    #[test]
+    fn role_catches_unknown_wire_values() {
+        let parse = |raw: &str| -> Role {
+            serde_json::from_str(&format!("\"{raw}\""))
+                .unwrap_or_else(|e| panic!("role {raw:?} must parse: {e}"))
+        };
+        assert_eq!(parse("system"), Role::System);
+        assert_eq!(parse("user"), Role::User);
+        assert_eq!(parse("assistant"), Role::Assistant);
+        assert_eq!(parse("tool"), Role::Tool);
+        assert_eq!(
+            parse("developer"),
+            Role::Unknown("developer".to_string()),
+            "an OpenAI-compatible server may use roles this client does not model"
+        );
+        assert_eq!(
+            serde_json::to_string(&Role::Unknown("developer".into())).unwrap(),
+            "\"developer\""
+        );
     }
 }
