@@ -130,6 +130,9 @@ pub(crate) struct AgentRebuildSpec {
     /// `[paths]` config, threaded into rules discovery via the builder.
     pub paths_config: xai_grok_agent::prompt::paths::PathsConfig,
     pub context_window_tokens: u64,
+    /// `[compaction.pruning] read_file_max_output_bytes`: opt-in `read_file` generation cap in
+    /// bytes. Zero leaves the read tool's own caps as its only size limits.
+    pub read_file_max_output_bytes: usize,
     pub prompt_working_directory: Option<String>,
     pub lsp: Option<Arc<dyn LspBackend>>,
     pub plugin_registry: Option<Arc<xai_grok_agent::plugins::PluginRegistry>>,
@@ -237,6 +240,7 @@ impl AgentRebuildSpec {
             compat,
             paths_config,
             context_window_tokens,
+            read_file_max_output_bytes,
             prompt_working_directory,
             lsp,
             plugin_registry,
@@ -338,9 +342,10 @@ impl AgentRebuildSpec {
             working_directory,
         ))
         .with_context_window(*context_window_tokens)
-        .with_mcp_max_output_bytes(
-            crate::util::config::resolve_max_mcp_output_bytes_for_cwd(working_directory),
-        );
+        .with_mcp_max_output_bytes(crate::util::config::resolve_max_mcp_output_bytes_for_cwd(
+            working_directory,
+        ))
+        .with_read_file_max_output_bytes(*read_file_max_output_bytes);
         if let Some(owner_session_id) = owner_session_id.clone() {
             builder = builder.with_owner_session_id(owner_session_id);
         }
@@ -509,6 +514,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         compat: CompatConfig::default(),
         paths_config: Default::default(),
         context_window_tokens: 256_000,
+        read_file_max_output_bytes: 0,
         prompt_working_directory: None,
         lsp: None,
         plugin_registry: None,

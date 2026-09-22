@@ -31,6 +31,9 @@ files="${FILES:-12}"
 file_bytes="${FILE_BYTES:-8000}"
 step_rounds="${STEP_ROUNDS:-2}"
 step_char_budget="${STEP_CHAR_BUDGET:-12000}"
+# Extra `[compaction.pruning]` lines for the step-aware home only, so a run can put one opt-in
+# setting (e.g. `read_file_max_output_bytes`) in one arm and leave the other arm without it.
+pruning_extra="${PRUNING_EXTRA:-}"
 max_turns="${MAX_TURNS:-24}"
 
 # The two markers the answer must carry: one from an early round and one from the last one.
@@ -155,7 +158,7 @@ early, late = os.environ["REQUEST_COMPONENTS_EARLY"], os.environ["REQUEST_COMPON
 
 
 def blank(reason):
-    print("\t".join([arm, run, reason] + ["-"] * 14))
+    print("\t".join([arm, run, reason] + ["-"] * 15))
     raise SystemExit(0)
 
 
@@ -183,6 +186,16 @@ try:
     answer = json.load(open(os.path.join(workdir, "out.json")))
 except Exception as exc:  # noqa: BLE001 - reported as a row, not a crash
     blank(f"no-json({type(exc).__name__})")
+
+# What this arm's home actually configured for the opt-in read generation cap. "-" means the key
+# was absent, which must leave the read tool's own caps as its only size limits.
+read_cap = "-"
+home_config = os.path.join(home, "config.toml")
+if os.path.exists(home_config):
+    with open(home_config) as handle:
+        match = re.search(r"read_file_max_output_bytes\s*=\s*(\d+)", handle.read())
+    if match:
+        read_cap = match.group(1)
 
 session_id = answer.get("sessionId", "")
 reports = glob.glob(os.path.join(home, "sessions", "*", session_id, "usage.json"))
@@ -222,6 +235,7 @@ print(
             str(prune_events),
             str(prune_rounds),
             str(prune_chars),
+            read_cap,
             f"{elapsed}s/{fidelity}",
         ]
     )
@@ -232,9 +246,10 @@ PY
 write_home "$out_root/home-baseline" ""
 write_home "$out_root/home-stepaware" \
     "keep_last_n_tool_rounds = $step_rounds
-recent_tool_result_char_budget = $step_char_budget"
+recent_tool_result_char_budget = $step_char_budget
+$pruning_extra"
 
-printf 'arm\trun\tnote\tloop_calls\tloop_input\tloop_cache_read\tloop_output\trequests_measured\tsystem_tokens\ttool_schema_tokens\ttool_result_tokens\tcompaction_calls\tcompaction_tokens\tprune_events\tprune_rounds\tprune_chars\twall/fidelity\n'
+printf 'arm\trun\tnote\tloop_calls\tloop_input\tloop_cache_read\tloop_output\trequests_measured\tsystem_tokens\ttool_schema_tokens\ttool_result_tokens\tcompaction_calls\tcompaction_tokens\tprune_events\tprune_rounds\tprune_chars\tread_cap_bytes\twall/fidelity\n'
 for run in $(seq 1 "$runs"); do
     for arm in baseline stepaware; do
         run_arm "$arm" "$out_root/home-$arm" "$out_root/work-$arm-$run" "$run"

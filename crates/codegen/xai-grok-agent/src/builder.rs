@@ -93,6 +93,10 @@ pub struct AgentBuilder {
     /// Seeded into the toolset's `TruncationCfg` after finalize; the MCP truncation path consults it before the process-global
     /// cap. Set only when the repo-level `[mcp] max_output_bytes` tier wins (see `resolve_max_mcp_output_bytes_for_cwd`).
     mcp_max_output_bytes: Option<usize>,
+    /// Opt-in `read_file` generation cap in bytes, seeded into the read tool's
+    /// `Params<ReadFileParams>` after finalize. `None` leaves the read tool's own
+    /// `READ_FILE_MAX_TOKENS` / `MAX_LINES_READ` as its only size limits.
+    read_file_max_output_bytes: Option<usize>,
     /// IDE-compat agent_type uses `"system_reminder"` instead of the default `"system-reminder"`.
     system_reminder_tag: &'static str,
     /// Restored into the SkillManager before `seed()`, which then skips the `BaselineChange` pending, so a resumed
@@ -222,6 +226,7 @@ impl AgentBuilder {
             api_key_provider: None,
             attribution_callback: None,
             mcp_max_output_bytes: None,
+            read_file_max_output_bytes: None,
             system_reminder_tag: xai_grok_tools::reminders::DEFAULT_REMINDER_TAG,
             persisted_announced_skill_names: None,
             preloaded_skills: None,
@@ -356,6 +361,12 @@ impl AgentBuilder {
     }
     pub fn with_mcp_max_output_bytes(mut self, bytes: Option<usize>) -> Self {
         self.mcp_max_output_bytes = bytes;
+        self
+    }
+    /// Inject the shell-resolved `read_file` generation cap (bytes). Zero disables it, so a
+    /// session that never sets the key keeps the read tool's own caps.
+    pub fn with_read_file_max_output_bytes(mut self, bytes: usize) -> Self {
+        self.read_file_max_output_bytes = (bytes > 0).then_some(bytes);
         self
     }
     pub fn with_state_path(mut self, path: PathBuf) -> Self {
@@ -1150,6 +1161,25 @@ impl AgentBuilder {
                     },
                 ),
             );
+        }
+        if let Some(bytes) = self.read_file_max_output_bytes {
+            // Update in place when a params value is already installed so an unrelated
+            // `cursor_rules_on_read` setting is not clobbered.
+            // Bind the toolset so the resource lock outlives the borrow.
+            let toolset = tool_bridge.toolset();
+            let mut resources = toolset.resources.lock().await;
+            if let Some(existing) = resources.get_mut::<xai_grok_tools::types::resources::Params<
+                xai_grok_tools::implementations::grok_build::read_file::ReadFileParams,
+            >>() {
+                existing.0.max_output_bytes = Some(bytes);
+            } else {
+                resources.insert(xai_grok_tools::types::resources::Params(
+                    xai_grok_tools::implementations::grok_build::read_file::ReadFileParams {
+                        max_output_bytes: Some(bytes),
+                        ..Default::default()
+                    },
+                ));
+            }
         }
         if let Some(names) = self.persisted_announced_skill_names {
             tool_bridge.restore_announced_skill_names(names).await;

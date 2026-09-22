@@ -824,7 +824,7 @@ mod tests {
     use crate::implementations::skills::types::SkillInfo;
     use crate::notification::types::ToolNotificationHandle;
     use crate::types::resources::{NotificationHandle, Resources};
-    use crate::types::tool_metadata::test_ctx;
+    use crate::types::tool_metadata::{test_ctx, test_ctx_with_call_id};
     use std::sync::Arc;
     use tempfile::TempDir;
     /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
@@ -989,6 +989,144 @@ mod tests {
         };
         assert!(fc.content.contains("line000200"));
         assert!(!fc.content.contains("truncated"));
+    }
+    /// Cell `cap_off_identical`: a session that never sets the config key installs no
+    /// `Params<ReadFileParams>`, so the byte-budget branch's guard is unmet and the read of a file
+    /// far over any would-be budget is the tool's ordinary full-window read — byte-identical to a
+    /// read whose budget cannot bind.
+    #[tokio::test]
+    async fn cap_off_identical() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
+        let input = || ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        // Flag unset: exactly the Resources a session that never sets the key builds.
+        let unset = test_resources(tmp.path()).into_shared();
+        assert!(
+            max_output_bytes(&unset).await.is_none(),
+            "no ReadFileParams means the budget branch cannot be entered"
+        );
+        let ReadFileOutput::FileContent(flag_off) =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(unset), input())
+                .await
+                .unwrap()
+        else {
+            panic!("expected FileContent");
+        };
+        // Budget that cannot bind: the branch runs and must leave the window alone.
+        let roomy = budget_resources(tmp.path(), usize::MAX).into_shared();
+        assert_eq!(max_output_bytes(&roomy).await, Some(usize::MAX));
+        let ReadFileOutput::FileContent(flag_roomy) =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(roomy), input())
+                .await
+                .unwrap()
+        else {
+            panic!("expected FileContent");
+        };
+        eprintln!("--- CAP OFF (flag unset) ---\n{}", flag_off.content);
+        eprintln!(
+            "--- CAP ROOMY (budget cannot bind) ---\n{}",
+            flag_roomy.content
+        );
+        assert_eq!(
+            flag_off.content, flag_roomy.content,
+            "unset flag must be byte-identical to a non-binding budget"
+        );
+        assert_eq!(flag_off.raw_output, flag_roomy.raw_output);
+        // The unset arm is the whole file, uncapped, with no marker of any style.
+        let fixture = budget_fixture();
+        assert_eq!(flag_off.raw_output.lines().count(), 200);
+        for line in fixture.lines() {
+            assert!(flag_off.content.contains(line), "missing {line}");
+        }
+        assert!(
+            !flag_off.content.contains("truncated"),
+            "{}",
+            flag_off.content
+        );
+        assert!(!flag_off.content.contains("..."));
+        assert_eq!(flag_off.total_lines, 200);
+        eprintln!("--- CAP OFF CHECK: 200/200 lines, no marker, byte-identical: OK ---");
+        // The global caps are the only size limits in the unset case.
+        assert_eq!(READ_FILE_MAX_TOKENS, 25_000);
+        assert_eq!(MAX_LINES_READ, 1_000);
+    }
+    /// Cell `cap_names_next_offset`: with the flag set, an over-cap read keeps the first whole
+    /// lines that fit, answers the same single tool call, and reuses the read tool's own
+    /// continuation marker — next offset, total line count, shown range — with no second style.
+    #[tokio::test]
+    async fn cap_names_next_offset() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
+        let shared = budget_resources(tmp.path(), 500).into_shared();
+        // The full formatted window this file produces, measured through the shipped path with a
+        // budget that cannot bind, so the expected truncated-byte count is not hard-coded.
+        let ReadFileOutput::FileContent(roomy) = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            test_ctx(budget_resources(tmp.path(), usize::MAX).into_shared()),
+            ReadFileInput {
+                path: "big.txt".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            },
+        )
+        .await
+        .unwrap() else {
+            panic!("expected FileContent");
+        };
+        let ctx = test_ctx_with_call_id(shared, "call_cap_names_next_offset");
+        let call_id = ctx.call_id.clone();
+        let out = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            ctx.clone(),
+            ReadFileInput {
+                path: "big.txt".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            ctx.call_id, call_id,
+            "cap must not rewrite the tool call id"
+        );
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected one FileContent result for the call");
+        };
+        let (body, marker) = fc
+            .content
+            .rsplit_once('\n')
+            .expect("marker on its own line");
+        let kept = body.lines().count();
+        assert!(kept > 0 && kept < 200, "kept {kept}");
+        assert!(body.starts_with("1→line000001\n"), "body: {body:?}");
+        assert!(marker.starts_with("... ["), "marker: {marker:?}");
+        assert_eq!(
+            marker,
+            format!(
+                "... [{} characters truncated; file has 200 total lines; showing lines 1-{kept}; \
+                 rerun with offset={}] ...",
+                roomy.content.len() - body.len(),
+                kept + 1
+            ),
+            "marker must name the next offset, total lines and shown range"
+        );
+        // One truncation style only, and the global caps are untouched.
+        assert_eq!(fc.content.matches("... [").count(), 1);
+        assert_eq!(fc.raw_output.lines().count(), kept);
+        assert_eq!(fc.total_lines, 200);
+        assert_eq!(READ_FILE_MAX_TOKENS, 25_000);
+        assert_eq!(MAX_LINES_READ, 1_000);
     }
     /// Set up Resources with real filesystem for tests.
     fn test_resources(cwd: &std::path::Path) -> Resources {

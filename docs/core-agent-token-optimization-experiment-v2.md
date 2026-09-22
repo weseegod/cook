@@ -192,6 +192,44 @@ Matrix:
 
 Do not lower `READ_FILE_MAX_TOKENS` globally in this phase.
 
+### Phase 3 results (2026-09-22)
+
+What shipped:
+
+- `PruningConfig::read_file_max_output_bytes`, default `0`, and `PruningSettings::read_file_max_output_bytes: Option<usize>`. The key sits in `[compaction.pruning]` beside the pruning settings, because both decide how much tool output reaches the model, and it does not rewrite anything after the fact.
+- `AgentRebuildSpec::read_file_max_output_bytes` → `AgentBuilder::with_read_file_max_output_bytes`, which seeds `Params<ReadFileParams>` after finalize (updating in place when a value is already installed, so `cursor_rules_on_read` is not clobbered). `0` and an absent key install nothing, so the session is byte-identical to today.
+- `read_file/mod.rs` keeps its existing `apply_byte_budget` path and its existing continuation marker (next offset, total line count, shown range). `READ_FILE_MAX_TOKENS` is still 25,000 and `MAX_LINES_READ` is still 1,000. Bash is untouched, so `bash_keeps_tail_and_path` is skipped.
+
+Rust cells (no model):
+
+| Cell | Result | Pass |
+|---|---|---|
+| `cap_off_identical` | With no `Params<ReadFileParams>` the budget accessor returns `None`, so the budget branch cannot be entered. A 200-line file read with the flag unset is byte-identical to the same read with a budget that cannot bind (both sides captured to `{SCRATCH}/cap-off.txt`, sha256 `c081ec55…`): 200/200 lines, no marker of any style | yes |
+| `cap_names_next_offset` | Budget 500 on the same fixture keeps the first whole lines, one marker naming `rerun with offset=<kept+1>`, `file has 200 total lines`, `showing lines 1-<kept>`, one truncation style only, same tool-call id, `READ_FILE_MAX_TOKENS` unchanged | yes |
+| `bash_keeps_tail_and_path` | — | skipped (bash untouched) |
+| `read_file_cap_resolves_from_pruning_table_and_defaults_off` | The key resolves from `[compaction.pruning]` (2500), defaults to 0 when absent or zero, and a key outside the table does not resolve | yes |
+
+Endpoint matrix, one process per model, temperature 0, `MAX_TOKENS=160` (800 retry on an empty answer):
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `middle_error_recoverable` | 935 prompt / 5 completion / 1 s | 932 / 5 / 1 s | 946 / 6 / 0 s | yes ×3 — all named `retry_drops_payload`, the annotated line at 36 of 41, which exists only past the `showing lines 1-32` cut |
+| `prefix_stable` | warm-first 0, warm 1,266, bust 0 cached | 0 / 1,263 / 0 | 0 / 1,274 / 0 | yes ×3 — warm cached tokens > 0 and bust < warm on every model; every cache column was reported by the server, so no `unreported` cell |
+
+Live cell, spark25-4b only (the live script still hardcodes the `spark25` wire name), `CONTEXT_WINDOW=40000`, `RUNS=1`, `PRUNING_EXTRA="read_file_max_output_bytes=2500"` in the step-aware home only:
+
+| Cell | Result | Pass |
+|---|---|---|
+| `live_spark_append` | Flagged arm (`read_cap_bytes=2500`): both markers in the answer at 3 turns / 16 s, `prune_events=0`, `tool_result_tokens=7,226`. Unflagged arm for contrast: both-markers-lost at 24 turns / 190 s with 3 compaction calls | yes — fidelity holds with the cap on and the prune arm idle |
+
+Notes:
+
+- The cap shortened what each read returned and the flagged arm finished in three turns while the unflagged arm ran to the 24-turn cap and lost both markers. That is a fidelity observation, not a cost claim (the uncached split is section 3).
+- Fixture wording for `middle_error_recoverable` was revised after two recorded attempts, with the raw answers kept. The first wording asked a yes/no question; spark25-4b answered “no defect” with the annotated line past the cut *and* with the whole file in one round (diagnostic variants A and E), so it measured phrasing rather than recoverability. The second wording asked for the annotated line and mimo26-9b answered the line number `41`. The committed fixture asks for the function name on the line the file annotates, with that line placed mid-continuation (36 of 41) so it cannot be produced by naming the first or last function in the block, and with a control arm that drops the annotation.
+- Control arm, not a gating cell: with the annotation removed, bonsai2-27b and spark25-4b answered the explicit negative; mimo26-9b still named the function. Its pass meets the cell's literal bar (the answer names the function the file annotates) but is weaker evidence of keying on the annotation.
+- The endpoint fixture carries the continuation read as the second tool round at the marker's named offset, because an endpoint cell cannot run tools. The rule it tests is unchanged: the error past the shown range must be reported and a “no error” guess fails.
+- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase3-final/` (endpoint matrix), `…-phase3-diag-20260922-124822/` and `…-phase3-diag2-20260922-124843/` (fixture diagnostics), `…-phase3-live-readcap-2/` (live).
+
 ## 7. Phase 4 — hit and miss in the session report
 
 The ledger already stores cache reads, and `usage.json` already has `purposeUsage` and `requestComponents`. This phase only makes the uncached remainder explicit and refuses to treat “unreported” as zero.

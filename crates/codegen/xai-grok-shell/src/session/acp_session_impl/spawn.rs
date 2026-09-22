@@ -1183,6 +1183,7 @@ pub(crate) async fn spawn_session_actor(
         compat,
         paths_config: paths_config.clone(),
         context_window_tokens,
+        read_file_max_output_bytes: session_pruning_config.read_file_max_output_bytes,
         prompt_working_directory: prompt_display_cwd.clone(),
         lsp: tool_context.lsp.clone(),
         plugin_registry: plugin_registry.clone(),
