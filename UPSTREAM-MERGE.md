@@ -76,13 +76,15 @@ to `main` until each row below is green.
 
 - **User:** puts `[model.*]` / `[model_providers.*]` in `~/.cook/config.toml`.
 - **Must remain true:** default user home is `~/.cook`, never upstream
-  `~/.grok`. `$GROK_HOME` still overrides. `cook models` lists those models.
+  `~/.grok`. `$COOK_HOME` overrides, then `$GROK_HOME`, unless the override is
+  the real `~/.grok` or `~/.thanh` (those are ignored; nothing is migrated).
+  `cook models` lists those models.
 - **Source of truth:** `crates/codegen/xai-dirs/src/lib.rs` —
   `grok_home_in` joins `".cook"`. Keep upstream's `GrokHomeSource`,
   `home_dir()`, `resolve_grok_home_with_source()`; only the directory name is
   fork-owned. `xai-fast-worktree` already delegates here.
-- **Do not** dual-read `~/.grok` and `~/.cook`. Do not rewrite project-level
-  `.grok/` (workspace config, agents, hooks).
+- **Do not** dual-read `~/.grok` and `~/.cook`. Do not migrate `~/.thanh`. Do
+  not rewrite project-level `.grok/` (workspace config, agents, hooks).
 - **Marker / test:** `join(".cook")` in `xai-dirs`;
   `default_grok_home_has_no_verbatim_prefix` asserts `ends_with(".cook")`.
   `rg 'join\("\.grok"\)' crates/codegen/xai-dirs/src/lib.rs` must be empty.

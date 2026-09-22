@@ -1,5 +1,5 @@
 //! Sandbox profiles. Built-in: `workspace`, `devbox`, `read-only`, `strict`,
-//! `off`. Custom profiles via `~/.grok/sandbox.toml` or `.grok/sandbox.toml`.
+//! `off`. Custom profiles via `~/.cook/sandbox.toml` or `.grok/sandbox.toml`.
 //! A custom profile's `deny` list is kernel-enforced (read and write/rename) on both platforms.
 
 #[cfg(all(feature = "enforce", unix))]
@@ -111,13 +111,13 @@ impl std::str::FromStr for ProfileName {
     }
 }
 
-/// Load sandbox config from `~/.grok/sandbox.toml` and `.grok/sandbox.toml`. Project config may add new profile names
+/// Load sandbox config from `~/.cook/sandbox.toml` and `.grok/sandbox.toml`. Project config may add new profile names
 /// only. It cannot redefine a name already present in the global config. Last-write-wins would let a malicious workspace
 /// hollow out a user/enterprise custom profile while keeping the trusted name.
 pub fn load_sandbox_config(workspace: &Path) -> SandboxConfig {
     let mut config = SandboxConfig::default();
 
-    // Global config: ~/.grok/sandbox.toml
+    // Global config: <grok_home>/sandbox.toml (`~/.cook/sandbox.toml` by default)
     let global_path = grok_home().join(SANDBOX_CONFIG_FILENAME);
     if let Some(global) = load_config_file(&global_path) {
         config = global;
@@ -232,10 +232,9 @@ impl ProfileName {
                 if real == home.join(path.file_name()?) {
                     return Some(real);
                 }
-                let default_sessions =
-                    xai_dirs::home_dir().map(|user_home| user_home.join(".grok").join("sessions"));
+                let default_sessions = home.join("sessions");
                 if path.file_name() == Some(std::ffi::OsStr::new("sessions"))
-                    && default_sessions.as_ref() == Some(&real)
+                    && default_sessions == real
                 {
                     return Some(real);
                 }
@@ -278,7 +277,7 @@ impl ProfileName {
 
         // Read-write paths. nono/Landlock need the path to exist at apply time (it opens an O_PATH fd), but new files within a
         // granted directory can be created freely after the sandbox is applied. Symlink children of grok_home fail closed unless
-        // the canonical dir is this home's same-named child or default ~/.grok/sessions.
+        // the canonical dir is this home's same-named child or `<grok_home>/sessions`.
         let home = grok_home();
         for path in &profile.read_write {
             let Some(grant) = Self::read_write_grant_path(path, &home) else {
@@ -502,7 +501,7 @@ impl ProfileName {
                 let profile_config = config.profiles.get(name).ok_or_else(|| {
                     anyhow::anyhow!(
                         "Custom sandbox profile '{name}' not found. \
-                         Define it in ~/.grok/sandbox.toml or .grok/sandbox.toml:\n\n\
+                         Define it in ~/.cook/sandbox.toml or .grok/sandbox.toml:\n\n\
                          [profiles.{name}]\n\
                          extends = \"workspace\"\n\
                          read_only = [\"/data\"]\n"

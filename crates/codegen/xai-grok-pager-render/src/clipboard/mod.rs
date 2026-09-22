@@ -467,7 +467,7 @@ impl CopyDelivery {
     }
 }
 
-/// [`GROK_COPY_FILE_ENV`] or `~/.grok/last-copy.txt`. `None` skips the file rather than writing a world-visible temp path.
+/// [`GROK_COPY_FILE_ENV`] or `~/.cook/last-copy.txt`. `None` skips the file rather than writing a world-visible temp path.
 pub fn default_copy_fallback_path() -> Option<std::path::PathBuf> {
     if let Ok(raw) = std::env::var(GROK_COPY_FILE_ENV) {
         let trimmed = raw.trim();
@@ -480,7 +480,7 @@ pub fn default_copy_fallback_path() -> Option<std::path::PathBuf> {
     xai_grok_config::user_grok_home().map(|grok_home| grok_home.join("last-copy.txt"))
 }
 
-/// Abbreviate via [`crate::util::abbreviate_path`] so toasts stay short (`~/.grok` or `~`).
+/// Abbreviate via [`crate::util::abbreviate_path`] so toasts stay short (`~/.cook` or `~`).
 pub fn display_copy_path(path: &std::path::Path) -> String {
     crate::util::abbreviate_path(&path.to_string_lossy()).into_owned()
 }
@@ -2393,7 +2393,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&custom).expect("read"), "payload");
     }
 
-    /// Without `GROK_COPY_FILE`, the default is `~/.grok/last-copy.txt`
+    /// Without `GROK_COPY_FILE`, the default is `~/.cook/last-copy.txt`
     /// (grok home) — short and toast-friendly, unlike macOS's temp dir.
     #[test]
     #[serial_test::serial(grok_copy_file)]
@@ -2417,8 +2417,8 @@ mod tests {
         if std::env::var_os("GROK_HOME").is_none() {
             let home = xai_dirs::home_dir().expect("home resolves in tests");
             assert_eq!(
-                display_copy_path(&home.join(".grok").join("last-copy.txt")),
-                "~/.grok/last-copy.txt"
+                display_copy_path(&home.join(".cook").join("last-copy.txt")),
+                "~/.cook/last-copy.txt"
             );
         }
         // Non-home paths pass through untouched, including multi-byte UTF-8 components (must never slice at a non-char boundary)

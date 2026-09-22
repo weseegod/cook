@@ -419,6 +419,11 @@ effects spawn tasks → `Presenter` coalesces draws → `render::draw::draw_fram
 SQLite only backs derived indexes (search, memory vectors, worktree tracking)
 and read-only foreign agent stores (Claude/Codex/Cursor).
 
+The user home is this directory only. `~/.grok` and `~/.thanh` are never read,
+written, or migrated. `$COOK_HOME` overrides it, then `$GROK_HOME`, unless that
+override is the real `~/.grok` or `~/.thanh`. Project `<repo>/.grok/` is a
+separate workspace config and is unchanged.
+
 ---
 
 ## 7. Change-map: "where do I go to…"
@@ -494,8 +499,9 @@ models (DeepSeek, OpenRouter, OpenAI-compatible) work with bring-your-own-key.
 Frequently touched fork-owned files (also the upstream-merge inventory in
 `UPSTREAM-MERGE.md`):
 
-- Identity: `cook` binary, `~/.cook` home (never `~/.grok`; single source of
-  truth `xai-dirs` `grok_home_in`), fork release feed in
+- Identity: `cook` binary, `~/.cook` home only (never read or migrate
+  `~/.grok` / `~/.thanh`; `$COOK_HOME` then `$GROK_HOME` select one directory;
+  source of truth `xai-dirs` `grok_home_in`), fork release feed in
   `xai-grok-update/src/version.rs` + `auto_update.rs`.
 - BYOK model config: `xai-grok-shell/src/agent/config.rs`,
   `config_model_override_parse.rs`, `models.rs` — `input`/`input_modalities`

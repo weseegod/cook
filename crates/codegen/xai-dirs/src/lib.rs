@@ -1,10 +1,10 @@
 //! Home-directory resolution generally: USERPROFILE-first `home_dir`, plus
-//! grok-home (`$GROK_HOME` / `$COOK_HOME` / `$THANH_HOME` or `<home>/.cook`). Shared by `xai-grok-config`
-//! and `xai-fast-worktree`.
+//! grok-home (`$COOK_HOME`, else `$GROK_HOME`, else `<home>/.cook`). Shared by
+//! `xai-grok-config` and `xai-fast-worktree`.
 //!
 //! This fork uses `~/.cook` instead of the official grok client's `~/.grok`
 //! so BYOK config and session data stay isolated from a co-installed grok.com
-//! binary. A one-shot rename migrates an existing `~/.thanh` home.
+//! binary. `~/.grok` and `~/.thanh` are never read, written, or migrated.
 //!
 //! Which function to call:
 //! - [`grok_home`]: the usual choice, a cached, created path to build on.
@@ -28,7 +28,7 @@ use std::sync::OnceLock;
 /// environment at the asking site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GrokHomeSource {
-    /// A non-empty `$GROK_HOME` override.
+    /// A non-empty `$COOK_HOME` or `$GROK_HOME` override.
     EnvOverride,
     /// `<home>/.cook` derived from the home directory.
     HomeDefault,
@@ -55,90 +55,14 @@ fn grok_home_in(home: &Path) -> PathBuf {
         .join(".cook")
 }
 
-/// One-shot migrate `~/.thanh` → `~/.cook` before the default home is created.
+/// `$COOK_HOME`, else `$GROK_HOME`, else `<home>/.cook`. Env values are used
+/// as-is (not canonicalized) so they stay stable and comparable: callers do
+/// literal prefix checks against them, and downstream symlink guards must
+/// still see their original components.
 ///
-/// Skipped when the caller already set an env override (`$GROK_HOME` /
-/// `$COOK_HOME` / `$THANH_HOME`). Dual-read forever is forbidden: if both
-/// exist, prefer `~/.cook` and leave `~/.thanh` alone.
-fn migrate_thanh_home_if_needed(cook_home: &Path) {
-    let Some(parent) = cook_home.parent() else {
-        return;
-    };
-    let thanh_home = parent.join(".thanh");
-
-    if cook_home.exists() {
-        if thanh_home.exists() {
-            static BOTH_HINT: OnceLock<()> = OnceLock::new();
-            let _ = BOTH_HINT.get_or_init(|| {
-                eprintln!("Found both ~/.cook and ~/.thanh; using ~/.cook");
-            });
-        }
-        return;
-    }
-
-    if !thanh_home.exists() {
-        return;
-    }
-
-    match std::fs::rename(&thanh_home, cook_home) {
-        Ok(()) => {
-            tracing::info!(
-                from = %thanh_home.display(),
-                to = %cook_home.display(),
-                "migrated home directory from ~/.thanh to ~/.cook"
-            );
-        }
-        Err(err) => {
-            tracing::warn!(
-                from = %thanh_home.display(),
-                to = %cook_home.display(),
-                %err,
-                "rename ~/.thanh → ~/.cook failed; attempting copy"
-            );
-            if let Err(copy_err) = copy_dir_recursive(&thanh_home, cook_home) {
-                tracing::warn!(
-                    from = %thanh_home.display(),
-                    to = %cook_home.display(),
-                    %copy_err,
-                    "copy ~/.thanh → ~/.cook failed; leaving ~/.thanh in place"
-                );
-            } else {
-                tracing::warn!(
-                    from = %thanh_home.display(),
-                    to = %cook_home.display(),
-                    "copied ~/.thanh → ~/.cook after rename failed; old directory left in place"
-                );
-            }
-        }
-    }
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if ty.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
-}
-
-fn first_nonempty_env(keys: &[&str]) -> Option<std::ffi::OsString> {
-    keys.iter().find_map(|key| {
-        std::env::var_os(key).and_then(|v| if v.is_empty() { None } else { Some(v) })
-    })
-}
-
-/// `$GROK_HOME` / `$COOK_HOME` / `$THANH_HOME` (deprecated) when non-empty,
-/// else `<home>/.cook`. Env values are used as-is (not canonicalized) so they
-/// stay stable and comparable: callers do literal prefix checks against them,
-/// and downstream symlink guards must still see their original components.
+/// An override equal to the real `<home>/.grok` or `<home>/.thanh` is ignored
+/// so a co-installed grok (or the old fork name) cannot redirect this process.
+/// `$THANH_HOME` is not consulted.
 fn resolve_grok_home_from(
     grok_home_env: Option<&OsStr>,
     os_home: Option<&Path>,
@@ -149,6 +73,38 @@ fn resolve_grok_home_from(
     os_home.map(|home| (grok_home_in(home), GrokHomeSource::HomeDefault))
 }
 
+fn is_legacy_user_home(path: &OsStr, os_home: Option<&Path>) -> bool {
+    let Some(home) = os_home else {
+        return false;
+    };
+    let path = Path::new(path);
+    let canonical = dunce::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    path == home.join(".grok")
+        || path == home.join(".thanh")
+        || path == canonical.join(".grok")
+        || path == canonical.join(".thanh")
+}
+
+fn select_override<'a>(
+    cook_home: Option<&'a OsStr>,
+    grok_home: Option<&'a OsStr>,
+    os_home: Option<&Path>,
+) -> Option<&'a OsStr> {
+    [cook_home, grok_home]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty() && !is_legacy_user_home(value, os_home))
+}
+
+fn resolve_grok_home_with_source_from(
+    cook_home: Option<&OsStr>,
+    grok_home: Option<&OsStr>,
+    os_home: Option<&Path>,
+) -> Option<(PathBuf, GrokHomeSource)> {
+    let override_env = select_override(cook_home, grok_home, os_home);
+    resolve_grok_home_from(override_env, os_home)
+}
+
 /// Resolve the grok home from the environment (fresh, no cache); `None` if neither resolves.
 pub fn resolve_grok_home() -> Option<PathBuf> {
     resolve_grok_home_with_source().map(|(home, _)| home)
@@ -156,8 +112,12 @@ pub fn resolve_grok_home() -> Option<PathBuf> {
 
 /// [`resolve_grok_home`] plus the [`GrokHomeSource`] the path came from.
 pub fn resolve_grok_home_with_source() -> Option<(PathBuf, GrokHomeSource)> {
-    let override_env = first_nonempty_env(&["GROK_HOME", "COOK_HOME", "THANH_HOME"]);
-    resolve_grok_home_from(override_env.as_deref(), home_dir().as_deref())
+    let os_home = home_dir();
+    resolve_grok_home_with_source_from(
+        std::env::var_os("COOK_HOME").as_deref(),
+        std::env::var_os("GROK_HOME").as_deref(),
+        os_home.as_deref(),
+    )
 }
 
 /// The default `<home>/.cook`, used when env overrides are unset.
@@ -168,17 +128,12 @@ pub fn default_grok_home() -> PathBuf {
 /// The grok home, created if missing and cached for the process; falls back to
 /// [`default_grok_home`] when neither an env override nor a home resolves.
 ///
-/// When resolving the default home, migrates `~/.thanh` → `~/.cook` once
-/// before `create_dir_all`. Env overrides never trigger migration.
+/// Does not read, copy, or rename `~/.thanh` or `~/.grok`.
 pub fn grok_home() -> PathBuf {
     static GROK_HOME: OnceLock<PathBuf> = OnceLock::new();
     GROK_HOME
         .get_or_init(|| {
-            let (home, source) = resolve_grok_home_with_source()
-                .unwrap_or_else(|| (default_grok_home(), GrokHomeSource::HomeDefault));
-            if source == GrokHomeSource::HomeDefault {
-                migrate_thanh_home_if_needed(&home);
-            }
+            let home = resolve_grok_home().unwrap_or_else(default_grok_home);
             if let Err(err) = std::fs::create_dir_all(&home) {
                 tracing::warn!(path = %home.display(), %err, "failed to create grok home");
             }
@@ -251,34 +206,63 @@ mod tests {
         );
     }
 
-    #[test]
-    fn migrate_renames_thanh_to_cook() {
-        let tmp = tempfile::tempdir().unwrap();
-        let thanh = tmp.path().join(".thanh");
-        let cook = tmp.path().join(".cook");
-        std::fs::create_dir_all(thanh.join("bin")).unwrap();
-        std::fs::write(thanh.join("config.toml"), "ok = true").unwrap();
-
-        migrate_thanh_home_if_needed(&cook);
-
-        assert!(cook.join("config.toml").is_file());
-        assert!(!thanh.exists());
+    fn expected_default(home: &Path) -> PathBuf {
+        dunce::canonicalize(home).unwrap().join(".cook")
     }
 
     #[test]
-    fn migrate_skips_when_cook_already_exists() {
+    fn cook_home_wins_over_grok_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let resolved = resolve_grok_home_with_source_from(
+            Some(OsStr::new("/custom/cook")),
+            Some(OsStr::new("/custom/grok")),
+            Some(tmp.path()),
+        );
+        assert_eq!(
+            resolved,
+            Some((PathBuf::from("/custom/cook"), GrokHomeSource::EnvOverride))
+        );
+    }
+
+    #[test]
+    fn override_pointing_at_real_dot_grok_or_dot_thanh_falls_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let expected = expected_default(tmp.path());
+        let grok = tmp.path().join(".grok");
+        let thanh = tmp.path().join(".thanh");
+        assert_eq!(
+            resolve_grok_home_with_source_from(Some(grok.as_os_str()), None, Some(tmp.path())),
+            Some((expected.clone(), GrokHomeSource::HomeDefault))
+        );
+        assert_eq!(
+            resolve_grok_home_with_source_from(None, Some(thanh.as_os_str()), Some(tmp.path())),
+            Some((expected, GrokHomeSource::HomeDefault))
+        );
+    }
+
+    #[test]
+    fn temp_grok_home_is_used_verbatim() {
+        let tmp = tempfile::tempdir().unwrap();
+        let custom = tmp.path().join("isolated");
+        let resolved =
+            resolve_grok_home_with_source_from(None, Some(custom.as_os_str()), Some(tmp.path()));
+        assert_eq!(resolved, Some((custom, GrokHomeSource::EnvOverride)));
+    }
+
+    #[test]
+    fn unset_overrides_use_dot_cook_and_leave_sibling_thanh() {
         let tmp = tempfile::tempdir().unwrap();
         let thanh = tmp.path().join(".thanh");
-        let cook = tmp.path().join(".cook");
-        std::fs::create_dir_all(&thanh).unwrap();
-        std::fs::create_dir_all(&cook).unwrap();
-        std::fs::write(thanh.join("old.txt"), "old").unwrap();
-        std::fs::write(cook.join("new.txt"), "new").unwrap();
+        std::fs::create_dir_all(thanh.join("bin")).unwrap();
+        std::fs::write(thanh.join("config.toml"), "old = true").unwrap();
 
-        migrate_thanh_home_if_needed(&cook);
+        let resolved = resolve_grok_home_with_source_from(None, None, Some(tmp.path()));
 
-        assert!(thanh.join("old.txt").is_file());
-        assert!(cook.join("new.txt").is_file());
-        assert!(!cook.join("old.txt").exists());
+        assert_eq!(
+            resolved,
+            Some((expected_default(tmp.path()), GrokHomeSource::HomeDefault))
+        );
+        assert!(thanh.join("config.toml").is_file());
+        assert!(!tmp.path().join(".cook").exists());
     }
 }
