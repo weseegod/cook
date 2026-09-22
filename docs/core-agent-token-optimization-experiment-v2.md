@@ -372,6 +372,30 @@ No prompt change in the default template until the matrix passes. The matrix its
 | `dependent_order` | Rust test, no model | An edit of `a` and a read of `a` in the same assistant step run in emission order, not interleaved ahead of the edit |
 | `no_quality_drop` | All three | `three_markers` fidelity matches a serial control on the same files. A missing marker is a fail even if the token count fell |
 
+### Phase 6 results (2026-09-22)
+
+What shipped:
+
+- No new executor, no prompt change. The runner is the existing `FuturesUnordered` dispatch in `execute_tool_calls_batch` (`acp_session_impl/tool_calls.rs`): calls from one assistant response prepare, permission-check, then dispatch concurrently, with per-path file locks (`lock_path_for_args` → one `tokio::sync::Mutex` per written path) so calls touching a written path serialize.
+- One Rust test added: `dependent_edit_then_read_in_one_batch_runs_in_emission_order` (`acp_session_tests/parallel_dispatch_tests.rs`), driving the real batch executor with the real `search_replace` + `read_file` tools against a temp file.
+
+Rust cells (no model):
+
+| Cell | Result | Pass |
+|---|---|---|
+| `dependent_order` | One batch of [edit `a` ("alpha"→"beta"), read `a`] runs in emission order: the read's tool result contains "beta" and not "alpha". The batch goes through the shipped dispatch, lock, and tool runtime — no test double on the execution path | yes |
+
+Matrix, one model (bonsai2-27b per the run's instruction), three files with three distinct markers, headless turn `--allow 'Read(*)' --max-turns 8`:
+
+| Cell | Result | Pass |
+|---|---|---|
+| `three_markers` | The parallel-allowed prompt ("you may issue the three reads together in one response") answers with all three markers (`MARKER-DELTA-7931`, `MARKER-EPSILON-4628`, `MARKER-ZETA-3174`); 3/3 found | yes |
+| `no_quality_drop` | The serial control on the same files answers with the same three markers, 3/3 found — fidelity matches the parallel answer; no marker dropped | yes |
+
+Notes:
+
+- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase6-20260922-144856/` (`run.log`, both `three_markers`/`serial_control` answer files, home `config.toml`).
+
 ## 10. Phase 7 — side calls stay until a matrix says otherwise
 
 Do not turn off dream, memory capture, flush, the laziness classifier, prompt suggestion, or goal roles in this phase. Do not move them to Batch API. Recap, `/btw`, turn summary, and title refresh already share the parent cache key; leave that path.

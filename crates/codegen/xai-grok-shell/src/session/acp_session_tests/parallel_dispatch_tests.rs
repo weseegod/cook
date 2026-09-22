@@ -660,3 +660,96 @@ fn test_skill_discovery_deferred_during_parallel_batch() {
         matches!(at(&conversation, 5), ConversationItem::User(u) if u.synthetic_reason == SyntheticReason::SystemReminder)
     );
 }
+
+/// Phase 6 `dependent_order`: an edit of a path and a read of that same path issued in one
+/// assistant step must run in emission order — the read observes the edit's bytes, never the
+/// pre-edit bytes. The per-path file lock from `execute_tool_calls` is what serializes them.
+#[tokio::test(flavor = "current_thread")]
+async fn dependent_edit_then_read_in_one_batch_runs_in_emission_order() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) =
+                tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor =
+                super::support::create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+            *actor.agent.borrow_mut() =
+                super::support::test_agent_with_tools(super::support::read_and_edit_toolset())
+                    .await;
+            actor
+                .workspace_ops
+                .bind_local_session(
+                    &actor.session_id_string(),
+                    actor.tool_context.cwd.as_path().to_path_buf(),
+                    actor.tool_context.hunk_tracker_handle.clone(),
+                    actor.agent.borrow().tool_bridge().toolset(),
+                    None,
+                )
+                .expect("bind_local_session must succeed");
+
+            let path = std::env::temp_dir().join(format!(
+                "grok-dependent-order-{}-{}.txt",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .expect("clock")
+                    .as_nanos()
+            ));
+            std::fs::write(&path, "alpha").expect("seed file must write");
+            let path_str = path.to_string_lossy().to_string();
+            let edit_id = "call-edit-1";
+            let read_id = "call-read-1";
+            let edit = crate::sampling::types::ToolCallResponse {
+                id: edit_id.to_owned(),
+                kind: "function".to_owned(),
+                function: crate::sampling::types::ToolCallFunction::new(
+                    "search_replace",
+                    serde_json::json!({
+                        "file_path": path_str,
+                        "old_string": "alpha",
+                        "new_string": "beta",
+                    })
+                    .to_string(),
+                ),
+            };
+            let read = crate::sampling::types::ToolCallResponse {
+                id: read_id.to_owned(),
+                kind: "function".to_owned(),
+                function: crate::sampling::types::ToolCallFunction::new(
+                    "read_file",
+                    serde_json::json!({ "target_file": path_str }).to_string(),
+                ),
+            };
+
+            let (_loop, _report) = tokio::time::timeout(
+                std::time::Duration::from_secs(15),
+                actor.execute_tool_calls_reported(vec![edit, read]),
+            )
+            .await
+            .expect("edit+read batch must not hang")
+            .expect("edit+read batch must not error");
+
+            let conversation = actor.chat_state_handle.get_conversation().await;
+            let read_text = conversation
+                .iter()
+                .find_map(|item| match item {
+                    ConversationItem::ToolResult(result) if result.tool_call_id == read_id => {
+                        Some(result.content.to_string())
+                    }
+                    _ => None,
+                })
+                .expect("the read's tool result must be in the conversation");
+            assert!(
+                read_text.contains("beta"),
+                "the read must run after the edit (emission order); got: {read_text}",
+            );
+            assert!(
+                !read_text.contains("alpha"),
+                "the read must not observe the pre-edit bytes; got: {read_text}",
+            );
+            let _ = std::fs::remove_file(&path);
+        })
+        .await;
+}
