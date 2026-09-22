@@ -2,7 +2,7 @@
 
 Date: **2026-09-22**.
 
-Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-and-token-optimization.md).
+Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-and-token-optimization.md). Source-checked comparison with Pi, and the list of what this plan does not copy: [core-agent-vs-pi-coding-agent.md](core-agent-vs-pi-coding-agent.md). Pi is pinned there at `1a584a7a56eb5e7b4ff8ccbd46430f1533282eed`.
 
 What v1 already shipped and measured: [core-agent-token-optimization-experiment.md](core-agent-token-optimization-experiment.md).
 
@@ -105,7 +105,7 @@ Implementation, default still off:
 - Carry provenance from tool execution into the request-copy pruner: exit status, whether the result is a failed check, whether a process is still live, and whether the result is the edit the assistant has not finished with. Do not classify this by scanning free-form log text.
 - The active round stays raw, as it does now, even when one parallel batch exceeds the character budget.
 - A pinned result stays raw even when it is outside the round window. If the pin plus the active round exceed the character budget, keep the pins and the active round, and say so in the placeholder for what was dropped. Do not drop a pin to honor the budget.
-- Files: `crates/codegen/xai-chat-state/src/actor/request_builder.rs`, the pruning config in `crates/codegen/xai-chat-state/src/types.rs`, and the tool result that already knows exit status. No change to canonical history. No new public tool name.
+- Files: `crates/codegen/xai-chat-state/src/actor/request_builder.rs`, the pruning config in `crates/codegen/xai-chat-state/src/types.rs`, and the tool result that already knows exit status. No change to canonical history. No new public tool name. An omission stays out of canonical history. This phase does not add an audit entry for it.
 
 Matrix. Quality cells only. The token columns are recorded and do not decide the commit.
 
@@ -124,7 +124,8 @@ Shorten output when the tool produces it. Do not rewrite an earlier byte on the 
 
 Implementation, flag default off:
 
-- Bash already caps model-visible output and keeps a full log path. Read file can still return on the order of 25,000 estimated tokens. Add an opt-in generation cap for read-file output that keeps a head, a tail, the byte length, and a path the model can read again. The middle of a log is not silently discarded without that path.
+- Bash already caps model-visible output and keeps a full log path. Leave that shape: tail plus path. Do not copy another harness’s 50KB or 2,000-line numbers.
+- Read file can still return on the order of 25,000 estimated tokens. The 1,000-line cap already keeps the head and names the next offset, the total line count, and the range shown (`read_file/mod.rs`). An opt-in generation cap, if this phase adds one, reuses that continuation marker. It does not add a head-and-tail truncation for reads. The middle is recovered by reading the named offset, not by a second truncation style. Do not lower `READ_FILE_MAX_TOKENS`.
 - The active tool result is never capped below the evidence the model has not yet seen. Cap the *next* generation. Request-time pruning still must not eat the active round. v1 already states that.
 - Files: `crates/codegen/xai-grok-tools/src/implementations/grok_build/read_file/mod.rs`, the bash truncate helper only if the existing cap cannot point at the full log, and a Cook config flag next to the existing pruning settings. Default off, so a session that does not set the flag is byte-identical to today.
 
@@ -133,8 +134,9 @@ Matrix:
 | Cell | Models | Pass |
 |---|---|---|
 | `cap_off_identical` | Rust test, no model | Flag absent or zero. Read output matches the current helper |
-| `cap_keeps_ends_and_path` | Rust test, no model | Over-cap read contains the first line, the last line, the omission notice, and a path. Call id unchanged |
-| `middle_error_recoverable` | All three, endpoint | A file whose only error line sits in the middle. The model-visible body may omit it. The answer must still report that error after the prompt tells the model to open the saved path. Guessing “no error” is a fail |
+| `cap_names_next_offset` | Rust test, no model | Over-cap read keeps the first line, names the next offset, the total line count, and the shown range. Call id unchanged. It does not need a tail or a saved-file path |
+| `bash_keeps_tail_and_path` | Rust test, no model, only if this phase edits the bash helper | Over-cap bash output keeps the tail and a path to the full log. Skip the cell when bash is untouched |
+| `middle_error_recoverable` | All three, endpoint | A file whose only error line sits past the notice’s shown range. The model-visible body may omit it. The answer must still report that error after the prompt tells the model to read the named offset. Guessing “no error” is a fail |
 | `prefix_stable` | All three, endpoint | Two identical follow-up requests after a capped tool result. `cache_warm` cached tokens, when reported, are greater than zero. A third request that rewrites an earlier result (the phase 2 sliding behavior, simulated in the prompt) is `cache_bust` and must show fewer cached tokens when both numbers exist |
 | `live_spark_append` | spark25-4b only, live script, flag on in that home only | Both markers. Prune-event count may be zero, because this phase should not need a mid-history rewrite. Fidelity still required |
 
@@ -147,7 +149,7 @@ The ledger already stores cache reads, and `usage.json` already has `purposeUsag
 Implementation:
 
 - Where the provider usage includes cache reads inside input, the persisted report gains `uncachedInputTokens = input - cacheRead` for that call, plus a boolean `cacheFieldPresent`.
-- Where the server omits the field, `cacheFieldPresent` is false and `uncachedInputTokens` is absent. Do not store 0.
+- Where the server omits the field, `cacheFieldPresent` is false and `uncachedInputTokens` is absent. Do not store 0. A latest-turn cache-hit footer is not part of this phase. The report stays the uncached remainder, and that remainder is absent when the server did not report the field.
 - No change to what is sent to the model.
 - Files: `crates/codegen/xai-chat-state/src/usage.rs`, `crates/codegen/xai-grok-shell/src/session/usage_file.rs`, and the existing usage-file tests.
 
@@ -246,6 +248,11 @@ Disabling a side call is out of scope until a matrix with the call forced off ma
 - A mega-tool that exists to reduce the tool count.
 - An LLM summary after every tool result.
 - Treating the v1 97.4% fixture drop, or the v1 live 27% prompt-token direction, as a default-on result. The live arm’s own billed input spanned 154,928 to 290,339 on one task.
+- A cache-warm request (`maxTokens: 1` before a TTL). There is no per-model TTL here, and phase 4 has not reported hit and miss. The source comparison is [core-agent-vs-pi-coding-agent.md](core-agent-vs-pi-coding-agent.md).
+- Turning prompt-cache writes off on the compaction request. Cook keeps the parent session id and the tool list so the summarizer prefix stays aligned (`session_compact.rs`). Another harness disables cache writes because its summary is a one-shot serialized transcript. Copying that would fight this prefix.
+- Copying another harness’s tool-output numbers (50KB, 2,000 lines) or cutting the built-in catalog down to four tools.
+- Rejecting a length-capped compaction summary. Cook labels that outcome `Truncated` and still completes. Changing that needs its own matrix. It is not a v2 phase. A truncated summary is not a clean checkpoint when a later matrix scores one.
+- A `context_edit` store. Phase 2 already leaves canonical history unchanged and does not add an audit entry. An omission record, if one is added later, is an append. It is not this plan.
 
 ## 12. Commit rule
 

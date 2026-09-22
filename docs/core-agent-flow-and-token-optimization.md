@@ -132,9 +132,15 @@ Completion records conversation/events, flushes storage, records usage, and send
 
 Single-pass compaction prepares history, a summary prompt, model/tools, and a budget, then calls [generate_session_compact](../crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs). The `compaction_verbatim_input` feature defaults to enabled in the registry: it prefers verbatim history, while fitting/retry can fall back to a shortened input. Do not assume the summarizer receives only a few lines or no tool schema. The code reserves 32,768 tokens for the compaction prompt/summary/reasoning; this is a compaction reserve, not the general output reserve for every main-loop request.
 
+The summarizer keeps the parent session id and the tool list on purpose. [session_compact.rs](../crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs) says dropping those tools would shift the prefix and force a full prefill. That is the opposite of a one-shot summary that disables prompt-cache writes. Do not turn cache writes off on this request to imitate another harness: the prefix alignment is the saving.
+
 When two-pass is enabled, pass 1 snapshots a prefix, summarizes it in the background, and stores NOTE₁ with a fingerprint, model, and boundary. When compaction is needed, pass 2 uses the note and tail if the prefix is still valid; if pass 1 is still running, it can await the task handle. A changed prefix or model invalidates the note. Fallback branches retain the single-pass path.
 
-After compaction, the runtime replaces active history with the compact result and required state, creates artifacts according to the selected mode, and rebuilds reminders for tasks/TODOs, rules, skills, MCP, and memory. A pre-compaction memory flush runs only when the policy and memory mode allow it; it is not mandatory for every compaction. Canonical history/artifacts and model-visible history serve different purposes: shortening a request does not delete source evidence.
+After compaction, the runtime replaces active history with the compact result and required state, creates artifacts according to the selected mode, and rebuilds reminders for tasks/TODOs, rules, skills, MCP, and memory. A pre-compaction memory flush runs only when the policy and memory mode allow it; it is not mandatory for every compaction. Canonical history/artifacts and model-visible history serve different purposes: shortening a request does not delete source evidence. The request-copy pruner does not persist the pruned copy. A compaction request does: `compaction_requests/{request_id}.json` under the session directory.
+
+What compaction keeps is not the pruner’s last three user turns. `keep_last_n_turns` (default 3) is request-copy pruning in [request_builder.rs](../crates/codegen/xai-chat-state/src/actor/request_builder.rs). Two-pass compaction splits at about 95% of token weight ([two_pass.rs](../crates/codegen/xai-grok-shell/src/session/two_pass.rs), `TWO_PASS_DEFAULT_SPLIT_FRACTION`) and does not sever a tool pair. [CompactionStateContext](../crates/codegen/xai-chat-state/src/compaction_utils.rs) then carries messages since the last anchor, edited paths, running tasks, MCP servers, and todos.
+
+A summary that hits its output cap is labeled `CompactionOutcome::Truncated` in [compaction.rs](../crates/codegen/xai-grok-shell/src/session/compaction.rs), and `compaction.complete` still runs. Do not score that outcome as a clean checkpoint. Rejecting it outright is not a change in this document; it would need its own quality matrix. Another harness refuses to checkpoint a length-stopped summary. That difference is recorded here so the two are not treated as the same result.
 
 ## 4. Existing budgets and token-saving mechanisms
 
@@ -144,7 +150,7 @@ After compaction, the runtime replaces active history with the compact result an
 | Tool-result age | Counts backward through `ConversationItem::User`; keeps the last 3 turns | A prompt with many tool rounds can retain output for a long time; synthetic users affect counting |
 | Soft trim | Old result over 4,000 characters → 1,500-character head + 1,500-character tail | Smaller context, but an error in the middle of a log may disappear |
 | Hard clear | Age ≥10 turns → placeholder | Retained history also has eager pruning when a new user turn arrives |
-| Read file | Cap of 25,000 **estimated** tokens and `MAX_LINES_READ = 1,000`, plus output-byte settings | One large read can materially grow context; over-cap reads can suggest narrower ranges |
+| Read file | Cap of 25,000 **estimated** tokens (`READ_FILE_MAX_TOKENS`) and `MAX_LINES_READ = 1,000` | The line cap already names the next offset, the total line count, and the range shown. The token-cap refusal (`FileTooLarge`) only says to use offset and limit; it does not compute the next offset. One large read can still grow context |
 | Bash | Default model output is 20,000 characters; full logs have a path when truncated | Head/tail truncation and offload already exist |
 | Skill catalog | Default fraction is 50% of context; fallback is a 400,000-character budget; each description + when-to-use is capped at 400 bytes | There is a budget, but the ceiling is wide; not every session uses it all |
 | Skill template | Non-Cursor XML is budgeted; Cursor compatibility is verbatim | Audit by profile rather than generalizing from one template |
@@ -251,6 +257,10 @@ For profiling, prefer counts, hashes, and provenance; do not log full prompts or
 
 The next code change is an append-only cap at tool-result generation, behind a flag that defaults off. Bytes already appended stay byte-identical, so the prefix a provider can cache does not move. The request-copy step-aware arm already implemented on this branch rewrites older results into placeholders as the round window slides. It stays opt-in. Section 8.4’s live comparison cut tool-result tokens per request and, on the same runs, roughly doubled the share that was not reported as a cache read. That is why generation-time caps come before more sliding rewrites. A sliding rewrite, if it remains, should fire once at a coarse boundary (about to compact), not on every sample.
 
+Name the rule this paragraph is already following. Provider context grows at the tail. The one planned cache break on the hot path is compaction. The step-aware arm is not that exception: it stays opt-in and off by default. Do not import another runtime’s lane or checkpoint deferral to enforce the rule. If a later change omits a tool result, the omission is an appended audit record, not an edit of canonical history, and it is not part of the v2 phases.
+
+A read cap keeps the head and names the next offset, the total line count, and the range shown, which is what the line cap in [read_file](../crates/codegen/xai-grok-tools/src/implementations/grok_build/read_file/mod.rs) already does. Do not add a head-and-tail shape for reads. Bash already keeps the tail and a path to the full log. Do not copy another harness’s 50KB or 2,000-line caps, and do not lower `READ_FILE_MAX_TOKENS` to match them. The token-cap refusal still does not compute a next offset; a generation cap, if one is added, reuses the existing continuation marker instead of inventing a second notice.
+
 Extend `PruningConfig` with metadata such as `tool_round`, `last_referenced`, artifact handle, file content hash, and evidence type. Keep `User` turn age for compatibility, then add an upper bound on live tool-result tokens **within one turn**. Pins for the latest failure, a live process, and the edit in progress are required before a broader omission rollout. Those pins come from tool provenance, not from a model reading the log.
 
 Starting values for a cost-conscious coding profile:
@@ -289,6 +299,8 @@ Reserve values depend on the backend: reasoning/output semantics and model limit
 The preferred order is: remove redundant output with an artifact → remove stale/duplicate reads → shrink optional catalogs → compact stable history. If mandatory rules plus the current input do not fit, report the problem and use a valid offload; do not silently cut user requirements.
 
 Proposed summary schema: objective/constraints, repository state and changed files, active decisions, checks and results, unresolved failures, live task/process IDs, artifact references, and next steps. Keep literal evidence for important commands, paths, and errors; a summary must not turn “planned” into “completed.” Reuse `CompactionStateContext` and segments, extending the schema at the appropriate layer.
+
+File lists in that schema come from tool provenance and are merged with the lists already stored on the previous summary. The model is not asked to remember paths. `CompactionStateContext` already carries edited paths, running tasks, MCP servers, and todos; a read-file list is the gap, not a new phase. Do not disable the compaction prefix alignment in section 3.8. A length-capped summary is not a clean checkpoint for the quality gate, and this section does not change the code that still completes one.
 
 Benchmark two-pass on and off with the same task/model, measuring task success first, then total cost and p95 compaction stall. Do not disable speculative prefire, or `compaction_verbatim_input`, only to spend fewer tokens. Both default on in the feature registry. Turn one off only after an A/B shows the same tasks still complete. The existing experiment flag is `[features] two_pass_compaction = false`, but record the effective resolved value because policy layers can override it.
 
@@ -437,11 +449,21 @@ A cache-hot MiMo prefix at $0.0036 per 1M is already far cheaper than a cache mi
 
 Do not replace the actor runtime with another framework merely to reduce tokens: process layout does not shorten prompts. Do not increase the context window as the default cost solution; long history can still increase cumulative input. Do not enable multi-agent orchestration or an LLM router for every task. Do not run an LLM summarizer after every tool call; first use structured truncation and artifact retrieval.
 
-Do not lower output/reasoning caps arbitrarily: continuation, retries, and rework can increase. Do not remove required AGENTS/rules/constraints to hit a token number. Do not compact repeatedly at a very low threshold without accounting for cache rebuild and information loss. Do not merge every tool into a vague “mega-tool” only to reduce the tool-name count. Do not put the coding loop on a provider Batch API. Do not retune the per-model context window from this document.
+Do not lower output/reasoning caps arbitrarily: continuation, retries, and rework can increase. Do not remove required AGENTS/rules/constraints to hit a token number. Do not compact repeatedly at a very low threshold without accounting for cache rebuild and information loss. Do not merge every tool into a vague “mega-tool” only to reduce the tool-name count. Do not put the coding loop on a provider Batch API. Do not retune the per-model context window from this document. Section 11 lists the further refusals that came from comparing this flow with the Pi coding agent.
 
 ## 11. External references and limits of the conclusion
 
 The principles of sufficient context, just-in-time retrieval, and structured notes align with [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents). This is design guidance, not a Cook benchmark.
+
+A source-checked comparison with the Pi coding agent (`earendil-works/pi` at `1a584a7a56eb5e7b4ff8ccbd46430f1533282eed`) is in [core-agent-vs-pi-coding-agent.md](core-agent-vs-pi-coding-agent.md). Take the named append-only rule, the read continuation marker, and file lists merged from tool provenance. Do not take the rest:
+
+- Do not cut the catalog to four tools, and do not drop MCP, subagents, or goals to save tokens.
+- Do not set the compaction request to skip prompt-cache writes. Section 3.8 keeps the parent session id and the tool list so the summarizer prefix stays aligned.
+- Do not add a cache-warm call that resends the last request with a one-token completion before a TTL. This runtime has no per-model TTL, and hit versus miss is not reported yet.
+- Do not fill a missing usage or a missing cache field with zero.
+- Do not turn two-pass prefire off because another harness compacts only at `contextWindow − reserveTokens`. That threshold is not a background pass.
+- Do not reject a length-capped summary in this plan. Record it as not a clean checkpoint. A change needs its own matrix.
+- Do not port a lane runtime, and do not add a `context_edit` store in the v2 phases. An omission, if one is persisted later, is an append. It does not rewrite canonical history.
 
 Keeping tool outputs short and clear and evaluating with real tasks are discussed in [Writing effective tools for AI agents](https://www.anthropic.com/engineering/writing-tools-for-agents). Lazy tool discovery is illustrated in [Introducing advanced tool use](https://www.anthropic.com/engineering/advanced-tool-use); Cook already has MCP discovery, so the proposal focuses on catalog budget and remaining built-ins. Vendor-reported savings are not projections for Cook.
 
