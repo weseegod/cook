@@ -1156,6 +1156,15 @@ impl From<&str> for ConversationGroupId {
     }
 }
 
+/// Provider-specific normalization applied before the standard Chat Completions transform.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatCompletionsAdapter {
+    #[default]
+    Standard,
+    XiaomiMimo,
+}
+
 /// Sampling client configuration (API key excluded; that stays in the client).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SamplingConfig {
@@ -1176,6 +1185,9 @@ pub struct SamplingConfig {
     /// Which API backend to use for this model
     #[serde(default)]
     pub api_backend: ApiBackend,
+    /// Provider-specific normalization for non-standard Chat Completions streams.
+    #[serde(default)]
+    pub chat_completions_adapter: ChatCompletionsAdapter,
     /// Extra headers to send with requests (e.g., for bring-your-own-key (BYOK) scenarios).
     #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
     pub extra_headers: indexmap::IndexMap<String, String>,
@@ -1215,6 +1227,7 @@ impl Default for SamplingConfig {
             max_retries: None,
             rate_limit_retry_threshold: None,
             api_backend: ApiBackend::default(),
+            chat_completions_adapter: ChatCompletionsAdapter::default(),
             extra_headers: indexmap::IndexMap::new(),
             conversation_group_id: None,
             query_params: indexmap::IndexMap::new(),

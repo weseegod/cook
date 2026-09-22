@@ -3699,6 +3699,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 top_p: m.top_p,
                 max_completion_tokens: m.max_completion_tokens,
                 api_backend: m.api_backend,
+                chat_completions_adapter: Default::default(),
                 auth_scheme: None,
                 agent_type: m.agent_type,
                 inference_idle_timeout_secs: m.inference_idle_timeout_secs,
@@ -3765,6 +3766,9 @@ pub struct ModelEntryConfig {
     /// Values: "chat_completions" (default), "responses"
     #[serde(default)]
     pub api_backend: ApiBackend,
+    /// Compatibility normalization for non-standard Chat Completions streams.
+    #[serde(default)]
+    pub chat_completions_adapter: crate::sampling::ChatCompletionsAdapter,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_scheme: Option<AuthScheme>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -3873,6 +3877,7 @@ impl Default for ModelEntryConfig {
             api_key: None,
             env_key: None,
             api_backend: ApiBackend::default(),
+            chat_completions_adapter: Default::default(),
             auth_scheme: None,
             reasoning_effort: None,
             supports_reasoning_effort: false,
@@ -3934,6 +3939,7 @@ pub struct ConfigModelOverride {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: Option<ApiBackend>,
+    pub chat_completions_adapter: Option<crate::sampling::ChatCompletionsAdapter>,
     #[serde(default)]
     pub extra_headers: IndexMap<String, String>,
     #[serde(default)]
@@ -4012,6 +4018,9 @@ impl ConfigModelOverride {
         }
         if let Some(ref v) = self.api_backend {
             entry.info.api_backend = v.clone();
+        }
+        if let Some(v) = self.chat_completions_adapter {
+            entry.info.chat_completions_adapter = v;
         }
         if !self.extra_headers.is_empty() {
             entry.info.extra_headers = self.extra_headers.clone();
@@ -4125,6 +4134,8 @@ pub struct ModelInfo {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: ApiBackend,
+    #[serde(default)]
+    pub chat_completions_adapter: crate::sampling::ChatCompletionsAdapter,
     pub auth_scheme: AuthScheme,
     pub extra_headers: IndexMap<String, String>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
@@ -4215,6 +4226,7 @@ impl ModelInfo {
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::default(),
+            chat_completions_adapter: Default::default(),
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
             query_params: IndexMap::new(),
@@ -4257,6 +4269,7 @@ impl ModelInfo {
             temperature: entry.temperature,
             top_p: entry.top_p,
             api_backend: entry.api_backend.clone(),
+            chat_completions_adapter: entry.chat_completions_adapter,
             auth_scheme: entry.auth_scheme.unwrap_or_default(),
             extra_headers: entry.extra_headers.clone(),
             query_params: IndexMap::new(),
@@ -4864,18 +4877,10 @@ pub struct ProviderContext {
     pub primary_base_url: Option<String>,
 }
 impl ProviderContext {
-    pub fn from_catalog(
-        models: &IndexMap<String, ModelEntry>,
-        primary_model_id: &str,
-    ) -> Self {
-        let selectable: Vec<&ModelEntry> = models
-            .values()
-            .filter(|e| e.user_selectable)
-            .collect();
+    pub fn from_catalog(models: &IndexMap<String, ModelEntry>, primary_model_id: &str) -> Self {
+        let selectable: Vec<&ModelEntry> = models.values().filter(|e| e.user_selectable).collect();
         let primary = find_model_by_id(models, primary_model_id);
-        let primary_is_byok = primary
-            .map(|e| e.has_own_credentials())
-            .unwrap_or(false);
+        let primary_is_byok = primary.map(|e| e.has_own_credentials()).unwrap_or(false);
         let primary_base_url = primary.map(|e| e.base_url.clone());
         let mut base_urls = std::collections::HashSet::new();
         for entry in &selectable {
@@ -5015,6 +5020,7 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 temperature: None,
                 top_p: None,
                 api_backend: ApiBackend::Responses,
+                chat_completions_adapter: Default::default(),
                 auth_scheme: Default::default(),
                 extra_headers: IndexMap::new(),
                 query_params: IndexMap::new(),
@@ -5114,8 +5120,7 @@ pub fn goal_role_model_is_selectable(
     pair: &crate::util::config::GoalRoleModel,
     models: &IndexMap<String, ModelEntry>,
 ) -> bool {
-    find_model_by_id(models, &pair.model)
-        .is_some_and(|e| e.info.user_selectable)
+    find_model_by_id(models, &pair.model).is_some_and(|e| e.info.user_selectable)
 }
 /// Resolve an auxiliary model slug, falling back to the active session config
 /// without forcing the slug onto the session endpoint (safe for BYOK routes).
@@ -5211,6 +5216,7 @@ pub(crate) fn sampling_config_for_model(
         temperature,
         top_p,
         api_backend,
+        chat_completions_adapter: info.chat_completions_adapter,
         auth_scheme: credentials.auth_scheme,
         request_compression,
         extra_headers,
@@ -5281,6 +5287,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::Responses,
+            chat_completions_adapter: Default::default(),
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
             query_params: IndexMap::new(),

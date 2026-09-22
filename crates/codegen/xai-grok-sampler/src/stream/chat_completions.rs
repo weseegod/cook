@@ -14,8 +14,10 @@ use xai_grok_sampling_types::{
     ResponseModelMetadata, SamplingError, StopReason, TokenUsage, ToolCall,
 };
 
+use crate::ChatCompletionsAdapter;
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
+use crate::stream::xiaomi_chat::{RecoveredToolCall, XiaomiMimoAdapter};
 use crate::types::RequestId;
 
 type ToolCallParts = (String, String, String);
@@ -24,13 +26,13 @@ type ToolCallParts = (String, String, String);
 /// wire `index` at zero for a later call in the same response. The provider call id is the stable
 /// identity; wire indices are only routing hints for argument-only continuation chunks.
 #[derive(Default)]
-struct ToolCallAccumulator {
+struct XiaomiToolCallAccumulator {
     calls: BTreeMap<u32, ToolCallParts>,
     active_by_wire_index: BTreeMap<u32, u32>,
     next_logical_index: u64,
 }
 
-impl ToolCallAccumulator {
+impl XiaomiToolCallAccumulator {
     fn resolve_logical_index(&mut self, wire_index: u32, incoming_id: Option<&str>) -> (u32, bool) {
         if let Some(&logical_index) = self.active_by_wire_index.get(&wire_index) {
             let current_id = self
@@ -75,6 +77,57 @@ impl ToolCallAccumulator {
     }
 }
 
+fn parts_into_tool_call((id, name, arguments): ToolCallParts) -> ToolCall {
+    ToolCall {
+        id: std::sync::Arc::<str>::from(id),
+        name,
+        arguments: std::sync::Arc::<str>::from(arguments),
+    }
+}
+
+fn select_xiaomi_calls(
+    request_id: &RequestId,
+    structured: Vec<ToolCallParts>,
+    recovered: Vec<RecoveredToolCall>,
+) -> Vec<ToolCall> {
+    if recovered.is_empty() {
+        return structured.into_iter().map(parts_into_tool_call).collect();
+    }
+
+    let mut structured = structured.into_iter().map(Some).collect::<Vec<_>>();
+    recovered
+        .into_iter()
+        .enumerate()
+        .map(|(index, recovered)| {
+            let matching = structured.iter_mut().find(|slot| {
+                slot.as_ref().is_some_and(|(_, name, arguments)| {
+                    name == &recovered.name && json_arguments_equal(arguments, &recovered.arguments)
+                })
+            });
+            let id = matching
+                .and_then(Option::take)
+                .map(|(id, _, _)| id)
+                .filter(|id| !id.is_empty())
+                .unwrap_or_else(|| format!("xiaomi_xml_{request_id}_{index}"));
+            ToolCall {
+                id: std::sync::Arc::<str>::from(id),
+                name: recovered.name,
+                arguments: std::sync::Arc::<str>::from(recovered.arguments),
+            }
+        })
+        .collect()
+}
+
+fn json_arguments_equal(left: &str, right: &str) -> bool {
+    match (
+        serde_json::from_str::<serde_json::Value>(left),
+        serde_json::from_str::<serde_json::Value>(right),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 /// The output stream emits exactly one terminal event per request.
 /// Callers must not consume past the terminal event (the implementation `return`s after yielding it).
 pub fn stream_chat_completions<'a>(
@@ -82,6 +135,27 @@ pub fn stream_chat_completions<'a>(
     model_metadata: Option<ResponseModelMetadata>,
     request_id: RequestId,
     idle_timeout: Duration,
+) -> impl Stream<Item = SamplingEvent> + Send + 'a {
+    stream_chat_completions_with_adapter(
+        raw_stream,
+        model_metadata,
+        request_id,
+        idle_timeout,
+        ChatCompletionsAdapter::Standard,
+        Vec::new(),
+    )
+}
+
+/// Chat Completions transform with an explicitly selected provider compatibility adapter.
+/// The standard path remains strict OpenAI wire behavior; only the Xiaomi strategy interprets
+/// MiMo's literal XML tool envelopes and reused indices.
+pub fn stream_chat_completions_with_adapter<'a>(
+    raw_stream: BoxStream<'a, Result<ChatCompletionChunk, SamplingError>>,
+    model_metadata: Option<ResponseModelMetadata>,
+    request_id: RequestId,
+    idle_timeout: Duration,
+    adapter: ChatCompletionsAdapter,
+    allowed_tool_names: Vec<String>,
 ) -> impl Stream<Item = SamplingEvent> + Send + 'a {
     async_stream::stream! {
         let decode_region = crate::span_timing::Region::from_span(tracing::info_span!(
@@ -119,10 +193,12 @@ pub fn stream_chat_completions<'a>(
 
         let mut content_acc = String::new();
         let mut reasoning_acc = String::new();
-        // The first chunk for a logical call carries the id and name and starts the arguments
-        // buffer; later chunks append to it. Some OpenAI-compatible providers reuse a wire index
-        // for a new id, so the accumulator normalizes wire indices into logical indices.
-        let mut tool_call_acc = ToolCallAccumulator::default();
+        // Standard OpenAI-compatible calls are correlated only by their specified wire index.
+        // Xiaomi's index-reuse workaround is isolated behind its selected adapter.
+        let mut standard_tool_calls: BTreeMap<u32, ToolCallParts> = BTreeMap::new();
+        let mut xiaomi_tool_calls = XiaomiToolCallAccumulator::default();
+        let mut xiaomi_adapter = (adapter == ChatCompletionsAdapter::XiaomiMimo)
+            .then(|| XiaomiMimoAdapter::new(allowed_tool_names));
 
         // Index counter spanning text and reasoning chunks (matches the shell's chunk_index used for notification correlation)
         let mut chunk_index: u64 = 0;
@@ -136,7 +212,7 @@ pub fn stream_chat_completions<'a>(
         let mut last_content_chunk_at = Instant::now();
 
         let mut stream = raw_stream;
-        loop {
+        'stream: loop {
             let next = match tokio::time::timeout(idle_timeout, stream.next()).await {
                 Ok(Some(next)) => next,
                 Ok(None) => break, // stream ended normally
@@ -206,15 +282,38 @@ pub fn stream_chat_completions<'a>(
                     }
                     chunk_has_content = true;
                     chunk_timestamps.push(Instant::now());
-                    chunk_index += 1;
-                    message_chunk_count += 1;
-                    content_acc.push_str(&text);
-                    yield SamplingEvent::ChannelToken {
-                        request_id: request_id.clone(),
-                        channel: SamplingChannel::Text,
-                        text,
-                        chunk_index,
-                    };
+                    if let Some(adapter) = xiaomi_adapter.as_mut() {
+                        let visible = adapter.push_text(&text);
+                        if !visible.is_empty() {
+                            chunk_index += 1;
+                            message_chunk_count += 1;
+                            content_acc.push_str(&visible);
+                            yield SamplingEvent::ChannelToken {
+                                request_id: request_id.clone(),
+                                channel: SamplingChannel::Text,
+                                text: visible,
+                                chunk_index,
+                            };
+                        }
+                        if adapter.should_salvage() {
+                            tracing::warn!(
+                                request_id = %request_id,
+                                "xiaomi adapter stopped a repeated literal tool-call envelope"
+                            );
+                            finish_reason = Some(StopReason::ToolCalls);
+                            break 'stream;
+                        }
+                    } else {
+                        chunk_index += 1;
+                        message_chunk_count += 1;
+                        content_acc.push_str(&text);
+                        yield SamplingEvent::ChannelToken {
+                            request_id: request_id.clone(),
+                            channel: SamplingChannel::Text,
+                            text,
+                            chunk_index,
+                        };
+                    }
                 }
 
                 if let Some(thought) = delta.reasoning_content
@@ -239,22 +338,27 @@ pub fn stream_chat_completions<'a>(
 
                 for tc_delta in delta.tool_calls.into_iter() {
                     chunk_has_content = true;
-
                     let wire_index = tc_delta.index;
-                    let (logical_index, remapped) = tool_call_acc
-                        .resolve_logical_index(wire_index, tc_delta.id.as_deref());
+                    let (logical_index, entry, remapped) = if xiaomi_adapter.is_some() {
+                        let (logical_index, remapped) = xiaomi_tool_calls
+                            .resolve_logical_index(wire_index, tc_delta.id.as_deref());
+                        let entry = xiaomi_tool_calls
+                            .calls
+                            .get_mut(&logical_index)
+                            .expect("resolved logical tool-call index must exist");
+                        (logical_index, entry, remapped)
+                    } else {
+                        let entry = standard_tool_calls.entry(wire_index).or_default();
+                        (wire_index, entry, false)
+                    };
                     if remapped {
                         tracing::warn!(
                             request_id = %request_id,
                             wire_index,
                             logical_index,
-                            "chat completions provider reused a tool-call index for a new id; remapping the call"
+                            "xiaomi adapter remapped a reused tool-call index"
                         );
                     }
-                    let entry = tool_call_acc
-                        .calls
-                        .get_mut(&logical_index)
-                        .expect("resolved logical tool-call index must exist");
 
                     let mut id_for_event: Option<String> = None;
                     let mut name_for_event: Option<String> = None;
@@ -275,13 +379,15 @@ pub fn stream_chat_completions<'a>(
                         }
                     }
 
-                    yield SamplingEvent::ToolCallDelta {
-                        request_id: request_id.clone(),
-                        tool_index: logical_index,
-                        id: id_for_event,
-                        name: name_for_event,
-                        arguments_delta: args_for_event,
-                    };
+                    if xiaomi_adapter.is_none() {
+                        yield SamplingEvent::ToolCallDelta {
+                            request_id: request_id.clone(),
+                            tool_index: logical_index,
+                            id: id_for_event,
+                            name: name_for_event,
+                            arguments_delta: args_for_event,
+                        };
+                    }
                 }
             }
 
@@ -300,14 +406,47 @@ pub fn stream_chat_completions<'a>(
         }
 
         // ── Build the final response ─────────────────────────────────
-        let tool_calls: Vec<ToolCall> = tool_call_acc.calls
-            .into_values()
-            .map(|(id, name, arguments)| ToolCall {
-                id: std::sync::Arc::<str>::from(id),
-                name,
-                arguments: std::sync::Arc::<str>::from(arguments),
-            })
-            .collect();
+        let tool_calls: Vec<ToolCall> = if let Some(adapter) = xiaomi_adapter {
+            let structured: Vec<ToolCallParts> = xiaomi_tool_calls.calls.into_values().collect();
+            let (tail, recovered, runaway) = adapter.finish();
+            if !tail.is_empty() {
+                chunk_index += 1;
+                message_chunk_count += 1;
+                content_acc.push_str(&tail);
+                yield SamplingEvent::ChannelToken {
+                    request_id: request_id.clone(),
+                    channel: SamplingChannel::Text,
+                    text: tail,
+                    chunk_index,
+                };
+            }
+            let recovered_from_xml = !recovered.is_empty();
+            let selected = select_xiaomi_calls(&request_id, structured, recovered);
+            if !selected.is_empty() {
+                tracing::warn!(
+                    request_id = %request_id,
+                    recovered_from_xml,
+                    runaway,
+                    tool_call_count = selected.len(),
+                    "xiaomi compatibility adapter selected tool calls"
+                );
+                for (tool_index, call) in selected.iter().enumerate() {
+                    yield SamplingEvent::ToolCallDelta {
+                        request_id: request_id.clone(),
+                        tool_index: u32::try_from(tool_index).expect("tool-call count exceeds u32"),
+                        id: Some(call.id.to_string()),
+                        name: Some(call.name.clone()),
+                        arguments_delta: Some(call.arguments.to_string()),
+                    };
+                }
+            }
+            selected
+        } else {
+            standard_tool_calls
+                .into_values()
+                .map(parts_into_tool_call)
+                .collect()
+        };
 
         // Tool calls override the stop reason, even an explicit `length`.
         // NOTE: the Messages backend has the opposite precedence: Length wins there
@@ -751,7 +890,7 @@ mod tests {
     /// while reusing wire index zero. The calls must remain separate instead of inheriting one
     /// another's argument fragments.
     #[tokio::test]
-    async fn reused_wire_index_with_new_id_starts_a_new_logical_tool_call() {
+    async fn xiaomi_adapter_remaps_reused_wire_indices_without_affecting_standard_path() {
         let chunks = vec![
             make_chunk(vec![ChatChunkDelta {
                 tool_calls: vec![ChunkToolCallDelta {
@@ -802,11 +941,13 @@ mod tests {
                 ..Default::default()
             }]),
         ];
-        let events = collect(stream_chat_completions(
+        let events = collect(stream_chat_completions_with_adapter(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
+            ChatCompletionsAdapter::XiaomiMimo,
+            vec!["get_task_output".into(), "todo_write".into()],
         ))
         .await;
 
@@ -817,7 +958,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(logical_indices, vec![0, 0, 1, 1]);
+        assert_eq!(logical_indices, vec![0, 1]);
 
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
@@ -835,6 +976,119 @@ mod tests {
                     calls[1].arguments.as_ref(),
                     "{\"todos\":[{\"id\":\"1\",\"status\":\"completed\"}]}"
                 );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn xiaomi_xml_is_authoritative_over_corrupted_parallel_structured_calls() {
+        let xml = "Waiting.<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
+        let chunk = make_chunk(vec![ChatChunkDelta {
+            content: Some(xml.into()),
+            tool_calls: vec![
+                ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_wrong_read".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("read_file".into()),
+                        arguments: Some(
+                            r#"{"task_ids":["task-1"],"timeout_ms":{"target_file":"./model.sh"}"#
+                                .into(),
+                        ),
+                    }),
+                },
+                ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_wrong_todo".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("todo_write".into()),
+                        arguments: Some("{}".into()),
+                    }),
+                },
+            ],
+            ..Default::default()
+        }]);
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter([Ok(chunk)]).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::XiaomiMimo,
+            vec![
+                "get_command_or_subagent_output".into(),
+                "read_file".into(),
+                "todo_write".into(),
+            ],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), "Waiting.");
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "get_command_or_subagent_output");
+                assert_eq!(
+                    serde_json::from_str::<serde_json::Value>(&calls[0].arguments).unwrap(),
+                    serde_json::json!({"task_ids": ["task-1"], "timeout_ms": 180000})
+                );
+                assert!(calls[0].id.starts_with("xiaomi_xml_"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn standard_adapter_does_not_interpret_literal_xiaomi_xml() {
+        let xml = "<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter></function></tool_call>";
+        let events = collect(stream_chat_completions(
+            stream::iter([Ok(text_chunk(xml))]).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), xml);
+                assert!(response.tool_calls().is_empty());
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn xiaomi_repeated_xml_is_salvaged_before_the_stream_finishes() {
+        let block = "<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
+        let chunks = vec![
+            text_chunk(block),
+            text_chunk(block),
+            text_chunk(block),
+            text_chunk("this chunk must never be consumed"),
+        ];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::XiaomiMimo,
+            vec!["get_command_or_subagent_output".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert!(response.assistant_text().is_empty());
+                assert_eq!(response.tool_calls().len(), 1);
+                assert_eq!(
+                    response.tool_calls()[0].name,
+                    "get_command_or_subagent_output"
+                );
+                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
             }
             other => panic!("expected Completed, got {other:?}"),
         }

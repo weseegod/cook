@@ -41,6 +41,7 @@ use crate::request_compression::{compress_body, should_compress};
 use crate::span_timing::{ERROR, STATUS_CODE, SUCCESS, StreamSpanTiming};
 use crate::stream_classify::{chat_chunk_class, message_event_class, responses_event_class};
 use xai_grok_auth::bearer_suffix;
+use xai_grok_sampling_types::ChatCompletionsAdapter;
 
 pub use xai_grok_sampling_types::ApiBackend;
 
@@ -344,6 +345,7 @@ struct ClientDefaults {
     temperature: Option<f32>,
     top_p: Option<f32>,
     api_backend: ApiBackend,
+    chat_completions_adapter: ChatCompletionsAdapter,
     auth_scheme: AuthScheme,
     request_compression: RequestCompression,
     stream_tool_calls: bool,
@@ -658,6 +660,7 @@ impl SamplingClient {
             temperature: config.temperature,
             top_p: config.top_p,
             api_backend: config.api_backend,
+            chat_completions_adapter: config.chat_completions_adapter,
             auth_scheme: config.auth_scheme,
             request_compression: config.request_compression,
             stream_tool_calls: config.stream_tool_calls,
@@ -683,6 +686,10 @@ impl SamplingClient {
 
     pub fn api_backend(&self) -> ApiBackend {
         self.defaults.api_backend.clone()
+    }
+
+    pub fn chat_completions_adapter(&self) -> ChatCompletionsAdapter {
+        self.defaults.chat_completions_adapter
     }
 
     /// Give the bearer resolver its pre-send hook before [`Self::post`] reads it.
@@ -2228,9 +2235,17 @@ impl SamplingClient {
         let length_policy = request.length_policy;
         let result = match self.api_backend() {
             ApiBackend::ChatCompletions => {
+                let allowed_tool_names =
+                    request.tools.iter().map(|tool| tool.name.clone()).collect();
                 let (raw, meta) = self.conversation_stream(request).await?;
-                let events =
-                    crate::stream::stream_chat_completions(raw, meta, request_id, idle_timeout);
+                let events = crate::stream::stream_chat_completions_with_adapter(
+                    raw,
+                    meta,
+                    request_id,
+                    idle_timeout,
+                    self.chat_completions_adapter(),
+                    allowed_tool_names,
+                );
                 crate::stream::collect_response(events).await
             }
             ApiBackend::Responses => {

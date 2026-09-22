@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use xai_grok_sampling_types::{
-    ApiBackend, CompactionAtTokens, CompactionsRemaining, ConversationGroupId,
-    DoomLoopRecoveryPolicy, ReasoningEffort, ReasoningSummary,
+    ApiBackend, ChatCompletionsAdapter, CompactionAtTokens, CompactionsRemaining,
+    ConversationGroupId, DoomLoopRecoveryPolicy, ReasoningEffort, ReasoningSummary,
 };
 
 use crate::attribution::SharedAttributionCallback;
@@ -45,6 +45,8 @@ pub struct SamplerConfig {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: ApiBackend,
+    #[serde(default)]
+    pub chat_completions_adapter: ChatCompletionsAdapter,
     #[serde(default)]
     pub auth_scheme: AuthScheme,
     #[serde(default)]
@@ -132,6 +134,7 @@ impl Default for SamplerConfig {
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::default(),
+            chat_completions_adapter: ChatCompletionsAdapter::default(),
             auth_scheme: AuthScheme::default(),
             request_compression: RequestCompression::default(),
             extra_headers: IndexMap::new(),

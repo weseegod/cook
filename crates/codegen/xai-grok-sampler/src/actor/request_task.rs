@@ -32,7 +32,7 @@ use crate::retry::{
     self as retry_mod, RetryDecision, classify_error, clone_error, resolve_max_retries,
 };
 use crate::stream::responses::stream_responses_tracked;
-use crate::stream::{stream_chat_completions, stream_messages};
+use crate::stream::stream_messages;
 use crate::types::RequestId;
 
 /// Default per-chunk idle timeout when neither config nor caller supplies one.
@@ -537,12 +537,20 @@ async fn run_one_attempt(
     let length_policy = request.length_policy;
     match client.api_backend() {
         ApiBackend::ChatCompletions => {
+            let allowed_tool_names = request.tools.iter().map(|tool| tool.name.clone()).collect();
             let (raw, metadata) = match client.conversation_stream(request).await {
                 Ok(pair) => pair,
                 Err(e) => return AttemptOutcome::InitFailed { error: e },
             };
             let (teed, captured) = tee_errors(raw);
-            let l2 = stream_chat_completions(teed, metadata, request_id.clone(), idle_timeout);
+            let l2 = crate::stream::stream_chat_completions_with_adapter(
+                teed,
+                metadata,
+                request_id.clone(),
+                idle_timeout,
+                client.chat_completions_adapter(),
+                allowed_tool_names,
+            );
             drive_l2(
                 l2,
                 request_id,

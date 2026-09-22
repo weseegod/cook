@@ -9,8 +9,9 @@ pub mod collect;
 pub mod messages;
 pub mod responses;
 pub mod vendor_trailer;
+mod xiaomi_chat;
 
-pub use chat_completions::stream_chat_completions;
+pub use chat_completions::{stream_chat_completions, stream_chat_completions_with_adapter};
 pub use collect::collect_response;
 pub use messages::stream_messages;
 pub use responses::stream_responses;

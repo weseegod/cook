@@ -6,7 +6,7 @@ Companion design: [core-agent-flow-and-token-optimization.md](core-agent-flow-an
 
 What v1 already shipped and measured: [core-agent-token-optimization-experiment.md](core-agent-token-optimization-experiment.md).
 
-This document is the implementation plan. It does not change Rust, defaults, or the tool API. No phase below has been executed on `qwen38-27b` or `spark25-4b`. The bonsai omission fixture from v1 (3/3, 8,840 → 230 prompt tokens) is not a result for the other two models.
+This document is the implementation plan. It does not change Rust, defaults, or the tool API. No phase below has been executed on `mimo26-9b` or `spark25-4b`. The bonsai omission fixture from v1 (3/3, 8,840 → 230 prompt tokens) is not a result for the other two models.
 
 Task correctness is the gate. A shorter prompt that misses the failure, the permission, or the edit is a failed phase. Token and price come after that.
 
@@ -26,7 +26,7 @@ Three models, one GPU, one port. They cannot run together. Weights on this machi
 | Launcher name | File under `~/.local/share/llama-models/` | Wire id the server advertises | Configured context in `~/models/config.json` |
 |---|---|---|---|
 | `bonsai2-27b` | `Ternary-Bonsai-2-27B-PQ2_0.gguf` | `bonsai2` (`--alias`) | 131072, parallel 1. Needs the PrismML `llama-server` named in `~/models/model.sh` |
-| `qwen38-27b` | `Qwen3.8-27B-UD-IQ3_XXS.gguf` | Whatever `GET /v1/models` returns. This launcher does not set `--alias` | 65536, parallel 1, q4_0 KV cache. Server template defaults `reasoning_effort` to medium |
+| `mimo26-9b` | `MiMo-V2.6-Distill-Qwen-9B-Q8_0.gguf` | `mimo26` (`--alias`) | 65536, parallel 1. Needs the PrismML `llama-server` named in `~/models/model.sh` |
 | `spark25-4b` | `Spark-X2.5-4B-Q4_K_M.gguf` | `spark25` (`--alias`) | 327680, parallel 4 |
 
 Launcher: `~/models/model.sh`. It stops whatever is already on port 8080 before starting. API key: `LLAMA_API_KEY`, else `~/.config/llama/api_key`. The existing endpoint harness reads `BONSAI_API_KEY`, else `~/.cook/bonsai_api_key`. Point them at the same key and do not print it:
@@ -41,9 +41,9 @@ curl --fail --silent -H "Authorization: Bearer ${BONSAI_API_KEY}" \
 
 Stop that model before starting the next one. `~/models/model.sh stop <name>` is enough; `stop` with no name stops every model the launcher tracks.
 
-Reasoning. The v1 bonsai run spent the whole completion cap in the reasoning channel until the request set `reasoning_effort=none` and the matching `chat_template_kwargs`. `scripts/benchmark_step_pruning.sh` already sends that. `qwen38-27b` boots with medium reasoning in the server template, so an empty `content` with a full completion count means the cap was eaten. Retry that cell once at `MAX_TOKENS=800` with the same reasoning override, and record which cap produced the answer. Do not treat an empty content field as a wrong verdict.
+Reasoning. The v1 bonsai run spent the whole completion cap in the reasoning channel until the request set `reasoning_effort=none` and the matching `chat_template_kwargs`. `scripts/benchmark_step_pruning.sh` already sends that. `mimo26-9b` boots with medium reasoning (`--chat-template-kwargs` in the launcher), so an empty `content` with a full completion count means the cap was eaten. Retry that cell once at `MAX_TOKENS=800` with the same reasoning override, and record which cap produced the answer. Do not treat an empty content field as a wrong verdict.
 
-Known harness limit. `scripts/benchmark_step_pruning.sh` honors `BONSAI_MODEL`, so phase 1 can target all three wire ids. `scripts/benchmark_step_pruning_live.sh` writes `model = "spark25"` into the generated Cook config even when `MODEL_KEY` changes. Live-loop cells for bonsai and qwen are not runnable through that script until that wire name is taken from the environment. Until then, those two models use the endpoint matrix only, and the live script is the spark25-4b column of any cell marked “live”.
+Known harness limit. `scripts/benchmark_step_pruning.sh` honors `BONSAI_MODEL`, so phase 1 can target all three wire ids. `scripts/benchmark_step_pruning_live.sh` writes `model = "spark25"` into the generated Cook config even when `MODEL_KEY` changes. Live-loop cells for bonsai and mimo26 are not runnable through that script until that wire name is taken from the environment. Until then, those two models use the endpoint matrix only, and the live script is the spark25-4b column of any cell marked “live”.
 
 Cook binary for live cells: `cargo build -p xai-grok-pager-bin --bin xai-grok-pager`. The installed `~/.local/bin/cook` at the v1 base revision does not contain this branch.
 
@@ -85,14 +85,14 @@ scripts/benchmark_step_pruning.sh
 
 Cache, same server, after fidelity. The body is a repeated padding line of a few thousand characters plus `Reply with exactly the single word PING.` Send it twice with temperature 0 and `max_tokens` 16. The second response is `cache_warm`. Send a third request whose first line differs and whose padding is byte-identical. That response is `cache_bust`.
 
-| Cell | bonsai2-27b | qwen38-27b | spark25-4b | Pass |
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
 |---|---|---|---|---|
 | `fidelity_baseline` | endpoint script, arm `baseline` | same | same | JSON `PASS` and the test name |
 | `fidelity_omitted` | endpoint script, arm `optimized` | same | same | Same bar. Rounds 1–6 are the omission marker |
 | `cache_warm` | second identical request | same | same | Record `cached_tokens`. `unreported` is allowed |
 | `cache_bust` | first line changed | same | same | Record `cached_tokens`. If both warm and bust are numbers, bust must be lower than warm. If either is `unreported`, record the gap and do not fail the phase on it |
 
-Phase 1 passes only when all six fidelity cells pass. Then commit the result table into this file. Do not commit a table that copies the v1 bonsai numbers onto qwen or spark.
+Phase 1 passes only when all six fidelity cells pass. Then commit the result table into this file. Do not commit a table that copies the v1 bonsai numbers onto mimo26 or spark.
 
 Rollback: nothing was changed. Stop the model.
 
@@ -113,7 +113,7 @@ Matrix. Quality cells only. The token columns are recorded and do not decide the
 |---|---|---|---|
 | `pin_old_failure` | A failing check that is not in the newest rounds | Endpoint fixture: rounds 1–6 are success noise except round 2, which is the only failure; rounds 7–8 are unrelated success. Omission policy on | All three models name round 2’s test and do not call the run clean |
 | `active_round` | Evidence the model has not consumed | Existing request-builder tests, plus one endpoint prompt per model whose only real patch is in the last round | Active patch present in the answer; call id still paired in the Rust test |
-| `live_markers` | The v1 live task still holds | `scripts/benchmark_step_pruning_live.sh` at `CONTEXT_WINDOW=40000`, `RUNS=1`, spark25-4b only until the live script’s wire name is configurable. Bonsai and qwen run `pin_old_failure` and `active_round` only | Both markers present, and the debug log shows the arm fired. A run with zero prune events is not a pass and not a fail of the policy; widen nothing, fix the window, rerun |
+| `live_markers` | The v1 live task still holds | `scripts/benchmark_step_pruning_live.sh` at `CONTEXT_WINDOW=40000`, `RUNS=1`, spark25-4b only until the live script’s wire name is configurable. Bonsai and mimo26 run `pin_old_failure` and `active_round` only | Both markers present, and the debug log shows the arm fired. A run with zero prune events is not a pass and not a fail of the policy; widen nothing, fix the window, rerun |
 | `stale_read` | A file changed after it was read | One spark live turn: read a file, overwrite it, ask for the new line | The answer quotes the new line, not the pre-change line |
 
 Phase 2 fails if any quality cell fails on any model that ran it. Leave the settings at zero in the default config. Commit the pin behavior and this matrix, not a default flip.
@@ -208,7 +208,7 @@ Matrix:
 | `loop_stays_realtime`, all three local models | Home config sets `supports_batch_api = true` on that local model. One headless turn. The sampler log shows `/v1/chat/completions` or `/v1/responses`, and does not show `/v1/batches`. The answer is still the one the prompt asked for |
 | Prompt identity | The eval path, in a unit test, reads the flag from the resolved model. With the flag true it is given the same messages the realtime path would send. The test fails if the batch body drops tools or the evidence lines. With the flag false the eval path does not build a batch body |
 
-Do not run a hosted batch in this phase. The local matrix cannot see a discount, and it should not pretend to. Turning the flag on for `bonsai2`, `qwen38-27b`, or `spark25` is only the negative test above.
+Do not run a hosted batch in this phase. The local matrix cannot see a discount, and it should not pretend to. Turning the flag on for `bonsai2`, `mimo26-9b`, or `spark25` is only the negative test above.
 
 ## 9. Phase 6 — independent reads in one realtime response
 
@@ -252,7 +252,7 @@ Disabling a side call is out of scope until a matrix with the call forced off ma
 For each phase:
 
 1. Implement only that phase. Defaults stay where the phase says they stay.
-2. Run that phase’s matrix on `bonsai2-27b`, `qwen38-27b`, and `spark25-4b`, one at a time, stopping the model in between.
+2. Run that phase’s matrix on `bonsai2-27b`, `mimo26-9b`, and `spark25-4b`, one at a time, stopping the model in between.
 3. If any quality cell fails, do not commit the phase. Fix or revert. A failed cell stays in the notes of this file only when the commit is the record of a negative result the user asked to keep. Silence is not a pass.
 4. If the quality cells pass, commit the phase and append the result table here. Include `unreported` cache cells as written. Do not average the three models into one saving.
 

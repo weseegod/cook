@@ -577,6 +577,7 @@ pub(crate) async fn spawn_session_actor(
         max_retries: Some(resolved_max_retries),
         rate_limit_retry_threshold: sampling_config.rate_limit_retry_threshold,
         api_backend: sampling_config.api_backend.clone(),
+        chat_completions_adapter: sampling_config.chat_completions_adapter,
         extra_headers: sampling_config.extra_headers.clone(),
         conversation_group_id: sampling_config.conversation_group_id.clone(),
         query_params: sampling_config.query_params.clone(),

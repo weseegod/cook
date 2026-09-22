@@ -688,6 +688,7 @@ pub(crate) fn parse_remote_model_value(
         api_key: get_string(obj, "apiKey").or_else(|| get_string(obj, "api_key")),
         env_key: get_env_keys(obj, "envKey").or_else(|| get_env_keys(obj, "env_key")),
         api_backend,
+        chat_completions_adapter: Default::default(),
         context_window,
         auto_compact_threshold_percent: get_u64(obj, "autoCompactThresholdPercent")
             .or_else(|| get_u64(obj, "auto_compact_threshold_percent"))

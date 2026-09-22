@@ -2,7 +2,7 @@ use indexmap::IndexMap;
 
 use super::config::{ConfigModelOverride, EnvKeys};
 use super::config_model_override_parse::{ConfigWarning, ConfigWarningKind};
-use crate::sampling::ApiBackend;
+use crate::sampling::{ApiBackend, ChatCompletionsAdapter};
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
@@ -12,6 +12,7 @@ pub struct ModelProviderConfig {
     pub env_key: Option<EnvKeys>,
     pub api_key: Option<String>,
     pub api_backend: Option<ApiBackend>,
+    pub chat_completions_adapter: Option<ChatCompletionsAdapter>,
     pub extra_headers: IndexMap<String, String>,
     /// Query parameters folded into every request URL; inherited by models.
     pub query_params: IndexMap<String, String>,
@@ -178,6 +179,7 @@ impl ConfigModelOverride {
             env_key,
             api_key,
             api_backend,
+            chat_completions_adapter,
             extra_headers,
             query_params,
             env_http_headers,
@@ -191,6 +193,10 @@ impl ConfigModelOverride {
         merged.base_url = merged.base_url.or_else(|| base_url.clone());
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
+        merged.chat_completions_adapter = merged.chat_completions_adapter.or_else(|| {
+            chat_completions_adapter
+                .or_else(|| (provider_id == "xiaomi").then_some(ChatCompletionsAdapter::XiaomiMimo))
+        });
         merged.context_window = merged.context_window.or(*context_window);
         // Inherited wholesale only when the model sets none of its own.
         if merged.extra_headers.is_empty() {
@@ -229,6 +235,53 @@ impl ConfigModelOverride {
 #[cfg(test)]
 mod tests {
     use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
+    use crate::sampling::ChatCompletionsAdapter;
+
+    #[test]
+    fn xiaomi_provider_selects_its_adapter_without_changing_standard_providers() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.xiaomi]
+            base_url = "https://xiaomi.example/v1"
+            [model.xiaomi-model]
+            model = "mimo"
+            model_provider = "xiaomi"
+            context_window = 100000
+
+            [model_providers.deepseek]
+            base_url = "https://deepseek.example/v1"
+            [model.deepseek-model]
+            model = "deepseek"
+            model_provider = "deepseek"
+            context_window = 100000
+
+            [model.xiaomi-standard-override]
+            model = "mimo"
+            model_provider = "xiaomi"
+            context_window = 100000
+            chat_completions_adapter = "standard"
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None);
+        assert_eq!(
+            resolved["xiaomi-model"].info.chat_completions_adapter,
+            ChatCompletionsAdapter::XiaomiMimo
+        );
+        assert_eq!(
+            resolved["deepseek-model"].info.chat_completions_adapter,
+            ChatCompletionsAdapter::Standard
+        );
+        assert_eq!(
+            resolved["xiaomi-standard-override"]
+                .info
+                .chat_completions_adapter,
+            ChatCompletionsAdapter::Standard
+        );
+    }
+
     #[test]
     fn model_inherits_provider_connection_defaults() {
         let raw_config: toml::Value = toml::from_str(

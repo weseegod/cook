@@ -17,9 +17,9 @@ pub use async_openai::types::responses as rs;
 // These re-exports keep `crate::sampling::{SamplerHandle, SamplerConfig, ...}` paths working for callers not yet ported to `xai_grok_sampler::*`
 // There is no shell-side `sampling::client::Config` composite anymore; `MvpAgent` holds session-snapshot state in a `RefCell<SamplerConfig>`
 pub use xai_grok_sampler::{
-    ConversationGroupId, InferenceLatencyStats, OriginClientInfo, RequestId, SamplerActor,
-    SamplerConfig, SamplerHandle, SamplingChannel, SamplingClient, SamplingErrorInfo,
-    SamplingErrorKind, SamplingEvent,
+    ChatCompletionsAdapter, ConversationGroupId, InferenceLatencyStats, OriginClientInfo,
+    RequestId, SamplerActor, SamplerConfig, SamplerHandle, SamplingChannel, SamplingClient,
+    SamplingErrorInfo, SamplingErrorKind, SamplingEvent,
 };
 
 const CONVERSATION_GROUP_NAMESPACE: &str = "xai:grok-build:conversation-group:";
