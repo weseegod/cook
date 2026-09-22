@@ -14,6 +14,16 @@ pub(super) const HARD_CLEAR_PLACEHOLDER: &str = "[Tool result omitted — too ol
 /// Placeholder used by the opt-in step-aware pruning experiment.
 const STEP_BUDGET_PLACEHOLDER: &str = "[Tool result omitted — outside recent step budget]";
 
+/// Placeholder used when the step budget is spent keeping pinned evidence, so the model can
+/// tell why this result went before results the budget would otherwise have covered.
+const STEP_BUDGET_PINNED_PLACEHOLDER: &str =
+    "[Tool result omitted — recent step budget spent on newer pinned evidence]";
+
+/// Whether a result was already replaced by one of the step-budget placeholders.
+fn is_step_budget_placeholder(content: &str) -> bool {
+    content == STEP_BUDGET_PLACEHOLDER || content == STEP_BUDGET_PINNED_PLACEHOLDER
+}
+
 /// Separator inserted between head and tail in soft-trimmed results.
 const SOFT_TRIM_SEPARATOR: &str = "\n\n[…trimmed…]\n\n";
 
@@ -111,9 +121,10 @@ impl ChatStateActor {
             // The step-aware policy is opt-in and changes what the model sees inside a single
             // user turn, so a run that used it has to say so: nothing else reports it, because
             // the pruned request copy is never persisted.
-            if report.rounds_cleared_by_step_budget > 0 {
+            if report.rounds_cleared_by_step_budget > 0 || report.pinned_kept > 0 {
                 tracing::info!(
                     rounds_cleared_by_step_budget = report.rounds_cleared_by_step_budget,
+                    pinned_kept = report.pinned_kept,
                     soft_trimmed = report.soft_trimmed,
                     hard_cleared = report.hard_cleared,
                     chars_reclaimed = report.chars_reclaimed,
@@ -155,6 +166,8 @@ pub(crate) struct PruningReport {
     pub soft_trimmed: usize,
     /// Results replaced with the hard-clear placeholder.
     pub hard_cleared: usize,
+    /// Results kept raw because their provenance pinned them.
+    pub pinned_kept: usize,
     /// Characters removed from results, summed over every replacement above.
     pub chars_reclaimed: usize,
 }
@@ -180,6 +193,12 @@ pub(crate) fn prune_conversation(
     let mut recent_tool_result_chars: usize = 0;
     let step_policy_enabled =
         config.keep_last_n_tool_rounds > 0 || config.recent_tool_result_char_budget > 0;
+    // Whether any pinned result is present decides which omission placeholder the model sees,
+    // so it is read before the mutating walk.
+    let any_pinned = config.pin_evidence
+        && conversation.iter().any(
+            |item| matches!(item, ConversationItem::ToolResult(tr) if tr.provenance.is_pinned()),
+        );
 
     for item in conversation.iter_mut().rev() {
         if matches!(item, ConversationItem::User(_)) {
@@ -222,11 +241,24 @@ pub(crate) fn prune_conversation(
                 continue;
             }
 
-            if tool_result.content.as_ref() != STEP_BUDGET_PLACEHOLDER {
+            // Evidence the model has not consumed outranks recency and the character budget.
+            // A pin is deliberately not charged against `recent_tool_result_char_budget`:
+            // dropping it to fit that budget is the failure the pin exists to prevent.
+            if config.pin_evidence && tool_result.provenance.is_pinned() {
+                report.pinned_kept += 1;
+                continue;
+            }
+
+            if !is_step_budget_placeholder(&tool_result.content) {
+                let placeholder = if any_pinned {
+                    STEP_BUDGET_PINNED_PLACEHOLDER
+                } else {
+                    STEP_BUDGET_PLACEHOLDER
+                };
                 total_chars_before += content_len;
-                total_chars_after += STEP_BUDGET_PLACEHOLDER.chars().count();
+                total_chars_after += placeholder.chars().count();
                 report.rounds_cleared_by_step_budget += 1;
-                tool_result.content = std::sync::Arc::<str>::from(STEP_BUDGET_PLACEHOLDER);
+                tool_result.content = std::sync::Arc::<str>::from(placeholder);
             }
             continue;
         }
@@ -335,7 +367,7 @@ fn safe_char_slice_tail(s: &str, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use xai_grok_sampling_types::ToolCall;
+    use xai_grok_sampling_types::{ToolCall, ToolResultProvenance};
 
     fn tool_round(id: usize, content_len: usize) -> [ConversationItem; 2] {
         [
@@ -346,6 +378,167 @@ mod tests {
             }]),
             ConversationItem::tool_result(format!("call_{id}"), "x".repeat(content_len)),
         ]
+    }
+
+    /// A tool round whose result carries execution provenance.
+    fn tool_round_with(
+        id: usize,
+        content_len: usize,
+        provenance: ToolResultProvenance,
+    ) -> [ConversationItem; 2] {
+        let [assistant, result] = tool_round(id, content_len);
+        let result = match result {
+            ConversationItem::ToolResult(mut item) => {
+                item.provenance = provenance;
+                ConversationItem::ToolResult(item)
+            }
+            other => other,
+        };
+        [assistant, result]
+    }
+
+    /// Step-aware limits tight enough that only the active round and pins survive.
+    fn step_arm_config() -> PruningConfig {
+        PruningConfig {
+            keep_last_n_turns: 3,
+            keep_last_n_tool_rounds: 3,
+            recent_tool_result_char_budget: 450,
+            pin_evidence: true,
+            ..Default::default()
+        }
+    }
+
+    fn result_contents(conv: &[ConversationItem]) -> Vec<String> {
+        conv.iter()
+            .filter_map(|item| match item {
+                ConversationItem::ToolResult(result) => Some(result.content.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The phase-2 `pin_old_failure` shape: rounds 1–6 are success noise except round 2, which
+    /// is the only failure, and the two newest rounds are unrelated success. The failure is
+    /// outside the round window, so only the pin keeps it.
+    #[test]
+    fn pinned_failure_outside_the_round_window_stays_raw() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            let provenance = ToolResultProvenance {
+                failed: id == 2,
+                ..Default::default()
+            };
+            conv.extend(tool_round_with(id, 200, provenance));
+        }
+
+        let report = prune_conversation(&mut conv, &step_arm_config());
+
+        let results = result_contents(&conv);
+        assert_eq!(results.len(), 8, "tool-call pairing must be preserved");
+        assert_eq!(results[7].len(), 200, "active round must remain raw");
+        assert_eq!(results[2].len(), 200, "the failed round must stay raw");
+        assert_eq!(report.pinned_kept, 1);
+        assert_eq!(
+            results[0], STEP_BUDGET_PINNED_PLACEHOLDER,
+            "omissions must name the pins that spent the budget"
+        );
+        assert_eq!(results[1], STEP_BUDGET_PINNED_PLACEHOLDER);
+        assert_eq!(results[3], STEP_BUDGET_PINNED_PLACEHOLDER);
+    }
+
+    #[test]
+    fn pin_is_off_unless_the_step_arm_enables_it() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            let provenance = ToolResultProvenance {
+                failed: id == 2,
+                ..Default::default()
+            };
+            conv.extend(tool_round_with(id, 200, provenance));
+        }
+
+        let report = prune_conversation(
+            &mut conv,
+            &PruningConfig {
+                pin_evidence: false,
+                ..step_arm_config()
+            },
+        );
+
+        let results = result_contents(&conv);
+        assert_eq!(results[2], STEP_BUDGET_PLACEHOLDER);
+        assert_eq!(report.pinned_kept, 0);
+    }
+
+    /// A pin is not charged against the character budget: it survives even when the pin plus
+    /// the active round exceed the budget on their own.
+    #[test]
+    fn pin_is_not_charged_against_the_character_budget() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            let provenance = ToolResultProvenance {
+                failed: id == 2,
+                ..Default::default()
+            };
+            conv.extend(tool_round_with(id, 200, provenance));
+        }
+        // Budget below one result, so nothing but the active round and pins would fit.
+        let config = PruningConfig {
+            recent_tool_result_char_budget: 50,
+            ..step_arm_config()
+        };
+
+        prune_conversation(&mut conv, &config);
+
+        let results = result_contents(&conv);
+        assert_eq!(results[7].len(), 200, "active round must remain raw");
+        assert_eq!(results[2].len(), 200, "a pin outranks the budget");
+    }
+
+    /// `still_live` and `unresolved_edit` pin the same way as `failed`.
+    #[test]
+    fn live_process_and_unverified_edit_results_are_pinned_too() {
+        for provenance in [
+            ToolResultProvenance {
+                still_live: true,
+                ..Default::default()
+            },
+            ToolResultProvenance {
+                unresolved_edit: true,
+                ..Default::default()
+            },
+        ] {
+            let mut conv = vec![ConversationItem::user("keep going")];
+            for id in 0..8 {
+                let this = if id == 2 {
+                    provenance
+                } else {
+                    ToolResultProvenance::default()
+                };
+                conv.extend(tool_round_with(id, 200, this));
+            }
+
+            let report = prune_conversation(&mut conv, &step_arm_config());
+
+            assert_eq!(result_contents(&conv)[2].len(), 200, "{provenance:?}");
+            assert_eq!(report.pinned_kept, 1, "{provenance:?}");
+        }
+    }
+
+    /// A run with no pinned result keeps the original omission placeholder.
+    #[test]
+    fn unpinned_omissions_keep_the_original_placeholder() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            conv.extend(tool_round(id, 200));
+        }
+
+        let report = prune_conversation(&mut conv, &step_arm_config());
+
+        let results = result_contents(&conv);
+        assert_eq!(results[0], STEP_BUDGET_PLACEHOLDER);
+        assert_eq!(results[5], STEP_BUDGET_PLACEHOLDER);
+        assert_eq!(report.pinned_kept, 0);
     }
 
     #[test]

@@ -854,6 +854,7 @@ async fn family_switch_compacts_lossy_with_new_model() {
                     tool_call_id: "call_xai_minted_id".to_string(),
                     content: std::sync::Arc::<str>::from("file listing"),
                     images: Vec::new(),
+                    ..Default::default()
                 }),
                 ConversationItem::assistant("done"),
             ]);
@@ -1023,6 +1024,7 @@ async fn e2e_auto_compact_413_steps_ladder_then_sticky_size_suppress() {
                     tool_call_id: "call_1".to_string(),
                     content: std::sync::Arc::<str>::from("file listing"),
                     images: Vec::new(),
+                    ..Default::default()
                 }),
                 ConversationItem::assistant("hi"),
                 ConversationItem::user("compact me"),

@@ -138,6 +138,36 @@ Matrix. Quality cells only. The token columns are recorded and do not decide the
 
 Phase 2 fails if any quality cell fails on any model that ran it. Leave the settings at zero in the default config. Commit the pin behavior and this matrix, not a default flip.
 
+### Phase 2 results (2026-09-22)
+
+What shipped:
+
+- `ToolResultProvenance { failed, still_live, unresolved_edit }` on `ToolResultItem`, `#[serde(skip)]`, so canonical history, the wire request, and persisted snapshots are unchanged. It is rebuilt at the push site from the typed `ToolOutput` (exit status, error flag, a still-running task, a successful edit), never by scanning rendered text.
+- `PruningConfig::pin_evidence`, default `false`. `spawn` sets it from the step-aware knobs, so with the knobs at their defaults the arm does not run and the pin cannot touch a default session. A pinned result is kept raw outside the round window and is not charged against `recent_tool_result_char_budget`; when pins are present, what is dropped says so (`…recent step budget spent on newer pinned evidence`).
+- `PruningReport::pinned_kept` is reported on the same `tracing` line the live harness greps.
+
+Endpoint matrix, one process per model, temperature 0, `MAX_TOKENS=160`:
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `pin_old_failure` | 1,183 prompt / 60 completion / 3 s | 1,180 / 35 / 2 s | 1,323 / 46 / 1 s | yes ×3 — all named round 2's failed test, none named the newest round's |
+| `active_round` | 1,165 / 86 / 3 s | 1,162 / 58 / 1 s | 1,302 / 76 / 1 s | yes ×3 — all carried `mark_usage_incomplete_nowait` |
+
+Rust cells (no model): `pinned_failure_outside_the_round_window_stays_raw`, `pin_is_off_unless_the_step_arm_enables_it`, `pin_is_not_charged_against_the_character_budget`, `live_process_and_unverified_edit_results_are_pinned_too`, `unpinned_omissions_keep_the_original_placeholder`, plus the pre-existing `active_round` pairing tests. `xai-chat-state --lib` 389 passed / 0 failed; `xai-grok-shell --lib` 7007 passed with only the six known pre-existing failures (`goal_use_current_model_only_env_{true,false}`, `validate_hooks_path_rejects_{outside_grok_home,traversal_attack}`, `parse_list_req_forces_kind_under_process_chat_mode_only`, and the flaky `set_consent_answer_is_monotonic_per_account`).
+
+Live cells, spark25-4b only (the live script still hardcodes the `spark25` wire name), `CONTEXT_WINDOW=40000`, `RUNS=1`, arm on in its home:
+
+| Cell | Result | Pass |
+|---|---|---|
+| `live_markers` | baseline both-markers at 15 calls; stepaware both-markers at 13 calls, `prune_events=5`, rounds cleared 30, chars reclaimed 237,720 | yes — both markers and the arm fired |
+| `stale_read` | read, overwrite, ask: answer quoted `VALUE-NEW-2`, not `VALUE-OLD-1` | yes |
+
+Notes:
+
+- The step-aware live arm again shows the split the design calls out: main-loop prompt input fell 317,205 → 262,887 while `tool_result_tokens` fell 94,081 → 60,165, and compaction calls stayed at 5 in both arms. This is not presented as a saving (see the uncached split in section 3).
+- `still_live` and `unresolved_edit` are carried and pinned, but no live cell exercised them: `live_markers` and `stale_read` use only the failure pin and the active round. Those two flags rest on the unit tests above.
+- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase2-20260922-121345/` (endpoint) and `…-phase2-live-20260922-121706/` (live).
+
 ## 6. Phase 3 — append-only tool output
 
 Shorten output when the tool produces it. Do not rewrite an earlier byte on the next sample. The sliding request-copy arm stays available and opt-in for comparison. It is not the design this phase turns on.

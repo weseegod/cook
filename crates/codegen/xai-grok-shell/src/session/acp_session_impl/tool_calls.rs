@@ -42,6 +42,45 @@ fn is_mcp_create_pull_request(tool_name: &str) -> bool {
 fn is_mcp_error_result(output: &ToolsToolOutput) -> bool {
     matches!(output, ToolsToolOutput::MCP(_)) && output.is_error()
 }
+/// Execution provenance for a tool result, read from the typed output rather than from the
+/// rendered text. The request-copy pruner uses it to keep evidence the model has not consumed
+/// (a failed check, a still-live process, an unverified edit) raw. Never persisted.
+fn tool_result_provenance(
+    output: &ToolsToolOutput,
+) -> xai_grok_sampling_types::ToolResultProvenance {
+    let task_failed =
+        |r: &xai_tool_types::TaskOutputResult| r.exit_code.is_some_and(|code| code != 0);
+    let failed = output.is_error()
+        || match output {
+            ToolsToolOutput::TaskOutput(xai_tool_types::TaskOutputOutput::Result(r)) => {
+                task_failed(r)
+            }
+            ToolsToolOutput::TaskOutput(xai_tool_types::TaskOutputOutput::MultiResult(m)) => {
+                m.results.iter().any(task_failed)
+            }
+            _ => false,
+        };
+    let still_live = match output {
+        ToolsToolOutput::BackgroundTaskStarted(_) => true,
+        ToolsToolOutput::TaskOutput(xai_tool_types::TaskOutputOutput::Result(r)) => {
+            !r.is_terminal()
+        }
+        ToolsToolOutput::TaskOutput(xai_tool_types::TaskOutputOutput::MultiResult(m)) => {
+            m.results.iter().any(|r| !r.is_terminal())
+        }
+        _ => false,
+    };
+    let unresolved_edit = !failed
+        && matches!(
+            output,
+            ToolsToolOutput::ApplyPatch(_) | ToolsToolOutput::SearchReplace(_)
+        );
+    xai_grok_sampling_types::ToolResultProvenance {
+        failed,
+        still_live,
+        unresolved_edit,
+    }
+}
 /// One `tool.execution` span, wrapping a single dispatch attempt.
 /// Outcome fields are declared `Empty` here because `record` on a field the span never declared is silently dropped.
 /// [`record_tool_span_outcome`] fills them in once the result is known.
@@ -3062,14 +3101,23 @@ impl SessionActor {
             )
             .await
         };
+        let provenance = tool_result_provenance(&result.output);
         let tool_chat = if inline_images.is_empty() {
-            ConversationItem::tool_result(call_id.to_string(), prompt_text)
+            ConversationItem::tool_result_with_provenance(
+                call_id.to_string(),
+                prompt_text,
+                provenance,
+            )
         } else {
-            ConversationItem::tool_result_with_images(
+            let mut item = ConversationItem::tool_result_with_images(
                 call_id.to_string(),
                 prompt_text,
                 inline_images,
-            )
+            );
+            if let ConversationItem::ToolResult(result) = &mut item {
+                result.provenance = provenance;
+            }
+            item
         };
         self.chat_state_handle.push_tool_result(tool_chat);
         let mut deferred_followups = Vec::new();

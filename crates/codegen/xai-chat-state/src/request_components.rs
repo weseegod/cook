@@ -171,6 +171,7 @@ mod tests {
                     tool_call_id: "call_1".to_string(),
                     content: std::sync::Arc::<str>::from(result),
                     images: Vec::new(),
+                    ..Default::default()
                 }),
             ],
             vec![tool("read_file", "read a file")],
@@ -210,6 +211,7 @@ mod tests {
                     images: vec![ContentPart::Image {
                         url: std::sync::Arc::<str>::from("data:image/png;base64,AAAA"),
                     }],
+                    ..Default::default()
                 },
             )],
             vec![],

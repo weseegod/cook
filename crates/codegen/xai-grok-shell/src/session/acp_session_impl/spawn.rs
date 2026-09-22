@@ -587,11 +587,16 @@ pub(crate) async fn spawn_session_actor(
         reasoning_summary: sampling_config.reasoning_summary,
         stream_tool_calls: Some(sampling_config.stream_tool_calls),
     };
+    let step_arm_configured = session_pruning_config.keep_last_n_tool_rounds > 0
+        || session_pruning_config.recent_tool_result_char_budget > 0;
     let actor_pruning_config = xai_chat_state::PruningConfig {
         enabled: session_pruning_config.enabled,
         keep_last_n_turns: session_pruning_config.keep_last_n_turns,
         keep_last_n_tool_rounds: session_pruning_config.keep_last_n_tool_rounds,
         recent_tool_result_char_budget: session_pruning_config.recent_tool_result_char_budget,
+        // Pinning rides with the step-aware arm: with the knobs at their defaults (zero) the
+        // arm does not run at all, so the pin cannot change a default session.
+        pin_evidence: step_arm_configured,
         soft_trim_threshold: session_pruning_config.soft_trim_threshold,
         soft_trim_head: session_pruning_config.soft_trim_head,
         soft_trim_tail: session_pruning_config.soft_trim_tail,

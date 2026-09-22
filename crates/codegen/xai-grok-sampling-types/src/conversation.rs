@@ -285,6 +285,30 @@ pub struct AssistantItem {
     pub reasoning_effort: Option<crate::ReasoningEffort>,
 }
 
+/// Execution provenance for a tool result, carried from the tool runner into the
+/// request-copy pruner.
+///
+/// Never serialized: canonical history, the wire request, and persisted snapshots are
+/// byte-identical with and without it. It is rebuilt when a result is pushed, so a restore
+/// that loses it only widens what a pruner may omit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolResultProvenance {
+    /// The tool reported a failure (non-zero exit, error output, failed check).
+    pub failed: bool,
+    /// A process or task this result refers to was still live when the result was written.
+    pub still_live: bool,
+    /// The result is an edit whose follow-up evidence (a check or test) has not run yet.
+    pub unresolved_edit: bool,
+}
+
+impl ToolResultProvenance {
+    /// Whether this result carries evidence the model has not consumed, so a
+    /// request-copy pruner must keep it raw even outside its recency window.
+    pub fn is_pinned(self) -> bool {
+        self.failed || self.still_live || self.unresolved_edit
+    }
+}
+
 /// Tool result message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultItem {
@@ -296,6 +320,21 @@ pub struct ToolResultItem {
     /// When non-empty, the API conversion layers embed these directly in the tool result message rather than in a separate follow-up user message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ContentPart>,
+    /// Execution provenance for the request-copy pruner. Not part of the wire shape and
+    /// not persisted; see [`ToolResultProvenance`].
+    #[serde(skip)]
+    pub provenance: ToolResultProvenance,
+}
+
+impl Default for ToolResultItem {
+    fn default() -> Self {
+        Self {
+            tool_call_id: String::new(),
+            content: Arc::<str>::from(""),
+            images: Vec::new(),
+            provenance: ToolResultProvenance::default(),
+        }
+    }
 }
 
 /// A server-side tool call from the backend agentic sampler.
@@ -1326,6 +1365,21 @@ impl ConversationItem {
             tool_call_id: tool_call_id.into(),
             content: Arc::<str>::from(content.into()),
             images: Vec::new(),
+            provenance: ToolResultProvenance::default(),
+        })
+    }
+
+    /// Create a tool result message that carries execution provenance for the pruner.
+    pub fn tool_result_with_provenance(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        provenance: ToolResultProvenance,
+    ) -> Self {
+        Self::ToolResult(ToolResultItem {
+            tool_call_id: tool_call_id.into(),
+            content: Arc::<str>::from(content.into()),
+            images: Vec::new(),
+            provenance,
         })
     }
 
@@ -1341,6 +1395,7 @@ impl ConversationItem {
             tool_call_id: tool_call_id.into(),
             content: Arc::<str>::from(content.into()),
             images,
+            provenance: ToolResultProvenance::default(),
         })
     }
 

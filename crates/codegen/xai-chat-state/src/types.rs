@@ -76,6 +76,14 @@ pub struct PruningConfig {
     /// Character budget for raw results protected by the tool-round window.
     /// Zero keeps the legacy user-turn-only behavior.
     pub recent_tool_result_char_budget: usize,
+    /// Keep a tool result whose execution provenance says the model has not consumed its
+    /// evidence (a failed check, a still-live process, an unverified edit) raw even when it
+    /// falls outside the tool-round window. Pinned results are not charged against
+    /// [`Self::recent_tool_result_char_budget`]; the pin wins over the budget.
+    ///
+    /// Off by default. Only read when the step-aware arm is configured
+    /// (`keep_last_n_tool_rounds` or `recent_tool_result_char_budget` non-zero).
+    pub pin_evidence: bool,
     /// Character threshold above which old tool results are soft-trimmed.
     pub soft_trim_threshold: usize,
     /// Characters to keep from the start of a soft-trimmed result.
@@ -93,6 +101,7 @@ impl Default for PruningConfig {
             keep_last_n_turns: 3,
             keep_last_n_tool_rounds: 0,
             recent_tool_result_char_budget: 0,
+            pin_evidence: false,
             soft_trim_threshold: 4000,
             soft_trim_head: 1500,
             soft_trim_tail: 1500,
