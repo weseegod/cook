@@ -160,6 +160,10 @@ pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
                 xai_grok_sampler::SamplingErrorKind::MaxTokensTruncation,
             ))
         }
+        // The shared watchdog already ended the attempt; surface its detail verbatim
+        SamplingError::ToolCallBudgetExceeded(_) => {
+            acp::Error::internal_error().data(err.to_string())
+        }
         SamplingError::IdleTimeout { elapsed_secs } => acp::Error::internal_error().data(format!(
             "No response from model for {elapsed_secs}s — the model may be stuck"
         )),
@@ -467,7 +471,7 @@ mod tests {
                 reasoning_tokens: 0,
                 cached_prompt_tokens: 0,
                 cache_creation_prompt_tokens: 0,
-            cached_prompt_tokens_present: (0) != 0,
+                cached_prompt_tokens_present: (0) != 0,
             },
             None,
             Some(10),

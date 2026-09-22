@@ -796,6 +796,7 @@ async fn read_parent_sampling_config(
                 rate_limit_retry_threshold: cfg.rate_limit_retry_threshold,
                 stream_tool_calls: cfg.stream_tool_calls.unwrap_or(false),
                 idle_timeout_secs: None,
+                tool_call_budget: ctx.sampling_config.tool_call_budget,
                 client_identifier: ctx.sampling_config.client_identifier.clone(),
                 deployment_id: ctx.sampling_config.deployment_id.clone(),
                 user_id: ctx.sampling_config.user_id.clone(),

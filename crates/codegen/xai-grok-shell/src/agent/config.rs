@@ -5249,6 +5249,7 @@ pub(crate) fn sampling_config_for_model(
         rate_limit_retry_threshold: info.rate_limit_retry_threshold,
         stream_tool_calls: info.stream_tool_calls.unwrap_or(false),
         idle_timeout_secs: None,
+        tool_call_budget: None,
         client_identifier: None,
         deployment_id,
         user_id,

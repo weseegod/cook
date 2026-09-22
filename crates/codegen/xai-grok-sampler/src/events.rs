@@ -228,6 +228,8 @@ pub enum SamplingErrorKind {
     EmptyResponse,
     MaxTokensTruncation,
     DoomLoopDetected,
+    /// The response streamed tool calls past a per-response budget; see `SamplingError::ToolCallBudgetExceeded`.
+    ToolCallBudgetExceeded,
 }
 /// [`SamplingErrorKind::from_str`] error: the wire string matched no known kind (a newer peer's kind); callers degrade to untyped via `.ok()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +250,7 @@ impl std::str::FromStr for SamplingErrorKind {
             "empty_response" => Self::EmptyResponse,
             "max_tokens_truncation" => Self::MaxTokensTruncation,
             "doom_loop_detected" => Self::DoomLoopDetected,
+            "tool_call_budget_exceeded" => Self::ToolCallBudgetExceeded,
             _ => return Err(UnknownSamplingErrorKind),
         })
     }
@@ -291,6 +294,9 @@ impl From<&SamplingError> for SamplingErrorInfo {
             }
             SamplingError::MaxTokensTruncation => {
                 (SamplingErrorKind::MaxTokensTruncation, None, None, None)
+            }
+            SamplingError::ToolCallBudgetExceeded(_) => {
+                (SamplingErrorKind::ToolCallBudgetExceeded, None, None, None)
             }
             SamplingError::DoomLoopDetected { .. } => {
                 (SamplingErrorKind::DoomLoopDetected, None, None, None)
@@ -521,6 +527,18 @@ mod tests {
     }
 
     #[test]
+    fn tool_call_budget_classified_as_budget_and_not_retryable() {
+        let err = SamplingError::ToolCallBudgetExceeded(
+            "the response opened 65 tool calls, past the 64 call ceiling for one response"
+                .to_string(),
+        );
+        let info = SamplingErrorInfo::from(&err);
+        assert_eq!(info.kind, SamplingErrorKind::ToolCallBudgetExceeded);
+        assert!(!info.is_retryable);
+        assert!(info.message.contains("65 tool calls"));
+    }
+
+    #[test]
     fn error_kind_wire_string_round_trips_for_every_variant() {
         use SamplingErrorKind::*;
         let all = [
@@ -533,14 +551,23 @@ mod tests {
             EmptyResponse,
             MaxTokensTruncation,
             DoomLoopDetected,
+            ToolCallBudgetExceeded,
         ];
         for kind in all {
             // Exhaustive match, no `_` arm: a new variant refuses to compile this test until an arm is added
             // That failure is the reminder to also extend `all` and `from_str`
             // Only variants listed in `all` are round-trip-checked; the compiler cannot force those two edits
             match kind {
-                Auth | Http | Api | Serialization | IdleTimeout | RateLimited | EmptyResponse
-                | MaxTokensTruncation | DoomLoopDetected => {}
+                Auth
+                | Http
+                | Api
+                | Serialization
+                | IdleTimeout
+                | RateLimited
+                | EmptyResponse
+                | MaxTokensTruncation
+                | DoomLoopDetected
+                | ToolCallBudgetExceeded => {}
             }
             assert_eq!(kind.as_ref().parse(), Ok(kind));
         }

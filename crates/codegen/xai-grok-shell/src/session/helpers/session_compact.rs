@@ -1,7 +1,7 @@
 use crate::sampling::{
     ApiBackend, ChatCompletionRequest, ChatRequestMessage, Client as OaiCompatClient,
-    ConversationRequest, ConversationToolChoice, HostedTool, SamplingError, ToolChoice,
-    ToolDefinition, ToolSpec, TokenUsage, conversation_to_chat_messages,
+    ConversationRequest, ConversationToolChoice, HostedTool, SamplingError, TokenUsage, ToolChoice,
+    ToolDefinition, ToolSpec, conversation_to_chat_messages,
 };
 use agent_client_protocol as acp;
 use async_openai::types::responses::ResponseStreamEvent;
@@ -140,6 +140,8 @@ fn classify_sampling_error(err: SamplingError) -> CompactFailure {
                 && *status != StatusCode::TOO_MANY_REQUESTS
         }
         SamplingError::MaxTokensTruncation => true,
+        // A response that looped on tool calls loops again on an identical payload.
+        SamplingError::ToolCallBudgetExceeded(_) => true,
         // Loops are stochastic at sampling temperature; a retry may differ.
         SamplingError::Http(_)
         | SamplingError::EventStreamError(_)
@@ -553,10 +555,9 @@ pub(crate) async fn generate_session_compact(
                         // Wire usage is cumulative for the response, so last-write-wins
                         // (same normalization the Layer-2 chat-completions transform applies).
                         if let Some(u) = chunk.usage.clone() {
-                            cost_usd_ticks = xai_grok_sampling_types::reported_cost_ticks(
-                                u.cost_in_usd_ticks,
-                            )
-                            .or(cost_usd_ticks);
+                            cost_usd_ticks =
+                                xai_grok_sampling_types::reported_cost_ticks(u.cost_in_usd_ticks)
+                                    .or(cost_usd_ticks);
                             usage = Some(u.into());
                         }
                         if let Some(choice) = chunk.choices.first() {

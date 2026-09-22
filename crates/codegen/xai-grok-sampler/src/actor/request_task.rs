@@ -90,6 +90,7 @@ pub(crate) async fn run_request_task(
             .idle_timeout_secs
             .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS),
     );
+    let tool_call_budget = config.tool_call_budget.unwrap_or_default();
     let configured_max_retries = config.max_retries.or(Some(retry_policy.max_retries));
     let max_retries = if configured_max_retries == Some(0) {
         0
@@ -144,6 +145,7 @@ pub(crate) async fn run_request_task(
             request.clone(),
             request_id.clone(),
             idle_timeout,
+            tool_call_budget,
             &event_tx,
             &cancel_token,
             doom_check,
@@ -529,6 +531,7 @@ async fn run_one_attempt(
     request: ConversationRequest,
     request_id: RequestId,
     idle_timeout: Duration,
+    tool_call_budget: crate::stream::ToolCallBudget,
     event_tx: &mpsc::UnboundedSender<SamplingEvent>,
     cancel_token: &CancellationToken,
     doom_check: Option<xai_grok_sampling_types::DoomLoopRecoveryPolicy>,
@@ -543,13 +546,17 @@ async fn run_one_attempt(
                 Err(e) => return AttemptOutcome::InitFailed { error: e },
             };
             let (teed, captured) = tee_errors(raw);
-            let l2 = crate::stream::stream_chat_completions_with_adapter(
-                teed,
-                metadata,
+            let l2 = crate::stream::guard_tool_call_budget(
+                crate::stream::stream_chat_completions_with_adapter(
+                    teed,
+                    metadata,
+                    request_id.clone(),
+                    idle_timeout,
+                    client.chat_completions_adapter(),
+                    allowed_tool_names,
+                ),
                 request_id.clone(),
-                idle_timeout,
-                client.chat_completions_adapter(),
-                allowed_tool_names,
+                tool_call_budget,
             );
             drive_l2(
                 l2,
@@ -582,14 +589,18 @@ async fn run_one_attempt(
             } else {
                 FailedResponseCapture::default()
             };
-            let l2 = stream_responses_tracked(
-                teed,
-                metadata,
+            let l2 = crate::stream::guard_tool_call_budget(
+                stream_responses_tracked(
+                    teed,
+                    metadata,
+                    request_id.clone(),
+                    idle_timeout,
+                    doom_loop,
+                    Arc::clone(&output_observed),
+                    failed_response.clone(),
+                ),
                 request_id.clone(),
-                idle_timeout,
-                doom_loop,
-                Arc::clone(&output_observed),
-                failed_response.clone(),
+                tool_call_budget,
             );
             drive_l2(
                 l2,
@@ -610,7 +621,11 @@ async fn run_one_attempt(
                 Err(e) => return AttemptOutcome::InitFailed { error: e },
             };
             let (teed, captured) = tee_errors(raw);
-            let l2 = stream_messages(teed, metadata, request_id.clone(), idle_timeout);
+            let l2 = crate::stream::guard_tool_call_budget(
+                stream_messages(teed, metadata, request_id.clone(), idle_timeout),
+                request_id.clone(),
+                tool_call_budget,
+            );
             drive_l2(
                 l2,
                 request_id,
@@ -838,6 +853,10 @@ fn synthesize_from_info(info: &SamplingErrorInfo) -> SamplingError {
             }
         }
         SamplingErrorKind::MaxTokensTruncation => SamplingError::MaxTokensTruncation,
+        // `info.message` is the variant's rendered Display, so rebuild via the constructor that owns the prefix-stripping
+        SamplingErrorKind::ToolCallBudgetExceeded => {
+            SamplingError::tool_call_budget_from_rendered(&info.message)
+        }
         SamplingErrorKind::DoomLoopDetected => SamplingError::DoomLoopDetected {
             triggers: info.doom_loop_triggers.clone().unwrap_or_default(),
             aborted_at_chunk: info.doom_loop_aborted_at_chunk,
@@ -948,6 +967,7 @@ fn strip_reason_for_image_error(err: &SamplingError) -> StripReason {
         | SamplingError::IdleTimeout { .. }
         | SamplingError::EmptyResponse { .. }
         | SamplingError::MaxTokensTruncation
+        | SamplingError::ToolCallBudgetExceeded(_)
         | SamplingError::DoomLoopDetected { .. } => StripReason::PayloadHeuristic,
     }
 }
@@ -1345,6 +1365,23 @@ mod tests {
             SamplingError::IdleTimeout { elapsed_secs } => assert_eq!(elapsed_secs, 240),
             other => panic!("expected IdleTimeout, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn synthesize_tool_call_budget_renders_once() {
+        let err = SamplingError::ToolCallBudgetExceeded(
+            "the response opened 65 tool calls, past the 64 call ceiling for one response"
+                .to_string(),
+        );
+        let info = SamplingErrorInfo::from(&err);
+        let rebuilt = synthesize_from_info(&info);
+        assert_eq!(
+            rebuilt.to_string(),
+            err.to_string(),
+            "the prefix must not be applied twice"
+        );
+        assert!(matches!(rebuilt, SamplingError::ToolCallBudgetExceeded(_)));
+        assert!(!rebuilt.is_retryable());
     }
 
     #[test]

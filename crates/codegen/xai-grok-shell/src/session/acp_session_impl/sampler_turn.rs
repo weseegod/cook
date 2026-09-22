@@ -107,6 +107,8 @@ pub(super) fn transient_retry_eligible(error: &xai_grok_sampler::SamplingErrorIn
         | SamplingErrorKind::RateLimited
         | SamplingErrorKind::EmptyResponse
         | SamplingErrorKind::MaxTokensTruncation
+        // A budget breach is a hard stop, like the sampler's own `is_retryable` verdict: the provider would loop again
+        | SamplingErrorKind::ToolCallBudgetExceeded
         | SamplingErrorKind::DoomLoopDetected => false,
     }
 }
@@ -750,6 +752,7 @@ impl SessionActor {
             rate_limit_retry_threshold: cfg.rate_limit_retry_threshold,
             stream_tool_calls: cfg.stream_tool_calls.unwrap_or(false),
             idle_timeout_secs: None,
+            tool_call_budget: None,
             client_identifier: self.client_identifier.clone(),
             deployment_id: crate::managed_config::resolve_deployment_id(
                 crate::managed_config::resolve_deployment_key().as_deref(),

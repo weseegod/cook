@@ -278,6 +278,12 @@ pub fn format_sampling_error(err: &SamplingError, retry_count: Option<u32>) -> S
         SamplingError::MaxTokensTruncation => {
             format!("{}Response truncated by max_tokens.", retry_prefix)
         }
+        SamplingError::ToolCallBudgetExceeded(detail) => {
+            format!(
+                "{}Tool-call budget exceeded: {detail}. The model kept streaming tool calls without finishing the turn; try again or use a different model.",
+                retry_prefix
+            )
+        }
         SamplingError::DoomLoopDetected { triggers, .. } => {
             format!(
                 "{}Server detected a reasoning loop ({}); resampling the response.",
@@ -333,6 +339,9 @@ pub(crate) fn clone_error(err: &SamplingError) -> SamplingError {
             context: context.clone(),
         },
         SamplingError::MaxTokensTruncation => SamplingError::MaxTokensTruncation,
+        SamplingError::ToolCallBudgetExceeded(detail) => {
+            SamplingError::ToolCallBudgetExceeded(detail.clone())
+        }
         SamplingError::DoomLoopDetected {
             triggers,
             aborted_at_chunk,
@@ -798,6 +807,26 @@ mod tests {
             RetryDecision::Fatal(SamplingError::IdleTimeout { elapsed_secs: 300 }) => {}
             other => panic!("expected Fatal(IdleTimeout), got {other:?}"),
         }
+    }
+
+    /// A budget breach is Fatal, like `IdleTimeout`: a provider looping on tool calls loops again on a replay,
+    /// so the attempt must not burn the retry budget re-streaming the same multi-megabyte response.
+    #[test]
+    fn classify_tool_call_budget_exceeded_is_fatal() {
+        let err = SamplingError::ToolCallBudgetExceeded(
+            "the response opened 65 tool calls, past the 64 call ceiling for one response"
+                .to_string(),
+        );
+        match classify_error(&err, 0, 5, RATE_LIMIT_RETRY_THRESHOLD) {
+            RetryDecision::Fatal(SamplingError::ToolCallBudgetExceeded(detail)) => {
+                assert!(detail.contains("65 tool calls"));
+            }
+            other => panic!("expected Fatal(ToolCallBudgetExceeded), got {other:?}"),
+        }
+        assert!(
+            format_sampling_error(&err, None).contains("Tool-call budget exceeded"),
+            "the terminal message must name the budget"
+        );
     }
 
     #[test]

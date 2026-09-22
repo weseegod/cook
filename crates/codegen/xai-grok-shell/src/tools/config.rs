@@ -219,6 +219,7 @@ impl ShellToolsetConfig {
             rate_limit_retry_threshold: None,
             stream_tool_calls: false,
             idle_timeout_secs: None,
+            tool_call_budget: None,
             client_identifier: None,
             deployment_id: None,
             user_id: None,

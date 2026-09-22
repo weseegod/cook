@@ -13,6 +13,7 @@ use xai_grok_sampling_types::{
 
 use crate::attribution::SharedAttributionCallback;
 use crate::retry::{DEFAULT_MAX_RETRIES, RATE_LIMIT_RETRY_THRESHOLD};
+use crate::stream::tool_call_budget::ToolCallBudget;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -74,6 +75,10 @@ pub struct SamplerConfig {
     pub rate_limit_retry_threshold: Option<u32>,
     pub stream_tool_calls: bool,
     pub idle_timeout_secs: Option<u64>,
+    /// Ceilings on one response's tool-call traffic; `None` uses [`ToolCallBudget::default`].
+    /// Set it to tune a local model whose tool payloads are legitimately large.
+    #[serde(default)]
+    pub tool_call_budget: Option<ToolCallBudget>,
 
     // Reasoning effort
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -147,6 +152,7 @@ impl Default for SamplerConfig {
             rate_limit_retry_threshold: None,
             stream_tool_calls: false,
             idle_timeout_secs: None,
+            tool_call_budget: None,
             reasoning_effort: None,
             reasoning_summary: None,
             origin_client: None,
