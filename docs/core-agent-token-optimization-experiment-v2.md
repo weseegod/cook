@@ -94,6 +94,26 @@ Cache, same server, after fidelity. The body is a repeated padding line of a few
 
 Phase 1 passes only when all six fidelity cells pass. Then commit the result table into this file. Do not commit a table that copies the v1 bonsai numbers onto mimo26 or spark.
 
+### Phase 1 results (2026-09-22)
+
+Run one process at a time on `:8080`, temperature 0, `REASONING_EFFORT=none`, `MAX_TOKENS=160` (no 800-token retry was needed). Quality bar: one JSON object, `verdict` `PASS`, `test` = `response_without_usage_preserves_context_and_marks_ledgers_incomplete`. Both arms keep rounds 7–8, so `mark_usage_incomplete_nowait` stays in the prompt.
+
+| Cell | bonsai2-27b | mimo26-9b | spark25-4b | Pass |
+|---|---|---|---|---|
+| `fidelity_baseline` | 8,840 prompt / 78 completion / 11 s | 8,837 / 39 / 4 s | 9,946 / 57 / 2 s | yes ×3 |
+| `fidelity_omitted` | 230 / 78 / 2 s | 227 / 39 / 1 s | 256 / 62 / 1 s | yes ×3 |
+| `cache_warm` | cached 624 of 628 | 621 of 625 | 633 of 634 | recorded |
+| `cache_bust` | cached 0 of 628 | 0 of 625 | 0 of 634 | bust &lt; warm ×3 |
+
+Notes:
+
+- All six fidelity cells returned JSON `PASS` with the required test name. Answers are not copied across models; each column is a separate request.
+- Prefix cache reports `cached_tokens` on the second identical body (`cache_warm`) and `0` when the first line changes (`cache_bust`). No `unreported` gap on this server for the cache cells.
+- Fidelity `cached_tokens` were `0` on the first baseline requests (and `9` on spark’s omitted arm); those zeros are reported zeros, not missing fields.
+- Prompt drop baseline → omitted: bonsai 8,840 → 230 (97.4%), mimo26 8,837 → 227 (97.4%), spark 9,946 → 256 (97.4%). The v1 bonsai drop is reproduced and extended to the other two local models on this fixture only.
+
+Raw log: `~/.grok/long-running-background-tasks/cook-token-v2-phase1-20260922-120311/`.
+
 Rollback: nothing was changed. Stop the model.
 
 ## 5. Phase 2 — pin evidence before omitting more
