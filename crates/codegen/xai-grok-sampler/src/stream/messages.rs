@@ -494,6 +494,8 @@ pub fn stream_messages<'a>(
                 reasoning_tokens: 0,
                 cached_prompt_tokens: final_cache_read_input_tokens,
                 cache_creation_prompt_tokens: final_cache_creation_input_tokens,
+                // `message_start.usage.cache_read_input_tokens` is non-optional on this backend.
+                cached_prompt_tokens_present: true,
             })
         } else {
             None

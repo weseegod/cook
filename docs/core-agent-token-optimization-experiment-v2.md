@@ -249,6 +249,36 @@ Matrix, one short headless turn per model (`-p 'reply with exactly "ready"'`, `-
 | `cache_field_honest` | If the server sent cached tokens, the report shows them and the uncached remainder, and the remainder is not negative. If it did not, `cacheFieldPresent` is false and there is no zero standing in for the miss |
 | `no_double_count` | One model call in the prompt does not appear as two purposes |
 
+### Phase 4 results (2026-09-22)
+
+What shipped:
+
+- `TokenUsage::cached_prompt_tokens_present`: true when the provider response carried a cache-read number (Chat Completions `prompt_tokens_details`, Responses `input_tokens_details`, Messages `message_start.usage`), even if it was 0. A missing field is unknown, never zero.
+- `UsageTotals` gains `uncached_input_tokens` (sum of `prompt - cached` over calls that reported the field), `cache_field_present_calls`, `cache_field_absent_calls`.
+- The persisted report (`usage.json`, `UsageSummary` and `PurposeUsage` rows, flattened into turn rows) gains `uncachedInputTokens` and `cacheFieldPresent`. The remainder is present only when every call in the row reported the field; otherwise both the remainder and any zero are absent. An empty row is neutral, so summing a turn into the session cannot veto a reported field. The headless result JSON projects the same two fields.
+- No change to what is sent to the model.
+
+Rust cells (no model):
+
+| Cell | Result | Pass |
+|---|---|---|
+| wire presence | `From<Usage>`: reported field (400 and 0) → present; absent field → not present, cached 0 | yes |
+| ledger honesty | reported call → remainder `input − cached`; an unreported call adds nothing; no call reported → remainder absent | yes |
+| report shape | `usage_file` tests: session, turn and purpose rows carry both fields; JSON keys `uncachedInputTokens`/`cacheFieldPresent`; a missing field serializes no remainder key | yes |
+
+Matrix, one model (bonsai2-27b per the run's instruction), one headless turn `-p 'reply with exactly "ready"' --output-format json`, then `usage <sessionId>`:
+
+| Cell | Result | Pass |
+|---|---|---|
+| `report_shape` | `purposeUsage` (keys `main_loop`) and `requestComponents` (`requestsMeasured=1`, 12,613 estimated tokens) on the session row | yes |
+| `cache_field_honest` | The server reported the field with `cached_tokens=0` (cold cache): `cacheFieldPresent=true`, `cachedReadTokens=0`, `uncachedInputTokens=13,347 = inputTokens − 0`, not negative. The absent-field branch is covered by the Rust cells (no remainder key, no zero) | yes |
+| `no_double_count` | Purpose rows sum to `modelCalls=1`, equal to the session's `modelCalls=1`; purpose remainders sum to the session remainder | yes |
+
+Notes:
+
+- The first end-to-end run exposed a real bug the unit tests had not: summing the turn row into the empty default session row let the empty row veto `cacheFieldPresent`. Fixed by making empty rows neutral; `usage.json` from the fixed binary shows the honest values above.
+- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase4-final3/` (cold-cache run), `…-phase4-warm/` (warm run), `…-phase4-final/` (the pre-fix run kept as the bug's evidence).
+
 ## 8. Phase 5 — `supports_batch_api` on the model row
 
 No batch client on the coding loop. No waiting for DeepSeek off-peak. No `previous_response_id` work. No table inside the binary that marks MiMo on and DeepSeek or Grok off. Prices change, and the user already picks the model in `~/.cook/config.toml`.

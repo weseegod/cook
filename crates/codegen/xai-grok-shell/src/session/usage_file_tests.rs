@@ -10,6 +10,16 @@ fn tu(prompt: u32, completion: u32) -> TokenUsage {
         reasoning_tokens: 0,
         cached_prompt_tokens: 0,
         cache_creation_prompt_tokens: 0,
+        cached_prompt_tokens_present: false,
+    }
+}
+
+/// A call whose provider response carried the cache-read field.
+fn tu_cached(prompt: u32, completion: u32, cached: u32) -> TokenUsage {
+    TokenUsage {
+        cached_prompt_tokens: cached,
+        cached_prompt_tokens_present: true,
+        ..tu(prompt, completion)
     }
 }
 
@@ -293,6 +303,91 @@ fn session_report_breaks_usage_down_by_call_purpose() {
     assert_eq!(json["purposeUsage"]["compact_single"]["modelCalls"], 1);
     let round_tripped: UsageSummary = serde_json::from_value(json).expect("deserializes");
     assert_eq!(round_tripped.purpose_usage, summary.purpose_usage);
+}
+
+/// The persisted report carries the uncached remainder beside the cache-field presence flag,
+/// and a call whose provider omitted the field leaves both honest instead of standing in a zero.
+#[test]
+fn session_report_shows_the_uncached_remainder_and_honors_a_missing_cache_field() {
+    let mut ledger = UsageLedger::default();
+    // One call, field reported: remainder = input - cached, on the session and purpose rows.
+    ledger.record_main_loop_call("grok-4", &tu_cached(1_000, 100, 400), Some(10), None);
+    let summary = UsageSummary::from_ledger(&ledger);
+    assert_eq!(summary.uncached_input_tokens, Some(600));
+    assert!(summary.cache_field_present);
+    let main = summary.purpose_usage.get("main_loop").expect("main row");
+    assert_eq!(main.uncached_input_tokens, Some(600));
+    assert!(main.cache_field_present);
+
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert_eq!(json["uncachedInputTokens"], 600);
+    assert_eq!(json["cacheFieldPresent"], true);
+    assert_eq!(
+        json["purposeUsage"]["main_loop"]["uncachedInputTokens"],
+        600
+    );
+    assert_eq!(json["purposeUsage"]["main_loop"]["cacheFieldPresent"], true);
+    let round_tripped: UsageSummary = serde_json::from_value(json).expect("deserializes");
+    assert_eq!(round_tripped, summary);
+
+    // A second call that omits the field: the remainder for those calls is unknown, never zero.
+    ledger.record_main_loop_call("grok-4", &tu(500, 50), Some(10), None);
+    let summary = UsageSummary::from_ledger(&ledger);
+    assert_eq!(summary.uncached_input_tokens, None);
+    assert!(!summary.cache_field_present);
+    assert_eq!(summary.cached_read_tokens, 400, "the hit itself is kept");
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert!(
+        json.get("uncachedInputTokens").is_none(),
+        "no zero may stand in for the miss: {}",
+        json
+    );
+    assert_eq!(json["cacheFieldPresent"], false);
+}
+
+/// A ledger whose calls never reported the field has no remainder at all.
+#[test]
+fn session_report_omits_the_uncached_remainder_when_no_call_reports_the_field() {
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu(1_000, 100), Some(10), None);
+    let summary = UsageSummary::from_ledger(&ledger);
+    assert_eq!(summary.uncached_input_tokens, None);
+    assert!(!summary.cache_field_present);
+    let json = serde_json::to_value(&summary).expect("serializes");
+    assert!(json.get("uncachedInputTokens").is_none());
+    assert_eq!(json["cacheFieldPresent"], false);
+}
+
+/// Turn rows carry the same honesty, and the session rebuild keeps it.
+#[test]
+fn turn_rows_carry_the_uncached_remainder_and_the_session_rebuild_keeps_it() {
+    let mut file = SessionUsageFile::new("sess-cap");
+    let mut ledger = UsageLedger::default();
+    ledger.record_main_loop_call("grok-4", &tu_cached(1_000, 100, 400), Some(10), None);
+    file.apply_turn(
+        1,
+        "2026-09-22T00:00:00Z",
+        &UsageSummary::from_ledger(&ledger),
+        None,
+    );
+    let [turn] = file.turns.as_slice() else {
+        panic!("expected one turn");
+    };
+    assert_eq!(turn.usage.uncached_input_tokens, Some(600));
+    assert!(turn.usage.cache_field_present);
+
+    // Second turn's calls omit the field, so the rebuilt session row must not report a remainder.
+    ledger.record_main_loop_call("grok-4", &tu(500, 50), Some(10), None);
+    file.apply_turn(
+        2,
+        "2026-09-22T00:00:10Z",
+        &UsageSummary::from_ledger(&ledger),
+        None,
+    );
+    assert!(!file.session.cache_field_present);
+    assert_eq!(file.session.uncached_input_tokens, None);
+    let json = serde_json::to_value(&file.session).expect("serializes");
+    assert!(json.get("uncachedInputTokens").is_none());
 }
 
 #[test]

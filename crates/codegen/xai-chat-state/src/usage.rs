@@ -143,6 +143,14 @@ pub struct UsageTotals {
     /// Completed calls whose provider response omitted usage. Their spend is
     /// unknown, never zero, so they add no tokens and no `model_calls`.
     pub usage_missing_calls: u64,
+    /// Sum of `prompt_tokens - cached_prompt_tokens` over the calls whose provider response
+    /// carried a cache-read number. `None` when no call did, so an unreported field never
+    /// becomes a zero remainder.
+    pub uncached_input_tokens: Option<u64>,
+    /// Calls whose provider response carried a cache-read number.
+    pub cache_field_present_calls: u64,
+    /// Calls whose provider response omitted it. Their cache-hit share is unknown, never zero.
+    pub cache_field_absent_calls: u64,
 }
 
 impl UsageTotals {
@@ -163,6 +171,11 @@ impl UsageTotals {
             cost_usd_ticks,
             cost_missing_calls: u64::from(cost_usd_ticks.is_none()),
             usage_missing_calls: 0,
+            uncached_input_tokens: usage.cached_prompt_tokens_present.then(|| {
+                u64::from(usage.prompt_tokens).saturating_sub(u64::from(usage.cached_prompt_tokens))
+            }),
+            cache_field_present_calls: u64::from(usage.cached_prompt_tokens_present),
+            cache_field_absent_calls: u64::from(!usage.cached_prompt_tokens_present),
         }
     }
 
@@ -186,6 +199,9 @@ impl UsageTotals {
             cost_usd_ticks,
             cost_missing_calls,
             usage_missing_calls,
+            uncached_input_tokens,
+            cache_field_present_calls,
+            cache_field_absent_calls,
         } = other;
         self.input_tokens = self.input_tokens.saturating_add(*input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(*output_tokens);
@@ -200,7 +216,23 @@ impl UsageTotals {
         self.usage_missing_calls = self
             .usage_missing_calls
             .saturating_add(*usage_missing_calls);
+        self.uncached_input_tokens =
+            merge_uncached_input(self.uncached_input_tokens, *uncached_input_tokens);
+        self.cache_field_present_calls = self
+            .cache_field_present_calls
+            .saturating_add(*cache_field_present_calls);
+        self.cache_field_absent_calls = self
+            .cache_field_absent_calls
+            .saturating_add(*cache_field_absent_calls);
         self.cost_usd_ticks = merge_cost_ticks(self.cost_usd_ticks, *cost_usd_ticks);
+    }
+}
+
+/// Sum two optional remainders; `None` only when neither side reported one.
+fn merge_uncached_input(a: Option<u64>, b: Option<u64>) -> Option<u64> {
+    match (a, b) {
+        (None, None) => None,
+        (a, b) => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
     }
 }
 
@@ -333,7 +365,56 @@ mod tests {
             reasoning_tokens: 0,
             cached_prompt_tokens: 0,
             cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: false,
         }
+    }
+
+    /// A call whose provider response reported a cache-read number.
+    fn tu_cached(prompt: u32, completion: u32, cached: u32) -> TokenUsage {
+        TokenUsage {
+            cached_prompt_tokens: cached,
+            cached_prompt_tokens_present: true,
+            ..tu(prompt, completion)
+        }
+    }
+
+    /// The uncached remainder is only computed from calls that reported a cache field, and a
+    /// call that did not report one leaves the remainder absent instead of standing in a zero.
+    #[test]
+    fn uncached_remainder_only_from_calls_that_report_the_cache_field() {
+        let mut ledger = UsageLedger::default();
+        // One call, field reported: remainder = input - cached.
+        ledger.record_main_loop_call("m", &tu_cached(1000, 10, 400), None, None);
+        assert_eq!(ledger.totals.uncached_input_tokens, Some(600));
+        assert_eq!(ledger.totals.cache_field_present_calls, 1);
+        assert_eq!(ledger.totals.cache_field_absent_calls, 0);
+
+        // A second call that omits the field: its remainder is unknown, never zero.
+        ledger.record_main_loop_call("m", &tu(500, 5), None, None);
+        assert_eq!(
+            ledger.totals.uncached_input_tokens,
+            Some(600),
+            "the unreported call must not add input - 0"
+        );
+        assert_eq!(ledger.totals.cache_field_present_calls, 1);
+        assert_eq!(ledger.totals.cache_field_absent_calls, 1);
+
+        // Purpose rows mirror the same honesty.
+        let main_loop = &ledger.by_purpose[&CallPurpose::MainLoop];
+        assert_eq!(main_loop.uncached_input_tokens, Some(600));
+        assert_eq!(main_loop.cache_field_present_calls, 1);
+        assert_eq!(main_loop.cache_field_absent_calls, 1);
+    }
+
+    /// A ledger where no call reported the field has no remainder at all.
+    #[test]
+    fn uncached_remainder_absent_when_no_call_reports_the_cache_field() {
+        let mut ledger = UsageLedger::default();
+        ledger.record_main_loop_call("m", &tu(1000, 10), None, None);
+        assert_eq!(ledger.totals.uncached_input_tokens, None);
+        assert_eq!(ledger.totals.cache_field_present_calls, 0);
+        assert_eq!(ledger.totals.cache_field_absent_calls, 1);
+        assert_eq!(ledger.totals.cached_read_tokens, 0);
     }
 
     #[test]

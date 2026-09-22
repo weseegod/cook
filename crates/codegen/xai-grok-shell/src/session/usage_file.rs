@@ -62,6 +62,15 @@ pub struct UsageSummary {
     /// in value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_components: Option<RequestComponentUsage>,
+    /// Uncached input remainder over this row's calls, present only when every call here
+    /// reported a cache-read number. Absent otherwise, so an unreported field never becomes a
+    /// zero remainder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<u64>,
+    /// Whether the cache-read field was reported for every call in this row. False means the
+    /// cache-hit share is unknown, not zero.
+    #[serde(default)]
+    pub cache_field_present: bool,
 }
 
 /// Estimated component totals across every measured main-loop request.
@@ -196,6 +205,15 @@ pub struct PurposeUsage {
     /// Completed calls whose provider response omitted usage. Unknown spend.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub usage_missing_calls: u64,
+    /// Uncached input remainder over this purpose's calls, present only when every call here
+    /// reported a cache-read number. Absent otherwise, so an unreported field never becomes a
+    /// zero remainder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<u64>,
+    /// Whether the cache-read field was reported for every call in this row. False means the
+    /// cache-hit share is unknown, not zero.
+    #[serde(default)]
+    pub cache_field_present: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -219,12 +237,40 @@ impl From<&xai_chat_state::UsageTotals> for PurposeUsage {
             total_tokens: t.total_tokens(),
             model_calls: t.model_calls,
             usage_missing_calls: t.usage_missing_calls,
+            uncached_input_tokens: remainder_when_reported(t),
+            cache_field_present: cache_field_fully_reported(t),
         }
     }
 }
 
+/// The row's uncached remainder, but only when every call in the row reported a cache-read
+/// number; otherwise `None`, so an unreported field never becomes a zero remainder.
+fn remainder_when_reported(t: &xai_chat_state::UsageTotals) -> Option<u64> {
+    cache_field_fully_reported(t)
+        .then_some(t.uncached_input_tokens)
+        .flatten()
+}
+
+/// True when at least one call reported the field and none omitted it.
+fn cache_field_fully_reported(t: &xai_chat_state::UsageTotals) -> bool {
+    t.cache_field_present_calls > 0 && t.cache_field_absent_calls == 0
+}
+
 impl PurposeUsage {
     fn saturating_add(&self, other: &Self) -> Self {
+        let combined = combine_cache_field(
+            (
+                self.model_calls,
+                self.cache_field_present,
+                self.uncached_input_tokens,
+            ),
+            (
+                other.model_calls,
+                other.cache_field_present,
+                other.uncached_input_tokens,
+            ),
+            |a, b| a.saturating_add(b),
+        );
         Self {
             input_tokens: self.input_tokens.saturating_add(other.input_tokens),
             output_tokens: self.output_tokens.saturating_add(other.output_tokens),
@@ -240,10 +286,25 @@ impl PurposeUsage {
             usage_missing_calls: self
                 .usage_missing_calls
                 .saturating_add(other.usage_missing_calls),
+            cache_field_present: combined.0,
+            uncached_input_tokens: combined.1,
         }
     }
 
     fn saturating_sub(&self, other: &Self) -> Self {
+        let combined = combine_cache_field(
+            (
+                self.model_calls,
+                self.cache_field_present,
+                self.uncached_input_tokens,
+            ),
+            (
+                other.model_calls,
+                other.cache_field_present,
+                other.uncached_input_tokens,
+            ),
+            |a, b| a.saturating_sub(b),
+        );
         Self {
             input_tokens: self.input_tokens.saturating_sub(other.input_tokens),
             output_tokens: self.output_tokens.saturating_sub(other.output_tokens),
@@ -259,6 +320,8 @@ impl PurposeUsage {
             usage_missing_calls: self
                 .usage_missing_calls
                 .saturating_sub(other.usage_missing_calls),
+            cache_field_present: combined.0,
+            uncached_input_tokens: combined.1,
         }
     }
 
@@ -311,6 +374,8 @@ impl UsageSummary {
             model_usage: IndexMap::new(),
             purpose_usage: IndexMap::new(),
             request_components: None,
+            uncached_input_tokens: remainder_when_reported(totals),
+            cache_field_present: cache_field_fully_reported(totals),
         }
     }
 
@@ -335,6 +400,19 @@ impl UsageSummary {
     }
 
     fn saturating_add_row(&self, other: &Self) -> Self {
+        let combined = combine_cache_field(
+            (
+                self.model_calls,
+                self.cache_field_present,
+                self.uncached_input_tokens,
+            ),
+            (
+                other.model_calls,
+                other.cache_field_present,
+                other.uncached_input_tokens,
+            ),
+            |a, b| a.saturating_add(b),
+        );
         Self {
             input_tokens: self.input_tokens.saturating_add(other.input_tokens),
             output_tokens: self.output_tokens.saturating_add(other.output_tokens),
@@ -358,6 +436,8 @@ impl UsageSummary {
                 self.request_components.as_ref(),
                 other.request_components.as_ref(),
             ),
+            cache_field_present: combined.0,
+            uncached_input_tokens: combined.1,
         }
     }
 
@@ -377,6 +457,19 @@ impl UsageSummary {
     }
 
     fn saturating_sub_row(&self, other: &Self) -> Self {
+        let combined = combine_cache_field(
+            (
+                self.model_calls,
+                self.cache_field_present,
+                self.uncached_input_tokens,
+            ),
+            (
+                other.model_calls,
+                other.cache_field_present,
+                other.uncached_input_tokens,
+            ),
+            |a, b| a.saturating_sub(b),
+        );
         Self {
             input_tokens: self.input_tokens.saturating_sub(other.input_tokens),
             output_tokens: self.output_tokens.saturating_sub(other.output_tokens),
@@ -400,6 +493,8 @@ impl UsageSummary {
                 self.request_components.as_ref(),
                 other.request_components.as_ref(),
             ),
+            cache_field_present: combined.0,
+            uncached_input_tokens: combined.1,
         }
     }
 
@@ -570,6 +665,35 @@ fn load_for_session_in_root(
         Ok(file) => Ok(UsageLoad::Ready(Box::new(file))),
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e)),
     }
+}
+
+/// Combine two rows' cache-field honesty. A row with no model calls is neutral: summing an
+/// empty row into a reported one keeps the report instead of letting the empty default veto it.
+/// The remainder is `None` unless the combined row is fully reported, so an unreported field
+/// never becomes a zero remainder.
+fn combine_cache_field(
+    a: (u64, bool, Option<u64>),
+    b: (u64, bool, Option<u64>),
+    op: impl Fn(u64, u64) -> u64,
+) -> (bool, Option<u64>) {
+    let a_ok = a.0 == 0 || a.1;
+    let b_ok = b.0 == 0 || b.1;
+    (
+        a_ok && b_ok,
+        (a_ok && b_ok).then(|| op(a.2.unwrap_or(0), b.2.unwrap_or(0))),
+    )
+}
+
+/// Combine two rows' reported remainders. The result is `None` unless both sides reported the
+/// cache field for every call they cover, so an unreported field never becomes a zero remainder.
+fn merge_reported_remainder(
+    a_present: bool,
+    a: Option<u64>,
+    b_present: bool,
+    b: Option<u64>,
+    op: impl Fn(u64, u64) -> u64,
+) -> Option<u64> {
+    (a_present && b_present).then(|| op(a.unwrap_or(0), b.unwrap_or(0)))
 }
 
 fn is_zero_u64(value: &u64) -> bool {

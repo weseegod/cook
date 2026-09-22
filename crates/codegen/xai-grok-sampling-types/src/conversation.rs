@@ -878,6 +878,10 @@ pub struct TokenUsage {
     /// Part of `prompt_tokens` but distinct from cache reads; 0 on backends without a cache-write signal.
     #[serde(default)]
     pub cache_creation_prompt_tokens: u32,
+    /// True when the provider response carried a cache-read number, even if it was 0. False means
+    /// the field was absent, so the cache-hit share is unknown and must not be read as zero.
+    #[serde(default)]
+    pub cached_prompt_tokens_present: bool,
 }
 
 impl TokenUsage {
@@ -905,6 +909,7 @@ impl From<Usage> for TokenUsage {
                 .map_or(0, |d| d.reasoning_tokens),
             cached_prompt_tokens,
             cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: u.prompt_tokens_details.is_some(),
         }
     }
 }
@@ -2389,6 +2394,37 @@ mod tests {
     use super::*;
     use crate::tool_overrides::*;
     use assert_matches::assert_matches;
+
+    /// `cached_prompt_tokens_present` records whether the wire carried a cache-read number at
+    /// all, so a missing `prompt_tokens_details` cannot masquerade as a 0-token cache hit.
+    #[test]
+    fn cached_prompt_tokens_presence_follows_the_wire_field() {
+        use crate::types::PromptTokensDetails;
+        let reported = |cached_tokens: Option<PromptTokensDetails>| Usage {
+            prompt_tokens: 1_000,
+            completion_tokens: 10,
+            total_tokens: 1_010,
+            prompt_tokens_details: cached_tokens,
+            completion_tokens_details: None,
+            cost_in_usd_ticks: None,
+        };
+
+        let usage = TokenUsage::from(reported(Some(PromptTokensDetails {
+            cached_tokens: 400,
+            ..Default::default()
+        })));
+        assert!(usage.cached_prompt_tokens_present);
+        assert_eq!(usage.cached_prompt_tokens, 400);
+
+        // A reported field with zero hits is still "present".
+        assert!(TokenUsage::from(reported(Some(PromptTokensDetails::default())))
+            .cached_prompt_tokens_present);
+
+        // No details object at all: the cache-hit share is unknown, never zero.
+        let usage = TokenUsage::from(reported(None));
+        assert!(!usage.cached_prompt_tokens_present);
+        assert_eq!(usage.cached_prompt_tokens, 0);
+    }
 
     /// Keeps `forwards_prompt_cache_key()` honest against each mapping: a key that never reaches the wire looks like a 0% cache hit, not a bug.
     #[test]

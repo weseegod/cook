@@ -283,6 +283,8 @@ fn messages_token_usage(
         reasoning_tokens: 0,
         cached_prompt_tokens: cache_read_input_tokens,
         cache_creation_prompt_tokens: cache_creation_input_tokens,
+        // The caller's event carries `cache_read_input_tokens` non-optionally.
+        cached_prompt_tokens_present: true,
     })
 }
 
@@ -668,6 +670,7 @@ pub(crate) async fn generate_session_compact(
                                 reasoning_tokens: u.output_tokens_details.reasoning_tokens,
                                 cached_prompt_tokens: u.input_tokens_details.cached_tokens,
                                 cache_creation_prompt_tokens: 0,
+                                cached_prompt_tokens_present: true,
                             });
                         }
                         match &chunk {
