@@ -211,26 +211,18 @@ impl UseToolInput {
         let tool_input_file = serde_json::json!({"type": "string", "minLength": 1, "description": "UTF-8 JSON file containing only the complete remote argument object"});
         let file = serde_json::json!({"type": "string", "minLength": 1, "description": "UTF-8 JSON file containing canonical tool_name and object tool_input"});
         // Root unions compile each branch without inheriting the root properties.
-        // File-input root has no branch-local inheritance of `required`. Top-level
-        // `required` is the preferred inline pair so weak models stop emitting `{}`;
-        // the file forms remain in `oneOf` for the model that chooses them (parser
-        // does not require JSON-Schema validation of `file`).
+        // Do not send `oneOf` to the model: llama.cpp guided JSON mishandles the
+        // exclusive union and spark25-4b then emits `{}` (real agents.mcp_echo).
+        // Root `required` forces the preferred inline pair; the parser still accepts
+        // file forms when a client ignores schema validation.
         schemars::json_schema!({
             "type": "object",
-            "description": "Use exactly one form. Preferred inline (both keys, never empty {}): {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}}. Example: {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}.",
+            "description": "Use exactly one form. Preferred inline (both keys, never empty {}): {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}}. Example: {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}. Alternative forms: tool_name + tool_input_file, or file (UTF-8 JSON document).",
             "required": ["tool_name", "tool_input"],
             "properties": {
                 "tool_name": tool_name, "tool_input": tool_input,
                 "tool_input_file": tool_input_file, "file": file
-            },
-            "oneOf": [
-                {"type": "object", "properties": {"tool_name": tool_name, "tool_input": tool_input},
-                 "required": ["tool_name", "tool_input"], "not": {"anyOf": [{"required": ["tool_input_file"]}, {"required": ["file"]}]}},
-                {"type": "object", "properties": {"tool_name": tool_name, "tool_input_file": tool_input_file},
-                 "required": ["tool_name", "tool_input_file"], "not": {"anyOf": [{"required": ["tool_input"]}, {"required": ["file"]}]}},
-                {"type": "object", "properties": {"file": file},
-                 "required": ["file"], "not": {"anyOf": [{"required": ["tool_name"]}, {"required": ["tool_input"]}, {"required": ["tool_input_file"]}]}}
-            ]
+            }
         })
     }
 }

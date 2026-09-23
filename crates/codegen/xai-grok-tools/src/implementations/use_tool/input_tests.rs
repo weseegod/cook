@@ -172,9 +172,8 @@ fn non_empty_wrong_keys_keep_short_form_list_error() {
     );
 }
 
-/// File-input schema must carry top-level `required` for the preferred inline pair so
-/// weak models stop emitting `{}` (real-model agents.mcp_echo), plus the never-empty
-/// example on the root description.
+/// File-input schema must carry top-level `required` for the preferred inline pair and
+/// must not send `oneOf` (guided JSON + exclusive union → spark25 emits `{}`).
 #[test]
 fn file_input_schema_root_description_forbids_empty_object() {
     let schema = serde_json::to_value(UseToolInput::input_schema(true)).unwrap();
@@ -182,6 +181,10 @@ fn file_input_schema_root_description_forbids_empty_object() {
         schema.get("required"),
         Some(&serde_json::json!(["tool_name", "tool_input"])),
         "file-input root must require the preferred inline pair: {schema}"
+    );
+    assert!(
+        schema.get("oneOf").is_none(),
+        "file-input schema must omit oneOf for guided JSON: {schema}"
     );
     let description = schema
         .get("description")
