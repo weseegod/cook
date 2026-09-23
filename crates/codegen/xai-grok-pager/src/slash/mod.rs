@@ -151,6 +151,14 @@ impl SuggestionRow {
     }
 }
 
+/// Argument rows plus the row the dropdown opens on when no selection carries over.
+#[derive(Default)]
+struct ArgSuggestions {
+    rows: Vec<SuggestionRow>,
+    /// Index into `rows` of the command's `preselected_arg`, when that row survived ranking.
+    preselected: Option<usize>,
+}
+
 /// Prefix match aligned with nucleo `CaseMatching::Smart`: all-lowercase query is case-insensitive; any uppercase in the query requires exact prefix.
 fn command_prefix_matches_smart(full_name: &str, query: &str) -> bool {
     if query.is_empty() {
@@ -628,14 +636,17 @@ impl SlashController {
         // branches partition: analyze_input sets args_range exactly when the cursor is past the command token.
         if input.cursor_in_command {
             let matches = self.command_suggestions(&input.query, models);
-            snapshot.selected = Self::carry_selection(&previous, &matches, true, &input);
+            snapshot.selected =
+                Self::carry_selection(&previous, &matches, true, &input).unwrap_or(0);
             snapshot.open = !matches.is_empty();
             snapshot.matches = matches;
         } else if input.args_range.is_some() {
-            let matches = self.arg_suggestions_for_input(text, &input, models);
-            snapshot.selected = Self::carry_selection(&previous, &matches, false, &input);
-            snapshot.open = !matches.is_empty();
-            snapshot.matches = matches;
+            let suggestions = self.arg_suggestions_for_input(text, &input, models);
+            snapshot.selected = Self::carry_selection(&previous, &suggestions.rows, false, &input)
+                .or(suggestions.preselected)
+                .unwrap_or(0);
+            snapshot.open = !suggestions.rows.is_empty();
+            snapshot.matches = suggestions.rows;
         }
 
         // Resolve the command for args placeholder and skill detection.
@@ -707,7 +718,7 @@ impl SlashController {
                     args_range: None,
                     args_query: String::new(),
                 };
-                let selected = Self::carry_selection(previous, &matches, true, &input);
+                let selected = Self::carry_selection(previous, &matches, true, &input).unwrap_or(0);
                 SlashSnapshot {
                     active: true,
                     open: !matches.is_empty(),
@@ -825,7 +836,7 @@ impl SlashController {
             String::new()
         };
 
-        let arg_matches = self.arg_suggestions(command.as_ref(), models, &args_query);
+        let suggestions = self.arg_suggestions(command.as_ref(), models, &args_query);
         let args_range = Some(start..args_end);
         let input = SlashInput {
             command_range: token.range.clone(),
@@ -837,9 +848,11 @@ impl SlashController {
 
         snapshot.args_query_is_empty = args_empty;
         snapshot.args_range = args_range;
-        snapshot.open = !arg_matches.is_empty();
-        snapshot.matches = arg_matches;
-        snapshot.selected = Self::carry_selection(previous, &snapshot.matches, false, &input);
+        snapshot.open = !suggestions.rows.is_empty();
+        snapshot.selected = Self::carry_selection(previous, &suggestions.rows, false, &input)
+            .or(suggestions.preselected)
+            .unwrap_or(0);
+        snapshot.matches = suggestions.rows;
         if args_empty {
             snapshot.args_placeholder = command.arg_placeholder().map(|s| s.to_string());
         }
@@ -884,14 +897,15 @@ impl SlashController {
     }
 
     /// Try to carry the previous selection across a refresh.
+    /// `None` when the dropdown context changed or there was nothing to carry, so the caller picks the opening row.
     fn carry_selection(
         previous: &SlashSnapshot,
         matches: &[SuggestionRow],
         cursor_in_command: bool,
         input: &SlashInput,
-    ) -> usize {
+    ) -> Option<usize> {
         if matches.is_empty() {
-            return 0;
+            return None;
         }
 
         let same_context = if cursor_in_command {
@@ -900,7 +914,7 @@ impl SlashController {
             !previous.cursor_in_command && previous.args_range == input.args_range
         };
         if !same_context || previous.matches.is_empty() {
-            return 0;
+            return None;
         }
 
         let prev_idx = previous
@@ -911,10 +925,10 @@ impl SlashController {
                 .iter()
                 .position(|row| row.insert_text == prev_row.insert_text)
         {
-            return pos;
+            return Some(pos);
         }
 
-        previous.selected.min(matches.len().saturating_sub(1))
+        Some(previous.selected.min(matches.len().saturating_sub(1)))
     }
 
     /// Byte ranges of recognized `/command` tokens anywhere in `text`. Both the composer's teal token highlighting and
@@ -1191,13 +1205,13 @@ impl SlashController {
         text: &str,
         input: &SlashInput,
         models: &ModelState,
-    ) -> Vec<SuggestionRow> {
+    ) -> ArgSuggestions {
         let Some(invocation) = parse_invocation(text) else {
-            return Vec::new();
+            return ArgSuggestions::default();
         };
         // Clone the Arc to release the borrow on self.registry before calling arg_suggestions (which needs &mut self for the matcher)
         let Some(command) = self.registry.get(invocation.token).cloned() else {
-            return Vec::new();
+            return ArgSuggestions::default();
         };
         // Hidden commands never produce arg suggestions either.
         let offered = {
@@ -1205,7 +1219,7 @@ impl SlashController {
             command_offered(command.as_ref(), &visible_ctx, self.hide_session_scoped)
         };
         if !offered {
-            return Vec::new();
+            return ArgSuggestions::default();
         }
         self.arg_suggestions(command.as_ref(), models, &input.args_query)
     }
@@ -1229,34 +1243,72 @@ impl SlashController {
         command: &dyn SlashCommand,
         models: &ModelState,
         query: &str,
-    ) -> Vec<SuggestionRow> {
+    ) -> ArgSuggestions {
         let ctx = self.app_ctx(models);
         if !command.takes_args_now(&ctx) {
-            return Vec::new();
+            return ArgSuggestions::default();
         }
         let Some(items) = command.suggest_args(&ctx, query) else {
-            return Vec::new();
+            return ArgSuggestions::default();
         };
         if items.is_empty() {
-            return Vec::new();
+            return ArgSuggestions::default();
         }
+        // `ctx` borrows `&self` and `self.matcher.rank` below needs `&mut self`, so ask before ranking
+        let target = command.preselected_arg(&ctx, query);
         let trimmed = query.trim();
-        if trimmed.is_empty() {
-            return items.iter().map(SuggestionRow::from_arg).collect();
-        }
-        let hits = self
-            .matcher
-            .rank(items.as_slice(), trimmed, items.len(), |item| {
-                item.match_text.as_str()
-            });
-        hits.into_iter()
-            .filter_map(|(idx, _)| {
-                let mut row = SuggestionRow::from_arg(items.get(idx)?);
-                row.indices = self.argument_highlight_indices(trimmed, &row.display);
-                Some(row)
-            })
-            .collect()
+        let rows: Vec<SuggestionRow> = if trimmed.is_empty() {
+            items.iter().map(SuggestionRow::from_arg).collect()
+        } else {
+            let fallbacks: Vec<String> = items.iter().map(label_match_haystack).collect();
+            let cands: Vec<(&ArgItem, &str)> = items
+                .iter()
+                .zip(fallbacks.iter().map(String::as_str))
+                .collect();
+            let hits = self.matcher.rank_either(
+                cands.as_slice(),
+                trimmed,
+                cands.len(),
+                |cand| cand.0.match_text.as_str(),
+                |cand| cand.1,
+            );
+            hits.into_iter()
+                .filter_map(|(idx, _)| {
+                    let mut row = SuggestionRow::from_arg(items.get(idx)?);
+                    row.indices = self.argument_highlight_indices(trimmed, &row.display);
+                    Some(row)
+                })
+                .collect()
+        };
+        let preselected =
+            target.and_then(|target| rows.iter().position(|row| row.insert_text == target));
+        ArgSuggestions { rows, preselected }
     }
+}
+
+/// Label haystack. Keeps the model-name prefix when the label is not already in `match_text`.
+fn label_match_haystack(item: &ArgItem) -> String {
+    let label = item
+        .display
+        .strip_suffix(" (active)")
+        .or_else(|| item.display.strip_suffix(" (current)"))
+        .unwrap_or(item.display.as_str());
+    if contains_ignore_ascii_case(&item.match_text, label) {
+        return label.to_string();
+    }
+    match item.match_text.rsplit_once(' ') {
+        Some((prefix, _)) => format!("{prefix} {label}"),
+        None => label.to_string(),
+    }
+}
+
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    needle.is_empty()
+        || haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 /// Conversely, [`SlashCommand::dashboard_only`] commands (`/cd`) are offered only when `hide_session_scoped` is set
@@ -3505,6 +3557,119 @@ mod tests {
         assert_eq!(
             snap.matches.first().map(|m| m.indices.as_slice()),
             Some([0, 1].as_slice())
+        );
+    }
+
+    #[test]
+    fn model_effort_phase_opens_on_default_row_and_keeps_carry_semantics() {
+        let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        let state = SlashState::default();
+        let mut models = ModelState::default();
+        let id = acp::ModelId::new(Arc::from("reasoning-x"));
+        models.available.insert(
+            id.clone(),
+            acp::ModelInfo::new(id, "Reasoning X").meta(
+                serde_json::json!({ "supportsReasoningEffort": true, "reasoningEffort": "high" })
+                    .as_object()
+                    .cloned(),
+            ),
+        );
+
+        let text = "/model Reasoning X ";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let snap = state.snapshot();
+        assert_eq!(1, snap.selected);
+        assert_eq!(
+            Some("Reasoning X high"),
+            snap.selection().map(|row| row.insert_text.as_str())
+        );
+
+        // Arrow navigation survives a same-text refresh; the opening row applies only to a new args context
+        ctrl.move_selection(&state, 1);
+        ctrl.refresh(&state, text, text.len(), &models);
+        assert_eq!(2, state.snapshot().selected);
+
+        let text = "/model Reasoning X h";
+        ctrl.refresh(&state, text, text.len(), &models);
+        assert_eq!(0, state.snapshot().selected);
+    }
+
+    #[test]
+    fn model_effort_phase_matches_a_catalog_id_prefix() {
+        let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        let state = SlashState::default();
+        let mut models = ModelState::default();
+        let id = acp::ModelId::new(Arc::from("grok-4.7"));
+        models.available.insert(
+            id.clone(),
+            acp::ModelInfo::new(id, "Grok 4.7").meta(
+                serde_json::json!({ "supportsReasoningEffort": true, "reasoningEffort": "high" })
+                    .as_object()
+                    .cloned(),
+            ),
+        );
+
+        // `grok-4.7` is not a subsequence of `Grok 4.7` (the hyphen). Rows must carry the id.
+        let text = "/model grok-4.7 ";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let snap = state.snapshot();
+        assert!(snap.open, "effort menu closed for a catalog id");
+        assert_eq!(
+            Some("grok-4.7 high"),
+            snap.selection().map(|row| row.insert_text.as_str())
+        );
+
+        let text = "/model grok-4.7 hi";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let snap = state.snapshot();
+        assert!(
+            snap.matches
+                .iter()
+                .any(|row| row.insert_text == "grok-4.7 high"),
+            "id prefix filtered out the effort rows: {:?}",
+            snap.matches
+                .iter()
+                .map(|row| row.insert_text.as_str())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn effort_active_suffix_is_not_searchable() {
+        let mut ctrl = SlashController::with_builtins(std::path::PathBuf::from("."));
+        let state = SlashState::default();
+        let mut models = ModelState::default();
+        let id = acp::ModelId::new(Arc::from("reasoning-x"));
+        models.available.insert(
+            id.clone(),
+            acp::ModelInfo::new(id.clone(), "Reasoning X").meta(
+                serde_json::json!({ "supportsReasoningEffort": true, "reasoningEffort": "high" })
+                    .as_object()
+                    .cloned(),
+            ),
+        );
+        models.current = Some(id);
+        models.reasoning_effort = Some(xai_grok_shell::sampling::types::ReasoningEffort::High);
+
+        let text = "/effort ";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let open = state.snapshot();
+        assert!(
+            open.matches
+                .iter()
+                .any(|row| row.display == "high (active)"),
+            "expected the active row before filtering"
+        );
+
+        let text = "/effort act";
+        ctrl.refresh(&state, text, text.len(), &models);
+        let filtered = state.snapshot();
+        assert!(
+            filtered
+                .matches
+                .iter()
+                .all(|row| row.display != "high (active)"),
+            "active suffix matched"
         );
     }
 

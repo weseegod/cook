@@ -389,9 +389,41 @@ impl Drop for InitClaimGuard {
     }
 }
 
+/// Admitted server list shared with the session handle.
+///
+/// `update_configs` and `update_configs_diff` publish into this cell, so a
+/// handle that cloned it at spawn sees the current seat, including headers.
+/// A fork snapshots that list instead of the spawn-time overlay.
+#[derive(Clone)]
+pub struct AdmittedMcpServers(Arc<parking_lot::Mutex<Vec<acp::McpServer>>>);
+
+impl AdmittedMcpServers {
+    pub fn new(servers: Vec<acp::McpServer>) -> Self {
+        Self(Arc::new(parking_lot::Mutex::new(servers)))
+    }
+
+    /// Copy the list. Forks keep this copy; later seat switches do not rewrite it.
+    pub fn snapshot(&self) -> Vec<acp::McpServer> {
+        self.0.lock().clone()
+    }
+
+    pub fn replace(&self, servers: Vec<acp::McpServer>) {
+        *self.0.lock() = servers;
+    }
+}
+
+impl Default for AdmittedMcpServers {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 /// Consolidated MCP state behind a single lock.
 pub struct McpState {
     pub configs: Vec<acp::McpServer>,
+    /// Shared with the session handle. Private so commits go through
+    /// [`Self::update_configs`] / [`Self::update_configs_diff`].
+    admitted: AdmittedMcpServers,
     pub meta_config_map: McpMetaConfigMap,
     pub owned_clients: crate::owned_clients::OwnedClients,
     /// Clients inherited from parent via `SharedMcpPool`; never cleared by config changes.
@@ -440,8 +472,10 @@ impl McpState {
     }
 
     pub fn new_with_meta(configs: Vec<acp::McpServer>, meta_config_map: McpMetaConfigMap) -> Self {
+        let admitted = AdmittedMcpServers::new(configs.clone());
         Self {
             configs,
+            admitted,
             meta_config_map,
             owned_clients: crate::owned_clients::OwnedClients::new(),
             shared_clients: HashMap::new(),
@@ -616,12 +650,22 @@ impl McpState {
         self.mcp_tool_icons.clear();
         self.disabled_tool_registrations.clear();
         self.configs = new_configs;
+        self.publish_admitted();
         self.cancel_any_init();
         self.auth_required.clear();
         self.init_failed.clear();
         self.unreachable_retry.clear();
         self.advance_generation(Replacement::ServerSetChange);
         true
+    }
+
+    /// Handle clones share this cell. Forks call [`AdmittedMcpServers::snapshot`].
+    pub fn admitted_servers(&self) -> AdmittedMcpServers {
+        self.admitted.clone()
+    }
+
+    fn publish_admitted(&self) {
+        self.admitted.replace(self.configs.clone());
     }
 
     fn advance_generation(&mut self, by: Replacement) {
@@ -722,6 +766,7 @@ impl McpState {
         );
 
         self.configs = new_configs;
+        self.publish_admitted();
         self.cancel_any_init();
         self.advance_generation(Replacement::ServerSetChange);
 

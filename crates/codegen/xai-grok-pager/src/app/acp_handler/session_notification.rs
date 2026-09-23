@@ -137,6 +137,9 @@ fn synthesize_replay_turn_marker(
     let visible = agent.replayed_visible_prompts.contains(prompt_id);
     let chatty_rate_limit = is_wake && stop == TurnStopReason::RateLimit && visible;
     if is_wake && (matches!(stop, TurnStopReason::Error) || chatty_rate_limit) {
+        if stop == TurnStopReason::Error {
+            super::prompt_origin::log_failed_wake(prompt_id, agent_result, "replay");
+        }
         agent.failed_wake_marker_for = Some(prompt_id.to_string());
     }
     let suppress = super::prompt_origin::suppress_replay_marker_for_origin(
@@ -227,6 +230,7 @@ pub(super) fn handle_session_notification_with_origin(
             child_sid,
             agent,
             is_api_key_auth,
+            session_notif.meta.as_ref(),
         );
         return changed && is_active;
     }
@@ -285,6 +289,7 @@ pub(super) fn handle_session_notification_with_origin(
     let mut plugins_changed_needs_skills_refetch = false;
     let mut status_snapshot_applied = false;
     let mut terminal_outcome: Option<super::super::turn_completion::TerminalApply> = None;
+    let mut queue_wake_turn_complete = false;
     let mut pending_finish_for_spawn = None;
     let root_session_id: &str = session_notif.session_id.0.as_ref();
     let changed = match session_notif.update {
@@ -369,31 +374,31 @@ pub(super) fn handle_session_notification_with_origin(
                     let errored = matches!(stop_reason.as_str(), "error" | "rate_limit");
                     if errored && agent.failed_wake_marker_for.as_deref() != Some(&*prompt_id) {
                         agent.failed_wake_marker_for = Some(prompt_id.clone());
-                        if crate::app::dispatch::scrollback_has_recent_error_banner(
+                        if stop_reason == "error" {
+                            super::prompt_origin::log_failed_wake(
+                                &prompt_id,
+                                agent_result.as_deref(),
+                                "busy",
+                            );
+                            false
+                        } else if crate::app::dispatch::scrollback_has_recent_error_banner(
                             &agent.scrollback,
                         ) {
                             false
                         } else {
-                            let event = if stop_reason == "rate_limit" {
+                            agent.push_end_marker_block(
                                 super::prompt_origin::rate_limited_wake_failure_event(
                                     agent_result.as_deref(),
                                     None,
-                                )
-                            } else {
-                                crate::app::turn_completion::failed_turn_event(
-                                    error_kind,
-                                    agent_result.as_deref(),
-                                    None,
-                                )
-                            };
-                            agent.push_end_marker_block(event);
+                                ),
+                            );
                             true
                         }
                     } else {
                         false
                     }
                 } else {
-                    finish_wake_turn(
+                    queue_wake_turn_complete = finish_wake_turn(
                         agent,
                         &prompt_id,
                         super::prompt_origin::WakeTerminal {
@@ -407,7 +412,6 @@ pub(super) fn handle_session_notification_with_origin(
                                 session_notif.meta.as_ref(),
                                 super::super::turn_completion::CANCELLATION_CATEGORY_KEY,
                             ),
-                            error_kind,
                         },
                     );
                     true
@@ -654,13 +658,6 @@ pub(super) fn handle_session_notification_with_origin(
                 child_view.set_sharing_enabled(agent.sharing_enabled);
                 child_view.set_billing_surface_visible(agent.billing_surface_visible);
                 child_view.set_usage_command_visible(agent.usage_command_visible);
-                let dashboard_visible = agent
-                    .prompt
-                    .slash_controller
-                    .registry()
-                    .get("dashboard")
-                    .is_some();
-                child_view.set_dashboard_visible(dashboard_visible);
                 child_view.set_has_session_announcements(
                     agent.prompt.slash_controller.has_session_announcements(),
                 );
@@ -1383,6 +1380,9 @@ pub(super) fn handle_session_notification_with_origin(
         let deferred = acp::ExtNotification::new("x.ai/session/update", params.into());
         let _ = handle_session_notification_with_origin(&deferred, app, origin);
     }
+    if queue_wake_turn_complete {
+        queue_wake_turn_complete_notification(app, parent_id);
+    }
     if !app.reconnect_pending
         && let Some(agent) = app.agents.get(&parent_id)
         && agent.running_wake_turn.is_none()
@@ -1399,6 +1399,46 @@ pub(super) fn handle_session_notification_with_origin(
     }
     changed && is_active
 }
+fn queue_wake_turn_complete_notification(app: &mut AppView, agent_id: AgentId) {
+    let (session_name, session_id, model) = {
+        let Some(agent) = app.agents.get(&agent_id) else {
+            return;
+        };
+        if !agent.session.pending_prompts.is_empty() {
+            return;
+        }
+        (
+            agent
+                .display_name
+                .as_deref()
+                .or(agent.generated_session_title.as_deref())
+                .map(str::to_string),
+            agent.session.session_id.as_ref().map(|s| s.0.to_string()),
+            agent.session.models.current_model_name(),
+        )
+    };
+    let cwd_str = app.cwd.to_string_lossy().into_owned();
+    let idle_title = crate::notifications::TitleState {
+        session_name: session_name.as_deref(),
+        model: model.as_deref(),
+        activity: None,
+        has_pending_permissions: false,
+        cwd: Some(cwd_str.as_str()),
+        turn_elapsed: None,
+        is_busy: false,
+        focused: true,
+    };
+    app.pending_notification_escapes = app.notification_service.build_idle_escapes(&idle_title);
+    app.deferred_notification = Some((
+        NotificationEvent {
+            kind: NotificationEventKind::TurnComplete,
+            title: session_name.unwrap_or_else(|| "Grok".into()),
+            body: String::from("Turn complete."),
+            session_id,
+        },
+        3,
+    ));
+}
 /// Handle an xAI session notification that targets a child (subagent) session.
 /// Events like compaction, retry, and memory flush are emitted by the child's `acp_session` with the *child's* `session_id`.
 /// This routes them to the correct child view and updates `SubagentInfo` where appropriate.
@@ -1407,6 +1447,7 @@ pub(super) fn handle_child_session_notification(
     child_sid: &str,
     agent: &mut AgentView,
     is_api_key_auth: bool,
+    meta: Option<&serde_json::Value>,
 ) -> bool {
     match update {
         XaiSessionUpdate::AutoCompactStarted { .. }
@@ -1460,6 +1501,52 @@ pub(super) fn handle_child_session_notification(
             let activity_label = subagent_activity_label(child_view);
             sync_subagent_activity(agent, child_sid, activity_label);
             true
+        }
+        XaiSessionUpdate::TurnCompleted {
+            prompt_id,
+            stop_reason,
+            agent_result,
+            error_kind,
+            elapsed_ms,
+            ..
+        } => {
+            if NotificationMeta::from_json(meta.and_then(|v| v.as_object())).is_replay {
+                return false;
+            }
+            let (finished, label) = {
+                let Some(child_view) = agent.child_view_for_live_update_mut(child_sid) else {
+                    return false;
+                };
+                let finished = super::super::turn_completion::finalize_child_view_turn(
+                    child_view,
+                    super::super::turn_completion::TerminalSignal {
+                        prompt_id: Some(&prompt_id),
+                        stop_reason: Some(&stop_reason),
+                        agent_result: agent_result.as_deref(),
+                        cancel_trigger: terminal_meta_str(
+                            meta,
+                            super::super::turn_completion::CANCEL_TRIGGER_KEY,
+                        ),
+                        cancellation_category: terminal_meta_str(
+                            meta,
+                            super::super::turn_completion::CANCELLATION_CATEGORY_KEY,
+                        ),
+                        cancellation_context: meta.and_then(|m| {
+                            m.get(super::super::turn_completion::CANCELLATION_CONTEXT_KEY)
+                        }),
+                        error_kind: crate::app::error_display::wire_error_kind(
+                            error_kind.as_deref(),
+                        ),
+                    },
+                    elapsed_ms,
+                );
+                let label = finished.then(|| subagent_activity_label(child_view));
+                (finished, label)
+            };
+            if let Some(label) = label {
+                sync_subagent_activity(agent, child_sid, label);
+            }
+            finished
         }
         _ => false,
     }

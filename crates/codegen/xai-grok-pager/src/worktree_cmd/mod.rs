@@ -70,6 +70,7 @@ enum WorktreeDbCommand {
     Path,
 }
 pub async fn run(args: WorktreeArgs, agent_config: &AgentConfig) -> Result<()> {
+    let command = args.command;
     let cancel = CancellationToken::new();
     xai_grok_telemetry::startup::mark_utility_process();
     let spawned = crate::acp::spawn::spawn_grok_shell(agent_config.clone(), &cancel, None).await?;
@@ -93,7 +94,7 @@ pub async fn run(args: WorktreeArgs, agent_config: &AgentConfig) -> Result<()> {
         &spawned.channel.tx,
     )
     .await?;
-    dispatch(args.command, &spawned.channel.tx).await
+    dispatch(command, &spawned.channel.tx).await
 }
 async fn dispatch(command: WorktreeCommand, tx: &xai_acp_lib::AcpAgentTx) -> Result<()> {
     match command {
@@ -175,15 +176,18 @@ async fn cmd_list(
     Ok(crate::util::ignore_broken_pipe(written)?)
 }
 async fn cmd_show(tx: &xai_acp_lib::AcpAgentTx, id_or_path: &str) -> Result<()> {
-    let rec: Option<WorktreeRecord> = ext_call(
+    let result: Result<Option<WorktreeRecord>> = ext_call(
         tx,
         "x.ai/git/worktree/show",
         &serde_json::json!({ "idOrPath" : id_or_path }),
     )
-    .await?;
+    .await;
+    let rec = result?;
     match rec {
         Some(r) => {
-            let written = display::print_show(&r, &mut std::io::stdout().lock());
+            let redirections_bytes = None;
+            let written =
+                display::print_show(&r, redirections_bytes, &mut std::io::stdout().lock());
             Ok(crate::util::ignore_broken_pipe(written)?)
         }
         None => bail!("worktree not found: {id_or_path}"),

@@ -44,14 +44,15 @@ use super::session::picker_routing::PickerRequest;
 use super::settings::ui::apply_setting_rollback;
 use super::status::{
     handle_coding_data_sharing_failed, handle_coding_data_sharing_updated,
-    handle_context_info_complete, handle_session_usage_result, scrub_error_for_toast,
+    handle_context_info_complete, handle_session_usage_result, toast_persist_failure,
     usage_modal_state_mut,
 };
 use super::transcript::{
     handle_hooks_list_loaded, handle_marketplace_list_loaded, handle_marketplace_updates_available,
     handle_mcp_toggle_done, handle_plugins_list_loaded, handle_skills_toggle_done,
 };
-use super::turn::handle_bg_task_killed;
+use super::turn::{clear_pending_kill, handle_bg_task_killed};
+use crate::app::acp_handler::task_view_by_session_id;
 use crate::app::actions::{
     Action, ClipboardPasteCompletion, ClipboardPasteContext, ClipboardPasteFailure,
     ClipboardPasteTarget, DoctorFixTarget, DoctorPlanningOutcome, Effect, ProbedAttachment,
@@ -61,6 +62,7 @@ use crate::app::agent::AgentId;
 use crate::app::agent_view::AgentDeferredSend;
 use crate::app::app_view::{ActiveView, AppView, AuthState};
 use crate::app::command_catalog::CommandCatalogSource;
+use crate::app::dispatch::settings;
 use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::MemoryCommandKind;
 use agent_client_protocol as acp;
@@ -992,11 +994,8 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             error,
         } => {
             tracing::warn!(task_id = %task_id, error = %error, "Failed to kill bg task");
-            if let Some(agent) = find_agent_by_session_id(&mut app.agents, &session_id)
-                && let Some(task) = agent.session.bg_tasks.get_mut(&task_id)
-            {
-                task.pending_kill = false;
-                task.kill_requested_at = None;
+            if let Some((session, _)) = task_view_by_session_id(app, &session_id) {
+                clear_pending_kill(session, &task_id);
             }
             vec![]
         }
@@ -2060,7 +2059,15 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             result,
             minimal_request_id,
             image_notice,
-        } => handle_btw_response(app, agent_id, result, minimal_request_id, image_notice),
+            skipped_image_numbers,
+        } => handle_btw_response(
+            app,
+            agent_id,
+            result,
+            minimal_request_id,
+            image_notice,
+            &skipped_image_numbers,
+        ),
         TaskResult::InterjectQueued { .. } => vec![],
         TaskResult::RecapRequested {
             session_id,
@@ -2255,6 +2262,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         }
         TaskResult::SettingPersisted { key, value } => {
             tracing::trace!(target: "settings", ?key, ?value, "setting persisted");
+            settings::handle_setting_persisted(app, key, value);
             vec![]
         }
         TaskResult::SettingPersistFailed {
@@ -2264,8 +2272,7 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
         } => {
             let rollback_effects = apply_setting_rollback(app, key, &rollback_value);
             tracing::warn!(target: "settings", ?key, ?rollback_value, %error, "setting persist failed; rolled back");
-            let scrubbed = scrub_error_for_toast(&error);
-            app.show_toast(&format!("\u{2717} Could not save {key}: {scrubbed}"));
+            toast_persist_failure(app, key, &error);
             rollback_effects
         }
         TaskResult::SettingPersistFailedBestEffort { key, error } => {
@@ -2274,9 +2281,11 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
                 ?key, %error,
                 "setting persist failed (best-effort); in-memory state stays at optimistic value",
             );
-            let scrubbed = scrub_error_for_toast(&error);
-            app.show_toast(&format!("\u{2717} Could not save {key}: {scrubbed}"));
+            toast_persist_failure(app, key, &error);
             vec![]
+        }
+        TaskResult::FeatureOverridePersisted { feature, result } => {
+            settings::handle_feature_override_persisted(app, feature, result)
         }
     }
 }

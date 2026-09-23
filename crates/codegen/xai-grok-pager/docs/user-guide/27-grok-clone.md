@@ -27,7 +27,7 @@ copy while clone can stay on; `GROK_CLONE=0` keeps `grok clone` off while
 worktrees can stay on.
 
 ```bash
-grok clone <url> [dir] [--branch NAME] [--cone PATH]... [--full-history]
+grok clone <url> [dir] [--branch NAME] [--full-history]
 ```
 
 ## History

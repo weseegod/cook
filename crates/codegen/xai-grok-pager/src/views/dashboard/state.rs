@@ -612,6 +612,7 @@ pub struct DashboardState {
     /// Surface-local compose mode for dispatch and peek (not persisted; not shared with agent sessions).
     /// `/multiline` or Ctrl+M.
     pub multiline_mode: bool,
+    pub(crate) preview_enabled: bool,
     /// `/usage` modal, hosted here because the dashboard has no agent to hang it on (session-less: no session id).
     /// Owns input while open; cleared on dashboard-open and on every overlay exit back to the list.
     pub usage_modal: Option<Box<crate::views::usage_modal::UsageInfoModalState>>,
@@ -1264,6 +1265,8 @@ impl DashboardState {
             voice_listening: false,
             voice_interim: None,
             multiline_mode: false,
+            preview_enabled: xai_grok_shell::agent::config::UiConfig::default()
+                .dashboard_preview_enabled(),
             usage_modal: None,
             // Fresh dashboard with no rows seeded, so the `+ New Agent` button is the default cursor target
             // Open sites that want a specific row seeded call `focus_row` after construction, which clears this atomically

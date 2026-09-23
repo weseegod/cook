@@ -27,6 +27,7 @@ mod chrome;
 pub mod layout;
 pub mod peek;
 pub mod peek_tail;
+mod preview;
 pub mod render;
 pub mod row;
 mod row_activity;

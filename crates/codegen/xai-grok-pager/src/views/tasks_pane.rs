@@ -193,8 +193,8 @@ pub enum TaskEntry {
         styled: Line<'static>,
         running: bool,
         started_at: Instant,
-        /// Capitalized agent-type / persona label (e.g. `Explore`, `Plan`, `General`).
-        /// Used to order subagents by type within their group.
+        /// Capitalized persona / role / tag label (e.g. `Reviewer`, `Subagent`).
+        /// Used to order subagents by display label within their group.
         type_label: String,
     },
     Scheduled {
@@ -317,7 +317,6 @@ impl TaskEntry {
     fn from_subagent(info: &SubagentInfo) -> Self {
         let theme = Theme::current();
 
-        // Single consolidated label (persona > role > subagent_type > tag > "general") plus description with any `[tag]` prefix stripped
         let (type_label, description) = format_subagent_label(info);
         let model_suffix = info
             .attempt
@@ -938,7 +937,7 @@ impl TasksPane {
                 .cmp(&b.type_order())
                 // 2. Running before done *within* each group.
                 .then_with(|| b.is_running().cmp(&a.is_running()))
-                // 3. Within a (group, run-state): subagents order by agent type (alphabetical) then newest-first.
+                // 3. Within a (group, run-state): subagents order by display label (alphabetical) then newest-first.
                 //    Tasks/monitors/loops order newest-first. The per-variant match avoids mixing SystemTime and Instant across types.
                 .then_with(|| match (a, b) {
                     (
@@ -2839,10 +2838,9 @@ mod tests {
     }
 
     #[test]
-    fn subagents_ordered_by_agent_type() {
+    fn nameless_explore_and_plan_type_labels_are_subagent() {
         let mut pane = TasksPane::new();
         let mut subagents = HashMap::new();
-        // Two running subagents of different types; both running so the running-first key ties and the type order decides
         let mut plan = make_info();
         plan.child_session_id = "cs-plan".into();
         plan.subagent_type = "plan".into();
@@ -2859,7 +2857,6 @@ mod tests {
             &[],
         );
 
-        // Ordered by agent type alphabetically: Explore before Plan.
         let types: Vec<&str> = pane
             .items
             .iter()
@@ -2868,7 +2865,42 @@ mod tests {
                 _ => panic!("expected Agent"),
             })
             .collect();
-        assert_eq!(types, vec!["Explore", "Plan"]);
+        assert_eq!(types, vec!["Subagent", "Subagent"]);
+    }
+
+    #[test]
+    fn display_label_sort_orders_reviewer_before_subagent() {
+        // Type-based clustering is gone; Agent rows order by type_label then newest-first.
+        let mut pane = TasksPane::new();
+        let mut subagents = HashMap::new();
+        let mut reviewer = make_info();
+        reviewer.child_session_id = "cs-reviewer".into();
+        reviewer.subagent_id = "sa-reviewer".into();
+        reviewer.attempt.persona = Some("reviewer".into());
+        let mut nameless = make_info();
+        nameless.child_session_id = "cs-nameless".into();
+        nameless.subagent_id = "sa-nameless".into();
+        // Nameless is newer so newest-first must not beat Reviewer < Subagent.
+        nameless.attempt.started_at += std::time::Duration::from_secs(1);
+        subagents.insert("cs-nameless".into(), nameless);
+        subagents.insert("cs-reviewer".into(), reviewer);
+
+        pane.sync(
+            &std::collections::BTreeMap::new(),
+            &subagents,
+            &HashMap::new(),
+            &[],
+        );
+
+        let types: Vec<&str> = pane
+            .items
+            .iter()
+            .map(|e| match e {
+                TaskEntry::Agent { type_label, .. } => type_label.as_str(),
+                _ => panic!("expected Agent"),
+            })
+            .collect();
+        assert_eq!(vec!["Reviewer", "Subagent"], types);
     }
 
     #[test]
@@ -2880,8 +2912,8 @@ mod tests {
             _ => panic!("expected Agent variant"),
         };
         assert!(
-            label.starts_with("Explore "),
-            "label should start with capitalized type badge: {label}",
+            label.starts_with("Subagent "),
+            "label should start with capitalized display label: {label}",
         );
     }
 
@@ -2913,7 +2945,7 @@ mod tests {
             TaskEntry::Agent { label, .. } => label.as_str(),
             _ => panic!("expected Agent variant"),
         };
-        assert_eq!(label, "Explore Find API endpoints");
+        assert_eq!(label, "Subagent Find API endpoints");
     }
 
     #[test]

@@ -10,7 +10,7 @@ into the tree cold. See `README.md` for user-level build/install info and
 
 ## 1. Overview
 
-This is a Rust workspace (93 crates) implementing **Cook**, a terminal-based
+This is a Rust workspace implementing **Cook**, a terminal-based
 AI coding agent. The binary is **`cook`** (the cargo artifact is
 `xai-grok-pager`) with its own home directory **`~/.cook`**.
 
@@ -27,7 +27,8 @@ The product runs in four modes, all sharing one agent runtime:
   [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md).
   Production plan: [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md).
   Wire status: [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md).
-  Same agent process as the TUI; does not reimplement tools or sampling.
+  Uses the same shell agent runtime as the TUI; does not reimplement tools or
+  sampling.
   `src-tauri` is a leaf crate (empty `[workspace]`); do not add it to the
   generated root workspace or path-depend on shell/pager/tools.
 
@@ -137,7 +138,7 @@ All paths under `crates/`. The workspace is split into `crates/codegen/*`
 | `xai-grok-sampler` + `xai-grok-sampling-types` | Actor-based LLM inference: HTTP streaming, retry, cancellation (`sampling/` in shell re-exports the types). |
 | `xai-grok-compaction`, `xai-compaction-transcript` | Shared transport-agnostic context-window compaction engine. |
 | `xai-interjection-core` | Mid-turn user-interjection buffering/formatting. |
-| `xai-grok-memory` | Persistent memory under `~/.cook/memory/` (global `MEMORY.md` + per-workspace blake3 dirs; FTS5 + vector store). |
+| `xai-grok-memory` | Legacy Markdown memory under `~/.cook/memory/` and opt-in memory v2 under `~/.cook/memory-v2/` (topics, observations, capture, consolidation, search). See the [memory guide](crates/codegen/xai-grok-pager/docs/user-guide/13-memory.md). |
 
 ### Tools infrastructure
 
@@ -266,7 +267,7 @@ Other trees:
   `subagent/` (subagent coordinator seam — `spawn.rs`:
   `spawn_subagent_coordinator`, child via `handle_request.rs`),
   `server.rs` (`run_agent_server`).
-- `src/session/` (281 files) — everything session-scoped: `compaction*.rs`,
+- `src/session/` — everything session-scoped: `compaction*.rs`,
   `two_pass.rs`, `helpers/` (compaction prompts), `goal_*.rs` +
   `goal_classifier/` (goal orchestration), `mcp_*.rs` (MCP dispatch/restart/
   managed), `storage/` + `persistence.rs` (transcripts), `worktree.rs` +
@@ -287,6 +288,12 @@ Other trees:
 - `src/config/` — config load/reload/watcher; `src/cli_models.rs` for
   `cook models`; `src/plugin.rs` for plugin lifecycle; `src/mcp_doctor.rs`
   for `cook mcp doctor`.
+- `src/session/memory_state.rs` and `acp_session_impl/memory_*.rs` — memory v2
+  access, capture, carryover, and consolidation coordination. The storage and
+  indexing implementation lives in `xai-grok-memory/src/{v2,storage_v2,search}.rs`.
+- `src/session/acp_session_impl/mcp_argument_coercion.rs` — MCP argument
+  validation and repair before tool dispatch; `tool_calls.rs` keeps the
+  hook, permission, provenance, and result path together.
 
 ### 4.3 `xai-grok-tools` — tools registry + implementations
 
@@ -321,6 +328,8 @@ Other trees:
   (behavior-version presets), `src/notification/` (`FileWritten` streaming
   notifications), `src/reminders/` (LSP diagnostics, task completion, skill
   discovery reminders), `src/persistence.rs` (resource persistence bundle).
+  `src/registry/types.rs` also maps unrecognized BYOK tool names to a
+  registered tool when the requested operation has a safe equivalent.
 
 ### 4.4 `xai-grok-workspace` — FS, VCS, execution, permissions
 
@@ -337,7 +346,8 @@ Other trees:
 - **`src/permission/`** — approval system: `manager/` (`bash_grants.rs`,
   `request_classification.rs`), `policy.rs`, `rules.rs`, `exec_risk.rs`,
   `bash_command_splitting.rs`, `auto_mode/`.
-- **`src/worktree/`** — git-worktree lifecycle via `xai-fast-worktree`.
+- **`src/worktree/`** — git-worktree lifecycle via `xai-fast-worktree`;
+  `create_root.rs` handles root creation and `identity.rs` resolves identity.
 - **`src/fs_notify.rs`** — bridges `xai-fsnotify` events into hunk tracker,
   codebase graph, and workspace event broadcast.
 - **`src/hub*.rs`** — remote workspace-server wiring (Computer Hub);
@@ -413,6 +423,7 @@ effects spawn tasks → `Presenter` coalesces draws → `render::draw::draw_fram
 | `sessions/<session_id>/` | Per-session dirs: `events.jsonl` (canonical record via `xai-grok-session-events`), transcripts, uploads. |
 | `sessions/session_search.sqlite` | **Derived** FTS5 search index (`xai-grok-session-search`). |
 | `memory/` | `MEMORY.md` + per-workspace blake3-hashed dirs (`xai-grok-memory`). |
+| `memory-v2/` | Opt-in topics and observation inbox, scoped globally and by workspace (`xai-grok-memory`). |
 | `logs/`, `docs/user-guide/`, caches | Logs, extracted docs, caches. |
 
 **Sessions are NOT stored in SQLite** — the JSON-lines files are canonical;
@@ -449,6 +460,7 @@ separate workspace config and is unchanged.
 |---|---|
 | Change the turn loop / prompt handling | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/{turn,sampler_turn,run_loop}.rs` |
 | Change how tools are dispatched per turn | `session/acp_session_impl/tool_dispatch.rs` (+ `tool_calls.rs`) |
+| Change MCP argument repair | `session/acp_session_impl/mcp_argument_coercion.rs` and `xai-grok-tools/src/registry/types.rs` (wrapper parsing and key mapping) |
 | Change session startup / actor spawn | `session/acp_session_impl/{spawn,session_setup}.rs`, `agent/mvp_agent/acp_agent.rs` |
 | Change context compaction | `session/compaction*.rs`, `session/two_pass.rs`, `session/helpers/` + shared `xai-grok-compaction` |
 | Change subagent behavior | `agent/subagent/` (coordinator seam) + `xai-grok-subagent-resolution` (pure resolution) |
@@ -470,7 +482,7 @@ separate workspace config and is unchanged.
 | Change file-system access behavior | `xai-grok-tools/src/computer/local/file_system.rs` + `xai-grok-workspace/src/file_system/` (`AsyncFileSystem`, `LocalFs`) |
 | Change permission / approval gating | `xai-grok-workspace/src/permission/` |
 | Change git / VCS / checkpoints | `xai-grok-workspace/src/session/` (`git.rs`, `jj.rs`, `checkpoint*.rs`), `file_system/git_status.rs` |
-| Change worktree creation / GC | `xai-fast-worktree` |
+| Change worktree creation / GC | `xai-grok-workspace/src/worktree/create_root.rs` and `xai-fast-worktree` |
 | Change sandboxing | `xai-grok-sandbox` + enforcement points in `computer/local/*.rs` |
 | Change file watching / index sync | `xai-grok-workspace/src/fs_notify.rs`, `xai-fsnotify`, `xai-hunk-tracker`, `xai-codebase-graph` |
 | Change hooks (external scripts) | `xai-grok-hooks` + turn-hook dispatch in `workspace/src/handle.rs` |
@@ -482,7 +494,7 @@ separate workspace config and is unchanged.
 | Add a config key / change merge order | `xai-grok-config` (+ `xai-grok-config-types` for shared value types) |
 | Change session event schema | `xai-grok-session-events` |
 | Change session search / FTS5 index | `xai-grok-session-search` |
-| Change memory persistence | `xai-grok-memory` |
+| Change memory persistence | `xai-grok-memory/src/storage.rs` (legacy), `storage_v2.rs` / `v2.rs` (v2); shell coordination in `session/memory_state.rs` |
 | Change self-update / version feed | `xai-grok-update` (fork feed `https://download.letcook.dev`; version crates: `xai-grok-version`, `xai-grok-pager-bin`) |
 | Change telemetry / analytics | `xai-grok-telemetry` |
 | Change voice input | `xai-grok-voice` (+ pager `src/voice/`) |
@@ -517,8 +529,9 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
   `/session-info`.
 - TUI UX: `/clear`, `/new` keep-model behavior, turn-status/tasks-pane tweaks
   in `xai-grok-pager`.
-- Build/release: `build.sh`, `scripts/publish_release.sh` (local builds, no
-  CI) + `scripts/desktop_release.sh` for Let Cook installers, `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
+- Build/release: `build.sh` (local CLI build), `scripts/publish_release.sh`
+  (version/tag/push; tag-triggered release workflow) and
+  `scripts/desktop_release.sh` for Let Cook installers, `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
   `docs/desktop-app.md` + `docs/desktop-app-client-implement.md` +
   `docs/desktop-app-implement.md` + `docs/desktop-tui-capability-map.md` +
   `docs/desktop-release.md`
@@ -526,6 +539,10 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
   workspace crate).
 - Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D;
   Desktop is a fork-owned leaf).
+- Core runtime and token experiments:
+  [`docs/core-agent-flow-and-token-optimization.md`](docs/core-agent-flow-and-token-optimization.md),
+  [`docs/core-agent-token-optimization-experiment-v2.md`](docs/core-agent-token-optimization-experiment-v2.md),
+  and the [real-model suite run order](docs/real-model-suite-run-order.md).
 
 ### Conventions every engineer should know
 

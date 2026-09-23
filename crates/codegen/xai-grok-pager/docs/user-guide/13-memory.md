@@ -91,7 +91,10 @@ internal hardening notes, not here.
 
 ## How Memory Is Stored
 
-Memory is stored as Markdown files under `~/.cook/memory/`:
+With `[memory_v2] enabled`, each scope stores Markdown under
+`~/.cook/memory-v2/`: `topics/` for curated notes and
+`observations/_inbox/` for new facts. With v2 off and legacy memory on,
+files live under `~/.cook/memory/`:
 
 | Location | Scope | Description |
 |----------|-------|-------------|
@@ -104,6 +107,8 @@ Cook suffixes each workspace directory with a short hash of the repository's ide
 An SQLite index supports search across all memory files:
 - **FTS5** provides the default full-text search for keyword matching.
 - **vec0** adds vector search for semantic similarity when an embedding model is configured.
+
+`[memory] enabled` and `[memory_v2] enabled` both default off.
 
 ---
 

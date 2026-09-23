@@ -1325,13 +1325,13 @@ pub(crate) async fn run(
     let requirements = xai_grok_shell::config::load_merged_requirements();
     let user_config = xai_grok_shell::config::load_from_disk().ok();
     let managed_config = xai_grok_shell::config::load_managed_config().ok();
-    let effective_config = {
+    let (config_layers, effective_config) = {
         let _t = xai_grok_telemetry::instrumentation::timer("startup.app_init.effective_config");
-        match xai_grok_shell::config::load_effective_config() {
-            Ok(raw) => Some(raw),
+        match xai_grok_shell::config::load_effective_config_with_layers() {
+            Ok((layers, raw)) => (Some(layers), Some(raw)),
             Err(e) => {
                 tracing::debug!(error = %e, "failed to load effective config, using partial layers");
-                None
+                (None, None)
             }
         }
     };
@@ -1363,6 +1363,11 @@ pub(crate) async fn run(
         requirements.as_ref(),
         user_config.as_ref(),
         managed_config.as_ref(),
+        remote_settings.as_ref(),
+    );
+    app.subagent_model_inheritance = crate::settings::FeatureOverrideState::from_layers(
+        xai_grok_shell::agent::config::Feature::SubagentModelInheritance,
+        config_layers.as_ref(),
         remote_settings.as_ref(),
     );
     app.subscription_watch_interval_secs = remote_settings
@@ -2423,13 +2428,18 @@ pub(crate) async fn run(
                 // Lost-response recovery (see `dispatch::reconcile_overdue_turn_ends`)
                 // Finish any turn whose `prompt_complete` broadcast outlived the grace window without its `session/prompt` RPC response arriving
                 let reconciled = dispatch::reconcile_overdue_turn_ends(&mut app);
+                // The reconcile drains queues outside any dispatched action; its image notices show now.
+                let notice_shown = app.flush_image_notices_if_root();
                 if let Some(effs) = reconciled {
                     if process_effects(effs, &mut tasks, &mut app, &progress_tx) {
                         break;
                     }
                     presenter.request(false);
-                } else if app.tick() {
-                    presenter.request(false);
+                } else {
+                    let ticked = app.tick();
+                    if ticked || notice_shown {
+                        presenter.request(false);
+                    }
                 }
                 // Keep ticking as long as there are running animations or pending actions waiting to expire
                 schedule_tick(&mut animation_tick_at, &app, tick_interval);

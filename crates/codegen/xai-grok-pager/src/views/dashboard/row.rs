@@ -434,11 +434,12 @@ fn append_roster_rows(
         }
         let cwd_display = super::state::compact_cwd(&cwd, home);
         let is_pinned = pinned.contains(&id);
+        let subtitle = None;
         rows.push(DashboardRow {
             id,
             session_id: Some(entry.session_id.clone()),
             label,
-            subtitle: None,
+            subtitle,
             state,
             activity,
             secondary_line: entry

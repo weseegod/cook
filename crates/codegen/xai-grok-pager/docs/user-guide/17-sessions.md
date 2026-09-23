@@ -39,7 +39,7 @@ Cook stores each session in its own directory, grouped by working directory. It 
   subagents/              # per-subagent metadata (meta.json); the child sessions live in the normal sessions tree
 ```
 
-`summary.json` is the index entry. It records the session summary and generated title, the model ID, the creation and update timestamps, the message counts, and a parent session reference for forked or restored sessions. It also records the latest last-turn summary and session recap so listing surfaces can show them. `updates.jsonl` is the authoritative conversation log that drives `/resume` and session restore. `tool_definitions.json` omits MCP `server__tool` entries because the model reaches those through `search_tool` and `use_tool`, which are listed. Per-turn token and cost totals are available through `grok usage`.
+`summary.json` is the index entry. It records the session summary and generated title, the model ID, the creation and update timestamps, the message counts, and a parent session reference for forked or restored sessions. It also records the latest last-turn summary and session recap so listing surfaces can show them. `updates.jsonl` is the authoritative conversation log that drives `/resume` and session restore. `tool_definitions.json` omits MCP `server__tool` entries because the model reaches those through `search_tool` and `use_tool`, which are listed. Per-turn token and cost totals are available through `cook usage`.
 
 ### Session titles
 
@@ -109,7 +109,7 @@ Run `cook --resume` without a value to resume the most recent session for the cu
 
 ### From the Welcome Screen
 
-When you launch `grok`, the welcome screen lists recent sessions for the current directory. Select one to resume it.
+When you launch `cook`, the welcome screen lists recent sessions for the current directory. Select one to resume it.
 
 ---
 
@@ -257,7 +257,7 @@ The agent persists all session updates automatically. Clients can reconnect and 
 
 ---
 
-## The grok sessions Subcommand
+## The `cook sessions` Subcommand
 
 List or search sessions from the command line. `cook sessions` requires a subcommand:
 
@@ -276,16 +276,16 @@ cook sessions search "rate limit"
 
 ---
 
-## The grok usage Subcommand
+## The `cook usage` Subcommand
 
 Print persisted token and cost usage for a session. Use this instead of reading session files:
 
 ```bash
 # Session totals plus every recorded turn
-grok usage <session-id>
+cook usage <session-id>
 
 # One turn
-grok usage <session-id> 3
+cook usage <session-id> 3
 ```
 
 Output is JSON with `sessionId`, `updatedAt`, `session`, and `turns`. A specific turn uses the same envelope with one element in `turns`. Session totals cover the whole conversation, including history inherited by resume or fork. `costUsdTicks` is 10¹⁰ ticks per USD (divide by `1e10` for dollars). A missing turn number is an error. Interactive credit and billing stay on `/usage` in the TUI.
@@ -304,9 +304,34 @@ Worktree sessions are managed internally through the `x.ai/git/worktree/*` exten
 
 Resume a session in a fresh worktree with `cook -w -r <session-id>`.
 
+### Manage Grove redirections
+
+A Grove worktree can redirect ignored artifact directories such as `target` and `node_modules` to storage outside the projected tree. The redirect commands take the mount path as their first argument.
+
+```bash
+cook worktree redirect list /path/to/worktree
+cook worktree redirect list /path/to/worktree --json
+cook worktree redirect add /path/to/worktree target bind
+cook worktree redirect del /path/to/worktree target
+cook worktree redirect fixup /path/to/worktree
+cook worktree redirect unmount /path/to/worktree target
+```
+
+`list` prints `repo_path`, `type`, `mechanism`, `target`, `source`, and `state`. Run `unmount` without a repo-relative path to take down every redirect on the mount. Use `fixup --force` to replace Grove-owned residue. Use `fixup --strict` to refuse a populated plain directory.
+
+
+```bash
+cook clone https://example.com/org/repo.git --redirect-ignored
+cook clone https://example.com/org/repo.git \
+  --redirect-ignored --redirect-dir build --redirect-dir '**/node_modules'
+cook clone https://example.com/org/repo.git --no-redirects
+```
+
+`GROVE_REDIRECTS=0` remains a runtime kill switch. Cook does not save the kill switch as the clone's redirect choice.
+
 ### Checking Disk Usage
 
-`cook du` (alias: `cook disk-usage`) reports what the grok home (`~/.cook`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
+`cook du` (alias: `cook disk-usage`) reports what the Cook home (`~/.cook`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
 
 ```text
 Disk usage for ~/.cook
@@ -325,11 +350,13 @@ To reclaim space, run `cook worktree gc --max-age 7d --dry-run`, then the same c
 Untracked rows are not in the registry, so gc never visits them. Remove one with `cook worktree rm --dry-run <path>`, then without `--dry-run`.
 ```
 
+After the Cook home table, `cook du` may print **Redirections**, **Orphaned redirections**, and **Unattributed redirect directories**. Those bytes live in Grove escape jails, outside the Cook home total. An empty scan prints nothing. Reclaim a live jail with `cook worktree clean-artifacts`. Purge live jails plus proven orphans with `cook du --clean --yes`. Delete only proven orphans with `cook du --clean-orphaned --yes`.
+
 `AGE` is the value `cook worktree gc` measures: time since the worktree was last accessed, or since it was created when that is more recent. Session and agent activity update it; a shell or editor left open in the directory does not. An untracked worktree has no registry entry, so its age comes from the newest file underneath it.
 
 Sizes are physical block counts on Unix and logical file sizes elsewhere, matching what `cook worktree show` reports. A worktree clone shares storage with its source and each copy counts in full, so the total can exceed both `du -sh` and the space actually in use. When the total exceeds the used space on the volume, the report says so. `--json` carries the same figures as `volume_capacity_bytes` and `volume_available_bytes`.
 
-The report measures a single filesystem, the one holding the grok home. A directory on any other filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug cook du` to name each one.
+The report measures a single filesystem, the one holding the Cook home. A directory on any other filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug cook du` to name each one.
 
 Every worktree row in `--json` also carries `created_at`, `last_accessed_at`, and `last_modified_at` in unix seconds, plus `repo_name` and `git_ref`. Registry fields are `null` for untracked rows. `git_ref` is the branch recorded when the worktree was registered, not the branch checked out now.
 
@@ -372,7 +399,7 @@ The smaller state files -- `summary.json`, `plan.json`, and `signals.json` -- ar
 - `num_messages` and `num_chat_messages` -- update and chat-message counts
 - `current_model_id` -- the model in use
 - `parent_session_id` -- the source session for a fork or restore
-- `agent_name` -- the agent definition active when the session was last saved
+- `agent_name` -- named agents persist this only; an inline `--agent-profile` session also persists `agent_profile` JSON
 - `last_turn_summary` -- an ultra-short summary of the most recent turn
 - `last_recap` -- a bounded preview of the latest session recap
 

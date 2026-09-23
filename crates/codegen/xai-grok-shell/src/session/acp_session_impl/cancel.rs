@@ -123,6 +123,8 @@ impl SessionActor {
         self.turn_phases.emit_pending_latency();
         task.abort();
         self.turn_report.release_aborted(epoch);
+        // The aborted task never reaches its turn-end emission; a cancelled turn still counts.
+        self.emit_long_reasoning_turn_event();
     }
 
     /// The Ctrl+C teardown, except the running command moves to the background instead of being killed.
@@ -716,11 +718,24 @@ impl SessionActor {
         if tore_down_task {
             self.cancel_active_sampling_requests();
             if rewound_input.is_none() {
+                // Handoff answers must exist before the repair below writes its halt text.
+                let answers =
+                    if !cancel_subagents && let Some(prompt_id) = cancelled_prompt_id.as_deref() {
+                        let interrupt = if send_now {
+                            xai_tool_types::ForegroundSpawnInterrupt::UserSentMessage
+                        } else {
+                            xai_tool_types::ForegroundSpawnInterrupt::UserStoppedTurn
+                        };
+                        self.hand_off_foreground_subagents(prompt_id, interrupt)
+                            .await
+                    } else {
+                        HashMap::new()
+                    };
                 // The aborted turn can strand a continue reminder awaiting its continuation, plus dangling tool calls
                 // Repair now so the on-disk tail is clean even if the session ends here (the next push would otherwise repair lazily)
                 // Rewinds skip this: they replace the turn's history wholesale
                 self.chat_state_handle
-                    .repair_dangling_after_harness_halt("user_cancel");
+                    .repair_dangling_after_harness_halt("user_cancel", answers);
             }
         }
 
