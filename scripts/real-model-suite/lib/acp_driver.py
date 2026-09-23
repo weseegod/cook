@@ -35,7 +35,9 @@ def main() -> None:
         send({"jsonrpc": "2.0", "id": rid, "method": method, "params": params})
 
     deadline = time.monotonic() + args.timeout
-    request(1, "initialize", {})
+    # InitializeRequest requires protocolVersion; empty params are rejected with
+    # "missing field protocolVersion" and session/new then has no initialized agent.
+    request(1, "initialize", {"protocolVersion": 1})
     stage = "initialize"
     session_id = ""
     while time.monotonic() < deadline:
