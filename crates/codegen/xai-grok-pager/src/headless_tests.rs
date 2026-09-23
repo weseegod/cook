@@ -648,6 +648,23 @@ fn structured_output_without_meta_errors_never_parses_text() {
 }
 
 #[test]
+fn finish_without_prompt_result_emits_end_turn_with_session_id() {
+    // Flush-only headless exits (`prompt_result == None`) must still write a
+    // terminal JSON object; empty stdout makes the suite retry without
+    // `--memory-flush` and overwrite purposeUsage to main_loop only.
+    let mut emitter = HeadlessEmitter::new(OutputFormat::Json, false);
+    super::finish_without_prompt_result(&mut emitter, "sess-flush-only").expect("terminal end");
+    let result = emitter
+        .last_terminal_json
+        .as_ref()
+        .expect("on_end must record the JSON terminal object");
+    assert_eq!(result["sessionId"].as_str(), Some("sess-flush-only"));
+    assert_eq!(result["stopReason"].as_str(), Some("end_turn"));
+    assert_eq!(result["text"].as_str(), Some(""));
+    assert!(result["sessionId"].is_string());
+}
+
+#[test]
 fn structured_output_from_meta_wins_over_text_buffer() {
     let mut emitter = HeadlessEmitter::new(OutputFormat::Json, true);
     emitter.text_buffer = "thinking out loud...".into();

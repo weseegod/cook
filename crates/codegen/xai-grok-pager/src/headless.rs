@@ -111,6 +111,8 @@ struct HeadlessEmitter {
     reducer: Option<Box<dyn Reducer>>,
     /// Set when the prompt is sent; `result.duration_ms` on the terminal line is measured from it.
     prompt_started: Option<Instant>,
+    /// Last JSON terminal object written by [`Self::on_end`] (Json format only; for tests).
+    last_terminal_json: Option<serde_json::Value>,
     out: std::io::Stdout,
     /// Latched once stdout is unwritable so later writes are dropped instead of panicking.
     output_closed: bool,
@@ -129,6 +131,7 @@ impl HeadlessEmitter {
             usage: None,
             reducer: reducer_for(format),
             prompt_started: None,
+            last_terminal_json: None,
             out: std::io::stdout(),
             output_closed: false,
             write_error: None,
@@ -332,6 +335,7 @@ impl HeadlessEmitter {
             }
             OutputFormat::Json => {
                 let result = self.build_json_result(stop_reason, session_id, request_id);
+                self.last_terminal_json = Some(result.clone());
                 let mut rendered =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
                 rendered.push('\n');
@@ -403,6 +407,16 @@ impl HeadlessEmitter {
 
 pub(crate) fn attach_result_usage(result: &mut serde_json::Value, usage: &serde_json::Value) {
     xai_grok_shell::extensions::notification::attach_result_usage_fail_closed(result, usage);
+}
+
+/// Terminal result when headless exits without a prompt future result
+/// (flush-only / `--memory-flush` with an empty prompt).
+///
+/// Emits a real `end` so stdout always carries a sessionId; empty stdout makes
+/// callers (and the suite) retry without `--memory-flush`.
+fn finish_without_prompt_result(emitter: &mut HeadlessEmitter, session_id: &str) -> Result<()> {
+    emitter.on_end("end_turn", session_id, "");
+    Ok(())
 }
 
 /// Snake_case wire token for an ACP stop reason.
@@ -1519,7 +1533,7 @@ pub async fn run_single_turn(
             emitter.on_error(&msg, stop_reason_override);
             Err(anyhow::anyhow!("{msg}"))
         }
-        None => Ok(()),
+        None => finish_without_prompt_result(&mut emitter, session_id.0.as_ref()),
     };
 
     let flush_error = if options.memory_flush && outcome.is_ok() {
