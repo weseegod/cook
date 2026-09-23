@@ -125,7 +125,9 @@ fn schema_default_offset() -> Option<i64> {
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadFileInput {
-    #[serde(rename = "target_file")]
+    // MiMo sometimes sends the common `file_path` field even though our advertised schema uses
+    // `target_file`. Accept it at the input boundary; keep one canonical field on the wire.
+    #[serde(rename = "target_file", alias = "file_path")]
     #[schemars(
         description = "The path of the file to read. You can use either a relative path in the workspace or an absolute path. If an absolute path is provided, it will be preserved as is."
     )]
@@ -3106,6 +3108,26 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let str_neg: ReadFileInput =
             serde_json::from_str(r#"{"target_file":"x","offset":"-3"}"#).unwrap();
         assert_eq!(str_neg.offset, Some(-3));
+    }
+    #[test]
+    fn read_file_input_accepts_file_path_alias_without_changing_its_schema() {
+        let input: ReadFileInput =
+            serde_json::from_str(r#"{"file_path":"src/main.rs","offset":90,"limit":50}"#).unwrap();
+        assert_eq!(input.path, "src/main.rs");
+        assert_eq!(input.offset, Some(90));
+        assert_eq!(input.limit, Some(50));
+        let serialized = serde_json::to_value(&input).unwrap();
+        assert_eq!(serialized["target_file"], "src/main.rs");
+        assert!(serialized.get("file_path").is_none());
+
+        let schema = schemars::schema_for!(ReadFileInput);
+        let schema = serde_json::to_value(schema).unwrap();
+        assert_eq!(schema["required"], serde_json::json!(["target_file"]));
+        assert!(schema["properties"].get("file_path").is_none());
+        assert!(
+            serde_json::from_str::<ReadFileInput>(r#"{"target_file":"a.rs","file_path":"b.rs"}"#)
+                .is_err()
+        );
     }
     #[test]
     fn stored_read_offset_drops_negatives() {
