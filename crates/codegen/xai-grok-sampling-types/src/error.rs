@@ -437,7 +437,7 @@ impl SamplingError {
             SamplingError::Serialization(_) => false,
             SamplingError::Api { status, .. } => is_retryable_api_status(*status),
             SamplingError::EventStreamError(_) => true,
-            SamplingError::StreamError { .. } => true,
+            SamplingError::StreamError { error_type, .. } => error_type != "invalid_tool_call",
             SamplingError::IdleTimeout { .. } => false,
             SamplingError::EmptyResponse { .. } => true,
             SamplingError::MaxTokensTruncation => false,

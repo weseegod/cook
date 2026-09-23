@@ -15,7 +15,7 @@ use xai_grok_sampling_types::SamplingError;
 use crate::events::{SamplingErrorInfo, SamplingEvent};
 use crate::types::RequestId;
 
-/// Total tool-call argument bytes one response may stream (the Xiaomi adapter's per-call 32 KiB cut stays as the provider-specific first line).
+/// Total tool-call argument bytes one response may stream.
 pub const DEFAULT_MAX_TOOL_CALL_ARGUMENT_BYTES: u64 = 256 * 1024;
 /// Distinct tool-call indices one response may open. Matches the pager's own per-sample label cap.
 pub const DEFAULT_MAX_TOOL_CALLS: u64 = 64;
@@ -27,9 +27,7 @@ pub const DEFAULT_MAX_REPEATED_TOOL_CALLS: u64 = 0;
 
 /// Ceilings on one response's tool-call traffic.
 /// A limit of `0` disables that check; every field has a serde default, so a partial override parses.
-/// Byte accounting counts `arguments_delta` as forwarded: Xiaomi's synthetic reconciling deltas replay a
-/// whole call's arguments, so that path spends the budget roughly twice, and the per-call 32 KiB cut there
-/// usually fires first anyway.
+/// Byte accounting counts each forwarded `arguments_delta`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ToolCallBudget {

@@ -408,7 +408,11 @@ fn unknown_field_warnings(model_key: &str, unknown: Vec<String>) -> Vec<ConfigWa
                 model_key,
                 Some(field.as_str()),
                 ConfigWarningKind::UnknownField,
-                "unknown field".to_owned(),
+                if field == "chat_completions_adapter" {
+                    "chat_completions_adapter was removed; delete this setting".to_owned()
+                } else {
+                    "unknown field".to_owned()
+                },
             )
         })
         .collect()
@@ -734,7 +738,9 @@ mod tests {
             temperature: Some(0.5),
             top_p: Some(0.9),
             api_backend: Some(ApiBackend::Messages),
-            chat_completions_adapter: Some(crate::sampling::ChatCompletionsAdapter::XiaomiMimo),
+            chat_completions_request_format: Some(
+                crate::sampling::ChatCompletionsRequestFormat::DeepSeekThinking,
+            ),
             extra_headers: [("x-team".to_owned(), "codegen".to_owned())]
                 .into_iter()
                 .collect(),

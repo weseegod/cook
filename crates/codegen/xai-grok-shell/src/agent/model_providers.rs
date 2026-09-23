@@ -4,7 +4,7 @@ use indexmap::IndexMap;
 
 use super::config::{ConfigModelOverride, EnvKeys};
 use super::config_model_override_parse::{ConfigWarning, ConfigWarningKind};
-use crate::sampling::{ApiBackend, ChatCompletionsAdapter};
+use crate::sampling::{ApiBackend, ChatCompletionsRequestFormat};
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
@@ -14,7 +14,7 @@ pub struct ModelProviderConfig {
     pub env_key: Option<EnvKeys>,
     pub api_key: Option<String>,
     pub api_backend: Option<ApiBackend>,
-    pub chat_completions_adapter: Option<ChatCompletionsAdapter>,
+    pub chat_completions_request_format: Option<ChatCompletionsRequestFormat>,
     pub extra_headers: IndexMap<String, String>,
     /// Query parameters folded into every request URL; inherited by models.
     pub query_params: IndexMap<String, String>,
@@ -99,7 +99,11 @@ pub(crate) fn parse_model_providers(
                         id,
                         Some(key.as_str()),
                         ConfigWarningKind::UnknownField,
-                        "unrecognized key; field ignored".to_owned(),
+                        if key == "chat_completions_adapter" {
+                            "chat_completions_adapter was removed; delete this setting".to_owned()
+                        } else {
+                            "unrecognized key; field ignored".to_owned()
+                        },
                     ));
                 }
                 if let Some(auth) = &provider.auth {
@@ -183,7 +187,7 @@ impl ConfigModelOverride {
             env_key,
             api_key,
             api_backend,
-            chat_completions_adapter,
+            chat_completions_request_format,
             extra_headers,
             query_params,
             env_http_headers,
@@ -198,10 +202,13 @@ impl ConfigModelOverride {
         merged.base_url = merged.base_url.or_else(|| base_url.clone());
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
-        merged.chat_completions_adapter = merged.chat_completions_adapter.or_else(|| {
-            chat_completions_adapter
-                .or_else(|| (provider_id == "xiaomi").then_some(ChatCompletionsAdapter::XiaomiMimo))
-        });
+        merged.chat_completions_request_format =
+            merged.chat_completions_request_format.or_else(|| {
+                chat_completions_request_format.or_else(|| {
+                    (provider_id == "xiaomi")
+                        .then_some(ChatCompletionsRequestFormat::DeepSeekThinking)
+                })
+            });
         merged.context_window = merged.context_window.or(*context_window);
         merged.max_request_bytes = merged.max_request_bytes.or(*max_request_bytes);
         // Inherited wholesale only when the model sets none of its own.
@@ -242,13 +249,15 @@ impl ConfigModelOverride {
 mod tests {
     use std::num::NonZeroU64;
 
+    use super::{ConfigWarningKind, parse_model_providers};
+
     use crate::agent::config::{
         Config, resolve_credentials, resolve_model_list, sampling_config_for_model,
     };
-    use crate::sampling::ChatCompletionsAdapter;
+    use crate::sampling::ChatCompletionsRequestFormat;
 
     #[test]
-    fn xiaomi_provider_selects_its_adapter_without_changing_standard_providers() {
+    fn xiaomi_provider_selects_request_format_without_changing_standard_providers() {
         let raw_config: toml::Value = toml::from_str(
             r#"
             [model_providers.xiaomi]
@@ -269,7 +278,15 @@ mod tests {
             model = "mimo"
             model_provider = "xiaomi"
             context_window = 100000
-            chat_completions_adapter = "standard"
+            chat_completions_request_format = "standard"
+
+            [model_providers.mimo-relay]
+            base_url = "https://relay.example/v1"
+            chat_completions_request_format = "deepseek_thinking"
+            [model.relay-model]
+            model = "mimo"
+            model_provider = "mimo-relay"
+            context_window = 100000
             "#,
         )
         .unwrap();
@@ -277,19 +294,47 @@ mod tests {
         let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
         let resolved = resolve_model_list(&cfg, None);
         assert_eq!(
-            resolved["xiaomi-model"].info.chat_completions_adapter,
-            ChatCompletionsAdapter::XiaomiMimo
+            resolved["xiaomi-model"]
+                .info
+                .chat_completions_request_format,
+            ChatCompletionsRequestFormat::DeepSeekThinking
         );
         assert_eq!(
-            resolved["deepseek-model"].info.chat_completions_adapter,
-            ChatCompletionsAdapter::Standard
+            resolved["deepseek-model"]
+                .info
+                .chat_completions_request_format,
+            ChatCompletionsRequestFormat::Standard
         );
         assert_eq!(
             resolved["xiaomi-standard-override"]
                 .info
-                .chat_completions_adapter,
-            ChatCompletionsAdapter::Standard
+                .chat_completions_request_format,
+            ChatCompletionsRequestFormat::Standard
         );
+        assert_eq!(
+            resolved["relay-model"].info.chat_completions_request_format,
+            ChatCompletionsRequestFormat::DeepSeekThinking
+        );
+    }
+
+    #[test]
+    fn removed_adapter_setting_warns_in_provider_config() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.xiaomi]
+            base_url = "https://api.xiaomimimo.com/v1"
+            chat_completions_adapter = "xiaomi_mimo"
+            "#,
+        )
+        .unwrap();
+        let (providers, warnings) = parse_model_providers(&raw_config);
+        assert!(providers.contains_key("xiaomi"));
+        assert!(warnings.iter().any(|warning| {
+            warning.kind == ConfigWarningKind::UnknownField
+                && warning
+                    .reason
+                    .contains("chat_completions_adapter was removed")
+        }));
     }
 
     #[test]

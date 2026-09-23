@@ -253,6 +253,9 @@ pub fn format_sampling_error(err: &SamplingError, retry_count: Option<u32>) -> S
             message,
             ..
         } => {
+            if error_type == "invalid_tool_call" {
+                return format!("{}Invalid tool call: {}.", retry_prefix, message);
+            }
             format!(
                 "{}Server stream error ({}): {}. The server encountered an error while streaming the response.",
                 retry_prefix, error_type, message
@@ -798,6 +801,20 @@ mod tests {
             RetryDecision::RetryWithClientRebuild { .. } => {}
             other => panic!("expected RetryWithClientRebuild for StreamError, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn malformed_tool_call_does_not_retry_the_same_request() {
+        let err = SamplingError::StreamError {
+            error_type: "invalid_tool_call".into(),
+            message: "tool read_file returned invalid arguments".into(),
+            code: None,
+        };
+        assert!(!err.is_retryable());
+        assert!(matches!(
+            classify_error(&err, 0, 3, RATE_LIMIT_RETRY_THRESHOLD),
+            RetryDecision::Fatal(_)
+        ));
     }
 
     #[test]

@@ -797,7 +797,7 @@ async fn read_parent_sampling_config(
                 temperature: cfg.temperature,
                 top_p: cfg.top_p,
                 api_backend: cfg.api_backend,
-                chat_completions_adapter: cfg.chat_completions_adapter,
+                chat_completions_request_format: cfg.chat_completions_request_format,
                 auth_scheme,
                 request_compression: crate::util::config::request_compression_for_url(
                     &inherited_base_url,

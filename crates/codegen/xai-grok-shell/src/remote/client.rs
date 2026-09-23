@@ -702,7 +702,7 @@ pub(crate) fn parse_remote_model_value(
         api_key: get_string(obj, "apiKey").or_else(|| get_string(obj, "api_key")),
         env_key: get_env_keys(obj, "envKey").or_else(|| get_env_keys(obj, "env_key")),
         api_backend,
-        chat_completions_adapter: Default::default(),
+        chat_completions_request_format: Default::default(),
         context_window,
         max_request_bytes: get_u64(obj, "maxRequestBytes")
             .or_else(|| get_u64(obj, "max_request_bytes"))

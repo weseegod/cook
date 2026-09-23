@@ -48,6 +48,19 @@ where
     Option::<T>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatThinkingType {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct ChatThinking {
+    #[serde(rename = "type")]
+    pub kind: ChatThinkingType,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -57,6 +70,8 @@ pub struct ChatCompletionRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,6 +90,8 @@ pub struct ChatCompletionRequest {
     pub response_format: Option<crate::rs::ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ChatThinking>,
 
     /// custom headers
     #[serde(skip)]
@@ -110,6 +127,7 @@ impl ChatCompletionRequest {
             messages,
             temperature: None,
             max_tokens: None,
+            max_completion_tokens: None,
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
@@ -119,6 +137,7 @@ impl ChatCompletionRequest {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            thinking: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,
@@ -138,6 +157,7 @@ impl ChatCompletionRequest {
             messages,
             temperature: None,
             max_tokens: None,
+            max_completion_tokens: None,
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
@@ -147,6 +167,7 @@ impl ChatCompletionRequest {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            thinking: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,
@@ -1192,13 +1213,15 @@ impl From<&str> for ConversationGroupId {
     }
 }
 
-/// Provider-specific normalization applied before the standard Chat Completions transform.
+/// Request shape for OpenAI-compatible Chat Completions endpoints.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ChatCompletionsAdapter {
+pub enum ChatCompletionsRequestFormat {
     #[default]
     Standard,
-    XiaomiMimo,
+    /// DeepSeek-style thinking request and reasoning replay used by MiMo.
+    #[serde(rename = "deepseek_thinking")]
+    DeepSeekThinking,
 }
 
 /// Sampling client configuration (API key excluded; that stays in the client).
@@ -1221,9 +1244,9 @@ pub struct SamplingConfig {
     /// Which API backend to use for this model
     #[serde(default)]
     pub api_backend: ApiBackend,
-    /// Provider-specific normalization for non-standard Chat Completions streams.
+    /// Chat Completions request shape for this model.
     #[serde(default)]
-    pub chat_completions_adapter: ChatCompletionsAdapter,
+    pub chat_completions_request_format: ChatCompletionsRequestFormat,
     /// Extra headers to send with requests (e.g., for bring-your-own-key (BYOK) scenarios).
     #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
     pub extra_headers: indexmap::IndexMap<String, String>,
@@ -1266,7 +1289,7 @@ impl Default for SamplingConfig {
             max_retries: None,
             rate_limit_retry_threshold: None,
             api_backend: ApiBackend::default(),
-            chat_completions_adapter: ChatCompletionsAdapter::default(),
+            chat_completions_request_format: ChatCompletionsRequestFormat::default(),
             extra_headers: indexmap::IndexMap::new(),
             conversation_group_id: None,
             query_params: indexmap::IndexMap::new(),

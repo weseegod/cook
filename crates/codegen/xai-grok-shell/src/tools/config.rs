@@ -203,7 +203,7 @@ impl ShellToolsetConfig {
             temperature: None,
             top_p: None,
             api_backend: Default::default(),
-            chat_completions_adapter: Default::default(),
+            chat_completions_request_format: Default::default(),
             auth_scheme: Default::default(),
             request_compression: Default::default(),
             extra_headers: indexmap::IndexMap::new(),

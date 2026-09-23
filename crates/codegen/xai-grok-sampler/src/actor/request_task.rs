@@ -547,12 +547,11 @@ async fn run_one_attempt(
             };
             let (teed, captured) = tee_errors(raw);
             let l2 = crate::stream::guard_tool_call_budget(
-                crate::stream::stream_chat_completions_with_adapter(
+                crate::stream::stream_chat_completions_with_tools(
                     teed,
                     metadata,
                     request_id.clone(),
                     idle_timeout,
-                    client.chat_completions_adapter(),
                     allowed_tool_names,
                 ),
                 request_id.clone(),

@@ -14,13 +14,9 @@ use xai_grok_sampling_types::{
     ResponseModelMetadata, SamplingError, StopReason, TokenUsage, ToolCall,
 };
 
-use crate::ChatCompletionsAdapter;
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
-use crate::stream::xiaomi_chat::{
-    IN_FLIGHT_CALL_CEILING_BYTES, RecoveredToolCall, XiaomiMimoAdapter,
-    recover_tool_calls_from_text,
-};
+use crate::stream::tool_call_recovery::recover_tool_calls_from_text;
 use crate::types::RequestId;
 
 type ToolCallParts = (String, String, String);
@@ -29,13 +25,13 @@ type ToolCallParts = (String, String, String);
 /// wire `index` at zero for a later call in the same response. The provider call id is the stable
 /// identity; wire indices are only routing hints for argument-only continuation chunks.
 #[derive(Default)]
-struct XiaomiToolCallAccumulator {
+struct ToolCallAccumulator {
     calls: BTreeMap<u32, ToolCallParts>,
     active_by_wire_index: BTreeMap<u32, u32>,
     next_logical_index: u64,
 }
 
-impl XiaomiToolCallAccumulator {
+impl ToolCallAccumulator {
     fn resolve_logical_index(&mut self, wire_index: u32, incoming_id: Option<&str>) -> (u32, bool) {
         if let Some(&logical_index) = self.active_by_wire_index.get(&wire_index) {
             let current_id = self
@@ -86,39 +82,6 @@ fn parts_into_tool_call((id, name, arguments): ToolCallParts) -> ToolCall {
         name,
         arguments: std::sync::Arc::<str>::from(arguments),
     }
-}
-
-fn select_xiaomi_calls(
-    request_id: &RequestId,
-    structured: Vec<ToolCallParts>,
-    recovered: Vec<RecoveredToolCall>,
-) -> Vec<ToolCall> {
-    if recovered.is_empty() {
-        return structured.into_iter().map(parts_into_tool_call).collect();
-    }
-
-    let mut structured = structured.into_iter().map(Some).collect::<Vec<_>>();
-    recovered
-        .into_iter()
-        .enumerate()
-        .map(|(index, recovered)| {
-            let matching = structured.iter_mut().find(|slot| {
-                slot.as_ref().is_some_and(|(_, name, arguments)| {
-                    name == &recovered.name && json_arguments_equal(arguments, &recovered.arguments)
-                })
-            });
-            let id = matching
-                .and_then(Option::take)
-                .map(|(id, _, _)| id)
-                .filter(|id| !id.is_empty())
-                .unwrap_or_else(|| format!("xiaomi_xml_{request_id}_{index}"));
-            ToolCall {
-                id: std::sync::Arc::<str>::from(id),
-                name: recovered.name,
-                arguments: std::sync::Arc::<str>::from(recovered.arguments),
-            }
-        })
-        .collect()
 }
 
 /// llama.cpp puts MiMo's literal XML envelopes in `tool_calls[].function.arguments`.
@@ -306,9 +269,9 @@ fn json_arguments_equal(left: &str, right: &str) -> bool {
     }
 }
 
-/// MiMo can emit the same call several times in one response with fresh ids. Those calls run
+/// A model can emit the same call several times in one response with fresh ids. Those calls run
 /// concurrently, so the copies cannot observe one another's results and only repeat the effect.
-fn collapse_xiaomi_duplicate_calls(calls: Vec<ToolCall>) -> Vec<ToolCall> {
+fn collapse_duplicate_calls(calls: Vec<ToolCall>) -> Vec<ToolCall> {
     let mut unique: Vec<ToolCall> = Vec::with_capacity(calls.len());
     for call in calls {
         if unique.iter().any(|seen| {
@@ -330,25 +293,21 @@ pub fn stream_chat_completions<'a>(
     request_id: RequestId,
     idle_timeout: Duration,
 ) -> impl Stream<Item = SamplingEvent> + Send + 'a {
-    stream_chat_completions_with_adapter(
+    stream_chat_completions_with_tools(
         raw_stream,
         model_metadata,
         request_id,
         idle_timeout,
-        ChatCompletionsAdapter::Standard,
         Vec::new(),
     )
 }
 
-/// Chat Completions transform with an explicitly selected provider compatibility adapter.
-/// The standard path remains strict OpenAI wire behavior; only the Xiaomi strategy interprets
-/// MiMo's literal XML tool envelopes and reused indices.
-pub fn stream_chat_completions_with_adapter<'a>(
+/// Chat Completions transform with names of tools eligible for malformed-argument recovery.
+pub fn stream_chat_completions_with_tools<'a>(
     raw_stream: BoxStream<'a, Result<ChatCompletionChunk, SamplingError>>,
     model_metadata: Option<ResponseModelMetadata>,
     request_id: RequestId,
     idle_timeout: Duration,
-    adapter: ChatCompletionsAdapter,
     allowed_tool_names: Vec<String>,
 ) -> impl Stream<Item = SamplingEvent> + Send + 'a {
     async_stream::stream! {
@@ -387,16 +346,9 @@ pub fn stream_chat_completions_with_adapter<'a>(
 
         let mut content_acc = String::new();
         let mut reasoning_acc = String::new();
-        // Standard OpenAI-compatible calls are correlated only by their specified wire index.
-        // Xiaomi's index-reuse workaround is isolated behind its selected adapter.
-        let mut standard_tool_calls: BTreeMap<u32, ToolCallParts> = BTreeMap::new();
-        let mut xiaomi_tool_calls = XiaomiToolCallAccumulator::default();
+        // Call ids are stable when a provider reuses a wire index for a later call.
+        let mut tool_calls = ToolCallAccumulator::default();
         let allowed_recovery: HashSet<String> = allowed_tool_names.iter().cloned().collect();
-        let mut xiaomi_adapter = (adapter == ChatCompletionsAdapter::XiaomiMimo)
-            .then(|| XiaomiMimoAdapter::new(allowed_tool_names));
-        // Set when the Xiaomi adapter stops reading before the provider does. The response is still
-        // built from whatever the adapter salvaged, so the shell executes reconciled calls.
-        let mut cut_early = false;
 
         // Index counter spanning text and reasoning chunks (matches the shell's chunk_index used for notification correlation)
         let mut chunk_index: u64 = 0;
@@ -410,7 +362,7 @@ pub fn stream_chat_completions_with_adapter<'a>(
         let mut last_content_chunk_at = Instant::now();
 
         let mut stream = raw_stream;
-        'stream: loop {
+        loop {
             let next = match tokio::time::timeout(idle_timeout, stream.next()).await {
                 Ok(Some(next)) => next,
                 Ok(None) => break, // stream ended normally
@@ -487,40 +439,15 @@ pub fn stream_chat_completions_with_adapter<'a>(
                     }
                     chunk_has_content = true;
                     chunk_timestamps.push(Instant::now());
-                    if let Some(adapter) = xiaomi_adapter.as_mut() {
-                        let visible = adapter.push_text(&text);
-                        if !visible.is_empty() {
-                            chunk_index += 1;
-                            message_chunk_count += 1;
-                            content_acc.push_str(&visible);
-                            yield SamplingEvent::ChannelToken {
-                                request_id: request_id.clone(),
-                                channel: SamplingChannel::Text,
-                                text: visible,
-                                chunk_index,
-                            };
-                        }
-                        if let Some(reason) = adapter.salvage_reason() {
-                            tracing::warn!(
-                                request_id = %request_id,
-                                ?reason,
-                                "xiaomi compatibility adapter cut the stream before the provider ended it"
-                            );
-                            finish_reason = Some(StopReason::ToolCalls);
-                            cut_early = true;
-                            break 'stream;
-                        }
-                    } else {
-                        chunk_index += 1;
-                        message_chunk_count += 1;
-                        content_acc.push_str(&text);
-                        yield SamplingEvent::ChannelToken {
-                            request_id: request_id.clone(),
-                            channel: SamplingChannel::Text,
-                            text,
-                            chunk_index,
-                        };
-                    }
+                    chunk_index += 1;
+                    message_chunk_count += 1;
+                    content_acc.push_str(&text);
+                    yield SamplingEvent::ChannelToken {
+                        request_id: request_id.clone(),
+                        channel: SamplingChannel::Text,
+                        text,
+                        chunk_index,
+                    };
                 }
 
                 if let Some(thought) = delta.reasoning_content
@@ -543,28 +470,21 @@ pub fn stream_chat_completions_with_adapter<'a>(
                     };
                 }
 
-                let mut oversize_call_arguments = false;
                 for tc_delta in delta.tool_calls.into_iter() {
                     chunk_has_content = true;
                     let wire_index = tc_delta.index;
-                    let (logical_index, entry, remapped) = if xiaomi_adapter.is_some() {
-                        let (logical_index, remapped) = xiaomi_tool_calls
-                            .resolve_logical_index(wire_index, tc_delta.id.as_deref());
-                        let entry = xiaomi_tool_calls
-                            .calls
-                            .get_mut(&logical_index)
-                            .expect("resolved logical tool-call index must exist");
-                        (logical_index, entry, remapped)
-                    } else {
-                        let entry = standard_tool_calls.entry(wire_index).or_default();
-                        (wire_index, entry, false)
-                    };
+                    let (logical_index, remapped) = tool_calls
+                        .resolve_logical_index(wire_index, tc_delta.id.as_deref());
+                    let entry = tool_calls
+                        .calls
+                        .get_mut(&logical_index)
+                        .expect("resolved logical tool-call index must exist");
                     if remapped {
                         tracing::warn!(
                             request_id = %request_id,
                             wire_index,
                             logical_index,
-                            "xiaomi adapter remapped a reused tool-call index"
+                            "provider reused a tool-call index with a new id"
                         );
                     }
 
@@ -583,19 +503,11 @@ pub fn stream_chat_completions_with_adapter<'a>(
                         }
                         if let Some(args) = func.arguments {
                             entry.2.push_str(&args);
-                            if xiaomi_adapter.is_some()
-                                && entry.2.len() > IN_FLIGHT_CALL_CEILING_BYTES
-                            {
-                                oversize_call_arguments = true;
-                            }
                             args_for_event = Some(args);
                         }
                     }
 
-                    // Forwarded as they arrive for every provider: the shell only shows a call in
-                    // progress from them. Execution waits for the reconciling `Completed`
-                    // response, so a Xiaomi call whose structured arguments turn out to be garbage
-                    // is still replaced in place by the XML call under the same logical index.
+                    // Execution waits for the final response, after argument recovery and deduplication.
                     yield SamplingEvent::ToolCallDelta {
                         request_id: request_id.clone(),
                         tool_index: logical_index,
@@ -605,16 +517,6 @@ pub fn stream_chat_completions_with_adapter<'a>(
                     };
                 }
 
-                if oversize_call_arguments {
-                    tracing::warn!(
-                        request_id = %request_id,
-                        ceiling_bytes = IN_FLIGHT_CALL_CEILING_BYTES,
-                        "xiaomi compatibility adapter cut a tool-call argument stream that outgrew the in-flight ceiling"
-                    );
-                    finish_reason = Some(StopReason::ToolCalls);
-                    cut_early = true;
-                    break 'stream;
-                }
             }
 
             if chunk_has_content {
@@ -632,63 +534,38 @@ pub fn stream_chat_completions_with_adapter<'a>(
         }
 
         // ── Build the final response ─────────────────────────────────
-        let tool_calls: Vec<ToolCall> = if let Some(adapter) = xiaomi_adapter {
-            let structured: Vec<ToolCallParts> = xiaomi_tool_calls.calls.into_values().collect();
-            let (tail, recovered, runaway) = adapter.finish(!cut_early);
-            if !tail.is_empty() {
-                chunk_index += 1;
-                message_chunk_count += 1;
-                content_acc.push_str(&tail);
-                yield SamplingEvent::ChannelToken {
-                    request_id: request_id.clone(),
-                    channel: SamplingChannel::Text,
-                    text: tail,
-                    chunk_index,
-                };
-            }
-            let recovered_from_xml = !recovered.is_empty();
-            let selected = select_xiaomi_calls(&request_id, structured, recovered);
-            if !selected.is_empty() {
-                tracing::warn!(
-                    request_id = %request_id,
-                    recovered_from_xml,
-                    runaway,
-                    tool_call_count = selected.len(),
-                    "xiaomi compatibility adapter selected tool calls"
-                );
-                for (tool_index, call) in selected.iter().enumerate() {
-                    yield SamplingEvent::ToolCallDelta {
-                        request_id: request_id.clone(),
-                        tool_index: u32::try_from(tool_index).expect("tool-call count exceeds u32"),
-                        id: Some(call.id.to_string()),
-                        name: Some(call.name.clone()),
-                        arguments_delta: Some(call.arguments.to_string()),
-                    };
-                }
-            }
-            selected
-        } else {
-            standard_tool_calls
-                .into_values()
-                .map(parts_into_tool_call)
-                .collect()
-        };
+        let tool_calls: Vec<ToolCall> = tool_calls
+            .calls
+            .into_values()
+            .map(parts_into_tool_call)
+            .collect();
         let tool_calls = promote_embedded_xml_calls(tool_calls, &allowed_recovery);
-        let tool_calls = if adapter == ChatCompletionsAdapter::XiaomiMimo {
-            let original_count = tool_calls.len();
-            let unique = collapse_xiaomi_duplicate_calls(tool_calls);
-            if unique.len() != original_count {
-                tracing::warn!(
-                    request_id = %request_id,
-                    original_count,
-                    unique_count = unique.len(),
-                    "xiaomi compatibility adapter collapsed duplicate tool calls"
-                );
-            }
-            unique
-        } else {
-            tool_calls
-        };
+        let original_count = tool_calls.len();
+        let tool_calls = collapse_duplicate_calls(tool_calls);
+        if tool_calls.len() != original_count {
+            tracing::warn!(
+                request_id = %request_id,
+                original_count,
+                unique_count = tool_calls.len(),
+                "collapsed duplicate tool calls in one response"
+            );
+        }
+        if let Some(call) = tool_calls.iter().find(|call| {
+            !serde_json::from_str::<serde_json::Value>(&call.arguments)
+                .ok()
+                .is_some_and(|value| value.is_object())
+        }) {
+            let err = SamplingError::StreamError {
+                error_type: "invalid_tool_call".to_owned(),
+                message: format!("tool {} returned arguments that are not a JSON object", call.name),
+                code: None,
+            };
+            yield SamplingEvent::Failed {
+                request_id: request_id.clone(),
+                error: SamplingErrorInfo::from(&err),
+            };
+            return;
+        }
 
         // Tool calls override the stop reason, even an explicit `length`.
         // NOTE: the Messages backend has the opposite precedence: Length wins there
@@ -1029,7 +906,7 @@ mod tests {
     /// Pins the load-bearing precedence: tool calls override an explicit `length` finish (opposite of the Messages backend).
     /// See the NOTE at the override site.
     #[tokio::test]
-    async fn tool_calls_override_length_finish() {
+    async fn length_stop_with_invalid_tool_call_fails() {
         let tool_chunk = make_chunk(vec![ChatChunkDelta {
             role: None,
             content: None,
@@ -1058,20 +935,12 @@ mod tests {
         ))
         .await;
 
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
-                assert_eq!(response.tool_calls().len(), 1);
-            }
-            other => panic!("expected Completed(ToolCalls), got {other:?}"),
-        }
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
     }
 
-    /// A Length stop whose arguments are neither JSON nor an XML envelope must still
-    /// keep the wire call. Dropping it left `stop_reason=Length` with no tools, which
-    /// `LengthPolicy` turns into fatal `MaxTokensTruncation`.
+    /// A Length stop with malformed arguments must fail before the tool can execute.
     #[tokio::test]
-    async fn length_stop_keeps_non_json_non_xml_tool_arguments() {
+    async fn malformed_tool_arguments_fail_before_execution() {
         let tool_chunk = make_chunk(vec![ChatChunkDelta {
             role: None,
             content: None,
@@ -1102,20 +971,12 @@ mod tests {
         ))
         .await;
 
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 1, "calls: {calls:?}");
-                assert_eq!(calls[0].name, "read_file");
-                assert!(
-                    calls[0].arguments.contains("secret.txt"),
-                    "kept arguments: {}",
-                    calls[0].arguments
-                );
-            }
-            other => panic!("expected Completed(ToolCalls), got {other:?}"),
-        }
+        assert!(matches!(events.last(), Some(SamplingEvent::Failed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::Completed { .. }))
+        );
     }
 
     #[tokio::test]
@@ -1208,7 +1069,7 @@ mod tests {
     }
 
     /// Local llama.cpp streams MiMo's XML envelopes as `function.arguments` chunks, including a
-    /// newline after `<tool_call>`. The standard adapter must recover the call instead of keeping
+    /// newline after `<tool_call>`. The stream must recover the call instead of keeping
     /// the non-JSON argument string.
     #[tokio::test]
     async fn standard_path_recovers_xml_envelopes_stuffed_into_tool_arguments() {
@@ -1231,12 +1092,11 @@ mod tests {
             }]),
             final_chunk(FinishReason::ToolCalls),
         ];
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::Standard,
             vec!["read_file".into(), "list_dir".into()],
         ))
         .await;
@@ -1274,12 +1134,11 @@ mod tests {
             }]),
             final_chunk(FinishReason::ToolCalls),
         ];
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::Standard,
             vec!["run_terminal_command".into(), "read_file".into()],
         ))
         .await;
@@ -1317,12 +1176,11 @@ mod tests {
             }]),
             final_chunk(FinishReason::ToolCalls),
         ];
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::Standard,
             vec!["run_terminal_command".into(), "search_replace".into()],
         ))
         .await;
@@ -1365,12 +1223,11 @@ mod tests {
             }]),
             final_chunk(FinishReason::Stop),
         ];
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::Standard,
             vec!["run_terminal_command".into()],
         ))
         .await;
@@ -1408,12 +1265,11 @@ mod tests {
             }]),
             final_chunk(FinishReason::Length),
         ];
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::Standard,
             vec!["run_terminal_command".into()],
         ))
         .await;
@@ -1432,11 +1288,11 @@ mod tests {
         }
     }
 
-    /// Xiaomi-compatible streams have been observed starting a later tool call with a fresh id
+    /// Some streams start a later tool call with a fresh id
     /// while reusing wire index zero. The calls must remain separate instead of inheriting one
     /// another's argument fragments.
     #[tokio::test]
-    async fn xiaomi_adapter_remaps_reused_wire_indices_without_affecting_standard_path() {
+    async fn reused_wire_indices_follow_call_ids() {
         let chunks = vec![
             make_chunk(vec![ChatChunkDelta {
                 tool_calls: vec![ChunkToolCallDelta {
@@ -1487,18 +1343,16 @@ mod tests {
                 ..Default::default()
             }]),
         ];
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
             vec!["get_task_output".into(), "todo_write".into()],
         ))
         .await;
 
-        // Four argument deltas forwarded on the two remapped logical indices, then the two
-        // reconciling deltas for the assembled calls.
+        // Four argument deltas use the two logical call indices.
         let logical_indices: Vec<u32> = events
             .iter()
             .filter_map(|event| match event {
@@ -1506,7 +1360,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(logical_indices, vec![0, 0, 1, 1, 0, 1]);
+        assert_eq!(logical_indices, vec![0, 0, 1, 1]);
 
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
@@ -1530,8 +1384,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn xiaomi_collapses_eight_identical_structured_calls_through_the_shared_budget() {
-        let chunks = (0..8)
+    async fn repeated_structured_calls_collapse_but_distinct_call_survives() {
+        let chunks = (0..9)
             .map(|index| {
                 Ok(make_chunk(vec![ChatChunkDelta {
                     tool_calls: vec![ChunkToolCallDelta {
@@ -1540,19 +1394,22 @@ mod tests {
                         kind: Some("function".into()),
                         function: Some(ToolCallFunctionDelta {
                             name: Some("grep".into()),
-                            arguments: Some(r#"{"pattern":"same"}"#.into()),
+                            arguments: Some(if index < 8 {
+                                r#"{"pattern":"same"}"#.into()
+                            } else {
+                                r#"{"pattern":"other"}"#.into()
+                            }),
                         }),
                     }],
                     ..Default::default()
                 }]))
             })
             .collect::<Vec<_>>();
-        let stream = stream_chat_completions_with_adapter(
+        let stream = stream_chat_completions_with_tools(
             stream::iter(chunks).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
             vec!["grep".into()],
         );
         let events = collect(crate::stream::guard_tool_call_budget(
@@ -1564,48 +1421,18 @@ mod tests {
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
                 let calls = response.tool_calls();
-                assert_eq!(calls.len(), 1);
+                assert_eq!(calls.len(), 2);
                 assert_eq!(calls[0].id.as_ref(), "call_0");
                 assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"same"}"#);
+                assert_eq!(calls[1].id.as_ref(), "call_8");
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"other"}"#);
             }
             other => panic!("expected one call through budget, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn xiaomi_collapses_repeated_xml_calls_but_keeps_distinct_arguments() {
-        let same =
-            "<tool_call><function=grep><parameter=pattern>same</parameter></function></tool_call>";
-        let distinct =
-            "<tool_call><function=grep><parameter=pattern>other</parameter></function></tool_call>";
-        let content = format!("{}{distinct}{}", same.repeat(6), same);
-        let chunks = vec![Ok(make_chunk(vec![ChatChunkDelta {
-            content: Some(content),
-            ..Default::default()
-        }]))];
-        let events = collect(stream_chat_completions_with_adapter(
-            stream::iter(chunks).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
-            vec!["grep".into()],
-        ))
-        .await;
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 2);
-                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"same"}"#);
-                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"other"}"#);
-            }
-            other => panic!("expected two distinct calls, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn xiaomi_keeps_three_distinct_parallel_calls() {
+    async fn three_distinct_parallel_calls_survive() {
         let chunks = ["alpha", "beta", "gamma"]
             .into_iter()
             .enumerate()
@@ -1624,12 +1451,11 @@ mod tests {
                 }]))
             })
             .collect::<Vec<_>>();
-        let events = collect(stream_chat_completions_with_adapter(
+        let events = collect(stream_chat_completions_with_tools(
             stream::iter(chunks).boxed(),
             None,
             rid(),
             Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
             vec!["echo".into()],
         ))
         .await;
@@ -1642,320 +1468,6 @@ mod tests {
                 assert_eq!(calls[2].arguments.as_ref(), r#"{"text":"gamma"}"#);
             }
             other => panic!("expected three parallel calls, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn xiaomi_xml_is_authoritative_over_corrupted_parallel_structured_calls() {
-        let xml = "Waiting.<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
-        let chunk = make_chunk(vec![ChatChunkDelta {
-            content: Some(xml.into()),
-            tool_calls: vec![
-                ChunkToolCallDelta {
-                    index: 0,
-                    id: Some("call_wrong_read".into()),
-                    kind: Some("function".into()),
-                    function: Some(ToolCallFunctionDelta {
-                        name: Some("read_file".into()),
-                        arguments: Some(
-                            r#"{"task_ids":["task-1"],"timeout_ms":{"target_file":"./model.sh"}"#
-                                .into(),
-                        ),
-                    }),
-                },
-                ChunkToolCallDelta {
-                    index: 0,
-                    id: Some("call_wrong_todo".into()),
-                    kind: Some("function".into()),
-                    function: Some(ToolCallFunctionDelta {
-                        name: Some("todo_write".into()),
-                        arguments: Some("{}".into()),
-                    }),
-                },
-            ],
-            ..Default::default()
-        }]);
-        let events = collect(stream_chat_completions_with_adapter(
-            stream::iter([Ok(chunk)]).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
-            vec![
-                "get_command_or_subagent_output".into(),
-                "read_file".into(),
-                "todo_write".into(),
-            ],
-        ))
-        .await;
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert_eq!(response.assistant_text(), "Waiting.");
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 1);
-                assert_eq!(calls[0].name, "get_command_or_subagent_output");
-                assert_eq!(
-                    serde_json::from_str::<serde_json::Value>(&calls[0].arguments).unwrap(),
-                    serde_json::json!({"task_ids": ["task-1"], "timeout_ms": 180000})
-                );
-                assert!(calls[0].id.starts_with("xiaomi_xml_"));
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn standard_adapter_does_not_interpret_literal_xiaomi_xml() {
-        let xml = "<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter></function></tool_call>";
-        let events = collect(stream_chat_completions(
-            stream::iter([Ok(text_chunk(xml))]).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-        ))
-        .await;
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert_eq!(response.assistant_text(), xml);
-                assert!(response.tool_calls().is_empty());
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn xiaomi_repeated_xml_is_salvaged_before_the_stream_finishes() {
-        let block = "<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
-        let mut chunks = (0..crate::stream::xiaomi_chat::RUNAWAY_REPEAT_THRESHOLD)
-            .map(|_| text_chunk(block))
-            .collect::<Vec<_>>();
-        chunks.push(text_chunk("this chunk must never be consumed"));
-        let events = collect(stream_chat_completions_with_adapter(
-            stream::iter(chunks.into_iter().map(Ok)).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
-            vec!["get_command_or_subagent_output".into()],
-        ))
-        .await;
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert!(response.assistant_text().is_empty());
-                assert_eq!(response.tool_calls().len(), 1);
-                assert_eq!(
-                    response.tool_calls()[0].name,
-                    "get_command_or_subagent_output"
-                );
-                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    /// MiMo's structured calls are still streamed as they arrive (the shell shows a call in
-    /// progress), while the XML envelope stays authoritative for what is executed. The reconciling
-    /// delta reuses logical index 0, so the shell updates that call in place.
-    #[tokio::test]
-    async fn xiaomi_forwards_progress_and_replaces_a_live_call_with_the_xml_call() {
-        let xml = "<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
-        let chunks = vec![
-            make_chunk(vec![ChatChunkDelta {
-                content: Some("Waiting.".into()),
-                tool_calls: vec![
-                    ChunkToolCallDelta {
-                        index: 0,
-                        id: Some("call_read".into()),
-                        kind: Some("function".into()),
-                        function: Some(ToolCallFunctionDelta {
-                            name: Some("read_file".into()),
-                            arguments: Some(
-                                r#"{"task_ids":["task-1"],"timeout_ms":{"target_file":"./model.sh"}"#
-                                    .into(),
-                            ),
-                        }),
-                    },
-                    ChunkToolCallDelta {
-                        index: 1,
-                        id: Some("call_todo".into()),
-                        kind: Some("function".into()),
-                        function: Some(ToolCallFunctionDelta {
-                            name: Some("todo_write".into()),
-                            arguments: Some("{}".into()),
-                        }),
-                    },
-                ],
-                ..Default::default()
-            }]),
-            text_chunk(xml),
-            final_chunk(FinishReason::ToolCalls),
-        ];
-        let events = collect(stream_chat_completions_with_adapter(
-            stream::iter(chunks.into_iter().map(Ok)).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
-            vec![
-                "get_command_or_subagent_output".into(),
-                "read_file".into(),
-                "todo_write".into(),
-            ],
-        ))
-        .await;
-
-        let deltas: Vec<(u32, Option<String>, Option<String>)> = events
-            .iter()
-            .filter_map(|event| match event {
-                SamplingEvent::ToolCallDelta {
-                    tool_index,
-                    name,
-                    arguments_delta,
-                    ..
-                } => Some((*tool_index, name.clone(), arguments_delta.clone())),
-                _ => None,
-            })
-            .collect();
-        assert!(
-            deltas.len() >= 3,
-            "the buffered call must still report progress: {deltas:?}"
-        );
-        assert_eq!(
-            deltas.iter().map(|(index, ..)| *index).collect::<Vec<_>>(),
-            vec![0, 1, 0]
-        );
-        assert_eq!(nth(&deltas, 0).1.as_deref(), Some("read_file"));
-        assert_eq!(
-            nth(&deltas, 2).1.as_deref(),
-            Some("get_command_or_subagent_output"),
-            "the reconciling delta must land on the live call's index"
-        );
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert_eq!(response.assistant_text(), "Waiting.");
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 1, "calls: {calls:?}");
-                assert_eq!(calls[0].name, "get_command_or_subagent_output");
-                assert_eq!(
-                    serde_json::from_str::<serde_json::Value>(&calls[0].arguments).unwrap(),
-                    serde_json::json!({"task_ids": ["task-1"], "timeout_ms": 180000})
-                );
-                assert!(calls[0].id.starts_with("xiaomi_xml_"));
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    /// An envelope the model never closes must not keep the turn reading to the completion budget.
-    /// The complete calls already recovered are kept; the held XML is dropped rather than printed.
-    #[tokio::test]
-    async fn xiaomi_cuts_an_open_envelope_past_the_ceiling_and_salvages_complete_calls() {
-        let complete = "<tool_call><function=wait><parameter=task_ids>[\"task-1\"]</parameter></function></tool_call>";
-        let open = format!(
-            "<tool_call><function=read_file><parameter=target_file>{}</parameter>",
-            "x".repeat(IN_FLIGHT_CALL_CEILING_BYTES)
-        );
-        let chunks = vec![
-            text_chunk(complete),
-            text_chunk(&open),
-            text_chunk("<tool_call><function=todo_write></function></tool_call>"),
-        ];
-        let events = collect(stream_chat_completions_with_adapter(
-            stream::iter(chunks.into_iter().map(Ok)).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
-            vec!["wait".into(), "read_file".into(), "todo_write".into()],
-        ))
-        .await;
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert!(
-                    response.assistant_text().is_empty(),
-                    "held XML must not surface as text: {:?}",
-                    response.assistant_text()
-                );
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 1, "calls: {calls:?}");
-                assert_eq!(calls[0].name, "wait");
-                assert_eq!(calls[0].arguments.as_ref(), r#"{"task_ids":["task-1"]}"#);
-                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    /// The other silent shape: one call whose argument deltas arrive forever. The ceiling ends the
-    /// turn instead of letting the busy stream reset the idle timer to the completion budget.
-    #[tokio::test]
-    async fn xiaomi_cuts_a_tool_argument_stream_past_the_ceiling() {
-        let chunks = vec![
-            make_chunk(vec![ChatChunkDelta {
-                tool_calls: vec![ChunkToolCallDelta {
-                    index: 0,
-                    id: Some("call_wait".into()),
-                    kind: Some("function".into()),
-                    function: Some(ToolCallFunctionDelta {
-                        name: Some("get_task_output".into()),
-                        arguments: Some("{\"task_ids\":[\"task-1\"],\"timeout_ms\":".into()),
-                    }),
-                }],
-                ..Default::default()
-            }]),
-            make_chunk(vec![ChatChunkDelta {
-                tool_calls: vec![ChunkToolCallDelta {
-                    index: 0,
-                    function: Some(ToolCallFunctionDelta {
-                        arguments: Some("1".repeat(IN_FLIGHT_CALL_CEILING_BYTES)),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }]),
-            text_chunk("this chunk must never be consumed"),
-        ];
-        let events = collect(stream_chat_completions_with_adapter(
-            stream::iter(chunks.into_iter().map(Ok)).boxed(),
-            None,
-            rid(),
-            Duration::from_secs(60),
-            ChatCompletionsAdapter::XiaomiMimo,
-            vec!["get_task_output".into()],
-        ))
-        .await;
-
-        let forwarded: Vec<u32> = events
-            .iter()
-            .filter_map(|event| match event {
-                SamplingEvent::ToolCallDelta { tool_index, .. } => Some(*tool_index),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(
-            forwarded,
-            vec![0, 0, 0],
-            "both argument deltas and the final call are forwarded on index 0"
-        );
-
-        match events.last().unwrap() {
-            SamplingEvent::Completed { response, .. } => {
-                assert!(
-                    response.assistant_text().is_empty(),
-                    "the turn must end before the trailing chunk is read"
-                );
-                let calls = response.tool_calls();
-                assert_eq!(calls.len(), 1, "calls: {calls:?}");
-                assert_eq!(calls[0].name, "get_task_output");
-                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
-            }
-            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
@@ -2085,9 +1597,9 @@ mod tests {
     }
 
     /// Lesson 4 lock: tool-call progress must reach the consumer while the response is still open.
-    /// The second chunk is withheld until a delta is observed, so an adapter that buffers the whole
+    /// The second chunk is withheld until a delta is observed, so a transform that buffers the whole
     /// generation before emitting anything stalls here instead of emitting deltas at the end.
-    async fn a_tool_call_delta_precedes_the_terminal_event(adapter: ChatCompletionsAdapter) {
+    async fn a_tool_call_delta_precedes_the_terminal_event() {
         let (release, hold) = tokio::sync::oneshot::channel::<()>();
         let first = make_chunk(vec![ChatChunkDelta {
             tool_calls: vec![ChunkToolCallDelta {
@@ -2118,12 +1630,11 @@ mod tests {
             }))
             .boxed();
 
-        let mut stream = Box::pin(stream_chat_completions_with_adapter(
+        let mut stream = Box::pin(stream_chat_completions_with_tools(
             raw,
             None,
             rid(),
             Duration::from_secs(60),
-            adapter,
             Vec::new(),
         ));
         let mut release = Some(release);
@@ -2146,13 +1657,13 @@ mod tests {
                 }
                 Ok(None) => break,
                 Err(_) => panic!(
-                    "timed out waiting for a ToolCallDelta ({adapter:?}): the transform buffered the stream instead of forwarding tool-call progress"
+                    "timed out waiting for a ToolCallDelta : the transform buffered the stream instead of forwarding tool-call progress"
                 ),
             }
         }
         assert!(
             release.is_none(),
-            "expected a ToolCallDelta before the terminal event ({adapter:?})"
+            "expected a ToolCallDelta before the terminal event "
         );
         assert!(
             matches!(events.last(), Some(SamplingEvent::Completed { .. })),
@@ -2161,13 +1672,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn standard_adapter_emits_tool_call_deltas_before_completing() {
-        a_tool_call_delta_precedes_the_terminal_event(ChatCompletionsAdapter::Standard).await;
-    }
-
-    #[tokio::test]
-    async fn xiaomi_adapter_emits_tool_call_deltas_before_completing() {
-        a_tool_call_delta_precedes_the_terminal_event(ChatCompletionsAdapter::XiaomiMimo).await;
+    async fn tool_call_deltas_precede_completion() {
+        a_tool_call_delta_precedes_the_terminal_event().await;
     }
 
     #[tokio::test]

@@ -76,7 +76,7 @@ impl SessionActor {
                 )),
                 rate_limit_retry_threshold: sampling_config.rate_limit_retry_threshold,
                 api_backend: sampling_config.api_backend.clone(),
-                chat_completions_adapter: sampling_config.chat_completions_adapter,
+                chat_completions_request_format: sampling_config.chat_completions_request_format,
                 extra_headers: sampling_config.extra_headers.clone(),
                 conversation_group_id: sampling_config.conversation_group_id.clone(),
                 query_params: sampling_config.query_params.clone(),

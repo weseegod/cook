@@ -260,6 +260,12 @@ Provider URLs (không secret):
 | xiaomi | `https://api.xiaomimimo.com/v1` |
 | moonshot | `https://api.moonshot.ai/v1` |
 
+Model dùng `model_provider = "xiaomi"` tự gửi request theo định dạng MiMo: `thinking`,
+`max_completion_tokens`, và `reasoning_content` trong lịch sử assistant. Không cần
+`chat_completions_adapter`; nếu cấu hình cũ còn khóa đó, xóa nó. Với provider
+tùy chỉnh trỏ tới MiMo, có thể đặt
+`chat_completions_request_format = "deepseek_thinking"` trong `[model_providers.<id>]`.
+
 Backup lúc import: `~/.cook/config.toml.bak-20260731-221150`
 
 ---

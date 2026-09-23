@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use xai_grok_sampling_types::{
-    ApiBackend, ChatCompletionsAdapter, CompactionAtTokens, CompactionsRemaining,
+    ApiBackend, ChatCompletionsRequestFormat, CompactionAtTokens, CompactionsRemaining,
     ConversationGroupId, DoomLoopRecoveryPolicy, ReasoningEffort, ReasoningSummary,
 };
 
@@ -47,8 +47,9 @@ pub struct SamplerConfig {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: ApiBackend,
+    /// Selects Chat Completions request fields; response parsing remains provider agnostic.
     #[serde(default)]
-    pub chat_completions_adapter: ChatCompletionsAdapter,
+    pub chat_completions_request_format: ChatCompletionsRequestFormat,
     #[serde(default)]
     pub auth_scheme: AuthScheme,
     #[serde(default)]
@@ -143,7 +144,7 @@ impl Default for SamplerConfig {
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::default(),
-            chat_completions_adapter: ChatCompletionsAdapter::default(),
+            chat_completions_request_format: ChatCompletionsRequestFormat::default(),
             auth_scheme: AuthScheme::default(),
             request_compression: RequestCompression::default(),
             extra_headers: IndexMap::new(),
