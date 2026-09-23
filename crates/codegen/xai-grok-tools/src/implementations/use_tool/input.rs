@@ -124,7 +124,9 @@ impl<'de> Visitor<'de> for InputVisitor<'_> {
 
     fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
         let mut values = serde_json::Map::new();
+        let mut saw_any_key = false;
         while let Some(key) = map.next_key::<String>()? {
+            saw_any_key = true;
             let canonical = self.reverse.get(&key).map_or(key.as_str(), String::as_str);
             if FIELDS.contains(&canonical) {
                 if values.contains_key(canonical) {
@@ -162,6 +164,14 @@ impl<'de> Visitor<'de> for InputVisitor<'_> {
             (false, false, false, true) => Ok(UseToolInput::InvocationFile {
                 file: parse_path(values.remove("file"))?,
             }),
+            // Empty `{}` is the weak-model miss real agents.mcp_echo still hits after the
+            // schema description: spell the inline fill-in so the next call can succeed.
+            _ if !saw_any_key => Err(de::Error::custom(
+                "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}; \
+                 empty {} is invalid. Required inline form \
+                 {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}} \
+                 — example {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}",
+            )),
             _ => Err(de::Error::custom(
                 "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}",
             )),

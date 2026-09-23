@@ -132,6 +132,46 @@ fn remapping_does_not_descend_into_remote_properties() {
     );
 }
 
+/// Empty `{}` must fail with the inline fill-in example, not only the form-list error.
+/// Real-model `agents.mcp_echo` kept retrying `{}` after the schema description alone.
+#[test]
+fn empty_object_error_includes_inline_fill_in_example() {
+    let err = serde_json::from_value::<UseToolInput>(Value::Object(
+        serde_json::Map::new(),
+    ))
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("exactly one"),
+        "must keep form-list guidance: {err}"
+    );
+    assert!(
+        err.contains("empty {} is invalid"),
+        "must call out empty object: {err}"
+    );
+    assert!(
+        err.contains(r#"{"tool_name": "<discovered name>", "tool_input": {"<param>": <value>}}"#),
+        "must show required inline form: {err}"
+    );
+    assert!(
+        err.contains(r#"{"tool_name": "echo__echo", "tool_input": {"text": "hello"}}"#),
+        "must show concrete example: {err}"
+    );
+}
+
+/// Non-empty wrong-key objects keep the short form-list error (no empty-specific noise).
+#[test]
+fn non_empty_wrong_keys_keep_short_form_list_error() {
+    let err = serde_json::from_value::<UseToolInput>(json!({"unrelated": true}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("exactly one"), "{err}");
+    assert!(
+        !err.contains("empty {} is invalid"),
+        "short error for non-empty wrong keys: {err}"
+    );
+}
+
 /// File-input schema root has no `required`; the root description must still carry the
 /// never-empty example so weak models stop emitting `{}` (agents.mcp_echo).
 #[test]

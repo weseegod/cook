@@ -421,9 +421,25 @@ pub(super) fn build_tool_parse_error_message(
             "\n\nNote: the arguments above contain invalid JSON — {json_err}\n\
              Please fix the syntax and retry."
         ));
+    } else if is_empty_json_object(raw_arguments) {
+        // Schema-valid `{}` still fails required/wrapper checks. Spell the retry so weak
+        // models do not keep sending an empty object after a clear description already
+        // forbade it (real-model agents.mcp_echo).
+        msg.push_str(
+            "\n\nThe arguments were an empty object `{}`. Resend the same tool call with \
+             every required field filled in — copy the example shape from the tool \
+             description. Do not retry `{}`.",
+        );
     }
 
     msg
+}
+
+fn is_empty_json_object(raw_arguments: &str) -> bool {
+    matches!(
+        serde_json::from_str::<serde_json::Value>(raw_arguments),
+        Ok(serde_json::Value::Object(ref map)) if map.is_empty()
+    )
 }
 
 #[cfg(test)]

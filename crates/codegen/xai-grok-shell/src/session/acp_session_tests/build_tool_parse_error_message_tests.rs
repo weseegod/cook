@@ -63,6 +63,46 @@ fn test_empty_arguments_no_extra_content() {
     assert!(msg.contains("Failed to parse arguments for tool `search_replace`"));
     assert!(!msg.contains("Your original arguments"));
     assert!(!msg.contains("invalid JSON"));
+    assert!(
+        !msg.contains("empty object `{}`"),
+        "no empty-object recovery when raw args are absent: {msg}"
+    );
+}
+
+/// Schema-valid `{}` still fails wrapper/required checks. The result must tell the model
+/// not to resend `{}` (real-model agents.mcp_echo retried empty four times).
+#[test]
+fn test_empty_json_object_gets_no_empty_retry() {
+    let err = xai_tool_runtime::ToolError::invalid_arguments(
+        "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}".to_string(),
+    );
+    let msg = build_tool_parse_error_message("use_tool", &err, "{}");
+
+    assert!(msg.contains("Failed to parse arguments for tool `use_tool`"));
+    assert!(msg.contains("Your original arguments"));
+    assert!(msg.contains("{}"));
+    assert!(
+        msg.contains("empty object `{}`"),
+        "must call out empty object: {msg}"
+    );
+    assert!(
+        msg.contains("Do not retry `{}`"),
+        "must forbid retrying empty object: {msg}"
+    );
+    assert!(
+        !msg.contains("invalid JSON"),
+        "valid empty object must not take the invalid-JSON path: {msg}"
+    );
+}
+
+/// Non-empty valid JSON does not get the empty-object recovery note.
+#[test]
+fn test_non_empty_valid_json_skips_empty_object_note() {
+    let err = xai_tool_runtime::ToolError::invalid_arguments("missing field".to_string());
+    let msg = build_tool_parse_error_message("read_file", &err, r#"{"path":"x"}"#);
+
+    assert!(!msg.contains("empty object `{}`"), "{msg}");
+    assert!(!msg.contains("Do not retry `{}`"), "{msg}");
 }
 
 /// Arguments longer than MAX_ARGS_IN_ERROR must be truncated with a marker.
