@@ -25,7 +25,7 @@ def files_for(case: str, marker: str, file_bytes: int) -> dict[str, str]:
         "tools.update_goal", "tools.kill_and_wait", "tools.monitor_short",
         "tools.scheduler_roundtrip", "tools.memory_roundtrip", "session.resume",
         "session.resume_by_id", "session.fork", "session.permissions_deny_bash",
-        "session.memory_flush", "session.hooks", "agents.subagent_read",
+        "session.memory_flush", "session.hooks", "session.streaming_json", "agents.subagent_read",
         "agents.no_subagents_flag", "agents.mcp_echo", "agents.acp_stdio",
         "agents.opencode_read", "tools.unknown_and_sibling",
     }

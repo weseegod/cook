@@ -124,6 +124,13 @@ copy_session() {
   elif [[ -d "$cwd_root" ]]; then
     while IFS= read -r summary; do session_src=${summary%/summary.json}; done < <(find "$cwd_root" -mindepth 2 -maxdepth 2 -name summary.json -type f | sort)
   fi
+  # Worktree sessions live under the encoded worktree path, not the launch cwd.
+  if [[ -z "$session_src" && -n "$sid" ]]; then
+    while IFS= read -r summary; do session_src=${summary%/summary.json}; break; done < <(find "$home/sessions" -mindepth 3 -maxdepth 3 -path "*/$sid/summary.json" -type f 2>/dev/null | sort)
+  fi
+  if [[ -z "$session_src" && -z "$sid" && -d "$home/sessions" ]]; then
+    while IFS= read -r summary; do session_src=${summary%/summary.json}; done < <(find "$home/sessions" -mindepth 3 -maxdepth 3 -name summary.json -type f 2>/dev/null | sort)
+  fi
   [[ -n "$session_src" ]] || return 1
   rm -rf "$case_dir/session"
   cp -a "$session_src" "$case_dir/session" 2>/dev/null || mkdir -p "$case_dir/session"
@@ -276,9 +283,10 @@ run_model_case() {
   template="$SUITE_DIR/$(case_field "$file" prompt)"; marker_file="$workdir/secret.txt"
   write_home_config "$home" "$permission" "$cap" "$window"
   if [[ "$id" == session.hooks ]]; then
-    mkdir -p "$home/hooks" "$home/bin"
-    printf '%s\n' '#!/usr/bin/env bash' 'printf "fired\\n" >>"$COOK_HOME/hook-log.txt"' >"$home/bin/log-read.sh"
-    chmod +x "$home/bin/log-read.sh"
+    # Relative hook commands resolve against the hook JSON's parent ($COOK_HOME/hooks/).
+    mkdir -p "$home/hooks/bin"
+    printf '%s\n' '#!/usr/bin/env bash' 'printf "fired\\n" >>"$COOK_HOME/hook-log.txt"' >"$home/hooks/bin/log-read.sh"
+    chmod +x "$home/hooks/bin/log-read.sh"
     printf '%s\n' '{"hooks":{"PostToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"bin/log-read.sh","timeout":5}]}]}}' >"$home/hooks/log-read.json"
   fi
   if [[ "$id" == tools.update_goal ]]; then
@@ -314,6 +322,8 @@ run_model_case() {
     invoke_cook "$case_dir" "$home" "$workdir" "$second_prompt" "$timeout_secs" "$permission" "$allow" "$deny" "$second_extra"
     mv "$case_dir/stdout.json" "$case_dir/stdout-2.json"; mv "$case_dir/stderr.log" "$case_dir/stderr-2.log"
     cp "$case_dir/stdout-2.json" "$case_dir/stdout.json"; cp "$case_dir/stderr-2.log" "$case_dir/stderr.log"
+    # Keep the second-invocation argv (resume/fork/--memory-flush) if a later empty-text retry runs.
+    extra=$second_extra
   elif [[ "$id" == agents.acp_stdio ]]; then
     set +e
     COOK_HOME="$home" GROK_LOG_FILE="$case_dir/wire.log" RUST_LOG="info,xai_grok_shell=debug,xai_grok_sampler=debug" \
