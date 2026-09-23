@@ -1030,6 +1030,7 @@ impl AgentBuilder {
             // injected (Codex:apply_patch, GrokBuildHashline:hashline_edit, OpenCode:read, …)
             // so retain() can keep them by id instead of silently dropping them.
             let known_kinds = tool_bridge_builder.known_tool_kinds();
+            let mut companion_keep: Vec<String> = Vec::new();
             for t in &definition.tools {
                 if AGENT_TASK_CLASSIFIER_RE.is_match(t) || t.starts_with("mcp__") {
                     continue;
@@ -1049,6 +1050,33 @@ impl AgentBuilder {
                     tc.kind = known_kinds.get(&full_id).copied();
                 }
                 tool_config.tools.push(tc);
+
+                // Registry-valid hashline bundle: editing without anchors needs hashline_read
+                // so the model can see line hashes. Do not widen to plain read_file/search_replace.
+                // companion_keep makes the allowlist retain keep the injected id (it is not in definition.tools).
+                if short_tool_name(&full_id) == "hashline_edit" {
+                    let companion = registered_tool_ids
+                        .iter()
+                        .find(|id| short_tool_name(id) == "hashline_read")
+                        .cloned();
+                    if let Some(companion_id) = companion {
+                        companion_keep.push(companion_id.clone());
+                        if !tool_config
+                            .tools
+                            .iter()
+                            .any(|tc| tool_id_eq(&companion_id, &tc.id))
+                        {
+                            let mut read_tc =
+                                xai_grok_tools::registry::types::ToolConfig::from_id(
+                                    companion_id.clone(),
+                                );
+                            if read_tc.kind.is_none() {
+                                read_tc.kind = known_kinds.get(&companion_id).copied();
+                            }
+                            tool_config.tools.push(read_tc);
+                        }
+                    }
+                }
             }
             if !recognized_but_unavailable.is_empty() {
                 tracing::debug!(
@@ -1060,6 +1088,9 @@ impl AgentBuilder {
             if unresolved.is_empty() {
                 tool_config.tools.retain(|tc| {
                     tool_id_matches(&definition.tools, &tc.id)
+                        || companion_keep
+                            .iter()
+                            .any(|id| tool_id_eq(id, &tc.id))
                         || tc.kind.is_some_and(|k| allow_kinds.contains(&k))
                         || (has_agent_entry && task_deps.contains(&short_tool_name(&tc.id)))
                         || matches!(tc.kind, Some(ToolKind::SearchTool | ToolKind::UseTool))
@@ -2215,6 +2246,7 @@ mod tests {
         .map(|definition| definition.function.name)
         .collect()
     }
+
     #[tokio::test]
     async fn top_level_session_still_receives_workflow() {
         let names = workflow_tool_names(
@@ -3097,6 +3129,31 @@ mod tests {
                 "--tools {allow} must not fall back to the full toolset; got {names:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    /// `--tools hashline_edit` must also expose `hashline_read` (registry-valid bundle)
+    /// so Replace has anchors; still no plain `read_file` / `search_replace`.
+    async fn allowlist_hashline_edit_injects_companion_hashline_read() {
+        let agent = build_with_tools(vec!["hashline_edit".to_string()], vec![]).await;
+        let names: Vec<String> = agent
+            .tool_definitions()
+            .await
+            .iter()
+            .map(|d| d.function.name.clone())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "hashline_edit"),
+            "must expose hashline_edit; got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "hashline_read"),
+            "hashline_edit must inject companion hashline_read; got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n == "read_file" || n == "search_replace"),
+            "must not widen to plain file tools; got {names:?}"
+        );
     }
     async fn build_with_web_search(
         web_search_enabled: bool,
