@@ -109,6 +109,31 @@ fn acp_finish_emits_end_line_with_usage_and_structured_output() {
     assert_eq!(json_str(end, "/stopReason"), Some("end_turn"));
     assert_eq!(json_str(end, "/sessionId"), Some("sess-1"));
     assert_eq!(json_str(end, "/requestId"), Some("req-1"));
+    assert_eq!(json_str(end, "/text"), Some(""));
     assert_eq!(json_str(end, "/structuredOutput/name"), Some("alice"));
     assert!(end.get("usage").is_some_and(Value::is_object));
+}
+
+#[test]
+fn acp_finish_end_line_carries_result_text_for_streaming_marker() {
+    let mut r = AcpReducer;
+    let marker = "MARKER-session.streaming_json-deadbeef";
+    let out = r.finish(&TurnEnd {
+        stop_reason: "end_turn",
+        session_id: "sess-1",
+        request_id: "req-1",
+        usage: None,
+        structured_output: None,
+        result_text: marker,
+        duration_ms: 0,
+    });
+    let Some(end) = out.last() else {
+        panic!("expected an end line: {out:?}");
+    };
+    assert_eq!(msg_type(end), Some("end"));
+    assert_eq!(json_str(end, "/text"), Some(marker));
+    assert!(
+        end.to_string().contains(marker),
+        "streaming-json terminal line must contain the marker: {end}"
+    );
 }
