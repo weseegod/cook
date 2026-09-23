@@ -172,11 +172,17 @@ fn non_empty_wrong_keys_keep_short_form_list_error() {
     );
 }
 
-/// File-input schema root has no `required`; the root description must still carry the
-/// never-empty example so weak models stop emitting `{}` (agents.mcp_echo).
+/// File-input schema must carry top-level `required` for the preferred inline pair so
+/// weak models stop emitting `{}` (real-model agents.mcp_echo), plus the never-empty
+/// example on the root description.
 #[test]
 fn file_input_schema_root_description_forbids_empty_object() {
     let schema = serde_json::to_value(UseToolInput::input_schema(true)).unwrap();
+    assert_eq!(
+        schema.get("required"),
+        Some(&serde_json::json!(["tool_name", "tool_input"])),
+        "file-input root must require the preferred inline pair: {schema}"
+    );
     let description = schema
         .get("description")
         .and_then(serde_json::Value::as_str)
