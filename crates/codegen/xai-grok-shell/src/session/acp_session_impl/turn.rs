@@ -2883,6 +2883,10 @@ impl SessionActor {
                 self.drain_interjections_at_safe_point().await;
                 self.flush_pending_skill_reminders().await;
                 self.inject_pending_monitor_events().await;
+                // Mid-turn workflow finishes must reach this sample; waiting for the
+                // next user turn lets the model poll until max_turns (headless exit 1).
+                self.drain_between_turn_workflow_completions(self.goal_loop_active())
+                    .await;
             }
             let memory_reminder = self.first_turn_memory_reminder().await;
             if memory_reminder.is_some() {
