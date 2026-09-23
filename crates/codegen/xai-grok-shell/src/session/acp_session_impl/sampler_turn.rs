@@ -1305,22 +1305,29 @@ impl SessionActor {
         // Genuine overflows already completed truncated in the quiet arm above
         // The remaining mid-salvage kinds (rate limit) take their terminal arms below
         if !mid_salvage_continuation && self.should_compact_on_error(&error).await {
-            // SAFETY: `should_compact_on_error` returned true only when `model_metadata.context_window` was Some(>0)
+            let configured_cw = self
+                .chat_state_handle
+                .get_sampling_config()
+                .await
+                .map(|c| c.context_window.get())
+                .unwrap_or(0);
+            // Prefer the error's reported window; MaxTokensTruncation has none and uses the configured window.
             let cw = error
                 .model_metadata
                 .as_ref()
                 .and_then(|m| m.context_window)
-                .expect("should_compact_on_error guarantees context_window");
-            {
+                .filter(|w| *w > 0)
+                .unwrap_or(configured_cw);
+            if cw > 0 {
                 let total_tokens = self.chat_state_handle.get_estimated_total_tokens().await;
                 let percentage = xai_token_estimation::usage_percentage_u8(total_tokens, cw);
 
                 // Update the in-memory sampling config's `context_window` if the model reported a different value (mirror the legacy path's bookkeeping)
                 if let Some(mut cfg) = self.chat_state_handle.get_sampling_config().await
-                    && let Some(new_cw) = std::num::NonZeroU64::new(cw)
+                    && error.model_metadata.as_ref().and_then(|m| m.context_window) == Some(cw)
                     && self.compaction.context_window_override.get().is_none()
                 {
-                    cfg.context_window = new_cw;
+                    cfg.context_window = std::num::NonZeroU64::new(cw).unwrap_or(cfg.context_window);
                     self.chat_state_handle.update_sampling_config(cfg);
                 }
 

@@ -2170,8 +2170,28 @@ impl SessionActor {
         if self.compaction.is_suppressed() {
             return false;
         }
-        self.estimate_exceeds_error_context_window(err).await
+        if self.estimate_exceeds_error_context_window(err).await {
+            return true;
+        }
+        // MaxTokensTruncation carries no model_metadata; if the local estimate is already
+        // past the configured window, compact-and-resubmit instead of terminal exit 1.
+        matches!(
+            err.kind,
+            xai_grok_sampler::SamplingErrorKind::MaxTokensTruncation
+        ) && self.estimate_exceeds_configured_window().await
     }
+
+    async fn estimate_exceeds_configured_window(&self) -> bool {
+        let Some(cfg) = self.chat_state_handle.get_sampling_config().await else {
+            return false;
+        };
+        let cw = cfg.context_window.get();
+        if cw == 0 {
+            return false;
+        }
+        self.chat_state_handle.get_estimated_total_tokens().await > cw
+    }
+
     /// The request's token estimate exceeds the failed response's reported context window.
     /// This probable-overflow signal is shared by compact-and-resubmit and the mid-salvage truncated-complete arm.
     /// The latter must see overflows even while compaction is suppressed.

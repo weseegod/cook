@@ -2068,6 +2068,59 @@ fn api_error_with_context_window(context_window: u64) -> xai_grok_sampler::Sampl
         credential: xai_grok_sampling_types::SentCredential::Unknown,
     }
 }
+
+fn max_tokens_truncation_error() -> xai_grok_sampler::SamplingErrorInfo {
+    xai_grok_sampler::SamplingErrorInfo {
+        kind: xai_grok_sampler::SamplingErrorKind::MaxTokensTruncation,
+        status_code: None,
+        message: "response truncated by max_tokens".to_string(),
+        is_retryable: false,
+        retry_after_secs: None,
+        should_retry: None,
+        error_code: None,
+        model_metadata: None,
+        empty_response_context: None,
+        doom_loop_triggers: None,
+        doom_loop_aborted_at_chunk: None,
+        credential: xai_grok_sampling_types::SentCredential::Unknown,
+    }
+}
+
+/// MaxTokensTruncation has no model_metadata; when the local estimate is already past
+/// the configured window, should_compact_on_error must still compact (agents.workflow_live).
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_truncation_compacts_when_estimate_exceeds_configured_window() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            // Estimated 50_000 against configured window 32_768.
+            let actor = create_test_actor(50_000, 32_768, 85, gateway_tx, persistence_tx).await;
+            let err = max_tokens_truncation_error();
+            assert!(err.model_metadata.is_none());
+            assert!(
+                actor.should_compact_on_error(&err).await,
+                "over-window MaxTokens must compact"
+            );
+        })
+        .await;
+}
+
+/// Same error with the estimate still inside the configured window must not compact.
+#[tokio::test(flavor = "current_thread")]
+async fn max_tokens_truncation_does_not_compact_inside_configured_window() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let actor = create_test_actor(10_000, 32_768, 85, gateway_tx, persistence_tx).await;
+            let err = max_tokens_truncation_error();
+            assert!(!actor.should_compact_on_error(&err).await);
+        })
+        .await;
+}
 /// Pre-sampling check uses estimated tokens (includes tool-result delta).
 #[tokio::test(flavor = "current_thread")]
 async fn test_pre_sampling_uses_estimated_tokens() {
