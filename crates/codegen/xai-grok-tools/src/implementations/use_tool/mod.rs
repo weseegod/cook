@@ -327,7 +327,10 @@ impl crate::types::tool_metadata::ToolMetadata for UseTool {
     fn description_template(&self) -> &str {
         "Call a discovered MCP integration tool with `${{ params.use_tool.tool_name }}` and \
          `${{ params.use_tool.tool_input }}`. Arguments must match the discovered schema\
-         ${%- if tools.by_kind.search_tool %} from `${{ tools.by_kind.search_tool }}`${%- endif %}."
+         ${%- if tools.by_kind.search_tool %} from `${{ tools.by_kind.search_tool }}`${%- endif %}.\n\n\
+         Required inline form (both keys, never empty `{}`):\n\
+         {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}}\n\
+         Example: {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}."
     }
 
     fn versioned_definition(

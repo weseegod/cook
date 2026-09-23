@@ -666,6 +666,36 @@ fn schema_allows_arbitrary_properties_for_tool_input() {
     );
 }
 
+/// Empty `{}` arguments bounce off the anyOf/required gate; the description must show
+/// the required inline JSON shape (real-model agents.mcp_echo kept sending `{}`).
+#[test]
+fn description_shows_required_inline_json_example() {
+    let description = xai_tool_runtime::Tool::description(
+        &UseTool,
+        &xai_tool_runtime::ListToolsContext::default(),
+    );
+    let text = description.description.to_lowercase();
+    assert!(
+        text.contains("never empty `{}`") || text.contains("never empty {}"),
+        "description must forbid empty object args: {}",
+        description.description
+    );
+    assert!(
+        description
+            .description
+            .contains(r#"{"tool_name": "<discovered name>", "tool_input": {"<param>": <value>}}"#),
+        "description must show the required inline JSON shape: {}",
+        description.description
+    );
+    assert!(
+        description
+            .description
+            .contains(r#"{"tool_name": "echo__echo", "tool_input": {"text": "hello"}}"#),
+        "description must show a concrete example: {}",
+        description.description
+    );
+}
+
 #[test]
 fn dump_classification_preserves_shape_and_query_steer() {
     let row = "{'id': 0, 'name': 'user0', 'email': 'u0@example.com', 'age': 20}";
