@@ -15,6 +15,8 @@ invoke_cook() {
   if [[ ! " ${cmd[*]} " =~ " --max-turns " ]]; then cmd+=(--max-turns "$MAX_TURNS"); fi
   if [[ ! " ${cmd[*]} " =~ " --output-format " ]]; then cmd+=(--output-format json); fi
   set +e
+  # GROK_WORKFLOWS=0 keeps the legacy model-facing update_goal tool (default-on
+  # workflows strip GoalUpdate). Other cases keep their default driver.
   COOK_HOME="$home" GROK_LOG_FILE="$case_dir/wire.log" RUST_LOG="info,xai_grok_shell=debug,xai_grok_sampler=debug" \
     timeout --signal=TERM --kill-after=10 "$timeout_secs" "${cmd[@]}" >"$case_dir/stdout.json" 2>"$case_dir/stderr.log" &
   INVOKE_PID=$!

@@ -281,6 +281,13 @@ run_model_case() {
     chmod +x "$home/bin/log-read.sh"
     printf '%s\n' '{"hooks":{"PostToolUse":[{"matcher":"Read","hooks":[{"type":"command","command":"bin/log-read.sh","timeout":5}]}]}}' >"$home/hooks/log-read.json"
   fi
+  if [[ "$id" == tools.update_goal ]]; then
+    # Default-on background workflows strip update_goal (host-owned goal driver).
+    # This case exercises the legacy model-facing goal tool.
+    export GROK_WORKFLOWS=0
+  else
+    unset GROK_WORKFLOWS || true
+  fi
   if [[ "$id" == tools.web_fetch_public ]]; then
     port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
     python3 -m http.server "$port" --bind 127.0.0.1 --directory "$workdir/served" >"$case_dir/http.log" 2>&1 & HTTP_PID=$!
@@ -337,7 +344,9 @@ run_model_case() {
   if [[ ! -f "$case_dir/summary.json" ]]; then
     printf 'fail no-session\n' >"$case_dir/status.txt"; printf '%s fail no-session\n' "$id" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" 'fail no-session'; return 1
   fi
-  if [[ "$(<"$case_dir/exit-code.txt")" != 0 ]]; then
+  # Headless returns an error after it has already recorded the max-turns stop.
+  # Section 9 scores that case from stopReason / stderr; every other case still fails closed.
+  if [[ "$(<"$case_dir/exit-code.txt")" != 0 && "$id" != session.max_turns ]]; then
     rc=$(<"$case_dir/exit-code.txt")
     printf 'fail exit %s\n' "$rc" >"$case_dir/status.txt"; printf '%s fail exit %s\n' "$id" "$rc" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" "fail exit $rc"; return 1
   fi

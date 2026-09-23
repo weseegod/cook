@@ -302,10 +302,18 @@ def check_no_session(case: dict[str, Any], root: Path) -> None:
 
 def check_no_external_http(case: dict[str, Any], root: Path) -> None:
     wire = (root / "wire.log").read_text(encoding="utf-8", errors="replace")
-    urls = re.findall(r"https?://[^\s\"']+", wire)
     allowed = re.sub(r"/v1/?$", "", case.get("base_url", "http://127.0.0.1:8080/v1"))
-    if any(not url.startswith(allowed) for url in urls):
-        raise Failure("no_external_http: non-local-model URL found")
+    # Catalog fetch and config echo print remote URLs on every run; those are not
+    # tool HTTP. Real requests must still stay on the local model server.
+    noise = re.compile(
+        r"Fetching models from |data capture config resolved|Failed to fetch models"
+    )
+    for line in wire.splitlines():
+        if noise.search(line):
+            continue
+        for url in re.findall(r"https?://[^\s\"']+", line):
+            if not url.startswith(allowed):
+                raise Failure(f"no_external_http: non-local-model URL found ({url})")
 
 
 def check_ssrf_safe(case: dict[str, Any], root: Path) -> None:
@@ -343,9 +351,22 @@ def check_home_memory(case: dict[str, Any], root: Path) -> None:
 def check_scheduler_clean(case: dict[str, Any], root: Path) -> None:
     home = root / "home"
     for path in home.rglob("*"):
-        if path.is_file() and "session" not in path.parts and marker(root) in path.read_text(encoding="utf-8", errors="replace"):
-            if "schedul" in str(path).lower():
-                raise Failure("scheduler_clean: scheduled-task record remains")
+        if not path.is_file():
+            continue
+        # Session transcripts under home/sessions/ legitimately contain the nonce
+        # (read_file results, tool calls). Only non-session files matter.
+        rel = path.relative_to(home)
+        if any(part == "sessions" or part.startswith("session") for part in rel.parts[:-1]) or (
+            rel.parts and rel.parts[0] == "sessions"
+        ):
+            continue
+        # Match path components under home only: the case directory is named
+        # tools.scheduler_roundtrip, so a full-path "schedul" match false-positives.
+        rel_s = str(rel).lower()
+        if "schedul" not in rel_s:
+            continue
+        if marker(root) in path.read_text(encoding="utf-8", errors="replace"):
+            raise Failure("scheduler_clean: scheduled-task record remains")
 
 
 def check_hook_once(case: dict[str, Any], root: Path) -> None:
@@ -369,7 +390,25 @@ def check_purpose_present(case: dict[str, Any], root: Path) -> None:
 def check_lsp_smoke(case: dict[str, Any], root: Path) -> None:
     ok = any(e.get("tool_name") == "lsp" for e in tool_events(root, "tool_completed"))
     text = str(result_obj(root).get("text", "")).lower()
-    if not ok and not ("no language server" in text or "not available" in text or "not configured" in text):
+    # Unavailability phrasing the case prompt allows ("say so in one sentence"):
+    # either the generic "language server" wording or an explicit "no LSP server…".
+    # spark25 often says "No LSP (language server) tool is available… no MCP server".
+    unavailable = any(
+        phrase in text
+        for phrase in (
+            "no language server",
+            "no lsp server",
+            "no lsp tool",
+            "no lsp (language",
+            "no mcp server",
+            "no mcp servers",
+            "not available",
+            "not configured",
+            "no server is configured",
+            "none are configured",
+        )
+    )
+    if not ok and not unavailable:
         raise Failure("lsp_smoke: neither completion nor unavailable response")
 
 
@@ -480,6 +519,44 @@ def self_test() -> None:
         (root / "chat_history.jsonl").write_text(json.dumps({"name":"read_file","arguments":{"target_file":"secret.txt"}})+"\n")
         (root / "wire.log").write_text("")
         assert score({"checks":["tool_called"],"expect_tools":["read_file"]}, root)[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        # Regression: absolute case path contains tools.scheduler_roundtrip, and
+        # home/sessions/.../chat_history.jsonl holds the nonce after a clean delete.
+        root = Path(tmp)
+        nonce = "MARKER-tools.scheduler_roundtrip-deadbeef"
+        (root / "MANIFEST.json").write_text(json.dumps({"case": "tools.scheduler_roundtrip", "nonce": nonce}))
+        nested = root / "home" / "sessions" / "tools.scheduler_roundtrip" / "abc"
+        nested.mkdir(parents=True)
+        (nested / "chat_history.jsonl").write_text(nonce + "\n")
+        (root / "updates.jsonl").write_text(nonce + "\n")
+        (root / "events.jsonl").write_text("{}\n")
+        scase = {"checks": ["scheduler_clean"]}
+        store = root / "home" / "scheduled"
+        store.mkdir(parents=True, exist_ok=True)
+        (store / "placeholder.txt").write_text("no marker\n")
+        assert score(scase, root)[0], "session/case-dir noise must not fail scheduler_clean"
+        (store / "tasks.json").write_text(nonce + "\n")
+        assert not score(scase, root)[0], "marker under home/scheduled must fail scheduler_clean"
+    with tempfile.TemporaryDirectory() as tmp:
+        # Unavailable LSP wording: "No LSP server is configured" must pass (no lsp tool call).
+        root = Path(tmp)
+        (root / "stdout.json").write_text(json.dumps({
+            "text": "No LSP server is configured in this session, so I cannot retrieve diagnostics.",
+            "stopReason": "end_turn",
+        }))
+        (root / "events.jsonl").write_text("{}\n")
+        assert score({"checks": ["lsp_smoke"]}, root)[0], "no-lsp-server phrasing must pass"
+        # spark25 live wording from tools.lsp_smoke
+        (root / "stdout.json").write_text(json.dumps({
+            "text": "No LSP (language server) tool is available in this session — no MCP server is connected, so I cannot request diagnostics on `lib.rs`.",
+            "stopReason": "end_turn",
+        }))
+        assert score({"checks": ["lsp_smoke"]}, root)[0], "no-lsp-tool phrasing must pass"
+        (root / "stdout.json").write_text(json.dumps({
+            "text": "Diagnostics unavailable for other reasons.",
+            "stopReason": "end_turn",
+        }))
+        assert not score({"checks": ["lsp_smoke"]}, root)[0], "unrelated prose must still fail"
     print("score.py self-test: pass")
 
 

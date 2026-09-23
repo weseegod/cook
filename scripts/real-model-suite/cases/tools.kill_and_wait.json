@@ -22,7 +22,9 @@
   "expect_any_tools": [
     [
       "wait_tasks",
-      "get_terminal_command_output"
+      "get_terminal_command_output",
+      "get_task_output",
+      "get_command_or_subagent_output"
     ]
   ],
   "forbid_tools": [

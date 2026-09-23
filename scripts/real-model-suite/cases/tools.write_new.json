@@ -19,7 +19,8 @@
   "expect_any_tools": [
     [
       "search_replace",
-      "run_terminal_cmd"
+      "run_terminal_cmd",
+      "write"
     ]
   ],
   "forbid_tools": [],

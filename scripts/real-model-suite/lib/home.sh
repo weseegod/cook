@@ -16,6 +16,12 @@ write_home_config() {
     printf '[privacy]\nprivacy_banner_acked = "2026-01-01T00:00:00Z"\n\n'
     printf '[consent.answers.aup]\nversion = 2\naccount = "suite@example.com"\n\n'
     printf '[consent.answers.tos]\nversion = 2\n'
+    # Feature-gated tools the tools phase expects: memory backend (default off)
+    # and web_fetch (Feature::WebFetch default off).
+    printf '\n[memory]\nenabled = true\n'
+    printf '\n[features]\nweb_fetch = true\n'
+    # Public fetch case serves 127.0.0.1; SSRF still blocks private/metadata.
+    printf '\n[toolset.web_fetch]\nallow_local = true\n'
   } >"$home/config.toml"
   chmod 0600 "$home/config.toml"
   sed '/^api_key = /d' "$home/config.toml" >"$home/config.redacted.toml"
