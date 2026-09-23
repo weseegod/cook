@@ -697,11 +697,36 @@ fn structured_output_from_meta_wins_over_text_buffer() {
 }
 
 #[test]
+fn streaming_json_end_line_carries_marker_from_text_chunks() {
+    let mut emitter = HeadlessEmitter::new(OutputFormat::StreamingJson, false);
+    emitter.on_text_chunk("NONCE-streaming_json-end-abc123");
+    emitter.on_end("end_turn", "sess-1", "req-1");
+    let end = emitter
+        .last_terminal_json
+        .as_ref()
+        .expect("streaming end line must be recorded");
+    assert_eq!(
+        end.get("type").and_then(|t| t.as_str()),
+        Some("end"),
+        "terminal line shape: {end}"
+    );
+    assert_eq!(
+        end.get("text").and_then(|t| t.as_str()),
+        Some("NONCE-streaming_json-end-abc123"),
+        "end record must carry accumulated text_buffer: {end}"
+    );
+    assert!(
+        end.to_string().contains("NONCE-streaming_json-end-abc123"),
+        "end record must contain the marker: {end}"
+    );
+}
+
+#[test]
 fn streaming_json_structured_output_emits_from_meta() {
     let mut emitter = HeadlessEmitter::new(OutputFormat::StreamingJson, true);
     emitter.on_text_chunk(r#"{"name":"#);
     emitter.on_text_chunk(r#""bob"}"#);
-    assert!(emitter.text_buffer.is_empty());
+    assert_eq!(emitter.text_buffer, r#"{"name":"bob"}"#);
 
     emitter.set_structured_output_from_meta(
         serde_json::json!({"structuredOutput": {"name": "bob"}}).as_object(),

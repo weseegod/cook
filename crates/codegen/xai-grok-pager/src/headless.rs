@@ -271,6 +271,7 @@ impl HeadlessEmitter {
                 self.reduce_and_emit(StreamEvent::AgentMessage(text.to_string()));
             }
             OutputFormat::StreamingJson => {
+                self.text_buffer.push_str(text);
                 self.reduce_and_emit(StreamEvent::AgentMessage(text.to_string()));
             }
         }
@@ -359,6 +360,12 @@ impl HeadlessEmitter {
                     reducer.finish(&end)
                 });
                 if let Some(lines) = lines {
+                    // Pin the terminal `end` line for tests so streaming can assert the marker path.
+                    if let Some(last) = lines.last()
+                        && last.get("type").and_then(|t| t.as_str()) == Some("end")
+                    {
+                        self.last_terminal_json = Some(last.clone());
+                    }
                     self.emit_lines(lines);
                 }
             }
