@@ -339,7 +339,7 @@ run_model_case() {
   [[ -n "${HTTP_PID:-}" ]] && kill "$HTTP_PID" >/dev/null 2>&1 || true; HTTP_PID=
   sid=$(result_value "$case_dir/stdout.json" sessionId)
   copy_session "$home" "$workdir" "$case_dir" "$sid" || true
-  if [[ "$id" != session.max_turns ]]; then
+  if [[ "$id" != session.max_turns && "$id" != agents.acp_stdio ]]; then
     text=$(result_value "$case_dir/stdout.json" text); stop=$(result_value "$case_dir/stdout.json" stopReason)
     if [[ -z "$text" && "$stop" != end_turn ]]; then
       write_home_config "$home" "$permission" 8192 "$window"
