@@ -98,6 +98,24 @@ pub fn grok_names_for(claude: &str) -> impl Iterator<Item = &'static str> {
         .copied()
 }
 
+/// Case-insensitive row lookup for the dispatch safeguard.
+/// Allowlist and hook matching stay exact (`kind_for` / `grok_names_for`); BYOK models
+/// emit the same names in whatever case their training set used (`glob`, not `Glob`).
+pub(crate) struct AliasTargets {
+    pub kind: Option<ToolKind>,
+    pub grok: &'static [&'static str],
+}
+
+pub(crate) fn alias_targets_ignore_case(name: &str) -> Option<AliasTargets> {
+    CLAUDE_TOOLS
+        .iter()
+        .find(|t| t.claude.eq_ignore_ascii_case(name))
+        .map(|t| AliasTargets {
+            kind: t.kind,
+            grok: t.grok,
+        })
+}
+
 /// The Claude names that map to `grok_name` (reverse lookup, for regex matchers).
 pub fn claude_names_for(grok_name: &str) -> impl Iterator<Item = &'static str> + '_ {
     CLAUDE_TOOLS

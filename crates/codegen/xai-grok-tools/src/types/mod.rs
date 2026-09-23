@@ -1,5 +1,6 @@
 pub mod agents_md_tracker;
 pub mod api_key_provider;
+pub mod byok_tool_safeguard;
 pub mod claude_alias;
 pub mod compat;
 pub mod config_source;

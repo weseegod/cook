@@ -1379,11 +1379,40 @@ impl FinalizedToolset {
             .unwrap_or_else(|_| xai_tool_protocol::ToolId::new("unknown").expect("valid"));
         xai_tool_runtime::ToolError::not_found(tid, format!("Tool not found: {tool_name}"))
     }
+    /// When `name` is not registered, rewrite it onto a tool that is. Registered names,
+    /// including OpenCode's `glob`, are returned unchanged.
+    fn rewrite_unknown_tool(
+        &self,
+        name: &str,
+        args: &serde_json::Value,
+    ) -> Option<(String, serde_json::Value)> {
+        let tools = self.tools.read();
+        if tools.iter().any(|tool| tool.client_name == name) {
+            return None;
+        }
+        let available: Vec<&str> = tools.iter().map(|tool| tool.client_name.as_str()).collect();
+        let rewritten = crate::types::byok_tool_safeguard::rewrite(name, args, &available)?;
+        tracing::info!(
+            requested = name,
+            resolved = %rewritten.0,
+            "byok safeguard rewrote an unknown tool onto the active toolset"
+        );
+        Some(rewritten)
+    }
     pub async fn try_parse(
         &self,
         tool_name: &str,
         tool_params: &serde_json::Value,
     ) -> Result<ToolInput, xai_tool_runtime::ToolError> {
+        let rewritten = self.rewrite_unknown_tool(tool_name, tool_params);
+        let tool_name = rewritten
+            .as_ref()
+            .map(|(name, _)| name.as_str())
+            .unwrap_or(tool_name);
+        let tool_params = rewritten
+            .as_ref()
+            .map(|(_, args)| args)
+            .unwrap_or(tool_params);
         let (reverse_params, parse_input) = {
             let tools = self.tools.read();
             let tool = tools
@@ -1408,6 +1437,15 @@ impl FinalizedToolset {
         tool_args: serde_json::Value,
         parent_ctx: xai_tool_runtime::ToolCallContext,
     ) -> Result<crate::types::output::ToolOutput, xai_tool_runtime::ToolError> {
+        let rewritten = self.rewrite_unknown_tool(tool_name, &tool_args);
+        let tool_name = rewritten
+            .as_ref()
+            .map(|(name, _)| name.as_str())
+            .unwrap_or(tool_name);
+        let tool_args = rewritten
+            .as_ref()
+            .map(|(_, args)| args)
+            .unwrap_or(&tool_args);
         let (registry_id, output_converter, reverse_params) = {
             let tools = self.tools.read();
             let entry = tools
@@ -1421,9 +1459,9 @@ impl FinalizedToolset {
             )
         };
         let canonical_params = if reverse_params.is_empty() {
-            tool_args
+            tool_args.clone()
         } else {
-            remap_json_keys(tool_args, &reverse_params)
+            remap_json_keys(tool_args.clone(), &reverse_params)
         };
         let mut ctx = xai_tool_runtime::ToolCallContext::new(parent_ctx.call_id.clone());
         ctx.extensions.insert(self.resources.clone());
@@ -1574,12 +1612,16 @@ impl FinalizedToolset {
         cwd_override: Option<std::path::PathBuf>,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<DispatchParts, xai_tool_runtime::ToolError> {
+        let (tool_name, tool_args) = match self.rewrite_unknown_tool(tool_name, &tool_args) {
+            Some((name, args)) => (name, args),
+            None => (tool_name.to_owned(), tool_args),
+        };
         let (registry_id, output_converter, reverse_params) = {
             let tools = self.tools.read();
             let entry = tools
                 .iter()
                 .find(|t| t.client_name == tool_name)
-                .ok_or_else(|| Self::tool_not_found_error(tool_name))?;
+                .ok_or_else(|| Self::tool_not_found_error(&tool_name))?;
             (
                 entry.registry_id.clone(),
                 entry.output_converter.clone(),
@@ -1600,7 +1642,7 @@ impl FinalizedToolset {
         } else {
             None
         };
-        let contract_version = self.get_contract_version(tool_name);
+        let contract_version = self.get_contract_version(&tool_name);
         let rt_call_id = xai_tool_protocol::ToolCallId::new(tool_call_id)
             .unwrap_or_else(|_| xai_tool_protocol::ToolCallId::new_v7());
         let mut ctx = xai_tool_runtime::ToolCallContext::new(rt_call_id);
