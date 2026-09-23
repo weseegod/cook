@@ -1,8 +1,8 @@
 //! Batch API gate for offline eval calls (design doc section 9).
 //!
-//! The interactive loop never reads [`ModelInfo::supports_batch_api`]. The only
-//! intended reader is a future eval harness whose prompt is a frozen snapshot
-//! and whose next line does not edit a live tree. This module encodes the gate:
+//! Ordinary interactive turns never read [`ModelInfo::supports_batch_api`]. Offline
+//! eval callers use a frozen snapshot whose next line does not edit a live tree.
+//! This module encodes the gate:
 //! the flag must be on, the call must not gate the next tool step, and nobody
 //! may be waiting on a stream or a permission prompt. The prompt-identity rule
 //! is enforced by construction: the batch body's messages are built from the

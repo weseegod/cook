@@ -3776,8 +3776,8 @@ pub struct ModelEntryConfig {
     pub reasoning_effort: Option<ReasoningEffort>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_reasoning_effort: bool,
-    /// Per-model opt-in for Batch API eligibility (eval harness only). The interactive loop
-    /// never reads it and no backend auto-defaults it to true; omitted means false.
+    /// Per-model opt-in for offline Batch API jobs and explicit `/goal_batch`.
+    /// Ordinary interactive turns never read it; omitted means false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_batch_api: bool,
     /// Per-model reasoning-effort menu (source of truth).
@@ -4184,7 +4184,7 @@ pub struct ModelInfo {
     pub reasoning_effort: Option<ReasoningEffort>,
     /// When true, the UI shows effort controls for this model.
     pub supports_reasoning_effort: bool,
-    /// Per-model Batch API eligibility (eval harness only); the interactive loop never reads it.
+    /// Per-model Batch API eligibility for explicit `/goal_batch`; ordinary turns ignore it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_batch_api: bool,
     /// Per-model reasoning-effort menu (source of truth); legacy fields derived from it.

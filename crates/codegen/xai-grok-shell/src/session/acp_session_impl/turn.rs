@@ -702,6 +702,26 @@ impl SessionActor {
                 }
                 otel_command_name = Some(action.command_name().to_string());
                 match action {
+                    BuiltinAction::GoalBatchSet {
+                        objective,
+                        token_budget,
+                        plan_source,
+                        batch_base_url,
+                    } => {
+                        xai_grok_telemetry::session_ctx::log_event(slash_used);
+                        match self
+                            .setup_goal_batch(objective, token_budget, plan_source, batch_base_url)
+                            .await
+                        {
+                            GoalSetupOutcome::Inference { reminder } => vec![text_block(reminder)],
+                            GoalSetupOutcome::Message(msg) => {
+                                self.persist_host_turn_user_echo(&original_prompt_text, prompt_id);
+                                self.mark_front_message_committed().await;
+                                self.send_host_turn_slash_command_output(&msg).await;
+                                return ok_end_turn(0, None);
+                            }
+                        }
+                    }
                     BuiltinAction::GoalSet {
                         objective,
                         token_budget,
@@ -722,6 +742,15 @@ impl SessionActor {
                     }
                     BuiltinAction::GoalResume => {
                         xai_grok_telemetry::session_ctx::log_event(slash_used);
+                        if let Err(error) = self.restore_goal_batch_for_resume().await {
+                            self.persist_host_turn_user_echo(&original_prompt_text, prompt_id);
+                            self.mark_front_message_committed().await;
+                            self.send_host_turn_slash_command_output(&format!(
+                                "Cannot resume batch goal: {error}"
+                            ))
+                            .await;
+                            return ok_end_turn(0, None);
+                        }
                         match self.resume_goal().await {
                             GoalResumeOutcome::Inference { reminder, user_msg } => {
                                 self.send_slash_command_output(&user_msg).await;

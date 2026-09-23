@@ -94,6 +94,8 @@ pub(crate) use types::*;
 pub use types::{TodoGateDecision, TodoGateReason};
 #[path = "acp_session_impl/goal.rs"]
 mod goal;
+#[path = "acp_session_impl/goal_batch.rs"]
+mod goal_batch;
 #[path = "acp_session_impl/named_workflow_args.rs"]
 mod named_workflow_args;
 #[path = "acp_session_impl/turn.rs"]

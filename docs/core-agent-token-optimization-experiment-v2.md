@@ -340,6 +340,8 @@ What shipped:
 
 Rust cells (no model), all through `Config::new_from_toml_cfg` + `resolve_model_list`:
 
+Later experimental work added `/goal_batch` as an explicit, high-latency exception for main-agent model rounds. The phase-5 results above describe the historical eval-only implementation, not the current command surface. Ordinary turns and `/goal` still ignore the flag.
+
 | Cell | Result | Pass |
 |---|---|---|
 | omitted | `[model."mimo-v2.6-pro"]` and `[model."deepseek/deepseek-flash"]` without the key both resolve false (the id string is not consulted) | yes |

@@ -685,6 +685,7 @@ fn available_commands_orders_builtins_first() {
             "feedback",
             "deep-research",
             "workflow",
+            "goal_batch",
             "goal",
             "loop",
             "commit",
@@ -786,6 +787,7 @@ fn availability_filters_goal_command() {
         ..CommandAvailability::all_enabled()
     });
     assert!(!names.iter().any(|n| n == "goal"), "got: {names:?}");
+    assert!(!names.iter().any(|n| n == "goal_batch"), "got: {names:?}");
 }
 
 #[test]
@@ -893,6 +895,7 @@ fn pre_session_builtin_commands_excludes_gated_entries() {
         "dream",
         "memory",
         "feedback",
+        "goal_batch",
         "goal",
         "hooks-list",
         "plugins",
@@ -1773,6 +1776,32 @@ fn resolve_goal(args: &str) -> BuiltinAction {
         SlashCommandOutcome::Builtin(action) => action,
         _ => panic!("expected Builtin outcome"),
     }
+}
+
+fn resolve_goal_batch(args: &str) -> BuiltinAction {
+    let blocks = vec![text_block(&format!("/goal_batch {args}"))];
+    match resolve(blocks, &[], all_gated(), SkillSlashRewrite::default(), &[]).unwrap_err() {
+        SlashCommandOutcome::Builtin(action) => action,
+        _ => panic!("expected Builtin outcome"),
+    }
+}
+
+#[test]
+fn goal_batch_keeps_objective_and_provider_url_separate() {
+    match resolve_goal_batch("ship feature --budget 1000 --base-url https://api.openai.com/v1") {
+        BuiltinAction::GoalBatchSet {
+            objective,
+            token_budget,
+            batch_base_url,
+            ..
+        } => {
+            assert_eq!(objective, "ship feature");
+            assert_eq!(token_budget, Some(1000));
+            assert_eq!(batch_base_url.as_deref(), Some("https://api.openai.com/v1"));
+        }
+        other => panic!("expected GoalBatchSet, got {}", other.command_name()),
+    }
+    assert_eq!(resolve_goal_batch("ship feature").command_name(), "goal_batch");
 }
 
 #[test]

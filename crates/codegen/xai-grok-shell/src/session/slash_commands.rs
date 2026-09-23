@@ -323,6 +323,30 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         },
     },
     BuiltinCommand {
+        name: "goal_batch",
+        description: "Run the main goal agent through asynchronous Batch API model rounds",
+        argument_hint: Some("<objective> [--budget <tokens>] [--base-url <provider Batch URL>]"),
+        aliases: &[],
+        model_authored_eligibility: ModelAuthoredEligibility::Denied,
+        gate: BuiltinGate::Goal,
+        workflow_projection: WorkflowProjection::None,
+        resolve: |args| {
+            let trimmed = args.trim();
+            let (objective_args, batch_base_url) =
+                match trailing_flag_with_value(trimmed, "--base-url") {
+                    Some((head, url)) => (head, Some(url.to_string())),
+                    None => (trimmed, None),
+                };
+            let parsed = parse_goal_args(objective_args);
+            BuiltinAction::GoalBatchSet {
+                objective: parsed.objective,
+                token_budget: parsed.token_budget,
+                plan_source: parsed.plan_source,
+                batch_base_url,
+            }
+        },
+    },
+    BuiltinCommand {
         name: "goal",
         description: "Set, manage, or check an autonomous goal",
         argument_hint: Some(
@@ -1369,6 +1393,12 @@ pub(super) enum BuiltinAction {
         token_budget: Option<i64>,
         plan_source: Option<GoalPlanSource>,
     },
+    GoalBatchSet {
+        objective: String,
+        token_budget: Option<i64>,
+        plan_source: Option<GoalPlanSource>,
+        batch_base_url: Option<String>,
+    },
     GoalStatus,
     GoalPause,
     GoalResume,
@@ -1409,6 +1439,7 @@ impl BuiltinAction {
             BuiltinAction::PluginsUpdate { .. } => "plugins-update",
             BuiltinAction::Feedback { .. } => "feedback",
             BuiltinAction::MemoryBrowse => "memory",
+            BuiltinAction::GoalBatchSet { .. } => "goal_batch",
             BuiltinAction::GoalSet { .. }
             | BuiltinAction::GoalStatus
             | BuiltinAction::GoalPause
@@ -1442,7 +1473,7 @@ impl BuiltinAction {
             BuiltinAction::PluginsUpdate { name } => name.is_some(),
             BuiltinAction::Feedback { text } => !text.is_empty(),
             BuiltinAction::MemoryBrowse => false,
-            BuiltinAction::GoalSet { .. } => true,
+            BuiltinAction::GoalSet { .. } | BuiltinAction::GoalBatchSet { .. } => true,
             BuiltinAction::GoalStatus
             | BuiltinAction::GoalPause
             | BuiltinAction::GoalResume

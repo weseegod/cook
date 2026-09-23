@@ -432,6 +432,8 @@ Batch API (xAI `/v1/batches`, and the same shape at OpenAI and Anthropic) change
 
 The interactive loop fails conditions 2 and 4. The next tool round depends on the previous result, so each round would be a new batch. Compaction, the goal verifier, and the permission classifier also fail condition 2 when their result feeds the next coding step. Recap, `/btw`, turn summary, and title refresh already share the parent prompt-cache key; moving them to batch can drop a hot prefix for a discount that is smaller than the miss they would create.
 
+Current experimental exception: `/goal_batch` explicitly accepts this latency and submits one Batch API job per **main-agent** model round. It does not change `/goal` or normal turns; planner/verifier and subagents may still use realtime. See `docs/byok-models.md` for its narrower compatibility requirements and limitations. The remainder of this section is the original optimization guidance, not a prohibition on that opt-in experiment.
+
 The switch is not a price table in the binary. It is `supports_batch_api` on that model’s `[model."<id>"]` row in `~/.cook/config.toml`, the same kind of field as `supports_reasoning_effort`. Omitted or `false` means never. `true` means the user allows Batch API for calls that already meet the four conditions. The coding loop ignores it. Phase 5 of the v2 experiment document is the implementation.
 
 Prices checked on **2026-09-22**. They will change; the rule does not.
@@ -449,7 +451,7 @@ A cache-hot MiMo prefix at $0.0036 per 1M is already far cheaper than a cache mi
 
 Do not replace the actor runtime with another framework merely to reduce tokens: process layout does not shorten prompts. Do not increase the context window as the default cost solution; long history can still increase cumulative input. Do not enable multi-agent orchestration or an LLM router for every task. Do not run an LLM summarizer after every tool call; first use structured truncation and artifact retrieval.
 
-Do not lower output/reasoning caps arbitrarily: continuation, retries, and rework can increase. Do not remove required AGENTS/rules/constraints to hit a token number. Do not compact repeatedly at a very low threshold without accounting for cache rebuild and information loss. Do not merge every tool into a vague “mega-tool” only to reduce the tool-name count. Do not put the coding loop on a provider Batch API. Do not retune the per-model context window from this document. Section 11 lists the further refusals that came from comparing this flow with the Pi coding agent.
+Do not lower output/reasoning caps arbitrarily: continuation, retries, and rework can increase. Do not remove required AGENTS/rules/constraints to hit a token number. Do not compact repeatedly at a very low threshold without accounting for cache rebuild and information loss. Do not merge every tool into a vague “mega-tool” only to reduce the tool-name count. Do not put the ordinary coding loop on a provider Batch API; `/goal_batch` is the explicit high-latency exception above. Do not retune the per-model context window from this document. Section 11 lists the further refusals that came from comparing this flow with the Pi coding agent.
 
 ## 11. External references and limits of the conclusion
 

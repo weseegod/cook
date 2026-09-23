@@ -55,8 +55,18 @@ input = ["text", "image"]             # optional: ["text"] | ["text", "image"]
 | `name` | Tên hiển thị trong picker |
 | `context_window` | Dùng cho auto-compact; nên set đúng provider |
 | `max_completion_tokens` | Max tokens mỗi response |
-| `supports_batch_api` | Opt-in model chấp nhận Batch API (dành cho eval harness). Default `false`; không backend nào tự bật. Loop tương tác không bao giờ đọc flag này và không bao giờ gọi `/v1/batches` |
+| `supports_batch_api` | Opt-in cho `/goal_batch` trên model có Batch API kiểu OpenAI-compatible. Mặc định `false`; `/goal` và chat thường vẫn realtime |
 | `input` | Input model nhận được: `["text"]` (chỉ text) hoặc `["text", "image"]` (đọc được ảnh). Không khai báo = chưa biết → xử lý như nhận ảnh (an toàn, không regression). Xem mục 2.1 |
+
+### `/goal_batch` (thử nghiệm)
+
+`/goal_batch <objective>` chạy **các lượt model của agent chính** qua Batch API: mỗi lượt gửi một job, đợi kết quả, xử lý tool call rồi gửi job tiếp theo. Planner/verifier và subagent có thể tiếp tục dùng realtime. `/goal <objective>` thông thường không đổi. Chỉ dùng model có `supports_batch_api = true`, `api_backend = "chat_completions"`, API key riêng và Batch API tương thích các endpoint `/v1/files` + `/v1/batches`. OpenAI dùng `https://api.openai.com/v1` tự động; provider khác cần truyền URL chính thức:
+
+```text
+/goal_batch sửa lỗi đăng nhập --base-url https://batch-api-<region>.xiaomimimo.com/v1
+```
+
+Không đưa API key vào lệnh. Với Xiaomi, lấy URL đúng vùng tài khoản từ Batch Inference console; URL realtime không thay thế được. Theo [OpenAI Docs](https://developers.openai.com/api/docs/guides/batch), job có thể mất tới 24 giờ; mỗi lượt phụ thuộc nhau nên tổng thời gian có thể dài hơn nhiều. Giữ session chạy trong lúc đợi. `/goal status`, `/goal pause`, `/goal resume`, `/goal clear` quản lý goal; chưa có khôi phục job batch sau khi thoát ứng dụng. Việc hủy lượt đang chạy sẽ gửi yêu cầu hủy job tới provider khi có thể.
 
 ### Key có dấu chấm (`.`)
 

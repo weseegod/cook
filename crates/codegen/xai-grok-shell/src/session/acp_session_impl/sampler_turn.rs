@@ -1067,6 +1067,7 @@ impl SessionActor {
         }
         // Carry over the session's per-chunk idle timeout via `SamplerConfig.idle_timeout_secs`
         sampler_config.idle_timeout_secs = Some(self.inference_idle_timeout.as_secs());
+        self.apply_goal_batch_route(&mut sampler_config);
         self.sampler_handle.update_config(sampler_config);
     }
 

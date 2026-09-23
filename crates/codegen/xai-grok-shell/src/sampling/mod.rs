@@ -1,6 +1,7 @@
 pub mod conversation;
 pub mod error;
 pub mod eval_batch;
+pub mod goal_batch;
 pub mod types;
 
 pub use self::eval_batch::{EvalBatchConditions, eval_batch_request};
