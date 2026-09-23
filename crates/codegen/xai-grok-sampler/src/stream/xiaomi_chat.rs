@@ -8,6 +8,8 @@ use std::collections::HashSet;
 
 use serde_json::{Map, Value};
 
+use crate::stream::tool_call_budget::DEFAULT_MAX_TOOL_CALLS;
+
 const TOOL_OPEN: &str = "<tool_call>";
 const TOOL_CLOSE: &str = "</tool_call>";
 const FUNCTION_OPEN: &str = "<function=";
@@ -15,7 +17,7 @@ const FUNCTION_CLOSE: &str = "</function>";
 const PARAM_OPEN: &str = "<parameter=";
 const PARAM_CLOSE: &str = "</parameter>";
 const CODE_FENCE: &str = "```";
-const RUNAWAY_REPEAT_THRESHOLD: usize = 3;
+pub(super) const RUNAWAY_REPEAT_THRESHOLD: usize = DEFAULT_MAX_TOOL_CALLS as usize;
 /// Bytes buffered for one in-flight call before the adapter stops reading: an open `<tool_call>`
 /// envelope held back from `content`, or one call's accumulated `tool_calls[].arguments`. A model
 /// past this is not progressing, so waiting for the completion budget only looks like a hang.
@@ -390,7 +392,7 @@ mod tests {
     fn detects_and_deduplicates_a_repeated_tail() {
         let block = "<tool_call><function=wait><parameter=task_ids>[\"t1\"]</parameter></function></tool_call>";
         let mut adapter = XiaomiMimoAdapter::new(["wait".to_owned()]);
-        let visible = adapter.push_text(&format!("{block}{block}{block}"));
+        let visible = adapter.push_text(&block.repeat(RUNAWAY_REPEAT_THRESHOLD));
         assert!(visible.is_empty());
         assert_eq!(
             adapter.salvage_reason(),
@@ -403,15 +405,15 @@ mod tests {
     }
 
     #[test]
-    fn preserves_two_identical_calls_below_the_runaway_threshold() {
+    fn preserves_five_identical_calls_below_the_runaway_threshold() {
         let block = "<tool_call><function=wait><parameter=task_ids>[\"t1\"]</parameter></function></tool_call>";
         let mut adapter = XiaomiMimoAdapter::new(["wait".to_owned()]);
-        assert!(adapter.push_text(&format!("{block}{block}")).is_empty());
+        assert!(adapter.push_text(&block.repeat(5)).is_empty());
         assert_eq!(adapter.salvage_reason(), None);
 
         let (_, calls, runaway) = adapter.finish(true);
         assert!(!runaway);
-        assert_eq!(calls.len(), 2);
+        assert_eq!(calls.len(), 5);
     }
 
     #[test]

@@ -1499,6 +1499,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn xiaomi_preserves_five_identical_calls_through_the_shared_budget() {
+        let chunks = (0..5)
+            .map(|index| {
+                Ok(make_chunk(vec![ChatChunkDelta {
+                    tool_calls: vec![ChunkToolCallDelta {
+                        index: 0,
+                        id: Some(format!("call_{index}")),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("grep".into()),
+                            arguments: Some(r#"{"pattern":"same"}"#.into()),
+                        }),
+                    }],
+                    ..Default::default()
+                }]))
+            })
+            .collect::<Vec<_>>();
+        let stream = stream_chat_completions_with_adapter(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::XiaomiMimo,
+            vec!["grep".into()],
+        );
+        let events = collect(crate::stream::guard_tool_call_budget(
+            stream,
+            rid(),
+            crate::stream::ToolCallBudget::default(),
+        ))
+        .await;
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 5);
+                for (index, call) in calls.iter().enumerate() {
+                    assert_eq!(call.id.as_ref(), format!("call_{index}"));
+                    assert_eq!(call.arguments.as_ref(), r#"{"pattern":"same"}"#);
+                }
+            }
+            other => panic!("expected five calls through budget, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn xiaomi_keeps_three_distinct_parallel_calls() {
+        let chunks = ["alpha", "beta", "gamma"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| {
+                Ok(make_chunk(vec![ChatChunkDelta {
+                    tool_calls: vec![ChunkToolCallDelta {
+                        index: index as u32,
+                        id: Some(format!("call_{index}")),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("echo".into()),
+                            arguments: Some(format!(r#"{{"text":"{text}"}}"#)),
+                        }),
+                    }],
+                    ..Default::default()
+                }]))
+            })
+            .collect::<Vec<_>>();
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::XiaomiMimo,
+            vec!["echo".into()],
+        ))
+        .await;
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 3);
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"text":"alpha"}"#);
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"text":"beta"}"#);
+                assert_eq!(calls[2].arguments.as_ref(), r#"{"text":"gamma"}"#);
+            }
+            other => panic!("expected three parallel calls, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn xiaomi_xml_is_authoritative_over_corrupted_parallel_structured_calls() {
         let xml = "Waiting.<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
         let chunk = make_chunk(vec![ChatChunkDelta {
@@ -1581,12 +1667,10 @@ mod tests {
     #[tokio::test]
     async fn xiaomi_repeated_xml_is_salvaged_before_the_stream_finishes() {
         let block = "<tool_call><function=get_command_or_subagent_output><parameter=task_ids>[\"task-1\"]</parameter><parameter=timeout_ms>180000</parameter></function></tool_call>";
-        let chunks = vec![
-            text_chunk(block),
-            text_chunk(block),
-            text_chunk(block),
-            text_chunk("this chunk must never be consumed"),
-        ];
+        let mut chunks = (0..crate::stream::xiaomi_chat::RUNAWAY_REPEAT_THRESHOLD)
+            .map(|_| text_chunk(block))
+            .collect::<Vec<_>>();
+        chunks.push(text_chunk("this chunk must never be consumed"));
         let events = collect(stream_chat_completions_with_adapter(
             stream::iter(chunks.into_iter().map(Ok)).boxed(),
             None,

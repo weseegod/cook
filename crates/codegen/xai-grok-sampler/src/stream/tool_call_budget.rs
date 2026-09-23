@@ -21,8 +21,9 @@ pub const DEFAULT_MAX_TOOL_CALL_ARGUMENT_BYTES: u64 = 256 * 1024;
 pub const DEFAULT_MAX_TOOL_CALLS: u64 = 64;
 /// Wall-clock ceiling for a tool-call channel that closes no call and produces no other output.
 pub const DEFAULT_MAX_TOOL_CALL_STREAM_SECS: u64 = 600;
-/// Consecutive near-identical tool calls that end the response as a runaway loop.
-pub const DEFAULT_MAX_REPEATED_TOOL_CALLS: u64 = 3;
+/// Repetition alone cannot distinguish a runaway stream from a finite request for identical
+/// calls. The shared guard defaults this optional check off; count, byte, and time limits remain.
+pub const DEFAULT_MAX_REPEATED_TOOL_CALLS: u64 = 0;
 
 /// Ceilings on one response's tool-call traffic.
 /// A limit of `0` disables that check; every field has a serde default, so a partial override parses.
@@ -38,7 +39,8 @@ pub struct ToolCallBudget {
     pub max_tool_calls: u64,
     /// Seconds of continuous tool-call deltas with no text/reasoning output in between.
     pub max_stream_secs: u64,
-    /// Run length of consecutive tool calls identical after whitespace normalization.
+    /// Optional run length of consecutive calls identical after whitespace normalization.
+    /// Zero disables this check; finite repeated calls can be intentional.
     pub max_repeated_calls: u64,
 }
 
@@ -473,7 +475,10 @@ mod tests {
                 delta(2, Some("grep"), Some(r#"{"pattern":"x"}"#)),
                 delta(3, Some("grep"), Some(r#"{"pattern":"y"}"#)),
             ],
-            ToolCallBudget::default(),
+            ToolCallBudget {
+                max_repeated_calls: 3,
+                ..Default::default()
+            },
         )
         .await;
 
@@ -489,6 +494,19 @@ mod tests {
             "{}",
             error.message
         );
+    }
+
+    #[tokio::test]
+    async fn finite_identical_calls_pass_the_default_budget() {
+        let events = collect(
+            (0..5)
+                .map(|index| delta(index, Some("echo"), Some(r#"{"text":"ping"}"#)))
+                .collect(),
+            ToolCallBudget::default(),
+        )
+        .await;
+        assert_eq!(events.len(), 5);
+        assert!(failed_kind(&events).is_none(), "{events:?}");
     }
 
     #[tokio::test]
