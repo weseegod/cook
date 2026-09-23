@@ -306,6 +306,22 @@ fn json_arguments_equal(left: &str, right: &str) -> bool {
     }
 }
 
+/// MiMo can emit the same call several times in one response with fresh ids. Those calls run
+/// concurrently, so the copies cannot observe one another's results and only repeat the effect.
+fn collapse_xiaomi_duplicate_calls(calls: Vec<ToolCall>) -> Vec<ToolCall> {
+    let mut unique: Vec<ToolCall> = Vec::with_capacity(calls.len());
+    for call in calls {
+        if unique.iter().any(|seen| {
+            seen.name == call.name
+                && json_arguments_equal(seen.arguments.as_ref(), call.arguments.as_ref())
+        }) {
+            continue;
+        }
+        unique.push(call);
+    }
+    unique
+}
+
 /// The output stream emits exactly one terminal event per request.
 /// Callers must not consume past the terminal event (the implementation `return`s after yielding it).
 pub fn stream_chat_completions<'a>(
@@ -658,6 +674,21 @@ pub fn stream_chat_completions_with_adapter<'a>(
                 .collect()
         };
         let tool_calls = promote_embedded_xml_calls(tool_calls, &allowed_recovery);
+        let tool_calls = if adapter == ChatCompletionsAdapter::XiaomiMimo {
+            let original_count = tool_calls.len();
+            let unique = collapse_xiaomi_duplicate_calls(tool_calls);
+            if unique.len() != original_count {
+                tracing::warn!(
+                    request_id = %request_id,
+                    original_count,
+                    unique_count = unique.len(),
+                    "xiaomi compatibility adapter collapsed duplicate tool calls"
+                );
+            }
+            unique
+        } else {
+            tool_calls
+        };
 
         // Tool calls override the stop reason, even an explicit `length`.
         // NOTE: the Messages backend has the opposite precedence: Length wins there
@@ -1499,8 +1530,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn xiaomi_preserves_five_identical_calls_through_the_shared_budget() {
-        let chunks = (0..5)
+    async fn xiaomi_collapses_eight_identical_structured_calls_through_the_shared_budget() {
+        let chunks = (0..8)
             .map(|index| {
                 Ok(make_chunk(vec![ChatChunkDelta {
                     tool_calls: vec![ChunkToolCallDelta {
@@ -1533,13 +1564,43 @@ mod tests {
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
                 let calls = response.tool_calls();
-                assert_eq!(calls.len(), 5);
-                for (index, call) in calls.iter().enumerate() {
-                    assert_eq!(call.id.as_ref(), format!("call_{index}"));
-                    assert_eq!(call.arguments.as_ref(), r#"{"pattern":"same"}"#);
-                }
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id.as_ref(), "call_0");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"same"}"#);
             }
-            other => panic!("expected five calls through budget, got {other:?}"),
+            other => panic!("expected one call through budget, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn xiaomi_collapses_repeated_xml_calls_but_keeps_distinct_arguments() {
+        let same =
+            "<tool_call><function=grep><parameter=pattern>same</parameter></function></tool_call>";
+        let distinct =
+            "<tool_call><function=grep><parameter=pattern>other</parameter></function></tool_call>";
+        let content = format!("{}{distinct}{}", same.repeat(6), same);
+        let chunks = vec![Ok(make_chunk(vec![ChatChunkDelta {
+            content: Some(content),
+            ..Default::default()
+        }]))];
+        let events = collect(stream_chat_completions_with_adapter(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            ChatCompletionsAdapter::XiaomiMimo,
+            vec!["grep".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"same"}"#);
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"other"}"#);
+            }
+            other => panic!("expected two distinct calls, got {other:?}"),
         }
     }
 
