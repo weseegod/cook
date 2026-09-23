@@ -1965,27 +1965,23 @@ impl SessionActor {
             .replace_conversation_for_compaction(compacted_history);
         self.reseed_active_goal_after_compaction().await;
         let new_len = self.chat_state_handle.get_conversation_len().await;
-        if self.startup_hints.inherited_prefix_len.is_some() {
-            let post_replace_tokens = self.chat_state_handle.get_total_tokens().await;
-            if xai_token_estimation::exceeds_threshold(
+        // Always re-check after replace: a summary that stays over threshold must sticky-suppress
+        // AUTO, not clear suppress and re-loop (fresh workdirs have `inherited_prefix_len == None`).
+        let post_replace_tokens = self.chat_state_handle.get_estimated_total_tokens().await;
+        if xai_token_estimation::exceeds_threshold(
+            post_replace_tokens,
+            context_window,
+            self.compaction.threshold_percent.get(),
+        ) {
+            self.compaction
+                .auto_compact_suppressed
+                .store(SUPPRESS_STICKY, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!(
+                session_id = %self.session_info.id.0,
                 post_replace_tokens,
                 context_window,
-                self.compaction.threshold_percent.get(),
-            ) {
-                self.compaction
-                    .auto_compact_suppressed
-                    .store(SUPPRESS_STICKY, std::sync::atomic::Ordering::Relaxed);
-                tracing::warn!(
-                    session_id = %self.session_info.id.0,
-                    post_replace_tokens,
-                    context_window,
-                    "compaction: released history still over threshold; suppressing AUTO to avoid a re-loop"
-                );
-            } else {
-                self.compaction
-                    .auto_compact_suppressed
-                    .store(SUPPRESS_NONE, std::sync::atomic::Ordering::Relaxed);
-            }
+                "compaction: history still over threshold after replace; suppressing AUTO to avoid a re-loop"
+            );
         } else {
             self.compaction
                 .auto_compact_suppressed

@@ -1552,6 +1552,74 @@ async fn forked_release_still_over_threshold_suppresses_auto() {
         })
         .await;
 }
+/// Fresh workdirs have `inherited_prefix_len == None`. If the post-replace history is still over
+/// threshold, AUTO must sticky-suppress — clearing to `SUPPRESS_NONE` causes a compact re-loop.
+#[tokio::test(flavor = "current_thread")]
+async fn fresh_session_still_over_threshold_after_compact_suppresses_auto() {
+    use crate::session::compaction_config::SUPPRESS_STICKY;
+    use xai_grok_test_support::MockInferenceServer;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, mut persistence_rx) = mpsc::unbounded_channel();
+            let huge_system = "s".repeat(150_000);
+            let conv = vec![
+                ConversationItem::system(huge_system),
+                ConversationItem::user("q"),
+                ConversationItem::assistant("a"),
+                ConversationItem::user("final query"),
+            ];
+            // Default: inherited_prefix_len is None (fresh suite workdir).
+            let actor = create_test_actor(0, 40_000, 80, gateway_tx, persistence_tx).await;
+            assert!(
+                actor.startup_hints.inherited_prefix_len.is_none(),
+                "fresh session must not carry an inherited prefix"
+            );
+            let actor = Arc::new(actor);
+            let server = MockInferenceServer::start().await.unwrap();
+            server.set_response("Summary. ".repeat(70));
+            let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            cfg.base_url = server.url();
+            actor.chat_state_handle.update_sampling_config(cfg);
+            actor.chat_state_handle.replace_conversation(conv);
+            let threshold_tokens = 40_000u64 * 80 / 100;
+            let before = actor.chat_state_handle.get_total_tokens().await;
+            assert!(
+                before > threshold_tokens,
+                "seed must exceed threshold: {before}"
+            );
+            let result = actor.run_compact(None).await;
+            assert!(result.is_ok(), "compaction should succeed: {result:?}");
+            let post = actor.chat_state_handle.get_estimated_total_tokens().await;
+            assert!(
+                post > threshold_tokens,
+                "post-replace must stay over threshold for this fixture: {post}"
+            );
+            assert_eq!(
+                actor.compaction.auto_compact_suppressed.load(Relaxed),
+                SUPPRESS_STICKY,
+                "still-over post-replace history must sticky-suppress AUTO even without an inherited prefix"
+            );
+            let mut saw_failure = false;
+            while let Ok(msg) = persistence_rx.try_recv() {
+                if let PersistenceMsg::Update(crate::session::storage::SessionUpdate::Xai(notif)) =
+                    msg
+                    && matches!(
+                        &notif.update,
+                        crate::extensions::notification::SessionUpdate::AutoCompactFailed { .. }
+                    )
+                {
+                    saw_failure = true;
+                }
+            }
+            assert!(
+                !saw_failure,
+                "successful compaction must not emit AutoCompactFailed"
+            );
+        })
+        .await;
+}
 /// The cancel error carries the typed kind AND still extracts to the plain cancel text for text-only consumers (old pagers, log sinks).
 #[test]
 fn cancelled_error_is_typed_and_extracts_to_cancel_text() {
