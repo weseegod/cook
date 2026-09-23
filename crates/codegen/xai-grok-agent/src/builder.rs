@@ -1050,6 +1050,15 @@ impl AgentBuilder {
                 else {
                     continue;
                 };
+                // Config-gated web tools stay registered but absent while Disabled; do not
+                // re-inject them from the allowlist (registered_but_absent must not fall back).
+                let short = short_tool_name(&full_id);
+                if short == "web_search" && !self.web_search_config.is_enabled() {
+                    continue;
+                }
+                if short == "web_fetch" && !self.web_fetch_config.is_enabled() {
+                    continue;
+                }
                 let mut tc = xai_grok_tools::registry::types::ToolConfig::from_id(full_id.clone());
                 if tc.kind.is_none() {
                     tc.kind = known_kinds.get(&full_id).copied();

@@ -2036,7 +2036,13 @@ impl SessionActor {
                 Decision::PolicyDeny(ref reason) | Decision::Reject(ref reason) => {
                     let is_policy_deny = matches!(&decision, Decision::PolicyDeny(_));
                     let message = if is_policy_deny {
-                        format!("Tool `{}` was not executed: {reason}", call.function.name)
+                        format!(
+                            "Tool `{}` was not executed: {reason}. \
+                             This session denies file mutations and non-read shell writes. \
+                             Do not retry alternate write tools or shell redirects; \
+                             reply to the user in prose instead.",
+                            call.function.name
+                        )
                     } else {
                         format!("{reason} for tool `{}`", call.function.name)
                     };

@@ -4098,7 +4098,10 @@ fn step_is_problematically_repeating(kinds: &[Option<ToolKind>]) -> bool {
 
 /// Consecutive model rounds that only explore (read/search/list / read-only shell) with no edit.
 /// Distinct from identical-call stationarity: each round's arguments can differ slightly and still loop.
-pub(super) const MAX_CONSECUTIVE_READ_ONLY_ROUNDS: u32 = 3;
+/// Multi-file corpus reads (e.g. "read every file and answer") legitimately need a dozen-plus
+/// read-only rounds; 3 aborted those before the model could reply. Keep the stop for true
+/// aimless exploration, but leave room for a full directory sweep.
+pub(super) const MAX_CONSECUTIVE_READ_ONLY_ROUNDS: u32 = 16;
 
 fn is_edit_kind(kind: Option<ToolKind>) -> bool {
     matches!(kind, Some(ToolKind::Edit | ToolKind::Write | ToolKind::Delete | ToolKind::Move))
@@ -4514,7 +4517,7 @@ mod read_only_exploration_run_tests {
     }
 
     #[test]
-    fn three_read_only_rounds_stop_the_turn() {
+    fn enough_read_only_rounds_stop_the_turn() {
         let mut run = ReadOnlyExplorationRun::default();
         let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
         let kinds = [Some(ToolKind::Read)];
@@ -4523,6 +4526,28 @@ mod read_only_exploration_run_tests {
             assert_eq!(run.rounds, i);
         }
         assert!(run.should_stop());
+    }
+
+    #[test]
+    fn multi_file_corpus_reads_do_not_stop_early() {
+        // session.compaction-style sweep: list + one read per file, no edits, must not abort.
+        let mut run = ReadOnlyExplorationRun::default();
+        run.observe(
+            &[call("list_dir", r#"{"target_directory":"corpus"}"#)],
+            &[Some(ToolKind::ListDir)],
+        );
+        for i in 1..=12 {
+            run.observe(
+                &[call("read_file", &format!(r#"{{"target_file":"{i:02}.txt"}}"#))],
+                &[Some(ToolKind::Read)],
+            );
+            assert!(
+                !run.should_stop(),
+                "must not stop after listing + {i} distinct file reads"
+            );
+        }
+        assert_eq!(run.rounds, 13);
+        assert!(!run.should_stop());
     }
 
     #[test]
@@ -4553,19 +4578,17 @@ mod read_only_exploration_run_tests {
     #[test]
     fn differing_read_arguments_still_accumulate() {
         let mut run = ReadOnlyExplorationRun::default();
-        run.observe(
-            &[call("read_file", r#"{"target_file":"a.rs"}"#)],
-            &[Some(ToolKind::Read)],
-        );
+        let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
+        let kinds = [Some(ToolKind::Read)];
+        for _ in 0..MAX_CONSECUTIVE_READ_ONLY_ROUNDS {
+            run.observe(&reads, &kinds);
+        }
+        assert!(run.should_stop());
         run.observe(
             &[call("grep", r#"{"pattern":"foo"}"#)],
             &[Some(ToolKind::Search)],
         );
-        run.observe(
-            &[call("list_dir", r#"{"path":"."}"#)],
-            &[Some(ToolKind::ListDir)],
-        );
-        assert!(run.should_stop());
+        assert!(run.should_stop(), "non-edit rounds must not reset the counter");
     }
 }
 
