@@ -231,10 +231,11 @@ fn remote_settings_length_salvage_budget_serde_cells() {
             .expect("kill value");
     assert_eq!(set.length_salvage_budget, Some(0));
 }
-/// Default agent with the gate off (no env var): a Length response is the legacy non-retryable hard failure.
-/// This is the safety property that nothing changes for production default agents until the rollout flag lands.
+/// Default agent with the gate off (no env var): a partial text Length still completes truncated
+/// (`stop_reason: max_tokens`, exit 0) under the always-on `CompletePartial` policy. Salvage
+/// continuations stay gated — no continue reminder without the flag.
 #[test]
-fn default_agent_gate_off_hard_fails_on_length() {
+fn default_agent_gate_off_completes_truncated_on_partial_length() {
     if xai_grok_config::env_bool("GROK_LENGTH_SALVAGE") == Some(true) {
         panic!("ambient GROK_LENGTH_SALVAGE=1 would flip the gate under test");
     }
@@ -244,11 +245,14 @@ fn default_agent_gate_off_hard_fails_on_length() {
             server.enqueue_response("/v1/chat/completions", length_sse("one, two, three,"));
             let actor = salvage_test_actor(&server).await;
             let outcome = run_prompt(&actor, "length-gate-off").await;
-            let err = outcome.expect_err("gate off: Length must hard-fail the turn");
-            let err_str = format!("{err:?}");
-            assert!(
-                err_str.contains("max_tokens") || err_str.contains("max tokens"),
-                "the failure must be the max-tokens truncation error: {err_str}"
+            let ok = outcome.expect(
+                "gate off + CompletePartial: partial Length must complete truncated, not hard-fail",
+            );
+            assert_eq!(
+                ok.stop_reason,
+                acp::StopReason::MaxTokens,
+                "partial Length must stamp stop_reason max_tokens: {:?}",
+                ok.stop_reason
             );
             let conv = actor.chat_state_handle.get_conversation().await;
             let all_text: Vec<String> = conv.iter().map(|i| i.text_content()).collect();

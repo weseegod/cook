@@ -3092,9 +3092,11 @@ impl SessionActor {
                     );
                 }
             }
-            if salvage.enabled() {
-                request.length_policy = xai_grok_sampling_types::LengthPolicy::CompletePartial;
-            }
+            // Always complete partial text Length so a cut answer exits 0 with
+            // `stop_reason: max_tokens` instead of failing the headless turn.
+            // Empty Length still fails under CompletePartial. Salvage continuations
+            // (reminder + retry) stay gated on `salvage.enabled()`.
+            request.length_policy = xai_grok_sampling_types::LengthPolicy::CompletePartial;
             self.emit_event(crate::session::events::Event::PhaseChanged {
                 phase: crate::session::events::Phase::WaitingForModel,
             });
