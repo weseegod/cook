@@ -883,7 +883,12 @@ impl AgentBuilder {
             );
             tool_config.tools.retain(|tool| tool.id != ask_user_id);
         }
-        apply_workflow_tool_gates(&mut tool_config, self.background_workflows_enabled);
+        // Workflows spawn child agents via agent(); with --no-subagents they must not
+        // stay advertised (the model then invents Rhai instead of reading itself).
+        apply_workflow_tool_gates(
+            &mut tool_config,
+            self.background_workflows_enabled && self.subagents_enabled,
+        );
         let task_tool_id = format!(
             "{}:{}",
             xai_grok_tools::types::tool::ToolNamespace::GrokBuild,
@@ -2223,6 +2228,41 @@ mod tests {
             }
         }
     }
+    #[tokio::test]
+    /// `--no-subagents` must also strip the workflow tool: workflows orchestrate
+    /// subagents, and leaving them advertised makes the model invent `agent()` Rhai
+    /// instead of doing the read itself (real-model agents.no_subagents_flag).
+    async fn no_subagents_strips_workflow_tool() {
+        use xai_grok_tools::computer::local::LocalTerminalBackend;
+        use xai_grok_tools::notification::ToolNotificationHandle;
+        let agent = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(crate::config::AgentDefinition::default_grok_build())
+        .with_background_workflows_enabled(true)
+        .with_subagents_enabled(false)
+        .with_prompt_audience(crate::prompt::context::PromptAudience::Primary)
+        .build()
+        .await
+        .expect("agent should build");
+        let names: Vec<String> = agent
+            .tool_definitions()
+            .await
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(
+            !names.iter().any(|name| name == "workflow"),
+            "subagents_enabled=false must strip workflow even when workflows are on: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name == "spawn_subagent" || name == "task"),
+            "subagents_enabled=false must strip task; got {names:?}"
+        );
+    }
+
     async fn workflow_tool_names(
         audience: crate::prompt::context::PromptAudience,
         definition: crate::config::AgentDefinition,
@@ -2236,6 +2276,9 @@ mod tests {
         )
         .from_definition(definition)
         .with_background_workflows_enabled(true)
+        // Builder defaults subagents off; the workflow gate is
+        // background_workflows_enabled && subagents_enabled.
+        .with_subagents_enabled(true)
         .with_prompt_audience(audience)
         .build()
         .await
