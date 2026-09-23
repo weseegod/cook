@@ -137,7 +137,8 @@ pub struct DreamMessage {
 }
 
 /// Returns `true` if the content is scaffold boilerplate that should not be fed to the dream model as existing memory context.
-/// A file is scaffold only if it is short (under 500 bytes trimmed) and contains a scaffold marker.
+/// A file is scaffold only if it is short (under 500 bytes trimmed), contains a scaffold marker,
+/// and has not gained user list items (real memory lines under a leftover template comment).
 /// Files with substantial content are never scaffold, even if they contain leftover marker strings from the initial template.
 pub(crate) fn is_scaffold_template(content: &str) -> bool {
     const SCAFFOLD_MAX_LEN: usize = 500;
@@ -147,7 +148,16 @@ pub(crate) fn is_scaffold_template(content: &str) -> bool {
         "Add any cross-project preferences here",
     ];
     let trimmed = content.trim();
-    trimmed.len() < SCAFFOLD_MAX_LEN && MARKERS.iter().any(|marker| trimmed.contains(marker))
+    trimmed.len() < SCAFFOLD_MAX_LEN
+        && MARKERS.iter().any(|marker| trimmed.contains(marker))
+        && !trimmed.lines().any(is_user_list_item)
+}
+
+/// True for unordered markdown list lines (`-` / `*` / `+` after optional indent).
+fn is_user_list_item(line: &str) -> bool {
+    let t = line.trim_start();
+    matches!(t.as_bytes().first(), Some(b'-' | b'*' | b'+'))
+        && matches!(t.as_bytes().get(1), Some(b' ') | Some(b'\t'))
 }
 
 /// Build the user message for the dream model call from session log contents.
@@ -1079,6 +1089,36 @@ mod tests {
         assert!(!is_scaffold_template(
             "## Decisions\n\nWe chose Rust.\n\n## Architecture\n\nEvent-driven.",
         ));
+    }
+
+    /// Regression: suite `tools.memory_roundtrip` writes a durable line into a short MEMORY.md
+    /// that still carries the Preferences scaffold comment. That must stay searchable.
+    #[test]
+    fn scaffold_rejects_short_template_with_user_list_item() {
+        let content = "# Global Memory\n\
+             \n\
+             > This file is automatically managed by Grok's memory system.\n\
+             > You can also edit it manually — changes will be indexed on next session.\n\
+             \n\
+             ## Preferences\n\
+             \n\
+             <!-- Add any cross-project preferences here -->\n\
+             \n\
+             ## Important Lines\n\
+             \n\
+             - MARKER-tools.memory_roundtrip-a2424991\n";
+        assert!(
+            content.trim().len() < 500,
+            "fixture must stay under the scaffold length cap"
+        );
+        assert!(
+            content.contains("Add any cross-project preferences here"),
+            "fixture must still carry the scaffold marker"
+        );
+        assert!(
+            !is_scaffold_template(content),
+            "short MEMORY.md with a user list item must not be scaffold"
+        );
     }
 
     #[test]
