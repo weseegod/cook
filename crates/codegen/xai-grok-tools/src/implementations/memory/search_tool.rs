@@ -95,7 +95,10 @@ impl xai_tool_runtime::Tool for MemorySearchImpl {
         tracing::info!(target: crate::types::memory_backend::MEMORY_LOG_TARGET, results = results.len(), "MEMORY_SEARCH: complete");
         if results.is_empty() {
             return Ok(ToolOutput::Text(
-                "No memory results found for query.".into(),
+                crate::types::memory_backend::format_empty_search_message(
+                    &memory.durable_memory_files(),
+                )
+                .into(),
             ));
         }
         let mut output = format!("Found {} memory result(s):\n", results.len());

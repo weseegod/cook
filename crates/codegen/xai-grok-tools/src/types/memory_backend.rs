@@ -131,6 +131,25 @@ pub trait MemoryBackend: Send + Sync {
     fn default_search_min_score(&self) -> f64 {
         0.0
     }
+
+    /// Absolute paths of durable `MEMORY.md` files this backend owns.
+    /// Empty means the backend cannot advertise write locations (mocks / disabled storage).
+    fn durable_memory_files(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+}
+
+/// Empty-hit `memory_search` body: keep the stable first line, then advertise durable files when known.
+/// Suite `tools.memory_roundtrip` models that search first and then write; without a path hint they burn turns rediscovering `MEMORY.md`.
+pub fn format_empty_search_message(durable_files: &[std::path::PathBuf]) -> String {
+    let mut msg = String::from("No memory results found for query.");
+    if !durable_files.is_empty() {
+        msg.push_str("\nDurable memory files (edit these to remember):");
+        for path in durable_files {
+            msg.push_str(&format!("\n- {}", path.display()));
+        }
+    }
+    msg
 }
 
 #[cfg(test)]
@@ -259,5 +278,32 @@ mod tests {
             format_staleness_note("session", ts).is_empty(),
             "future timestamp should produce no warning"
         );
+    }
+
+    #[test]
+    fn empty_search_without_paths_keeps_stable_first_line() {
+        assert_eq!(
+            format_empty_search_message(&[]),
+            "No memory results found for query."
+        );
+    }
+
+    #[test]
+    fn empty_search_lists_durable_memory_paths() {
+        let paths = [
+            std::path::PathBuf::from("/home/u/.cook/memory/MEMORY.md"),
+            std::path::PathBuf::from("/home/u/proj/memory/MEMORY.md"),
+        ];
+        let msg = format_empty_search_message(&paths);
+        assert!(
+            msg.starts_with("No memory results found for query."),
+            "pager parse_no_results keys on the first line: {msg}"
+        );
+        assert!(
+            msg.contains("Durable memory files (edit these to remember):"),
+            "missing durable-file header: {msg}"
+        );
+        assert!(msg.contains("/home/u/.cook/memory/MEMORY.md"), "{msg}");
+        assert!(msg.contains("/home/u/proj/memory/MEMORY.md"), "{msg}");
     }
 }
