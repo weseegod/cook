@@ -187,6 +187,11 @@ impl MemoryStorage {
     /// Write a daily session log file.
     /// File path: `~/.grok/memory/{project}-{hash8}/sessions/YYYY-MM-DD-{slug}-{sid8}.md`
     /// `date`: e.g. `"2026-02-23"`; `slug`: short slug derived from the first user message; `session_id`: full session ID (first 8 chars used as suffix); `append`: when `true`, appends a timestamped section instead of overwriting. Each section is separated by `---` and a timestamp header so the chunker treats them as distinct entries.
+    ///
+    /// Ephemeral workspaces (`/tmp/...` cwd) skip the write and still return the
+    /// path so incidental session-end summaries do not litter `$COOK_HOME/memory`.
+    /// Callers that must actually persist (explicit memory flush) use
+    /// [`Self::write_daily_log_durable`].
     pub fn write_daily_log(
         &self,
         date: &str,
@@ -194,6 +199,32 @@ impl MemoryStorage {
         session_id: &str,
         content: &str,
         append: bool,
+    ) -> std::io::Result<PathBuf> {
+        self.write_daily_log_impl(date, slug, session_id, content, append, !self.ephemeral)
+    }
+
+    /// Like [`Self::write_daily_log`], but always creates the file even when the
+    /// workspace cwd is ephemeral. Explicit `--memory-flush` uses this so
+    /// `$COOK_HOME/memory` carries the turn under suite/temp workdirs.
+    pub fn write_daily_log_durable(
+        &self,
+        date: &str,
+        slug: &str,
+        session_id: &str,
+        content: &str,
+        append: bool,
+    ) -> std::io::Result<PathBuf> {
+        self.write_daily_log_impl(date, slug, session_id, content, append, true)
+    }
+
+    fn write_daily_log_impl(
+        &self,
+        date: &str,
+        slug: &str,
+        session_id: &str,
+        content: &str,
+        append: bool,
+        allow_write: bool,
     ) -> std::io::Result<PathBuf> {
         self.require_legacy("daily session logs")?;
         let sessions_dir = self.sessions_dir();
@@ -203,7 +234,7 @@ impl MemoryStorage {
         let filename = format!("{date}-{slug}-{sid8}.md");
         let path = sessions_dir.join(&filename);
 
-        if self.ephemeral {
+        if !allow_write {
             tracing::debug!(path = %path.display(), "MEMORY_EPHEMERAL_SKIP: daily log write skipped");
             return Ok(path);
         }
@@ -1615,6 +1646,44 @@ mod tests {
             .write_long_term(MemoryScope::Global, "global content")
             .unwrap();
         assert!(global_dir.join("MEMORY.md").exists());
+    }
+
+    #[test]
+    fn test_write_daily_log_durable_writes_when_ephemeral() {
+        let tmp = TempDir::new().unwrap();
+        let global_dir = tmp.path().join("memory");
+        let workspace_dir = global_dir.join("ephemeral-abc12345");
+
+        let storage = MemoryStorage {
+            mode: MemoryMode::Legacy,
+            global_dir,
+            workspace_dir: workspace_dir.clone(),
+            workspace_path: PathBuf::from("/tmp/test"),
+            ephemeral: true,
+        };
+
+        let content = "## Session flush (explicit)\nMARKER-ephemeral-durable\n";
+        let path = storage
+            .write_daily_log_durable("2026-05-07", "user_requested", "sess12345678", content, false)
+            .unwrap();
+        assert!(
+            path.exists(),
+            "durable flush must create {}",
+            path.display()
+        );
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            content,
+            "durable flush must store content for reindex/score"
+        );
+
+        // Append on durable path must land even when ephemeral.
+        storage
+            .write_daily_log_durable("2026-05-07", "user_requested", "sess12345678", "second", true)
+            .unwrap();
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("second"), "append: {after}");
+        assert!(after.contains("MARKER-ephemeral-durable"), "append: {after}");
     }
 
     #[test]

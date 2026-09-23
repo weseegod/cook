@@ -796,9 +796,14 @@ impl SessionActor {
                         } else if let Some(storage) = self.memory.storage() {
                             let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             let session_id = &self.session_info.id.0;
-                            match storage
-                                .write_daily_log(&date, trigger, session_id, &content, true)
-                            {
+                            // Durable: ephemeral `/tmp` cwd must not skip an explicit flush.
+                            match storage.write_daily_log_durable(
+                                &date,
+                                trigger,
+                                session_id,
+                                &content,
+                                true,
+                            ) {
                                 Ok(path) => {
                                     tracing::info!("memory flush wrote session log");
                                     self.reindex_and_embed(&path, "session").await;
