@@ -604,6 +604,28 @@ impl SessionActor {
         self.send_xai_notification(XaiSessionUpdate::MemoryFlushStarted)
             .await;
 
+        // Explicit flush must not skip a write when the conversation has content:
+        // `NO_REPLY` still becomes a session log so `$COOK_HOME/memory` carries the turn.
+        let user_message_count_before = {
+            let counts = self.chat_state_handle.get_conversation_counts().await;
+            counts.user
+        };
+        let force_write_on_no_reply =
+            Self::force_flush_write_for_trigger(trigger, user_message_count_before);
+        let mut force_flush_content: Option<String> = None;
+        if force_write_on_no_reply {
+            let conversation = self.chat_state_handle.get_conversation().await;
+            let chat_history =
+                xai_chat_state::compaction_utils::prepare_conversation_for_summarization(
+                    conversation,
+                );
+            let recent = crate::session::helpers::memory_flush_window::select_flush_window(
+                chat_history,
+                20,
+            );
+            force_flush_content = Some(Self::force_flush_content_from_window(&recent));
+        }
+
         let result = async {
             let sampling_client = self.prepare_chat_completion(false).await?;
             let MemoryFlushSnapshot {
@@ -710,7 +732,18 @@ impl SessionActor {
         let (outcome, response_len, accepted_len, was_truncated, flush_path) = match result {
             Ok(response_text) => {
                 let resp_len = response_text.len();
-                match process_flush_response(&response_text, &self.memory.flush_config) {
+                let mut processed = process_flush_response(&response_text, &self.memory.flush_config);
+                if matches!(processed, FlushResult::NothingToStore)
+                    && force_write_on_no_reply
+                {
+                    if let Some(forced) = force_flush_content.clone() {
+                        tracing::info!(
+                            "memory flush: NO_REPLY on explicit flush with content; forcing a write"
+                        );
+                        processed = FlushResult::Accepted(forced);
+                    }
+                }
+                match processed {
                     FlushResult::NothingToStore => {
                         tracing::debug!("memory flush: nothing to store");
                         ("nothing to store".to_string(), resp_len, 0, false, None)
@@ -855,12 +888,41 @@ impl SessionActor {
         });
 
         self.memory.release_flush_lock();
+        // Side-call usage lives only in the in-memory ledger until a turn ends.
+        // Flush-only / post-flush resumes never end a turn, so persist now.
+        self.persist_live_usage().await;
         self.send_xai_notification(XaiSessionUpdate::MemoryFlushCompleted {
             result: outcome,
             path: flush_path,
         })
         .await;
         true
+    }
+
+    /// Explicit triggers (`user_requested`, `slash_command`) with conversation content must not drop the write on `NO_REPLY`.
+    pub(super) fn force_flush_write_for_trigger(trigger: &str, user_message_count: usize) -> bool {
+        matches!(trigger, "user_requested" | "slash_command") && user_message_count > 0
+    }
+
+    /// Minimal markdown log built from the flush window so an explicit force-write still carries conversation markers.
+    pub(super) fn force_flush_content_from_window(window: &[ConversationItem]) -> String {
+        let mut out = String::from("## Session flush (explicit)\n");
+        for item in window {
+            match item {
+                ConversationItem::User(_) => {
+                    out.push_str("\n### User\n");
+                    out.push_str(&item.text_content());
+                    out.push('\n');
+                }
+                ConversationItem::Assistant(_) => {
+                    out.push_str("\n### Assistant\n");
+                    out.push_str(&item.text_content());
+                    out.push('\n');
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     /// Capture the flush inputs before compaction mutates conversation history.
@@ -974,5 +1036,26 @@ mod tests {
         assert!(MEMORY_FLUSH_MAX_OUTPUT_TOKENS > 1024);
         assert_eq!(request.x_grok_session_id.as_deref(), Some("sess-flush"));
         assert!(request.tools.is_empty());
+    }
+
+    #[test]
+    fn explicit_no_reply_force_write_requires_content() {
+        assert!(SessionActor::force_flush_write_for_trigger("user_requested", 1));
+        assert!(SessionActor::force_flush_write_for_trigger("slash_command", 2));
+        assert!(!SessionActor::force_flush_write_for_trigger("user_requested", 0));
+        assert!(!SessionActor::force_flush_write_for_trigger("interval", 3));
+        assert!(!SessionActor::force_flush_write_for_trigger("pre_compaction", 3));
+    }
+
+    #[test]
+    fn force_flush_content_carries_window_markers() {
+        let window = vec![
+            ConversationItem::user("Read NONCE-abc and reply with its exact line."),
+            ConversationItem::assistant("NONCE-abc"),
+        ];
+        let content = SessionActor::force_flush_content_from_window(&window);
+        assert!(content.contains("NONCE-abc"), "content: {content}");
+        assert!(content.contains("### User"), "content: {content}");
+        assert!(content.contains("## Session flush"), "content: {content}");
     }
 }
