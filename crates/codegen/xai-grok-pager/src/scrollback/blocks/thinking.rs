@@ -61,6 +61,63 @@ fn body_emphasis_patch(ctx: &BlockContext) -> Option<Style> {
 /// header's bullet ([`crate::appearance::ThinkingConfig::rail_under_bullet`]).
 const BODY_RAIL_WIDTH: usize = 2;
 
+/// Plain text of a wrapped line (styles stripped).
+fn line_plain(line: &Line<'_>) -> String {
+    line.spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
+/// Whether a wrapped line looks like a markdown fence opener/closer (` ``` `).
+fn line_is_fence(line: &Line<'_>) -> bool {
+    let plain = line_plain(line);
+    let trimmed = plain.trim_start();
+    trimmed.starts_with("```")
+}
+
+/// Count fence markers in `lines[0..end)` and return whether `end` sits inside an open fence.
+fn inside_open_fence(lines: &[Line<'static>], end: usize) -> bool {
+    let mut open = false;
+    for line in lines.iter().take(end) {
+        if line_is_fence(line) {
+            open = !open;
+        }
+    }
+    open
+}
+
+/// Start index for a truncated tail of about `desired_start..` that does not begin mid-fence.
+/// Walks forward from `desired_start` until the fence opened above the cut is closed, or returns
+/// `desired_start` when already outside a fence.
+fn fence_safe_tail_start(lines: &[Line<'static>], desired_start: usize) -> usize {
+    if desired_start >= lines.len() || !inside_open_fence(lines, desired_start) {
+        return desired_start;
+    }
+    let mut idx = desired_start;
+    while idx < lines.len() {
+        if line_is_fence(&lines[idx]) {
+            // This closer ends the fence that was open at the cut; start after it.
+            return idx + 1;
+        }
+        idx += 1;
+    }
+    // Fence never closed in the remaining lines: start at desired_start and strip fill instead.
+    desired_start
+}
+
+fn fence_opens_without_close(lines: &[Line<'static>]) -> bool {
+    let mut open = false;
+    for line in lines {
+        if line_is_fence(line) {
+            open = !open;
+        }
+    }
+    open
+}
+
+fn clear_code_fill(line: &mut BlockLine) {
+    line.content.style.bg = None;
+    line.background = None;
+}
+
 /// Whether the reasoning rail renders inside the body rows (directly below the header's bullet) instead of as the reserved accent column.
 /// Minimal-only: there every other block starts flush at column 0 with its own `◆`.
 /// An accent column would indent the header's diamond out of line and read as a second, different gutter treatment.
@@ -129,6 +186,8 @@ pub struct ThinkingBlock {
     elapsed_time_ms: Option<i64>,
     /// When the thinking block started (local timestamp for live elapsed).
     started_at: Option<std::time::Instant>,
+    /// Live tokens appended without a markdown re-render; flushed on the animation tick.
+    pending_render: bool,
 }
 impl ThinkingBlock {
     /// Create a new thinking block with complete text.
@@ -137,6 +196,7 @@ impl ThinkingBlock {
             content: MarkdownContent::new(text),
             elapsed_time_ms: None,
             started_at: None,
+            pending_render: false,
         }
     }
 
@@ -146,6 +206,7 @@ impl ThinkingBlock {
             content: MarkdownContent::streaming(),
             elapsed_time_ms: None,
             started_at: Some(std::time::Instant::now()),
+            pending_render: false,
         }
     }
 
@@ -156,23 +217,44 @@ impl ThinkingBlock {
             content: MarkdownContent::streaming(),
             elapsed_time_ms: None,
             started_at: None,
+            pending_render: false,
         }
     }
 
     /// Push a streaming chunk of markdown text.
+    /// Appends immediately but defers markdown reflow to [`flush_pending_render`] so a multi-thousand-token
+    /// thought does not reflow the viewport on every delta.
     pub fn push_chunk(&mut self, chunk: &str) {
-        self.content.push_chunk(chunk);
+        self.content.push_chunk_deferred(chunk);
+        self.pending_render = true;
     }
 
     /// Push a chunk without rendering immediately.
     pub fn push_chunk_deferred(&mut self, chunk: &str) {
         self.content.push_chunk_deferred(chunk);
+        self.pending_render = true;
+    }
+
+    /// Whether this block has deferred markdown work waiting for a coarse tick.
+    pub fn needs_render_flush(&self) -> bool {
+        self.pending_render
+    }
+
+    /// Re-render deferred thinking text (animation tick).
+    pub fn flush_pending_render(&mut self) -> bool {
+        if !self.pending_render {
+            return false;
+        }
+        self.content.flush_render();
+        self.pending_render = false;
+        true
     }
 
     /// Finish streaming and do a full re-render for safety.
     /// Freezes the local elapsed time from `started_at`.
     /// The collapsed view then shows the actual wall-clock duration the user experienced, not the server-reported delta.
     pub fn finish(&mut self) {
+        self.pending_render = false;
         self.content.finish();
         // Freeze local elapsed if no server time has been set.
         // The local timer (started_at to now) captures the full duration from block creation to finish, which is what the user perceives
@@ -338,6 +420,8 @@ impl ThinkingBlock {
     }
 
     /// Render truncated view: optional header, then "…", then the last N lines.
+    /// The tail is taken only after fences are closed for display: an open fence at the cut
+    /// must not leak a code background into the rows under the thought.
     fn render_truncated(&self, ctx: &BlockContext) -> BlockOutput {
         let config = &ctx.appearance.scrollback.blocks.thinking;
         let n = config.truncated_lines as usize;
@@ -380,22 +464,17 @@ impl ThinkingBlock {
                 return self.maybe_prepend_header(output, ctx);
             }
 
-            // Build truncated output: "…" then the last N lines
-            let theme = Theme::current();
-            let mut output_lines = Vec::with_capacity(n + 1);
+            let start = fence_safe_tail_start(&wrapped.lines, total - n);
+            let visible = &wrapped.lines[start..];
+            let orphan_open_fence = fence_opens_without_close(visible);
+            let mut output_lines = Vec::with_capacity(visible.len() + 1);
 
             // Ellipsis line
             let ellipsis = Line::from(Span::styled("…", theme.muted()));
             output_lines.push(ellipsis.into());
 
-            // Last N lines (with blending)
-            for (line, joiner) in wrapped
-                .lines
-                .iter()
-                .zip(wrapped.joiners.iter())
-                .skip(total - n)
-            {
-                output_lines.push(Self::thinking_body_line(
+            for (line, joiner) in visible.iter().zip(wrapped.joiners.iter().skip(start)) {
+                let mut body = Self::thinking_body_line(
                     line,
                     joiner,
                     &strip,
@@ -403,7 +482,13 @@ impl ThinkingBlock {
                     fg_default,
                     blend_factor,
                     emphasis,
-                ));
+                );
+                // If the visible window still opens a fence that never closes, strip the
+                // orphaned code fill so it cannot shade rows under the thought.
+                if orphan_open_fence {
+                    clear_code_fill(&mut body);
+                }
+                output_lines.push(body);
             }
 
             let mut output = BlockOutput {
@@ -868,6 +953,36 @@ mod tests {
         for mode in [DisplayMode::Expanded, DisplayMode::Truncated] {
             let out = empty.output(&hinted(mode, 60));
             assert!(!text_of(&out).contains(EXPAND_HINT), "empty/{mode:?}");
+        }
+    }
+
+    /// Truncation that would start inside an open fence must not leave code-block fill shading
+    /// the rows under the thought (or the following block in the scrollback).
+    #[test]
+    fn truncated_tail_starting_inside_a_fence_does_not_leak_code_fill() {
+        let mut appearance = AppearanceConfig::default();
+        appearance.scrollback.blocks.thinking.header = false;
+        appearance.scrollback.blocks.thinking.truncated_lines = 3;
+        let ctx = BlockContext {
+            appearance,
+            ..ctx(DisplayMode::Truncated, 40)
+        };
+        // Many preamble lines, then an unclosed fence whose body is the only thing in the tail.
+        let mut body = String::new();
+        for i in 0..20 {
+            body.push_str(&format!("reasoning line {i}\n"));
+        }
+        body.push_str("```rust\n");
+        body.push_str("fn orphan() {}\n");
+        body.push_str("fn still_open() {}\n");
+        let block = ThinkingBlock::new(body);
+        let out = block.output(&ctx);
+        assert!(out.lines.len() > 1, "expected truncated body, got {out:?}");
+        for line in out.lines.iter().skip(1) {
+            assert!(
+                line.background.is_none() && line.content.style.bg.is_none(),
+                "orphaned open fence must not shade truncated rows: {line:?}"
+            );
         }
     }
 }

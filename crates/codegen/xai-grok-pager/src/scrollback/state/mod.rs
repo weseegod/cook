@@ -416,7 +416,9 @@ impl ScrollbackState {
     pub fn tick(&mut self) -> bool {
         self.tick = self.tick.wrapping_add(1);
 
-        let mut needs_redraw = !self.running.is_empty() && self.any_running_in_viewport();
+        // Coarse flush of deferred thinking markdown (one reflow per animation tick, not per token).
+        let mut needs_redraw = self.flush_pending_thinking_renders();
+        needs_redraw = needs_redraw || (!self.running.is_empty() && self.any_running_in_viewport());
 
         // Finish-flash: O(flashing) over recently-finished entries, not O(entries) over the whole scrollback. Emit one
         // final redraw when a flash expires so the accent repaints in its static state. Otherwise the last-painted bright
@@ -446,6 +448,36 @@ impl ScrollbackState {
         needs_redraw
     }
 
+    /// Re-render thinking blocks that buffered tokens since the last tick.
+    fn flush_pending_thinking_renders(&mut self) -> bool {
+        let pending: Vec<EntryId> = self
+            .entries
+            .iter()
+            .filter_map(|(id, entry)| match &entry.block {
+                RenderBlock::Thinking(t) if t.needs_render_flush() => Some(*id),
+                _ => None,
+            })
+            .collect();
+        if pending.is_empty() {
+            return false;
+        }
+        let mut flushed = false;
+        for id in pending {
+            if let Some(entry) = self.entries.get_mut(&id)
+                && let RenderBlock::Thinking(ref mut block) = entry.block
+                && block.flush_pending_render()
+            {
+                entry.invalidate_cache();
+                self.dirty_heights.insert(id);
+                flushed = true;
+            }
+        }
+        if flushed {
+            self.bump_content_generation();
+        }
+        flushed
+    }
+
     /// Whether any entry is still marked running (visible or not).
     pub fn has_running_entries(&self) -> bool {
         !self.running.is_empty()
@@ -468,7 +500,13 @@ impl ScrollbackState {
 
     /// Check if animation ticks are needed. Off-screen running entries don't need ticks. Finish-flashes deliberately do
     /// not demand ticks: they animate opportunistically while ticks flow for other reasons.
+    /// Pending thinking markdown flushes also need ticks so a live thought still reflows when the accent is off-screen.
     pub fn needs_animation(&self) -> bool {
+        if self.entries.values().any(|e| {
+            matches!(&e.block, RenderBlock::Thinking(t) if t.needs_render_flush())
+        }) {
+            return true;
+        }
         !self.running.is_empty() && self.any_running_in_viewport()
     }
 
@@ -753,16 +791,15 @@ impl ScrollbackState {
     }
 
     /// Push a text chunk to a thinking block entry.
-    /// Similar to `push_chunk_to_agent()`, this handles all necessary cache invalidation for streaming thinking content.
+    /// Appends immediately; markdown reflow waits for [`Self::tick`] so multi-thousand-token
+    /// thoughts do not reflow the viewport on every delta.
     /// Returns true if successful, false if the entry doesn't exist or isn't a thinking block.
     pub fn push_chunk_to_thinking(&mut self, id: EntryId, chunk: &str) -> bool {
         if let Some(entry) = self.entries.get_mut(&id)
             && let RenderBlock::Thinking(ref mut block) = entry.block
         {
             block.push_chunk(chunk);
-            entry.invalidate_cache();
-            self.dirty_heights.insert(id);
-            self.bump_content_generation();
+            // Defer cache invalidation to the animation-tick flush.
             return true;
         }
         false
@@ -774,9 +811,7 @@ impl ScrollbackState {
             && let RenderBlock::Thinking(ref mut block) = entry.block
         {
             block.push_chunk_deferred(chunk);
-            entry.invalidate_cache();
-            self.dirty_heights.insert(id);
-            self.bump_content_generation();
+            // Replay batches until finish(); avoid per-chunk layout thrash on a 100MB updates log.
             return true;
         }
         false
@@ -1746,6 +1781,8 @@ pub(super) mod test_util {
         }
 
         pub(super) fn frame(&mut self) {
+            // A real frame advances the animation tick, which flushes deferred thinking markdown.
+            let _ = self.state.tick();
             self.state.prepare_layout(self.width, self.height);
         }
 
@@ -3286,6 +3323,7 @@ mod tests {
         let id = state.push_block(RenderBlock::thinking_streaming());
         state.set_last_running(true);
         state.push_chunk_to_thinking(id, "deep thoughts");
+        let _ = state.tick();
 
         state.finish_running(id);
 

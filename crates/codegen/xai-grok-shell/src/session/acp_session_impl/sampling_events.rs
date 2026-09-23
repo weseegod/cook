@@ -241,13 +241,14 @@ impl SessionActor {
             },
             SamplingEvent::ToolCallDelta {
                 request_id,
-                tool_index,
-                id,
-                name,
-                arguments_delta,
+                tool_index: _,
+                id: _,
+                name: _,
+                arguments_delta: _,
             } => {
-                // Mark the capture's phase so a partial taken now records it was cut off mid tool call rather than mid reasoning or response
-                // Mark only an already-active capture: a tool-call-only turn has no reasoning or text, so its capture stays empty and never uploads
+                // Accumulate in the sampler only. Do not paint a tool-call widget until the
+                // terminal Completed response exists: calls removed by collapse_duplicate_calls
+                // or dropped as non-JSON must never appear as in-progress rows.
                 {
                     let mut cap = self.streaming_turn_capture.lock();
                     if cap.prompt_id.is_some() {
@@ -255,17 +256,7 @@ impl SessionActor {
                         cap.phase = CapturePhase::ToolCall;
                     }
                 }
-
-                // A tool call is a token (ttft) but not meaningful text output (ttfm).
                 self.record_turn_first_token(Some(&request_id));
-
-                self.send_buffered_xai_update(XaiSessionUpdate::ToolCallDeltaChunk {
-                    tool_call_id: id,
-                    tool_index,
-                    name,
-                    arguments_delta,
-                })
-                .await;
             }
             SamplingEvent::ResponseStarted {
                 message_id,

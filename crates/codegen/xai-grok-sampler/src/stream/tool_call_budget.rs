@@ -17,6 +17,9 @@ use crate::types::RequestId;
 
 /// Total tool-call argument bytes one response may stream.
 pub const DEFAULT_MAX_TOOL_CALL_ARGUMENT_BYTES: u64 = 256 * 1024;
+/// Bytes one in-flight call may accumulate in `arguments` before the attempt ends.
+/// Restores the old Xiaomi in-flight ceiling so a single runaway argument stream cannot pin the UI.
+pub const DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES: u64 = 32 * 1024;
 /// Distinct tool-call indices one response may open. Matches the pager's own per-sample label cap.
 pub const DEFAULT_MAX_TOOL_CALLS: u64 = 64;
 /// Wall-clock ceiling for a tool-call channel that closes no call and produces no other output.
@@ -33,6 +36,8 @@ pub const DEFAULT_MAX_REPEATED_TOOL_CALLS: u64 = 0;
 pub struct ToolCallBudget {
     /// Total bytes of `arguments_delta` across the response.
     pub max_argument_bytes: u64,
+    /// Bytes accumulated on any single call's arguments.
+    pub max_per_call_argument_bytes: u64,
     /// Count of distinct `tool_index` values in the response.
     pub max_tool_calls: u64,
     /// Seconds of continuous tool-call deltas with no text/reasoning output in between.
@@ -46,6 +51,7 @@ impl Default for ToolCallBudget {
     fn default() -> Self {
         Self {
             max_argument_bytes: DEFAULT_MAX_TOOL_CALL_ARGUMENT_BYTES,
+            max_per_call_argument_bytes: DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES,
             max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
             max_stream_secs: DEFAULT_MAX_TOOL_CALL_STREAM_SECS,
             max_repeated_calls: DEFAULT_MAX_REPEATED_TOOL_CALLS,
@@ -57,6 +63,7 @@ impl Default for ToolCallBudget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BudgetLimit {
     ArgumentBytes,
+    PerCallArgumentBytes,
     ToolCalls,
     StallSecs,
     RepeatedCalls,
@@ -66,6 +73,7 @@ impl BudgetLimit {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::ArgumentBytes => "argument_bytes",
+            Self::PerCallArgumentBytes => "per_call_argument_bytes",
             Self::ToolCalls => "tool_calls",
             Self::StallSecs => "stall_secs",
             Self::RepeatedCalls => "repeated_calls",
@@ -188,6 +196,16 @@ impl ToolCallBudgetState {
         }
         if let Some(delta) = arguments_delta {
             call.arguments.push_str(delta);
+        }
+        let per_call_len = call.arguments.len() as u64;
+        if self.limit_of(self.budget.max_per_call_argument_bytes) < per_call_len {
+            return Some(self.breach(
+                BudgetLimit::PerCallArgumentBytes,
+                format!(
+                    "tool call {index} buffered {per_call_len} bytes of arguments, past the {} byte per-call ceiling",
+                    self.budget.max_per_call_argument_bytes
+                ),
+            ));
         }
 
         self.stall_breach(now)
@@ -566,9 +584,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn one_call_past_the_per_call_ceiling_ends_the_response() {
+        let budget = ToolCallBudget {
+            max_per_call_argument_bytes: 8,
+            ..Default::default()
+        };
+        let events = collect(
+            vec![
+                delta(0, Some("grep"), Some("abcd")),
+                delta(0, None, Some("efgh")),
+                delta(0, None, Some("ijkl")),
+            ],
+            budget,
+        )
+        .await;
+
+        assert_eq!(
+            failed_kind(&events),
+            Some(crate::events::SamplingErrorKind::ToolCallBudgetExceeded)
+        );
+        let SamplingEvent::Failed { error, .. } = events.last().unwrap() else {
+            panic!("expected a Failed terminal event");
+        };
+        assert!(
+            error.message.contains("per-call ceiling"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[tokio::test]
     async fn a_zero_limit_disables_its_check() {
         let budget = ToolCallBudget {
             max_argument_bytes: 0,
+            max_per_call_argument_bytes: 0,
             max_tool_calls: 0,
             max_stream_secs: 0,
             max_repeated_calls: 0,
@@ -596,6 +645,10 @@ mod tests {
         assert_eq!(
             budget.max_argument_bytes,
             DEFAULT_MAX_TOOL_CALL_ARGUMENT_BYTES
+        );
+        assert_eq!(
+            budget.max_per_call_argument_bytes,
+            DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES
         );
         assert_eq!(budget.max_stream_secs, DEFAULT_MAX_TOOL_CALL_STREAM_SECS);
         assert_eq!(budget.max_repeated_calls, DEFAULT_MAX_REPEATED_TOOL_CALLS);

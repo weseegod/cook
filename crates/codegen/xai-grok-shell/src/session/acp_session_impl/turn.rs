@@ -2718,6 +2718,7 @@ impl SessionActor {
         let mut loop_index: u32 = 0;
         let mut identical_tool_calls = IdenticalToolCallRun::default();
         let mut tool_argument_errors = ToolArgumentErrorRun::default();
+        let mut read_only_exploration = ReadOnlyExplorationRun::default();
         let mut todo_gate_fires: u32 = 0;
         let mut length_salvage_streak = LengthSalvageStreak::default();
         let mut auth_retry_schedule = AuthRetrySchedule::new();
@@ -2831,6 +2832,39 @@ impl SessionActor {
                         tool_name: tool_name.clone(),
                     },
                 );
+                self.finalize_turn_bookkeeping(
+                    req_id,
+                    std::mem::take(&mut turn_span_totals),
+                    turn_sampling,
+                )
+                .await;
+                return Ok(TurnOutcome::StationarityEnded);
+            }
+            if read_only_exploration.should_stop() {
+                let rounds = read_only_exploration.rounds;
+                tracing::warn!(
+                    session_id = %self.session_info.id,
+                    rounds,
+                    "read-only exploration loop: ending turn after consecutive explore-only rounds"
+                );
+                xai_grok_telemetry::unified_log::warn(
+                    "shell.turn.read_only_exploration_stop",
+                    Some(self.session_info.id.0.as_ref()),
+                    Some(serde_json::json!({
+                        "loop_index": loop_index,
+                        "rounds": rounds,
+                    })),
+                );
+                self.send_update(
+                    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                        acp::ContentBlock::Text(acp::TextContent::new(format!(
+                            "Stopped after {rounds} consecutive read-only tool rounds with no edits. \
+                             Resume the turn when you want the agent to keep going."
+                        ))),
+                    )),
+                    None,
+                )
+                .await;
                 self.finalize_turn_bookkeeping(
                     req_id,
                     std::mem::take(&mut turn_span_totals),
@@ -3871,6 +3905,7 @@ impl SessionActor {
                 step_problematic,
                 is_true_noop,
             );
+            read_only_exploration.observe(&tool_calls, &step_tool_kinds);
             if is_true_noop {
                 xai_grok_telemetry::session_ctx::log_event(
                     xai_grok_telemetry::events::ShellTrueNoop {
@@ -4059,6 +4094,97 @@ fn step_is_problematically_repeating(kinds: &[Option<ToolKind>]) -> bool {
         && kinds
             .iter()
             .all(|kind| is_problematically_repeating_kind(*kind))
+}
+
+/// Consecutive model rounds that only explore (read/search/list / read-only shell) with no edit.
+/// Distinct from identical-call stationarity: each round's arguments can differ slightly and still loop.
+pub(super) const MAX_CONSECUTIVE_READ_ONLY_ROUNDS: u32 = 3;
+
+fn is_edit_kind(kind: Option<ToolKind>) -> bool {
+    matches!(kind, Some(ToolKind::Edit | ToolKind::Write | ToolKind::Delete | ToolKind::Move))
+}
+
+fn is_read_only_kind(kind: Option<ToolKind>) -> bool {
+    matches!(
+        kind,
+        Some(
+            ToolKind::Read
+                | ToolKind::Search
+                | ToolKind::List
+                | ToolKind::ListDir
+                | ToolKind::MemorySearch
+                | ToolKind::MemoryGet
+                | ToolKind::WebSearch
+                | ToolKind::WebFetch
+                | ToolKind::Lsp
+        )
+    )
+}
+
+/// `run_terminal_cmd` / `run_terminal_command` whose command is only `git log` or `rg` (and close variants).
+fn is_read_only_shell_command(arguments: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return false;
+    };
+    let Some(command) = value
+        .get("command")
+        .and_then(|v| v.as_str())
+        .or_else(|| value.get("cmd").and_then(|v| v.as_str()))
+    else {
+        return false;
+    };
+    let trimmed = command.trim();
+    let first = trimmed.split_whitespace().next().unwrap_or("");
+    matches!(first, "git" | "rg" | "grep")
+        && (first != "git" || trimmed.split_whitespace().nth(1) == Some("log"))
+}
+
+fn step_is_read_only_exploration(
+    tool_calls: &[xai_grok_sampling_types::conversation::ToolCall],
+    kinds: &[Option<ToolKind>],
+) -> bool {
+    if tool_calls.is_empty() || tool_calls.len() != kinds.len() {
+        return false;
+    }
+    if kinds.iter().any(|kind| is_edit_kind(*kind)) {
+        return false;
+    }
+    tool_calls.iter().zip(kinds.iter()).all(|(tc, kind)| {
+        if is_read_only_kind(*kind) {
+            return true;
+        }
+        if matches!(kind, Some(ToolKind::Execute)) {
+            return is_read_only_shell_command(tc.arguments.as_ref());
+        }
+        false
+    })
+}
+
+#[derive(Default)]
+struct ReadOnlyExplorationRun {
+    rounds: u32,
+}
+
+impl ReadOnlyExplorationRun {
+    fn observe(
+        &mut self,
+        tool_calls: &[xai_grok_sampling_types::conversation::ToolCall],
+        kinds: &[Option<ToolKind>],
+    ) {
+        if kinds.iter().any(|kind| is_edit_kind(*kind)) {
+            self.rounds = 0;
+            return;
+        }
+        if step_is_read_only_exploration(tool_calls, kinds) {
+            self.rounds = self.rounds.saturating_add(1);
+        } else {
+            self.rounds = 0;
+        }
+    }
+
+    fn should_stop(&self) -> bool {
+        self.rounds >= MAX_CONSECUTIVE_READ_ONLY_ROUNDS
+    }
 }
 pub(super) const NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS: u32 = 4;
 pub(super) const NUDGE_AFTER_IDENTICAL_TOOL_CALLS: u32 = 8;
@@ -4371,6 +4497,78 @@ mod identical_tool_call_run_tests {
         assert!(run.take_nudge());
     }
 }
+
+#[cfg(test)]
+mod read_only_exploration_run_tests {
+    use super::{
+        MAX_CONSECUTIVE_READ_ONLY_ROUNDS, ReadOnlyExplorationRun, ToolKind,
+        is_read_only_shell_command, step_is_read_only_exploration,
+    };
+
+    fn call(name: &str, args: &str) -> xai_grok_sampling_types::conversation::ToolCall {
+        xai_grok_sampling_types::conversation::ToolCall {
+            id: "id".into(),
+            name: name.to_string(),
+            arguments: args.into(),
+        }
+    }
+
+    #[test]
+    fn three_read_only_rounds_stop_the_turn() {
+        let mut run = ReadOnlyExplorationRun::default();
+        let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
+        let kinds = [Some(ToolKind::Read)];
+        for i in 1..=MAX_CONSECUTIVE_READ_ONLY_ROUNDS {
+            run.observe(&reads, &kinds);
+            assert_eq!(run.rounds, i);
+        }
+        assert!(run.should_stop());
+    }
+
+    #[test]
+    fn an_edit_resets_the_read_only_counter() {
+        let mut run = ReadOnlyExplorationRun::default();
+        let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
+        run.observe(&reads, &[Some(ToolKind::Read)]);
+        run.observe(&reads, &[Some(ToolKind::Read)]);
+        assert_eq!(run.rounds, 2);
+        let edit = [call("search_replace", r#"{"file":"a.rs"}"#)];
+        run.observe(&edit, &[Some(ToolKind::Edit)]);
+        assert_eq!(run.rounds, 0);
+        assert!(!run.should_stop());
+    }
+
+    #[test]
+    fn git_log_and_rg_shell_commands_count_as_read_only() {
+        assert!(is_read_only_shell_command(r#"{"command":"git log -1"}"#));
+        assert!(is_read_only_shell_command(r#"{"command":"rg pattern"}"#));
+        assert!(!is_read_only_shell_command(r#"{"command":"cargo test"}"#));
+        assert!(!is_read_only_shell_command(r#"{"command":"git status"}"#));
+
+        let calls = [call("run_terminal_cmd", r#"{"command":"git log --oneline"}"#)];
+        let kinds = [Some(ToolKind::Execute)];
+        assert!(step_is_read_only_exploration(&calls, &kinds));
+    }
+
+    #[test]
+    fn differing_read_arguments_still_accumulate() {
+        let mut run = ReadOnlyExplorationRun::default();
+        run.observe(
+            &[call("read_file", r#"{"target_file":"a.rs"}"#)],
+            &[Some(ToolKind::Read)],
+        );
+        run.observe(
+            &[call("grep", r#"{"pattern":"foo"}"#)],
+            &[Some(ToolKind::Search)],
+        );
+        run.observe(
+            &[call("list_dir", r#"{"path":"."}"#)],
+            &[Some(ToolKind::ListDir)],
+        );
+        assert!(run.should_stop());
+    }
+}
+
 #[cfg(test)]
 mod user_echo_broadcast_tests {
     use super::{InputOrigin, PromptOrigin, UserEchoMode, user_echo_mode};
