@@ -696,6 +696,53 @@ fn description_shows_required_inline_json_example() {
     );
 }
 
+/// File-input is ON in the live suite, so the model sees `FILE_INPUT_DESCRIPTION`
+/// via `versioned_definition` — that path must still ship the required inline JSON.
+#[test]
+fn file_input_description_shows_required_inline_json_example() {
+    use crate::types::tool_metadata::ToolMetadata;
+    let param_map = std::collections::HashMap::from([
+        ("tool_name".to_string(), "tool_name".to_string()),
+        ("tool_input".to_string(), "tool_input".to_string()),
+        (
+            "tool_input_file".to_string(),
+            "tool_input_file".to_string(),
+        ),
+        ("file".to_string(), "file".to_string()),
+    ]);
+    let kind_params = std::collections::HashMap::from([(
+        crate::types::tool::ToolKind::UseTool,
+        param_map.clone(),
+    )]);
+    let renderer = crate::types::template_renderer::TemplateRenderer::new(
+        std::collections::HashMap::new(),
+        kind_params,
+    );
+    let def = ToolMetadata::versioned_definition(
+        &UseTool,
+        None,
+        "use_tool",
+        None,
+        &renderer,
+        &param_map,
+        &serde_json::json!({"type": "object"}),
+        &serde_json::json!({FILE_INPUT_SUPPORTED: true}),
+    );
+    let text = def.function.description.expect("description");
+    assert!(
+        text.contains("never empty `{}`") || text.contains("never empty {}"),
+        "file-input description must forbid empty object args: {text}"
+    );
+    assert!(
+        text.contains(r#"{"tool_name": "<discovered name>", "tool_input": {"<param>": <value>}}"#),
+        "file-input description must show the required inline JSON shape: {text}"
+    );
+    assert!(
+        text.contains(r#"{"tool_name": "echo__echo", "tool_input": {"text": "hello"}}"#),
+        "file-input description must show a concrete example: {text}"
+    );
+}
+
 #[test]
 fn dump_classification_preserves_shape_and_query_steer() {
     let row = "{'id': 0, 'name': 'user0', 'email': 'u0@example.com', 'age': 20}";
