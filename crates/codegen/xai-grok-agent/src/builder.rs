@@ -1007,11 +1007,35 @@ impl AgentBuilder {
                     None => unresolved.push(t),
                 }
             }
+            // Registered allowlist entries that are not already in the active toolset must be
+            // injected (Codex:apply_patch, GrokBuildHashline:hashline_edit, OpenCode:read, …)
+            // so retain() can keep them by id instead of silently dropping them.
+            let known_kinds = tool_bridge_builder.known_tool_kinds();
+            for t in &definition.tools {
+                if AGENT_TASK_CLASSIFIER_RE.is_match(t) || t.starts_with("mcp__") {
+                    continue;
+                }
+                if tool_config.tools.iter().any(|tc| tool_id_eq(t, &tc.id)) {
+                    continue;
+                }
+                let Some(full_id) = registered_tool_ids
+                    .iter()
+                    .find(|id| tool_id_eq(t, id))
+                    .cloned()
+                else {
+                    continue;
+                };
+                let mut tc = xai_grok_tools::registry::types::ToolConfig::from_id(full_id.clone());
+                if tc.kind.is_none() {
+                    tc.kind = known_kinds.get(&full_id).copied();
+                }
+                tool_config.tools.push(tc);
+            }
             if !recognized_but_unavailable.is_empty() {
                 tracing::debug!(
                     agent = %definition.name,
                     recognized_but_unavailable = ?recognized_but_unavailable,
-                    "tools allowlist named recognized tools that aren't enabled; ignoring them"
+                    "allowlisted registered tools were missing from the active toolset and were injected"
                 );
             }
             if unresolved.is_empty() {
@@ -3140,6 +3164,30 @@ mod tests {
             !names.contains(&"search_replace".to_string()),
             "no full-toolset fallback — Edit must be excluded; got: {names:?}"
         );
+    }
+    #[tokio::test]
+    async fn allowlist_injects_registered_apply_patch_hashline_edit_and_read() {
+        for (allow, expect) in [
+            ("apply_patch", "apply_patch"),
+            ("hashline_edit", "hashline_edit"),
+            ("read", "read"),
+        ] {
+            let agent = build_with_tools(vec![allow.to_string()], vec![]).await;
+            let names: Vec<String> = agent
+                .tool_definitions()
+                .await
+                .iter()
+                .map(|d| d.function.name.clone())
+                .collect();
+            assert!(
+                names.iter().any(|n| n == expect),
+                "--tools {allow} must expose {expect}; got {names:?}"
+            );
+            assert!(
+                !names.iter().any(|n| n == "run_terminal_cmd" || n == "search_replace"),
+                "--tools {allow} must not fall back to the full toolset; got {names:?}"
+            );
+        }
     }
     async fn build_with_web_search(
         web_search_enabled: bool,
