@@ -239,7 +239,7 @@ No `tool_started` or `tool_completed` whose `tool_name` is in `forbid_tools`.
 
 ### 6.4 `text_contains_marker` and `text_nonempty`
 
-`text_contains_marker` looks at top-level `text` only. `text_nonempty` requires non-empty `text` and `stopReason` of `end_turn`, unless the case JSON sets `"allow_stop": ["max_turn_requests"]`.
+`text_contains_marker` looks at top-level `text`. For `agents.workflow_live` it also accepts the nonce in any session workflow `state.json` `result_summary`, matching that case’s “parent `text` or the workflow result” rule. `text_nonempty` requires non-empty `text` and `stopReason` of `end_turn`, unless the case JSON sets `"allow_stop": ["max_turn_requests"]`.
 
 ### 6.5 `usage_honest`
 

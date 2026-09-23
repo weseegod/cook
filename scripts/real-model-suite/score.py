@@ -184,10 +184,29 @@ def check_file_absent(case: dict[str, Any], root: Path) -> None:
             raise Failure(f"file_absent: {name} exists")
 
 
+def workflow_result_blob(root: Path) -> str:
+    """Serialized workflow `result_summary` values under the case session home."""
+    blobs: list[str] = []
+    sessions = root / "session"
+    if not sessions.exists():
+        return ""
+    for state in sessions.rglob("workflows/**/state.json"):
+        data = load_json(state, {}) or {}
+        node = data.get("state") if isinstance(data, dict) else None
+        if not isinstance(node, dict):
+            node = data if isinstance(data, dict) else {}
+        summary = node.get("result_summary")
+        if summary:
+            blobs.append(str(summary))
+    return "\n".join(blobs)
+
+
 def check_text_contains_marker(case: dict[str, Any], root: Path) -> None:
     text = str(result_obj(root).get("text", ""))
     suffix = case.get("marker_suffix", "")
-    if marker(root) + suffix not in text:
+    needle = marker(root) + suffix
+    # Spec § agents.workflow_live: parent text **or** the workflow result may carry the nonce.
+    if needle not in text and needle not in workflow_result_blob(root):
         raise Failure("text_contains_marker: top-level text lacks marker")
     for forbidden in case.get("text_forbid", []):
         value = forbidden.replace("{{MARKER}}", marker(root))
@@ -557,6 +576,23 @@ def self_test() -> None:
             "stopReason": "end_turn",
         }))
         assert not score({"checks": ["lsp_smoke"]}, root)[0], "unrelated prose must still fail"
+    with tempfile.TemporaryDirectory() as tmp:
+        # Spec § agents.workflow_live: nonce may live in the workflow result when top-level text is empty/garbled.
+        root = Path(tmp)
+        nonce = "MARKER-agents.workflow_live-cafebabe"
+        (root / "MANIFEST.json").write_text(json.dumps({"case": "agents.workflow_live", "nonce": nonce}))
+        (root / "stdout.json").write_text(json.dumps({"text": "started only", "stopReason": "end_turn"}))
+        (root / "events.jsonl").write_text("{}\n")
+        scase = {"checks": ["text_contains_marker"]}
+        assert not score(scase, root)[0], "text-only fail without workflow result"
+        wf = root / "session" / "workflows" / "wf_x"
+        wf.mkdir(parents=True)
+        (wf / "state.json").write_text(json.dumps({
+            "state": {"result_summary": json.dumps({"output": nonce})}
+        }))
+        assert score(scase, root)[0], "workflow result_summary must satisfy the marker check"
+        (root / "stdout.json").write_text(json.dumps({"text": f"done {nonce}", "stopReason": "end_turn"}))
+        assert score(scase, root)[0]
     print("score.py self-test: pass")
 
 
