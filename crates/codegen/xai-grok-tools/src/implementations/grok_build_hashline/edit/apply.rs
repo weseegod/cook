@@ -200,6 +200,34 @@ pub(crate) fn apply_edits(
                 edit_details: vec![],
             };
         }
+        // Partial write: single-line content over a multi-line file discards
+        // surrounding lines (real-model agents.hashline_edit used write with
+        // only the replacement token). Steer the model to replace.
+        if !new_content.contains('\n')
+            && content.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+            && content.trim() != new_content.trim()
+        {
+            return ApplyResult {
+                output: HashlineEditOutput::Error(HashlineEditError {
+                    error: HashlineEditErrorKind::InvalidInput,
+                    message:
+                        "write content is a single line and would discard every other line of \
+                         this multi-line file. For a one-line edit use op \"replace\" with an \
+                         exact anchor from a prior hashline_read so surrounding lines survive. \
+                         Use write only with the full multi-line file content."
+                            .to_owned(),
+                    requested_anchor: None,
+                    current: None,
+                    context: None,
+                    context_start_line: None,
+                    shifted_to: None,
+                    shifted_anchor: None,
+                    ambiguous_candidates: vec![],
+                }),
+                new_content: None,
+                edit_details: vec![],
+            };
+        }
         return ApplyResult {
             output: build_write_result(new_content, file_path, scheme),
             new_content: Some(new_content.clone()),
@@ -2311,6 +2339,33 @@ mod tests {
             "wiped later lines: {new_content}"
         );
         assert!(!new_content.contains(&target), "anchor must not remain: {new_content}");
+    }
+
+    #[test]
+    fn partial_single_line_write_rejected_over_multiline_file() {
+        let ops = vec![HashlineOp::Write {
+            content: "DONE-EDIT".to_owned(),
+        }];
+        match apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme()).output
+        {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(e.message.contains("replace"), "msg: {}", e.message);
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_multiline_write_still_allowed() {
+        let ops = vec![HashlineOp::Write {
+            content: "first\nDONE-EDIT\nlast\n".to_owned(),
+        }];
+        let result = apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme());
+        let HashlineEditOutput::EditsApplied(_) = result.output else {
+            panic!("expected success, got: {:?}", result.output);
+        };
+        assert_eq!(result.new_content.as_deref(), Some("first\nDONE-EDIT\nlast\n"));
     }
 
     #[test]

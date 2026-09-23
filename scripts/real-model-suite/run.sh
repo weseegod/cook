@@ -360,12 +360,21 @@ run_model_case() {
   if [[ "$id" != session.max_turns && "$id" != agents.acp_stdio && "$id" != agents.workflow_live ]]; then
     text=$(result_value "$case_dir/stdout.json" text); stop=$(result_value "$case_dir/stdout.json" stopReason)
     if [[ -z "$text" && "$stop" != end_turn ]]; then
-      # Drop the empty first session before the 8192 retry. Leaving it makes
+      # Drop the failed first session before the 8192 retry. Leaving it makes
       # subagent_absent / single-session oracles see two parents (agents.no_subagents_flag).
+      # Error stdout often has no sessionId, so also wipe every session under this cwd
+      # unless the retry will --resume/--fork an existing one.
       cwd_root="$home/sessions/$(urlencode_cwd "$workdir")"
-      if [[ -n "$sid" && -d "$cwd_root/$sid" ]]; then
-        rm -rf "$cwd_root/$sid"
+      resuming=0
+      case "$extra" in
+        *'"-r"'*|*'--resume'*|*'--fork'*) resuming=1 ;;
+      esac
+      if [[ "$resuming" -eq 0 && -d "$cwd_root" ]]; then
+        # Fresh re-invoke: drop every session from the failed first attempt.
+        # sid is often empty when stdout is an error JSON without sessionId.
+        find "$cwd_root" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
       fi
+      # Resume/fork retries need the existing session; leave cwd_root alone.
       write_home_config "$home" "$permission" 8192 "$window"
       invoke_cook "$case_dir" "$home" "$workdir" "$prompt" "$timeout_secs" "$permission" "$allow" "$deny" "$extra"
       sid=$(result_value "$case_dir/stdout.json" sessionId); copy_session "$home" "$workdir" "$case_dir" "$sid" || true
