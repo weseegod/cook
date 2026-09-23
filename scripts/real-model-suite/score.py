@@ -593,6 +593,25 @@ def self_test() -> None:
         assert score(scase, root)[0], "workflow result_summary must satisfy the marker check"
         (root / "stdout.json").write_text(json.dumps({"text": f"done {nonce}", "stopReason": "end_turn"}))
         assert score(scase, root)[0]
+        # max_tokens after a finished workflow: empty text, nonce only in result_summary,
+        # tool_called still sees the parent workflow completion once copy_session prefers
+        # the workflows-bearing session (run.sh scores workflow_live despite exit 1).
+        (root / "stdout.json").write_text(json.dumps({
+            "type": "error",
+            "message": "response truncated by max_tokens",
+            "text": "",
+            "stopReason": "max_tokens",
+        }))
+        (root / "events.jsonl").write_text(
+            json.dumps({"type": "tool_completed", "tool_name": "workflow", "outcome": "success"}) + "\n"
+        )
+        full = {"checks": ["tool_called", "text_contains_marker"], "expect_tools": ["workflow"]}
+        assert score(full, root)[0], "workflow_live must score from state.json after max_tokens"
+        # Child-only events (no workflow) must still fail tool_called.
+        (root / "events.jsonl").write_text(
+            json.dumps({"type": "tool_completed", "tool_name": "read_file", "outcome": "success"}) + "\n"
+        )
+        assert not score(full, root)[0], "child events without workflow must not pass"
     print("score.py self-test: pass")
 
 

@@ -122,7 +122,21 @@ copy_session() {
   if [[ -n "$sid" && -d "$cwd_root/$sid" ]]; then
     session_src="$cwd_root/$sid"
   elif [[ -d "$cwd_root" ]]; then
-    while IFS= read -r summary; do session_src=${summary%/summary.json}; done < <(find "$cwd_root" -mindepth 2 -maxdepth 2 -name summary.json -type f | sort)
+    # Prefer a session that owns workflows/ (agents.workflow_live parent). Child
+    # agent sessions sort after the parent and lack state.json; picking the last
+    # summary drops workflow tools and the nonce blob.
+    local fallback=
+    while IFS= read -r summary; do
+      local dir=${summary%/summary.json}
+      if [[ -d "$dir/workflows" ]]; then
+        session_src=$dir
+        break
+      fi
+      fallback=$dir
+    done < <(find "$cwd_root" -mindepth 2 -maxdepth 2 -name summary.json -type f | sort)
+    if [[ -z "$session_src" ]]; then
+      session_src=$fallback
+    fi
   fi
   # Worktree sessions live under the encoded worktree path, not the launch cwd.
   if [[ -z "$session_src" && -n "$sid" ]]; then
@@ -366,7 +380,9 @@ run_model_case() {
   fi
   # Headless returns an error after it has already recorded the max-turns stop.
   # Section 9 scores that case from stopReason / stderr; every other case still fails closed.
-  if [[ "$(<"$case_dir/exit-code.txt")" != 0 && "$id" != session.max_turns ]]; then
+  # agents.workflow_live may exit 1 on max_tokens after the workflow finished — score
+  # the state.json nonce and parent text the same way an empty/garbled text would score.
+  if [[ "$(<"$case_dir/exit-code.txt")" != 0 && "$id" != session.max_turns && "$id" != agents.workflow_live ]]; then
     rc=$(<"$case_dir/exit-code.txt")
     printf 'fail exit %s\n' "$rc" >"$case_dir/status.txt"; printf '%s fail exit %s\n' "$id" "$rc" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" "fail exit $rc"; return 1
   fi
