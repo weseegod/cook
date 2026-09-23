@@ -112,6 +112,14 @@ impl xai_tool_runtime::Tool for WriteTool {
         // Resolve the model-provided path.
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.file_path);
 
+        // Non-empty text writes get a POSIX trailing newline (same rule apply_patch
+        // uses). Models often copy a one-line secret without the terminator the
+        // source file had.
+        let mut content = input.content;
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+
         // ── Check if file exists and read old content ────────────
         let (mut existed, mut old_content) = match fs.read_file(&path).await {
             Ok(bytes) => (true, Some(String::from_utf8_lossy(&bytes).into_owned())),
@@ -120,7 +128,7 @@ impl xai_tool_runtime::Tool for WriteTool {
         let is_memory_write = match crate::types::memory_v2::write_memory_v2_file(
             &resources,
             &path,
-            input.content.as_bytes(),
+            content.as_bytes(),
         )
         .await
         {
@@ -152,7 +160,7 @@ impl xai_tool_runtime::Tool for WriteTool {
 
         // ── Write the file ───────────────────────────────────────
         if !is_memory_write {
-            fs.write_file(&path, input.content.as_bytes())
+            fs.write_file(&path, content.as_bytes())
                 .await
                 .map_err(|e| {
                     xai_tool_runtime::ToolError::execution(
@@ -166,13 +174,13 @@ impl xai_tool_runtime::Tool for WriteTool {
         notification_handle.send_file_written(FileWritten {
             tool_call_id,
             absolute_path: path.clone(),
-            content: input.content.clone(),
+            content: content.clone(),
             previous_content: old_content.clone(),
             is_new_file: !existed,
         });
 
         let old_string = old_content.unwrap_or_default();
-        let new_string = input.content;
+        let new_string = content;
 
         let edits = vec![SearchReplaceEditDetail {
             old_string: old_string.clone(),
@@ -363,6 +371,46 @@ mod tests {
         assert!(file_path.exists());
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert!(content.is_empty());
+    }
+
+    // ── Trailing newline normalization ─────────────────────────
+
+    #[tokio::test]
+    async fn nonempty_write_without_trailing_newline_gains_one() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: tmp.path().join("line.txt").to_string_lossy().into_owned(),
+            content: "MARKER-only-line".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
+        let content = std::fs::read_to_string(tmp.path().join("line.txt")).unwrap();
+        assert_eq!(content, "MARKER-only-line\n");
+    }
+
+    #[tokio::test]
+    async fn nonempty_write_keeps_existing_trailing_newline() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: tmp.path().join("line.txt").to_string_lossy().into_owned(),
+            content: "already-terminated\n".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
+        let content = std::fs::read_to_string(tmp.path().join("line.txt")).unwrap();
+        assert_eq!(content, "already-terminated\n");
     }
 
     // ── Overwrite preserves path in output ─────────────────────
