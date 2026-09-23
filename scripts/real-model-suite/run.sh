@@ -353,11 +353,34 @@ run_model_case() {
   [[ -n "${HTTP_PID:-}" ]] && kill "$HTTP_PID" >/dev/null 2>&1 || true; HTTP_PID=
   sid=$(result_value "$case_dir/stdout.json" sessionId)
   copy_session "$home" "$workdir" "$case_dir" "$sid" || true
+  # When every expect_tools entry already succeeded, the case is done. Empty text
+  # or a trailing max_tokens must not wipe the successful session or re-invoke
+  # (agents.hashline_edit edited note.txt, then 8192 retry dropped that session).
+  tools_done=0
+  if python3 - "$file" "$case_dir" <<'PY'
+import json,sys
+from pathlib import Path
+case=json.load(open(sys.argv[1]))
+root=Path(sys.argv[2])
+expected=case.get("expect_tools") or []
+if not expected:
+    sys.exit(1)
+completed=set()
+ev=root/"events.jsonl"
+if ev.exists():
+    for line in ev.read_text(encoding="utf-8", errors="replace").splitlines():
+        try: e=json.loads(line)
+        except Exception: continue
+        if e.get("type")=="tool_completed" and e.get("outcome")=="success":
+            completed.add(e.get("tool_name"))
+sys.exit(0 if all(t in completed for t in expected) else 1)
+PY
+  then tools_done=1; fi
   # Empty-text retry re-invokes cook and can create a second parent session.
   # agents.workflow_live may place the nonce only in workflow state.json (score.py
   # accepts workflow_result_blob); retrying that case breaks child_budget.
   # agents.acp_stdio has no plain-text stdout.json contract; session.max_turns is scored from stopReason.
-  if [[ "$id" != session.max_turns && "$id" != agents.acp_stdio && "$id" != agents.workflow_live ]]; then
+  if [[ "$tools_done" -eq 0 && "$id" != session.max_turns && "$id" != agents.acp_stdio && "$id" != agents.workflow_live ]]; then
     text=$(result_value "$case_dir/stdout.json" text); stop=$(result_value "$case_dir/stdout.json" stopReason)
     if [[ -z "$text" && "$stop" != end_turn ]]; then
       # Drop the failed first session before the 8192 retry. Leaving it makes
@@ -380,7 +403,9 @@ run_model_case() {
       sid=$(result_value "$case_dir/stdout.json" sessionId); copy_session "$home" "$workdir" "$case_dir" "$sid" || true
       printf 'cap=8192\n' >"$case_dir/cap.txt"
     else printf 'cap=%s\n' "$cap" >"$case_dir/cap.txt"; fi
-  fi
+  elif [[ "$tools_done" -eq 1 ]]; then
+    printf 'cap=%s tools_done\n' "$cap" >"$case_dir/cap.txt"
+  else printf 'cap=%s\n' "$cap" >"$case_dir/cap.txt"; fi
   if [[ "$(<"$case_dir/exit-code.txt")" == 124 || "$(<"$case_dir/exit-code.txt")" == 137 ]]; then
     printf 'hung timeout\n' >"$case_dir/status.txt"; printf '%s hung timeout\n' "$id" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" 'hung timeout'; return 1
   fi
@@ -391,7 +416,9 @@ run_model_case() {
   # Section 9 scores that case from stopReason / stderr; every other case still fails closed.
   # agents.workflow_live may exit 1 on max_tokens after the workflow finished — score
   # the state.json nonce and parent text the same way an empty/garbled text would score.
-  if [[ "$(<"$case_dir/exit-code.txt")" != 0 && "$id" != session.max_turns && "$id" != agents.workflow_live ]]; then
+  # expect_tools already succeeded: score workdir/session even if a trailing sample
+  # hit max_tokens (agents.hashline_edit), same oracle as workflow_live.
+  if [[ "$(<"$case_dir/exit-code.txt")" != 0 && "$id" != session.max_turns && "$id" != agents.workflow_live && "$tools_done" -eq 0 ]]; then
     rc=$(<"$case_dir/exit-code.txt")
     printf 'fail exit %s\n' "$rc" >"$case_dir/status.txt"; printf '%s fail exit %s\n' "$id" "$rc" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" "fail exit $rc"; return 1
   fi
