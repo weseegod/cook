@@ -250,7 +250,10 @@ run_cli_case() {
     ((count+=1))
     mapfile -t argv < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])))' "$encoded")
     for i in "${!argv[@]}"; do argv[$i]=${argv[$i]//\{\{SESSION_ID\}\}/$SESSION_ID}; done
-    if [[ "$id" == cli.worktree_list ]]; then argv=(--cwd "$workdir" "${argv[@]}"); fi
+    # sessions list scopes to process cwd (CwdScope::WithSiblings). The dependency
+    # home lives under tools/<after>/workdir; without --cwd the session id never
+    # appears even though the session file exists. worktree_list already needs --cwd.
+    if [[ "$id" == cli.worktree_list || "$id" == cli.sessions_after ]]; then argv=(--cwd "$workdir" "${argv[@]}"); fi
     set +e
     COOK_HOME="$home" timeout --signal=TERM --kill-after=5 30 "$COOK_BIN" "${argv[@]}" >"$case_dir/stdout-$count.txt" 2>"$case_dir/stderr-$count.log"
     rc=$?
@@ -404,7 +407,34 @@ PY
       printf 'cap=8192\n' >"$case_dir/cap.txt"
     else printf 'cap=%s\n' "$cap" >"$case_dir/cap.txt"; fi
   elif [[ "$tools_done" -eq 1 ]]; then
-    printf 'cap=%s tools_done\n' "$cap" >"$case_dir/cap.txt"
+    # Tools succeeded but the final sample can still be truncated (max_tokens)
+    # with empty top-level text. File-only oracles (hashline) score as-is; text
+    # oracles need one resume at 8192 without wiping the successful session.
+    text=$(result_value "$case_dir/stdout.json" text); stop=$(result_value "$case_dir/stdout.json" stopReason)
+    needs_text=0
+    if python3 - "$file" <<'PY'
+import json,sys
+case=json.load(open(sys.argv[1]))
+sys.exit(0 if "text_contains_marker" in (case.get("checks") or []) else 1)
+PY
+    then needs_text=1; fi
+    if [[ "$needs_text" -eq 1 && -z "$text" && "$stop" != end_turn ]]; then
+      if [[ -z "$sid" && -f "$case_dir/summary.json" ]]; then
+        sid=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("info",{}).get("id",""))' "$case_dir/summary.json")
+      fi
+      if [[ -n "$sid" ]]; then
+        write_home_config "$home" "$permission" 8192 "$window"
+        extra=$(python3 -c 'import json,sys; print(json.dumps(["-r", sys.argv[1]]))' "$sid")
+        # Continuation only: tools already succeeded; do not re-open files.
+        invoke_cook "$case_dir" "$home" "$workdir" "Reply with the answer to the original request using only what you already learned. Do not call any tool." "$timeout_secs" "$permission" "$allow" "$deny" "$extra"
+        sid=$(result_value "$case_dir/stdout.json" sessionId); copy_session "$home" "$workdir" "$case_dir" "$sid" || true
+        printf 'cap=8192 tools_done\n' >"$case_dir/cap.txt"
+      else
+        printf 'cap=%s tools_done\n' "$cap" >"$case_dir/cap.txt"
+      fi
+    else
+      printf 'cap=%s tools_done\n' "$cap" >"$case_dir/cap.txt"
+    fi
   else printf 'cap=%s\n' "$cap" >"$case_dir/cap.txt"; fi
   if [[ "$(<"$case_dir/exit-code.txt")" == 124 || "$(<"$case_dir/exit-code.txt")" == 137 ]]; then
     printf 'hung timeout\n' >"$case_dir/status.txt"; printf '%s hung timeout\n' "$id" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" 'hung timeout'; return 1
