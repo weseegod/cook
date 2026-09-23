@@ -328,6 +328,26 @@ pub fn apply_permission_mode_hint(
     true
 }
 
+/// Agent/CLI `permissionMode=dontAsk` becomes `PromptPolicy::Deny` at spawn (same projection as
+/// `DefaultPermissionMode::DontAsk.effects()`). Settings/managed `defaultMode` still outrank it.
+/// Other agent modes (`default`, `plan`, `auto`, …) are left to their existing session paths.
+pub fn apply_agent_dont_ask_prompt_policy(config: &mut Option<PermissionConfig>) -> bool {
+    let config = config.get_or_insert_with(|| PermissionConfig::new(Vec::new()));
+    if config.default_mode_configured {
+        warn!(
+            prompt_policy = ?config.prompt_policy,
+            "agent permissionMode=dontAsk ignored: permissions.defaultMode is explicitly configured"
+        );
+        return false;
+    }
+    if config.prompt_policy == PromptPolicy::Deny {
+        return false;
+    }
+    config.prompt_policy = PromptPolicy::Deny;
+    info!("session permission prompts resolve as deny (agent/CLI permissionMode=dontAsk)");
+    true
+}
+
 /// `Deny` patterns that forbid reading a path (`Read`, `Grep`, or `Any`). Write-only denies and non-deny actions are excluded.
 /// Public so Grep excludes come from the manager's effective config; re-resolving would miss CLI read denies.
 pub fn deny_read_globs_from_config(config: &PermissionConfig) -> Vec<String> {

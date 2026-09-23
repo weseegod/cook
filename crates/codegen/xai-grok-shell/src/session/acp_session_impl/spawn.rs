@@ -385,6 +385,14 @@ pub(crate) async fn spawn_session_actor(
                 startup_hints.permission_mode.as_deref(),
                 yolo_pin,
             );
+            // CLI `--permission-mode dontAsk` lands on agent_definition via CliAgentOverrides.
+            // Without this, headless non-yolo auto-answers would-be prompts as Cancelled.
+            if matches!(
+                agent_definition.permission_mode,
+                xai_grok_agent::config::PermissionMode::DontAsk
+            ) {
+                permission_resolution::apply_agent_dont_ask_prompt_policy(&mut permission_config);
+            }
             let deny_read_globs = permission_config
                 .as_ref()
                 .map(permission_resolution::deny_read_globs_from_config)
