@@ -438,10 +438,15 @@ fn lossy_input_budget(context_window: u64, tool_tokens: u64) -> u64 {
     (context_window.saturating_mul(7) / 10).saturating_sub(tool_tokens)
 }
 /// Verbatim-fitted budget: leave room for the summary prompt plus tool-definition prefix.
+///
+/// The fixed 32k reserve and full tool schema must never zero the budget on a
+/// window smaller than them (suite `session.compaction` uses 8192). Cap the
+/// reserve and count only tools that still leave room for conversation.
 fn fitted_input_budget(context_window: u64, tool_tokens: u64) -> u64 {
-    context_window
-        .saturating_sub(SUMMARY_BUDGET_RESERVE_TOKENS)
-        .saturating_sub(tool_tokens)
+    let reserve = SUMMARY_BUDGET_RESERVE_TOKENS.min(context_window / 2);
+    let room = context_window.saturating_sub(reserve);
+    let tools = tool_tokens.min(room / 2);
+    room.saturating_sub(tools)
 }
 /// Input ladder: verbatim, then verbatim fitted, then lossy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::AsRefStr, strum::IntoStaticStr)]
@@ -1111,12 +1116,23 @@ impl SessionActor {
             .into_iter()
             .filter(|td| !backend_search_active || td.function.name != "web_search")
             .collect();
-        let compaction_tool_tokens =
+        // Tool schemas that alone exceed the window make every compact attempt
+        // overflow (budget 0 + tools re-sent). Drop them from the compact request.
+        let mut compaction_tool_tokens =
             xai_chat_state::estimate_tool_definitions_tokens(&effective_tool_defs);
-        let compaction_tools: Vec<xai_grok_sampling_types::ToolSpec> = effective_tool_defs
+        let mut compaction_tools: Vec<xai_grok_sampling_types::ToolSpec> = effective_tool_defs
             .into_iter()
             .map(xai_grok_sampling_types::ToolSpec::from)
             .collect();
+        if compaction_tool_tokens >= context_window {
+            tracing::warn!(
+                tool_tokens = compaction_tool_tokens,
+                context_window,
+                "compaction: tool schema exceeds context window; omitting tools from compact request"
+            );
+            compaction_tools.clear();
+            compaction_tool_tokens = 0;
+        }
         let compaction_hosted_tools: Vec<xai_grok_sampling_types::HostedTool> =
             self.hosted_tools_for_turn();
         if lossy_input {
