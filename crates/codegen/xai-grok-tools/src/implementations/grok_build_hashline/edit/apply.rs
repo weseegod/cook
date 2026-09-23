@@ -197,6 +197,84 @@ fn partial_arrow_write_error(
     }
 }
 
+/// Common edit-target sentinels. A unique line matching one of these is the
+/// intended replace target when a weak model sends a single-line `write`
+/// instead of `replace` (real-model agents.hashline_edit: reasoning said
+/// replace / `2:sce:nlg` but the sampled op stayed `write` + `DONE-EDIT`).
+fn looks_like_edit_placeholder(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() || t.len() > 64 {
+        return false;
+    }
+    const MARKERS: [&str; 8] = [
+        "REPLACE_ME",
+        "REPLACE-ME",
+        "PLACEHOLDER",
+        "CHANGEME",
+        "CHANGE_ME",
+        "TODO",
+        "FIXME",
+        "XXX",
+    ];
+    let upper = t.to_uppercase();
+    MARKERS.iter().any(|m| upper == *m || upper.contains(m))
+}
+
+/// Anchor for the unique placeholder line, if exactly one exists.
+fn unique_placeholder_anchor(content: &str, scheme: &dyn AnchorScheme) -> Option<String> {
+    let lines = split_lines(content);
+    let anchors = scheme.generate_anchors(&lines);
+    let mut hits: Vec<&Anchor> = anchors
+        .iter()
+        .zip(lines.iter())
+        .filter(|(_, line)| looks_like_edit_placeholder(line))
+        .map(|(a, _)| a)
+        .collect();
+    match hits.len() {
+        1 => Some(hits.pop()?.render()),
+        _ => None,
+    }
+}
+
+/// Hashline_read-style listing of every line for error context.
+fn full_anchor_listing(content: &str, scheme: &dyn AnchorScheme) -> String {
+    let lines = split_lines(content);
+    let anchors = scheme.generate_anchors(&lines);
+    anchors
+        .iter()
+        .zip(lines.iter())
+        .map(|(a, line)| format!("{}\u{2192}{line}", a.render()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn single_line_write_rejected_error(content: &str, write: &str, scheme: &dyn AnchorScheme) -> HashlineEditError {
+    let listing = full_anchor_listing(content, scheme);
+    let example_line = content
+        .lines()
+        .find(|l| looks_like_edit_placeholder(l))
+        .or_else(|| content.lines().nth(1))
+        .unwrap_or("LINE_CONTENT");
+    HashlineEditError {
+        error: HashlineEditErrorKind::InvalidInput,
+        message: format!(
+            "write content {write:?} is a single line and would discard every other line of \
+             this multi-line file. For a one-line edit use op \"replace\" with an exact \
+             LINE:HASH anchor from hashline_read so surrounding lines survive. Example: \
+             {{ \"op\": \"replace\", \"anchor\": \"LINE:HASH\", \"content\": {write:?} }} \
+             targeting the line {example_line:?}. Use write only with the full multi-line \
+             file content. Fresh anchors:\n{listing}"
+        ),
+        requested_anchor: None,
+        current: None,
+        context: Some(listing),
+        context_start_line: Some(1),
+        shifted_to: None,
+        shifted_anchor: None,
+        ambiguous_candidates: vec![],
+    }
+}
+
 fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> HashlineEditError {
     let offending_line = content.lines().nth(line_num - 1).unwrap_or("").to_owned();
 
@@ -344,28 +422,27 @@ pub(crate) fn apply_edits(
         }
         // Partial write: single-line content over a multi-line file discards
         // surrounding lines (real-model agents.hashline_edit used write with
-        // only the replacement token). Steer the model to replace.
+        // only the replacement token). If a unique placeholder line is present,
+        // apply as replace of that line (model often reasons "replace" but still
+        // samples op=write). Otherwise error with fresh anchors.
         if !new_content.contains('\n')
             && content.lines().filter(|l| !l.trim().is_empty()).count() >= 2
             && content.trim() != new_content.trim()
         {
+            if let Some(anchor) = unique_placeholder_anchor(content, scheme) {
+                let converted = HashlineOp::Replace {
+                    anchor,
+                    end_anchor: None,
+                    content: new_content.trim().to_owned(),
+                };
+                return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
+            }
             return ApplyResult {
-                output: HashlineEditOutput::Error(HashlineEditError {
-                    error: HashlineEditErrorKind::InvalidInput,
-                    message:
-                        "write content is a single line and would discard every other line of \
-                         this multi-line file. For a one-line edit use op \"replace\" with an \
-                         exact anchor from a prior hashline_read so surrounding lines survive. \
-                         Use write only with the full multi-line file content."
-                            .to_owned(),
-                    requested_anchor: None,
-                    current: None,
-                    context: None,
-                    context_start_line: None,
-                    shifted_to: None,
-                    shifted_anchor: None,
-                    ambiguous_candidates: vec![],
-                }),
+                output: HashlineEditOutput::Error(single_line_write_rejected_error(
+                    content,
+                    new_content,
+                    scheme,
+                )),
                 new_content: None,
                 edit_details: vec![],
             };
@@ -2485,17 +2562,38 @@ mod tests {
 
     #[test]
     fn partial_single_line_write_rejected_over_multiline_file() {
+        // No placeholder line — must not wipe; error lists anchors.
         let ops = vec![HashlineOp::Write {
             content: "DONE-EDIT".to_owned(),
         }];
-        match apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme()).output
-        {
+        match apply_edits("first\nsecond\nlast\n", &ops, &test_path(), &*test_scheme()).output {
             HashlineEditOutput::Error(e) => {
                 assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
                 assert!(e.message.contains("replace"), "msg: {}", e.message);
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
             }
             other => panic!("Expected error, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn single_line_write_converts_via_unique_placeholder() {
+        // Model often samples op=write with only DONE-EDIT while intending
+        // replace of REPLACE_ME (real-model agents.hashline_edit).
+        let ops = vec![HashlineOp::Write {
+            content: "DONE-EDIT".to_owned(),
+        }];
+        let result = apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme());
+        let HashlineEditOutput::EditsApplied(_) = result.output else {
+            panic!("expected success, got: {:?}", result.output);
+        };
+        assert_eq!(
+            result.new_content.as_deref(),
+            Some("first\nDONE-EDIT\nlast\n")
+        );
     }
 
     #[test]
