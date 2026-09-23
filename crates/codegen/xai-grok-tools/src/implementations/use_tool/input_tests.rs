@@ -131,3 +131,32 @@ fn remapping_does_not_descend_into_remote_properties() {
         mapped.pointer("/properties/args")
     );
 }
+
+/// File-input schema root has no `required`; the root description must still carry the
+/// never-empty example so weak models stop emitting `{}` (agents.mcp_echo).
+#[test]
+fn file_input_schema_root_description_forbids_empty_object() {
+    let schema = serde_json::to_value(UseToolInput::input_schema(true)).unwrap();
+    let description = schema
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_else(|| panic!("file-input schema missing root description: {schema}"));
+    assert!(
+        description.contains("never empty {}") || description.contains("never empty `{}`"),
+        "root description must forbid empty object: {description}"
+    );
+    assert!(
+        description.contains(r#"{"tool_name": "<discovered name>", "tool_input": {"<param>": <value>}}"#),
+        "root description must show required inline form: {description}"
+    );
+    assert!(
+        description.contains(r#"{"tool_name": "echo__echo", "tool_input": {"text": "hello"}}"#),
+        "root description must show concrete example: {description}"
+    );
+    // Non-file schema keeps the simple required pair and does not need the union description.
+    let inline = serde_json::to_value(UseToolInput::input_schema(false)).unwrap();
+    assert_eq!(
+        inline.get("required"),
+        Some(&serde_json::json!(["tool_name", "tool_input"]))
+    );
+}

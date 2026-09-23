@@ -189,8 +189,8 @@ impl schemars::JsonSchema for UseToolInput {
 impl UseToolInput {
     pub(crate) fn input_schema(supports_file_input: bool) -> schemars::Schema {
         let tool_name =
-            serde_json::json!({"type": "string", "description": "Discovered MCP target name"});
-        let tool_input = serde_json::json!({"type": "object", "additionalProperties": true, "description": "Inline remote arguments; use the discovered input schema"});
+            serde_json::json!({"type": "string", "description": "Discovered MCP target name, e.g. echo__echo"});
+        let tool_input = serde_json::json!({"type": "object", "additionalProperties": true, "description": "Inline remote arguments object, e.g. {\"text\": \"hello\"}; match the discovered tool schema. Never omit."});
         if !supports_file_input {
             return schemars::json_schema!({
                 "type": "object",
@@ -201,8 +201,11 @@ impl UseToolInput {
         let tool_input_file = serde_json::json!({"type": "string", "minLength": 1, "description": "UTF-8 JSON file containing only the complete remote argument object"});
         let file = serde_json::json!({"type": "string", "minLength": 1, "description": "UTF-8 JSON file containing canonical tool_name and object tool_input"});
         // Root unions compile each branch without inheriting the root properties.
+        // File-input root has no `required`, so weak models emit `{}` unless the root
+        // description carries the same never-empty example as FILE_INPUT_DESCRIPTION.
         schemars::json_schema!({
             "type": "object",
+            "description": "Use exactly one form. Preferred inline (both keys, never empty {}): {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}}. Example: {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}.",
             "properties": {
                 "tool_name": tool_name, "tool_input": tool_input,
                 "tool_input_file": tool_input_file, "file": file
