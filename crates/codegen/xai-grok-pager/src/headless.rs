@@ -97,6 +97,8 @@ pub struct HeadlessOptions {
     pub memory_flush: bool,
     /// CLI `--experimental-memory` / `--no-memory` override for the headless agent.
     pub memory_enabled_override: Option<bool>,
+    /// CLI `--no-subagents` (`true` force-disables spawn; `false` leaves resolve default).
+    pub no_subagents: bool,
 }
 
 struct HeadlessEmitter {
@@ -909,7 +911,7 @@ pub async fn run_single_turn(
         raw_config: &raw_config,
         remote_settings: None,
         is_headless: true,
-        cli_subagents: None,
+        cli_subagents: if options.no_subagents { Some(false) } else { None },
         cli_web_search_model: None,
         cli_session_summary_model: None,
         memory_enabled_override: options.memory_enabled_override,

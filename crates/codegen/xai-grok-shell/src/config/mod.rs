@@ -355,7 +355,8 @@ impl SubagentsConfig {
     /// Resolve the final subagents config from all sources (in priority order): CLI flag `--subagents` (absolute highest, always enables) `GROK_SUBAGENTS` env var: `1`/`true` enables, `0`/`false` force-disables
     /// Config file `[subagents]` section Default (enabled) `enabled` is deliberately not remotely gated. Only explicit local intent (CLI flag, `GROK_SUBAGENTS`, `[subagents] enabled`) changes the default.
     /// Project files are excluded from this trust-independent base; Task boundaries overlay them using the parent cwd's authoritative trust verdict.
-    pub fn resolve(cli_flag: bool, config: &toml::Value) -> Self {
+    /// `cli_flag`: `None` = no CLI intent; `Some(true)` force-enables; `Some(false)` force-disables (`--no-subagents`).
+    pub fn resolve(cli_flag: Option<bool>, config: &toml::Value) -> Self {
         let user_grok_root = xai_grok_config::user_grok_home();
         Self::resolve_base_with_sources(
             cli_flag,
@@ -365,7 +366,7 @@ impl SubagentsConfig {
         )
     }
     pub(crate) fn resolve_base_with_sources(
-        cli_flag: bool,
+        cli_flag: Option<bool>,
         config: &toml::Value,
         user_grok_root: Option<&std::path::Path>,
         bundled_root: &std::path::Path,
@@ -375,7 +376,7 @@ impl SubagentsConfig {
             .and_then(|v| v.clone().try_into().ok())
             .unwrap_or_default();
         let resolved = crate::agent::config::resolve_enabled(
-            if cli_flag { Some(true) } else { None },
+            cli_flag,
             "GROK_SUBAGENTS",
             result.enabled,
             config.get("subagents").is_some(),

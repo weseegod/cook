@@ -1308,6 +1308,7 @@ async fn run_agent_command(
         raw_config: &raw_config,
         remote_settings: remote_settings.as_ref(),
         is_headless: !is_leader,
+        // Agent subcommand has no --no-subagents flag; the suite uses top-level -p (PagerArgs).
         cli_subagents: None,
         cli_web_search_model: None,
         cli_session_summary_model: None,
@@ -2458,6 +2459,7 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
                 ),
                 memory_flush,
                 memory_enabled_override,
+                no_subagents: args.no_subagents,
             },
         )
         .await;

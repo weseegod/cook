@@ -7243,6 +7243,30 @@ fn resolve_runtime_fields_cli_subagents_override() {
 }
 #[test]
 #[serial]
+fn resolve_runtime_fields_cli_subagents_force_disable() {
+    clear_runtime_env_vars();
+    let raw = empty_config();
+    let mut cfg = Config::new_from_toml_cfg(&raw).unwrap();
+    cfg.resolve_runtime_fields(&RuntimeResolutionContext {
+        raw_config: &raw,
+        remote_settings: None,
+        is_headless: true,
+        cli_subagents: Some(false),
+        cli_web_search_model: None,
+        cli_session_summary_model: None,
+        memory_enabled_override: None,
+        disable_web_search: false,
+        todo_gate: false,
+        laziness_debug_log: None,
+        storage_mode: None,
+    });
+    assert!(
+        !cfg.subagents_enabled,
+        "cli_subagents Some(false) must force-disable headless --no-subagents"
+    );
+}
+#[test]
+#[serial]
 fn resolve_runtime_fields_gitignore_from_env() {
     clear_runtime_env_vars();
     unsafe { std::env::set_var("GROK_RESPECT_GITIGNORE", "0") };
