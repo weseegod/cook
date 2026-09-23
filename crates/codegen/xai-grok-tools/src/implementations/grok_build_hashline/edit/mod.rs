@@ -48,6 +48,8 @@ Operations (use the "op" field):
     { "op": "write", "content": "full file content here" }
     Never use write to change one line or a small span: include every line that must
     remain, or use "replace" with anchors from a prior read so surrounding lines survive.
+    A write of the form "HASH→text" (missing the LINE: prefix) is rejected — always
+    pass a full "LINE:HASH" anchor on replace, e.g. "2:sce:nlg".
 
 Batch edits: pass multiple operations in "${{ params.edit.edits }}". They are validated against the
 pre-edit snapshot and applied atomically bottom-up — if any anchor fails
@@ -578,6 +580,10 @@ mod tests {
         assert!(
             DESCRIPTION.contains("Every other line is discarded"),
             "write must state that other lines are discarded"
+        );
+        assert!(
+            DESCRIPTION.contains("missing the LINE: prefix"),
+            "description must warn partial HASH→text writes"
         );
     }
 

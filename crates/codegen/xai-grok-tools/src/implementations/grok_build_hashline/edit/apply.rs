@@ -73,22 +73,128 @@ fn detect_anchor_prefix_in_content(content: &str) -> Option<usize> {
 /// Parse a single-line write whose content is one `ANCHOR→text` (or `ANCHOR->text`)
 /// paste from hashline_read into a replace op. Multi-line content never converts.
 fn single_line_anchor_write_as_replace(content: &str) -> Option<HashlineOp> {
+    parse_arrow_write(content, |before| {
+        if before.len() <= 25 && before.contains(':') && !before.contains(' ') {
+            Some(before.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+/// Parse a single-line `SOMETHING→text` write. `resolve` maps the left-hand side
+/// to a full `LINE:HASH` anchor (or `None` when it cannot).
+fn parse_arrow_write(content: &str, resolve: impl FnOnce(&str) -> Option<String>) -> Option<HashlineOp> {
     let trimmed = content.trim_end_matches('\n');
     if trimmed.contains('\n') {
         return None;
     }
     let s = trimmed.trim_start();
-    let (before, after) = s
-        .split_once('\u{2192}')
-        .or_else(|| s.split_once("->"))?;
-    if before.len() <= 25 && before.contains(':') && !before.contains(' ') {
-        return Some(HashlineOp::Replace {
-            anchor: before.to_owned(),
-            end_anchor: None,
-            content: after.to_owned(),
-        });
+    let (before, after) = s.split_once('\u{2192}').or_else(|| s.split_once("->"))?;
+    let anchor = resolve(before.trim())?;
+    Some(HashlineOp::Replace {
+        anchor,
+        end_anchor: None,
+        content: after.to_owned(),
+    })
+}
+
+/// Resolve a write LHS that omitted the line number (`nlg`, `sce:nlg`) against
+/// the file's generated anchors. Unique match only — ambiguous hashes return `None`
+/// so the caller can error with the full anchor list.
+fn resolve_partial_arrow_anchor(before: &str, content: &str, scheme: &dyn AnchorScheme) -> Option<String> {
+    if before.is_empty() || before.contains(' ') || before.len() > 25 {
+        return None;
     }
-    None
+    let lines = split_lines(content);
+    let anchors = scheme.generate_anchors(&lines);
+    let mut matches: Vec<String> = anchors
+        .iter()
+        .filter(|a| {
+            let full = a.render();
+            let suffix = anchor_suffix(a);
+            before == full
+                || before == suffix
+                || before == a.local
+                || a.context.as_deref() == Some(before)
+                || suffix.ends_with(&format!(":{before}"))
+        })
+        .map(|a| a.render())
+        .collect();
+    matches.sort();
+    matches.dedup();
+    match matches.len() {
+        1 => matches.pop(),
+        _ => None,
+    }
+}
+
+fn partial_arrow_write_error(
+    write: &str,
+    before: &str,
+    after: &str,
+    content: &str,
+    scheme: &dyn AnchorScheme,
+) -> HashlineEditError {
+    let lines = split_lines(content);
+    let anchors = scheme.generate_anchors(&lines);
+    let candidates: Vec<String> = anchors
+        .iter()
+        .filter(|a| {
+            let suffix = anchor_suffix(a);
+            before == a.local
+                || a.context.as_deref() == Some(before)
+                || suffix.ends_with(&format!(":{before}"))
+                || suffix == before
+        })
+        .map(|a| a.render())
+        .collect();
+    let listing: String = anchors
+        .iter()
+        .zip(lines.iter())
+        .map(|(a, line)| format!("{}\u{2192}{line}", a.render()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let example = match candidates.len() {
+        1 => format!(
+            "{{ \"op\": \"replace\", \"anchor\": \"{}\", \"content\": \"{after}\" }}",
+            candidates[0]
+        ),
+        0 => "{ \"op\": \"replace\", \"anchor\": \"LINE:HASH\", \"content\": \"...\" }".to_owned(),
+        _ => "use the full LINE:HASH of the line you intend to edit (see context), \
+             e.g. { \"op\": \"replace\", \"anchor\": \"2:sce:nlg\", \"content\": \"...\" }"
+            .to_owned(),
+    };
+    let cand_lines: Vec<usize> = anchors
+        .iter()
+        .zip(lines.iter())
+        .enumerate()
+        .filter(|(_, (a, _))| {
+            let suffix = anchor_suffix(a);
+            before == a.local
+                || a.context.as_deref() == Some(before)
+                || suffix.ends_with(&format!(":{before}"))
+                || suffix == before
+        })
+        .map(|(i, _)| i + 1)
+        .collect();
+    HashlineEditError {
+        error: HashlineEditErrorKind::InvalidInput,
+        message: format!(
+            "write content {write:?} uses partial anchor {before:?} without a line number. \
+             Use op \"replace\" with a full LINE:HASH (or LINE:HASH:HASH) anchor from \
+             hashline_read so surrounding lines survive — for example: {example}. \
+             Matching lines: {cand_lines:?}. \
+             An unmatched single-line write would discard every other line."
+        ),
+        requested_anchor: Some(before.to_owned()),
+        current: None,
+        context: Some(listing),
+        context_start_line: Some(1),
+        shifted_to: None,
+        shifted_anchor: None,
+        ambiguous_candidates: cand_lines,
+    }
 }
 
 fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> HashlineEditError {
@@ -188,6 +294,42 @@ pub(crate) fn apply_edits(
         // hashline_read — apply it as replace instead of rejecting or wiping.
         if let Some(converted) = single_line_anchor_write_as_replace(new_content) {
             return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
+        }
+        // Partial arrow write (`nlg→DONE-EDIT`, `sce:nlg→…`): resolve a unique
+        // anchor against this file; otherwise error with the full anchor list
+        // so the next turn can emit an exact replace (real-model agents.hashline_edit).
+        if !new_content.contains('\n') {
+            let trimmed = new_content.trim();
+            if let Some((before, after)) = trimmed
+                .split_once('\u{2192}')
+                .or_else(|| trimmed.split_once("->"))
+            {
+                let before = before.trim();
+                let after = after.to_owned();
+                if !before.is_empty() && !before.contains(' ') && before.len() <= 25 {
+                    if let Some(anchor) = resolve_partial_arrow_anchor(before, content, scheme) {
+                        let converted = HashlineOp::Replace {
+                            anchor,
+                            end_anchor: None,
+                            content: after,
+                        };
+                        return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
+                    }
+                    if !before.contains(':') || !before.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                        return ApplyResult {
+                            output: HashlineEditOutput::Error(partial_arrow_write_error(
+                                new_content,
+                                before,
+                                &after,
+                                content,
+                                scheme,
+                            )),
+                            new_content: None,
+                            edit_details: vec![],
+                        };
+                    }
+                }
+            }
         }
         if let Some(line_num) = detect_anchor_prefix_in_content(new_content) {
             return ApplyResult {
@@ -2351,6 +2493,69 @@ mod tests {
             HashlineEditOutput::Error(e) => {
                 assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
                 assert!(e.message.contains("replace"), "msg: {}", e.message);
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn partial_arrow_write_resolves_unique_anchor() {
+        let file = "first\nREPLACE_ME\nlast\n";
+        let anchors = anchors_for(file);
+        // Build `local→DONE-EDIT` from the unique local hash of line 2.
+        let full = nth(&anchors, 1); // "2:local:ctx" or "2:local"
+        let local = full.split(':').nth(1).expect("local").to_owned();
+        // Only unique if that local does not appear on another line.
+        let locals: Vec<&str> = anchors
+            .iter()
+            .map(|a| a.split(':').nth(1).unwrap_or(""))
+            .collect();
+        if locals.iter().filter(|x| **x == local.as_str()).count() == 1 {
+            let ops = vec![HashlineOp::Write {
+                content: format!("{local}\u{2192}DONE-EDIT"),
+            }];
+            let result = apply_edits(file, &ops, &test_path(), &*test_scheme());
+            let HashlineEditOutput::EditsApplied(_) = result.output else {
+                panic!("expected success, got: {:?}", result.output);
+            };
+            assert_eq!(
+                result.new_content.as_deref(),
+                Some("first\nDONE-EDIT\nlast\n")
+            );
+        } else {
+            // Context-only / shared local: must not wipe; error lists anchors.
+            let ops = vec![HashlineOp::Write {
+                content: "nlg\u{2192}DONE-EDIT".to_owned(),
+            }];
+            match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
+                HashlineEditOutput::Error(e) => {
+                    assert!(e.message.contains("replace"), "msg: {}", e.message);
+                    assert!(!e.ambiguous_candidates.is_empty(), "candidates listed");
+                }
+                other => panic!("Expected error, got: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn ambiguous_partial_arrow_write_errors_with_anchor_list() {
+        // Same context hash on every line — cannot uniquely resolve.
+        let file = "first\nREPLACE_ME\nlast\n";
+        let ops = vec![HashlineOp::Write {
+            content: "nlg\u{2192}DONE-EDIT".to_owned(),
+        }];
+            match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(
+                    e.message.contains("LINE:HASH") || e.message.contains("replace"),
+                    "msg: {}",
+                    e.message
+                );
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
             }
             other => panic!("Expected error, got: {other:?}"),
         }
