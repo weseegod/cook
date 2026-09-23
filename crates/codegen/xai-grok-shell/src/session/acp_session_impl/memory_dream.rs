@@ -6,6 +6,11 @@ use xai_grok_telemetry::session_end::{self, Phase};
 const DREAM_MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 /// Stale-lock floor: the whole dream (model call plus post-call reindex) must finish inside this, so it must exceed the model timeout; doubling it leaves reindex headroom.
 const DREAM_LOCK_STALE_FLOOR_SECS: u64 = DREAM_MODEL_TIMEOUT.as_secs() * 2;
+/// Output budget for the flush summarizer. The suite sets the session
+/// `max_completion_tokens` to 2048; a free-form markdown summary needs its own
+/// room so a Length stop does not discard the whole flush under the default
+/// `CompleteToolCalls` policy.
+pub(super) const MEMORY_FLUSH_MAX_OUTPUT_TOKENS: u32 = 4096;
 
 /// Whether a dream attempt reached the model call. `Ran` reports its own result; `Skipped` returned
 /// before the model call, so a user-initiated caller surfaces the reason and `/dream` is never silent.
@@ -542,6 +547,30 @@ impl SessionActor {
         Ok(response.assistant_text())
     }
 
+    /// Build the one-shot flush `ConversationRequest`.
+    ///
+    /// Flush is free-form prose: give it its own output budget and accept a
+    /// Length-truncated partial summary under `CompletePartial` rather than
+    /// discarding the whole call under the default `CompleteToolCalls` policy.
+    fn build_memory_flush_request(
+        items: Vec<ConversationItem>,
+        model: String,
+        session_id: &str,
+    ) -> ConversationRequest {
+        ConversationRequest {
+            items,
+            model: Some(model),
+            tools: vec![],
+            x_grok_conv_id: Some(format!("flush-{}", uuid::Uuid::new_v4())),
+            x_grok_req_id: Some(format!("xai-flush-{}", uuid::Uuid::new_v4())),
+            x_grok_session_id: Some(session_id.to_owned()),
+            x_grok_agent_id: Some(xai_grok_telemetry::id::agent_id()),
+            max_output_tokens: Some(MEMORY_FLUSH_MAX_OUTPUT_TOKENS),
+            length_policy: xai_grok_sampling_types::LengthPolicy::CompletePartial,
+            ..Default::default()
+        }
+    }
+
     /// Run a memory flush turn that summarizes recent conversation into a session log.
     /// Sets `is_flushing` to suppress auto-compact during the call.
     /// Returns `true` if a flush was executed, `false` if skipped because another flush is already in progress.
@@ -642,15 +671,7 @@ impl SessionActor {
             // The flush runs on a spawned task, so the ledger handle and the model name travel with it.
             let chat_state_handle = self.chat_state_handle.clone();
             let flush_model = model.clone();
-            let request = ConversationRequest {
-                items,
-                model: Some(model),
-                x_grok_conv_id: Some(format!("flush-{}", uuid::Uuid::new_v4())),
-                x_grok_req_id: Some(format!("xai-flush-{}", uuid::Uuid::new_v4())),
-                x_grok_session_id: Some(session_id.clone()),
-                x_grok_agent_id: Some(xai_grok_telemetry::id::agent_id()),
-                ..Default::default()
-            };
+            let request = Self::build_memory_flush_request(items, model, &session_id);
 
             // Run on the multi-threaded runtime so it doesn't block the session's LocalSet
             let handle = tokio::spawn(async move {
@@ -925,5 +946,33 @@ impl SessionActor {
                 Err(format!("rewrite inference failed: {e}"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xai_grok_sampling_types::LengthPolicy;
+
+    #[test]
+    fn memory_flush_request_accepts_partial_length_stop() {
+        let request = SessionActor::build_memory_flush_request(
+            vec![ConversationItem::user("summarize")],
+            "spark25".to_owned(),
+            "sess-flush",
+        );
+        assert_eq!(
+            request.length_policy,
+            LengthPolicy::CompletePartial,
+            "flush must salvage a Length-truncated prose summary"
+        );
+        assert_eq!(
+            request.max_output_tokens,
+            Some(MEMORY_FLUSH_MAX_OUTPUT_TOKENS),
+            "flush needs its own output budget above the session cap"
+        );
+        assert!(MEMORY_FLUSH_MAX_OUTPUT_TOKENS > 1024);
+        assert_eq!(request.x_grok_session_id.as_deref(), Some("sess-flush"));
+        assert!(request.tools.is_empty());
     }
 }
