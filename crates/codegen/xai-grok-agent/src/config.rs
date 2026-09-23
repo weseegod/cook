@@ -398,6 +398,7 @@ fn grok_build_plan_toolset() -> ToolServerConfig {
             kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
             task_output_tool_config(),
+            wait_tasks_tool_config(),
             task_tool_config(),
             (&grok_build::SchedulerCreateTool).into(),
             (&grok_build::SchedulerDeleteTool).into(),
@@ -477,6 +478,7 @@ fn grok_build_plan_no_subagents_toolset() -> ToolServerConfig {
             kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
             task_output_tool_config(),
+            wait_tasks_tool_config(),
             (&grok_build::SchedulerCreateTool).into(),
             (&grok_build::SchedulerDeleteTool).into(),
             (&grok_build::SchedulerListTool).into(),
@@ -1640,6 +1642,32 @@ mod tests {
             );
         }
         assert!(toolset_for_preset("does-not-exist").is_none());
+    }
+    /// Default headless/`grok-build-plan` must advertise the wait tool: background bash
+    /// is kept in that toolset, and the real-model `tools.kill_and_wait` case expects
+    /// `wait_tasks` (client name `wait_commands_or_subagents`).
+    #[test]
+    fn grok_build_plan_toolset_includes_wait_tasks() {
+        let wait_id = wait_tasks_tool_config().id;
+        let wait_name = wait_tasks_tool_config()
+            .name_override
+            .expect("wait tool is renamed for the wire");
+        for (label, tools) in [
+            ("grok-build-plan", &grok_build_plan_toolset().tools),
+            (
+                "grok-build-plan-no-subagents",
+                &grok_build_plan_no_subagents_toolset().tools,
+            ),
+        ] {
+            assert!(
+                tools
+                    .iter()
+                    .any(|t| t.id == wait_id
+                        && t.name_override.as_deref() == Some(wait_name.as_str())),
+                "{label} toolset must include wait_tasks as {wait_name}; tools: {:?}",
+                tools.iter().map(|t| t.id.as_str()).collect::<Vec<_>>()
+            );
+        }
     }
     #[test]
     fn presets_select_distinct_toolsets_by_size() {
