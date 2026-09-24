@@ -296,6 +296,7 @@ test.describe("agent-driven surfaces", () => {
     await openWorkspace(page, CONNECTED_SEED);
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Memory & project" }).click();
+    await expect(page.getByTestId("memory-flush")).toBeDisabled();
     await page.getByTestId("project-instructions").fill("# Rules\n\nBe brief.\n");
     await page.getByTestId("project-save").click();
     await expect(page.getByTestId("project-status")).toContainText("Saved");
@@ -374,7 +375,11 @@ test.describe("agent-driven surfaces", () => {
     await waitForCalls(page, "x.ai/hooks/action");
 
     await page.getByRole("tab", { name: "Memory & project" }).click();
+    await expect(page.getByRole("button", { name: "Rewrite" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Forget" })).toHaveCount(0);
     await page.getByTestId("memory-flush").click();
+    const flushes = await waitForCalls(page, "x.ai/memory/flush");
+    expect(flushes[0].params).toEqual({ session_id: "mock-session" });
     await expect(page.getByTestId("memory-status")).toContainText("flush requested");
     await expect(page.getByTestId("memory-browser")).toBeVisible();
   });

@@ -329,21 +329,22 @@ Agent match: `acp_agent.rs` L1966–2342. Desktop wrappers: `xai.ts`, `extension
 | C-yolo | `x.ai/yolo_mode_changed` | C→A notif | `/always-approve` | `client.ts` `setYolo` | `ok` | protocol |
 | C-perm | `x.ai/permissions/reset` | C→A **notif** on agent | settings | `xai.ts` `resetPermissions` via **`request`** (Settings General). Agent handles it as `ext_notification` | `partial` | surface |
 | C-toggle-plan | `x.ai/toggle_plan_mode` | C→A notif | legacy | Desktop uses `session/set_mode` | `na` | protocol |
-| C-q-rm | `x.ai/queue/remove` | C→A notif | queue pane | — | `gap` | surface |
+| C-q-rm | `x.ai/queue/remove` | C→A notif | queue pane | queue bar remove | `ok` | surface |
 | C-q-re | `x.ai/queue/reorder` | C→A notif | queue pane | — | `gap` | surface |
-| C-q-cl | `x.ai/queue/clear` | C→A notif | queue pane | — | `gap` | surface |
-| C-q-ed | `x.ai/queue/edit` / `hold_edit` / `release_edit` | C→A notif | queue pane | — | `gap` | surface |
-| C-q-in | `x.ai/queue/interject` | C→A notif | `/btw` / queue | — | `gap` | surface |
+| C-q-cl | `x.ai/queue/clear` | C→A notif | queue pane | queue bar clear | `ok` | surface |
+| C-q-ed | `x.ai/queue/edit` / `hold_edit` / `release_edit` | C→A notif | queue pane | queue bar edit | `ok` | surface |
+| C-q-in | `x.ai/queue/interject` | C→A notif | `/btw` / queue | queue bar send now | `ok` | surface |
 
-Desktop queues a second `session/prompt` (`queuePrompt`). That is not the TUI queue protocol.
+Desktop uses `queuePrompt` to enqueue a second `session/prompt`. The queue bar
+sends the TUI `x.ai/queue/*` notifications for existing rows.
 
 ### 5.4 Memory / compact
 
 | Id | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
 | C-mem-f | `x.ai/memory/flush` | `/flush` | Settings Memory | `ok` | surface |
-| C-mem-r | `x.ai/memory/rewrite` | — | Settings Memory | `ok` | surface |
-| C-mem-g | `x.ai/memory/forget` | — | Settings Memory | `ok` | surface |
+| C-mem-r | `x.ai/memory/rewrite` | — | no button; requires `sessionId`, `rawText`, `contextSummary` for one note | `gap` | surface |
+| C-mem-g | `x.ai/memory/forget` | — | no button; requires `sessionId`, `path`, `expectedContentHash` | `gap` | surface |
 | C-compact | `x.ai/compact_conversation` | `/compact` (pager + agent) | forwarded as prompt only | `ok-prompt` / `partial` (no compact UI) | surface |
 
 `/memory` browser is §9 / §12 (`memory_files` notif). Settings buttons are not that browser.

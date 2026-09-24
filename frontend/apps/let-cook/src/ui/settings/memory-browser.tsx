@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Brain, FileText, Sparkles } from "lucide-react";
+import { Brain, FileText } from "lucide-react";
 import { useState } from "react";
-import { flushMemory, forgetMemory, readProjectFile, rewriteMemory } from "../../acp/extensions";
+import { flushMemory, readProjectFile } from "../../acp/extensions";
 import { normalizeError } from "../../acp/errors";
 import { memoryFileSize, type MemoryFileView } from "../../acp/settings-ext";
 import { useCatalogStore } from "../../state/catalog";
@@ -21,7 +21,7 @@ function formatBytes(size: number): string {
 
 /**
  * Settings → Memory: list files from U-memf, open via `x.ai/fs/read_file`.
- * Does not write MEMORY.md here — only flush / rewrite / forget (agent ops).
+ * Does not write MEMORY.md here; flush is an agent operation.
  */
 export function MemoryBrowserPanel({ connected }: { connected: boolean }) {
   const sessionId = useSessionStore((state) => state.sessionId);
@@ -38,12 +38,11 @@ export function MemoryBrowserPanel({ connected }: { connected: boolean }) {
   });
 
   const run = useMutation({
-    mutationFn: async (action: "flush" | "rewrite" | "forget") => {
-      if (action === "flush") return flushMemory();
-      if (action === "rewrite") return rewriteMemory();
-      return forgetMemory();
+    mutationFn: async () => {
+      if (!sessionId) throw new Error("Start a conversation before flushing memory");
+      return flushMemory(sessionId);
     },
-    onSuccess: (_result, action) => setStatus(`${action} requested`),
+    onSuccess: () => setStatus("flush requested"),
     onError: (error) => setStatus(normalizeError(error, "Could not update memory")),
   });
 
@@ -52,14 +51,8 @@ export function MemoryBrowserPanel({ connected }: { connected: boolean }) {
   return (
     <div className="memory-panel" data-testid="memory-browser">
       <div className="settings-actions">
-        <button className="ghost-button" disabled={!connected || run.isPending} onClick={() => run.mutate("flush")} data-testid="memory-flush">
+        <button className="ghost-button" disabled={!connected || !sessionId || run.isPending} onClick={() => run.mutate()} data-testid="memory-flush">
           <Brain size={15} /> Flush
-        </button>
-        <button className="ghost-button" disabled={!connected || run.isPending} onClick={() => run.mutate("rewrite")}>
-          <Sparkles size={15} /> Rewrite
-        </button>
-        <button className="ghost-button" disabled={!connected || run.isPending} onClick={() => run.mutate("forget")}>
-          Forget
         </button>
       </div>
       {!memoryEnabled && <p className="settings-note">Memory is off for this session.</p>}

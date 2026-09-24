@@ -1884,6 +1884,7 @@ version = "1.0.39"
 dependencies = [
  "base64 0.22.1",
  "dirs",
+ "dunce",
  "fs2",
  "ignore",
  "libc",

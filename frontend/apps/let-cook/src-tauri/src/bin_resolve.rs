@@ -88,13 +88,18 @@ pub(crate) fn cook_home_from(
     grok_home: Option<&std::ffi::OsStr>,
     os_home: Option<&Path>,
 ) -> PathBuf {
+    let canonical_home =
+        os_home.map(|home| dunce::canonicalize(home).unwrap_or_else(|_| home.to_path_buf()));
     for value in [cook_home, grok_home].into_iter().flatten() {
         if value.is_empty() {
             continue;
         }
         let path = PathBuf::from(value);
         if let Some(home) = os_home {
-            if path == home.join(".grok") || path == home.join(".thanh") {
+            if [home, canonical_home.as_deref().unwrap_or(home)]
+                .into_iter()
+                .any(|base| path == base.join(".grok") || path == base.join(".thanh"))
+            {
                 continue;
             }
         }
@@ -244,6 +249,27 @@ mod tests {
         assert_eq!(
             cook_home_from(None, None, Some(os_home)),
             os_home.join(".cook")
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("alias")).unwrap();
+        std::fs::create_dir(temp.path().join("real")).unwrap();
+        let spelled_home = temp.path().join("alias").join("..").join("real");
+        let canonical_home = dunce::canonicalize(&spelled_home).unwrap();
+        for legacy in [".grok", ".thanh"] {
+            let legacy_path = canonical_home.join(legacy);
+            assert_eq!(
+                cook_home_from(Some(legacy_path.as_os_str()), None, Some(&spelled_home)),
+                spelled_home.join(".cook")
+            );
+        }
+        assert_eq!(
+            cook_home_from(
+                Some(OsStr::new("/custom/cook")),
+                Some(canonical_home.join(".grok").as_os_str()),
+                Some(&spelled_home),
+            ),
+            PathBuf::from("/custom/cook")
         );
     }
 }
