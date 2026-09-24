@@ -3954,6 +3954,12 @@ impl SessionActor {
             } else {
                 std::collections::BTreeSet::new()
             };
+            let skipped_with_effect = !skipped_observers.is_empty()
+                && tool_calls.iter().any(|call| {
+                    self.tool_bridge_handle().tool_kind(&call.name) == Some(ToolKind::Execute)
+                        && classify_terminal_command(call.arguments.as_ref())
+                            == TerminalCommandClass::Effect
+                });
             let observation_step =
                 terminal_observation_step(&tool_calls, &skipped_observers, |name| {
                     self.tool_bridge_handle().tool_kind(name)
@@ -4032,7 +4038,8 @@ impl SessionActor {
                 .await;
             let execute_tool_calls_result = {
                 let _tool_phase = turn_phases.begin_tool_blocking();
-                self.skip_terminal_observers(skipped_tool_calls).await?;
+                self.skip_terminal_observers(skipped_tool_calls, skipped_with_effect)
+                    .await?;
                 self.execute_tool_calls_reported(tool_call_responses, requested_model)
                     .await
             };
@@ -4127,7 +4134,12 @@ fn classify_terminal_command(arguments: &str) -> TerminalCommandClass {
     };
     let lower = command.to_ascii_lowercase();
     let words: Vec<_> = lower.split_whitespace().collect();
-    let executable = match words.as_slice() {
+    let invocation = words
+        .iter()
+        .position(|word| !word.contains('=') && *word != "env")
+        .unwrap_or(0);
+    let words = &words[invocation..];
+    let executable = match words {
         ["bash" | "sh", script, ..] if !script.starts_with('-') => *script,
         [first, ..] => *first,
         [] => "",
@@ -4399,6 +4411,16 @@ mod terminal_fanout_tests {
         assert_eq!(
             terminal_observer_skip_indices(&calls, execute_kind),
             (1..7).collect()
+        );
+    }
+
+    #[test]
+    fn launch_with_environment_prefix_is_effect() {
+        let arguments =
+            serde_json::json!({"command": "SKIP_BUILD=1 ./run.sh --phase safeguard"}).to_string();
+        assert_eq!(
+            classify_terminal_command(&arguments),
+            TerminalCommandClass::Effect
         );
     }
 

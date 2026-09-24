@@ -558,7 +558,13 @@ impl SessionActor {
     pub(super) async fn skip_terminal_observers(
         &self,
         skipped: Vec<crate::sampling::types::ToolCallResponse>,
+        launch_in_batch: bool,
     ) -> Result<(), acp::Error> {
+        let reason = if launch_in_batch {
+            "A task was launched in this response. Read its result or monitor its existing task ID before checking status."
+        } else {
+            "A status check in this response was already kept. Read that result or monitor the existing task before checking again."
+        };
         for call in skipped {
             let tool_call_id = acp::ToolCallId::new(std::sync::Arc::from(call.id.clone()));
             let raw_input =
@@ -575,12 +581,8 @@ impl SessionActor {
                 None,
             )
             .await;
-            self.handle_tool_not_executed(
-                &call.id,
-                &tool_call_id,
-                "A status check in this response was already kept. Read that result or monitor the existing task before checking again.".to_string(),
-            )
-            .await?;
+            self.handle_tool_not_executed(&call.id, &tool_call_id, reason.to_string())
+                .await?;
         }
         Ok(())
     }
