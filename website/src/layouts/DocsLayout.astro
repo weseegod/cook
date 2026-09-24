@@ -1,0 +1,79 @@
+---
+import { getUserGuides } from "../lib/docs.js";
+import "../styles/docs.css";
+
+const { title, summary, canonical } = Astro.props;
+const guides = getUserGuides();
+const sections = [
+  "Getting started",
+  "Using Cook",
+  "Commands",
+  "Workflows",
+  "Configure and extend",
+  "Reference",
+].map((name) => ({
+  name,
+  guides: guides.filter((guide) => guide.section === name),
+}));
+const pageTitle = `${title} · Cook Docs`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{pageTitle}</title>
+    <meta name="description" content={summary} />
+    <link rel="canonical" href={canonical} />
+    <meta name="theme-color" content="#080c14" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={pageTitle} />
+    <meta property="og:description" content={summary} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content="https://letcook.dev/assets/icon.png" />
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="/assets/favicon-32.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+  </head>
+  <body class="docs-page">
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="docs-header">
+      <div class="docs-header-inner">
+        <a class="docs-brand" href="/" aria-label="Cook home">
+          <img src="/assets/logo.svg" alt="" width="30" height="30" />
+          <span>Cook</span>
+        </a>
+        <nav aria-label="Main navigation">
+          <a href="/">Home</a>
+          <a href="/docs/" aria-current="page">Docs</a>
+          <a href="https://github.com/weseegod/cook">GitHub</a>
+        </nav>
+      </div>
+    </header>
+
+    <div class="docs-shell">
+      <aside class="docs-sidebar" aria-label="Documentation">
+        <a class="sidebar-home" href="/docs/">Documentation home</a>
+        {sections.map((section) => (
+          <section class="sidebar-section">
+            <h2>{section.name}</h2>
+            <ul>
+              {section.guides.map((guide) => (
+                <li><a href={`/docs/guides/${guide.slug}/`}>{guide.title}</a></li>
+              ))}
+            </ul>
+          </section>
+        ))}
+      </aside>
+      <main id="main" class="docs-main">
+        <div class="docs-breadcrumb"><a href="/docs/">Docs</a><span aria-hidden="true">/</span>{title}</div>
+        <slot name="content" />
+        <footer class="docs-footer">
+          <a href="/docs/">All documentation</a>
+          <a href="https://github.com/weseegod/cook">Cook on GitHub</a>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>

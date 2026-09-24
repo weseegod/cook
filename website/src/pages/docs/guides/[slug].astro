@@ -1,0 +1,22 @@
+---
+import DocsLayout from "../../../layouts/DocsLayout.astro";
+import { getUserGuides, renderGuide } from "../../../lib/docs.js";
+
+export function getStaticPaths() {
+  return getUserGuides().map((guide) => ({
+    params: { slug: guide.slug },
+    props: {
+      title: guide.title,
+      summary: guide.summary,
+      html: renderGuide(guide),
+      slug: guide.slug,
+    },
+  }));
+}
+
+const { title, summary, html, slug } = Astro.props;
+---
+
+<DocsLayout title={title} summary={summary} canonical={`https://letcook.dev/docs/guides/${slug}/`}>
+  <article slot="content" class="markdown-body" set:html={html} />
+</DocsLayout>

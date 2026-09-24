@@ -12,6 +12,10 @@ their models, keys, and source code.
 
 Project website: **[letcook.dev](https://letcook.dev)**
 
+The website and product docs live in [`website/`](website/README.md). The site
+renders the user guide directly from
+[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/).
+
 > Cook began as a focused fork of **Grok Build**. The product, documentation,
 > and public direction of this repository are maintained as Cook.
 

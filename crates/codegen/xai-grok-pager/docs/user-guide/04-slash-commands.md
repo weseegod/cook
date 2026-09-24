@@ -28,6 +28,10 @@ Open the [Agent Dashboard](23-dashboard.md): live roster of top-level sessions i
 
 Not `/config-agents` (alias `/agents`), which manages agent *definitions* and personas. Hidden in minimal mode; disable with `GROK_AGENT_DASHBOARD=0` or `[dashboard].enabled = false`.
 
+### `/cd [path]`
+
+On the dashboard, choose a folder for new agents, or change the dashboard's working folder with `/cd <path>`. This command only works on the dashboard.
+
 ### `/compact [context]`
 
 Compress conversation history to reclaim context-window space. Pass a note to tell Cook what to keep:
@@ -161,6 +165,18 @@ Open an external editor for the prompt, in either render mode. Cook resolves `$V
 Switch the current session to the other render mode, in place. `/minimal` (offered while you're in fullscreen) switches to the experimental scrollback-native mode; `/fullscreen` (offered while you're in minimal; alias `/full`) switches back to standard fullscreen mode. The switch happens inside the running process — nothing restarts, so a running turn keeps streaming and your composer draft, queued prompts, and permission mode all carry over; a marker (committed line in minimal, toast in fullscreen) reminds you how to switch back. Both are session-scoped — they don't touch `config.toml` — and the `--minimal` / `--fullscreen` CLI flags are session-scoped the same way. To make plain `grok` open in a given mode by default, use `/settings` → **Default screen mode** or set `[ui] screen_mode`. (If the in-place transition misbehaves in an exotic terminal, `GROK_SCREEN_MODE_SWITCH=exec` restores the old behavior of relaunching the pager onto the same session.)
 
 A handful of commands only work in one of the two modes, because the surface they drive doesn't exist in the other: `/find`, `/jump`, `/timeline`, `/theme`, `/tutorial`, and `/dashboard` are fullscreen-only, while `/expand` is minimal-only. (`/workflow runs` is different: it opens the run pane in fullscreen and degrades to a text overview in minimal rather than refusing.) Those are hidden from the command menu and the palette in the mode they can't run in. If you type one out anyway, Cook says why — and points you at whichever is actually useful. When the other mode is the only way to get it, that's the mode switch: `/theme isn't available in minimal mode (minimal renders with your terminal's own palette). Run /fullscreen to switch this session.` When this mode already does the job another way, it names that instead: `/expand isn't available in fullscreen mode: press Tab to focus the scrollback, then → on the block.` Everything else works in both. Note that `--no-alt-screen` still counts as fullscreen here, so it keeps the fullscreen-only commands.
+
+### `/find [text]`
+
+Search the conversation scrollback. You can add words to start with a search already filled in. Fullscreen mode only; in minimal mode, use your terminal's search.
+
+### `/jump`
+
+Open a picker to jump to another turn in the conversation. Fullscreen mode only.
+
+### `/timeline`
+
+Show or hide the timeline beside the conversation. Fullscreen mode only.
 
 ### `/plan`
 
@@ -484,6 +500,103 @@ Open the settings modal to view and change configuration interactively. Aliases:
 ### `/timestamps`
 
 Toggle message timestamps on or off.
+
+### `/announcements hide | show`
+
+Hide or show the announcement banner. This command is reserved for app controls and may not appear in the command menu.
+
+### `/queue`
+
+Show prompts waiting behind the current turn. In fullscreen mode, use the queue pane to edit or remove them.
+
+### `/tasks`
+
+List background tasks, subagents, and scheduled tasks. In fullscreen mode, open the tasks pane to manage them.
+
+### `/transcript` (alias: `/log`)
+
+Open the full conversation in your terminal pager. This is useful in minimal mode, where old messages have moved into your terminal's scrollback.
+
+### `/recap` (alias: `/summarize`)
+
+Ask Cook for a short summary of the session so far. It appears in the conversation, but does not add another message to the model's context.
+
+### `/config-agents` (alias: `/agents`)
+
+Open the list of agent definitions. This is different from `/dashboard`, which shows running sessions.
+
+### `/personas`
+
+Open the personas tab to create, edit, or remove personas.
+
+### `/toggle-mouse-reporting`
+
+Turn terminal mouse capture on or off. This command is hidden unless `ui.mouse_reporting_toggle = true` is set in `config.toml`.
+
+### `/expand`
+
+In minimal mode, open a response block in the fullscreen viewer. This command only appears in minimal mode.
+
+### `/voice`
+
+Start voice input when it is enabled for your account. The command is hidden when voice input is not available.
+
+### `/share`
+
+Session sharing is currently disabled. `/share` is hidden from the menu, and typing it reports that sharing is unavailable.
+
+### `/help`
+
+Open the command palette, where you can search commands and keyboard shortcuts. The same palette opens with `Ctrl+P` or `?`.
+
+### Aliases
+
+These names run the same command as the name in the right column:
+
+| Alias | Runs |
+|---|---|
+| `/agents` | `/config-agents` |
+| `/agents-dashboard`, `/sessions` | `/dashboard` |
+| `/changelog` | `/release-notes` |
+| `/config`, `/preferences`, `/prefs` | `/settings` |
+| `/cost` | `/usage` |
+| `/exit` | `/quit` |
+| `/full` | `/fullscreen` |
+| `/guides`, `/howto` | `/docs` |
+| `/info`, `/status` | `/session-info` |
+| `/m` | `/model` |
+| `/mem` | `/memory` |
+| `/ml` | `/multiline` |
+| `/onboarding`, `/tour` | `/tutorial` |
+| `/plugin` | `/plugins` |
+| `/plan-view`, `/show-plan` | `/view-plan` |
+| `/t` | `/theme` |
+| `/terminal-check`, `/terminal-info`, `/terminal-setup` | `/doctor` |
+| `/title` | `/rename` |
+| `/undo` | `/rewind` |
+| `/welcome` | `/home` |
+| `/yolo` | `/always-approve` |
+
+### Commands that depend on your setup
+
+Some commands appear only when their feature is available:
+
+| Command | When it appears |
+|---|---|
+| `/auto` | Auto permission mode is enabled. |
+| `/dashboard` | The dashboard is enabled and the session is not in minimal mode. |
+| `/dream`, `/flush` | Memory is enabled for the session. |
+| `/feedback` | Feedback is available for the current account. |
+| `/goal` | Goal mode is enabled for the session. |
+| `/loop` | The connected agent provides the scheduler tool. |
+| `/memory` | A memory store is configured. |
+| `/recap` | Session recap is enabled. |
+| `/share` | Reserved for session sharing, which is currently disabled. |
+| `/toggle-mouse-reporting` | The mouse reporting toggle is enabled in config. |
+| `/voice` | Voice input is available for the account. |
+| `/workflow`, `/deep-research` | The connected agent allows workflow launches. |
+
+`/announcements` and shell-only hook management commands are reserved for app controls. They may not appear in the prompt menu. `/debug`, `/gboom`, and `/scroll-debug` are diagnostics or hidden easter eggs, so they are not part of the user command list.
 
 ---
 

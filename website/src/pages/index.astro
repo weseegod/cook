@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cook: a fast coding agent for CLI and desktop</title>
+    <meta
+      name="description"
+      content="Cook is a fast, open-source coding agent with a CLI and a desktop app for Windows, macOS, and Ubuntu. Bring your own API keys and run it locally."
+    />
+    <link rel="canonical" href="https://letcook.dev/" />
+    <meta name="theme-color" content="#080c14" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Cook: a fast coding agent for CLI and desktop" />
+    <meta
+      property="og:description"
+      content="Get work done with Cook, an open-source coding agent for CLI and desktop on Windows, macOS, and Ubuntu. Run it locally with your own API keys."
+    />
+    <meta property="og:url" content="https://letcook.dev/" />
+    <meta property="og:image" content="https://letcook.dev/assets/icon.png" />
+    <link rel="icon" href="/assets/logo.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="/assets/favicon-32.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png" />
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="nav" id="top">
+      <div class="wrap nav-inner">
+        <a class="brand" href="#top" aria-label="Cook home">
+          <img class="brand-mark" src="/assets/logo.svg" alt="" width="32" height="32" />
+          <span>Cook</span>
+        </a>
+        <nav class="nav-links" aria-label="Sections">
+          <a href="#speed">Speed</a>
+          <a href="#configure">Configure</a>
+          <a href="#install">Install</a>
+          <a href="/docs/">Docs</a>
+        </nav>
+        <a class="nav-github" href="https://github.com/weseegod/cook" rel="noopener">
+          <svg viewBox="0 0 16 16" aria-hidden="true" width="16" height="16">
+            <path
+              fill="currentColor"
+              d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A7.99 7.99 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+            />
+          </svg>
+          GitHub
+        </a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <div class="wrap">
+          <p class="badge">Open source &middot; Apache-2.0 &middot; written in Rust</p>
+          <h1>A fast coding agent that gets work done.</h1>
+          <p class="lede">
+            Use Cook from your terminal with the CLI or in <strong>Let Cook</strong>, the desktop
+            app for Windows, macOS, and Ubuntu. It runs on your machine with your own API keys.
+          </p>
+
+          <div class="cmd" data-curl-cta>
+            <code id="install-command">curl -fsSL https://download.letcook.dev/install.sh | bash</code>
+            <button
+              class="copy-btn"
+              type="button"
+              data-copy
+              data-copy-label="install command"
+              data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | bash"
+            >
+              Copy
+            </button>
+          </div>
+          <div class="cmd" data-windows-cta hidden>
+            <span class="cmd-text">
+              Download the CLI binary here, or choose the Windows desktop installer below.
+            </span>
+            <a class="copy-btn" data-asset="cli" href="https://download.letcook.dev/cook-1.0.37-windows-x86_64">
+              Download
+            </a>
+          </div>
+
+          <p class="fine">
+            macOS, Linux, and Windows &middot;
+            <a href="#install">download an installer instead</a>
+          </p>
+        </div>
+      </section>
+
+      <section class="section" id="speed">
+        <div class="wrap">
+          <h2>Fast from the first command</h2>
+          <p class="lede">
+            Cook is a native Rust binary built to start quickly and keep every turn moving.
+          </p>
+          <ul class="lines">
+            <li>
+              <strong>Starts in milliseconds.</strong>
+              No Node, no Python, no JVM. <code>cook</code> is a single Rust binary on your
+              <code>PATH</code>.
+            </li>
+            <li>
+              <strong>Keeps work moving.</strong>
+              Streaming, tool calls, and subagents overlap in one runtime instead of waiting in a
+              queue.
+            </li>
+            <li>
+              <strong>A lightweight desktop app.</strong>
+              Let Cook uses Tauri and the system webview instead of bundling a browser.
+            </li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" id="configure">
+        <div class="wrap">
+          <h2>Make Cook yours</h2>
+          <p class="lede">
+            Set up your models, skills, commands, and permissions with simple files.
+          </p>
+          <ul class="lines">
+            <li><strong>Models.</strong> Connect your preferred provider and use your own API keys.</li>
+            <li>
+              <strong>Skills and commands.</strong> Add reusable instructions and shortcuts without
+              changing the code.
+            </li>
+            <li><strong>Permissions.</strong> Choose what Cook can read, run, and write.</li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="section" id="install">
+        <div class="wrap">
+          <h2>Get Cook running</h2>
+          <p class="lede">
+            On macOS or Linux, one command installs the CLI and desktop app. Download the desktop
+            app for Windows, macOS, or Ubuntu below.
+          </p>
+
+          <div class="cmd">
+            <code>curl -fsSL https://download.letcook.dev/install.sh | bash</code>
+            <button
+              class="copy-btn"
+              type="button"
+              data-copy
+              data-copy-label="install command"
+              data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | bash"
+            >
+              Copy
+            </button>
+          </div>
+
+          <h3>Desktop app</h3>
+          <ul class="downloads">
+            <li>
+              <a data-asset="mac-arm" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-macos-aarch64.dmg">macOS &middot; Apple Silicon</a>
+            </li>
+            <li>
+              <a data-asset="mac-intel" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-macos-x86_64.dmg">macOS &middot; Intel</a>
+            </li>
+            <li>
+              <a data-asset="linux-appimage" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-linux-x86_64.AppImage">Linux &middot; AppImage</a>
+            </li>
+            <li>
+              <a data-asset="linux" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-linux-x86_64.deb">Ubuntu &middot; .deb</a>
+            </li>
+            <li>
+              <a data-asset="windows" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-windows-x86_64-setup.exe">Windows &middot; installer</a>
+            </li>
+          </ul>
+
+          <h3>CLI</h3>
+          <ul class="downloads">
+            <li>
+              <a data-asset="cli" href="https://download.letcook.dev/cook-1.0.37-macos-aarch64">CLI binary &middot; <span data-cli-platform>macos-aarch64</span></a>
+            </li>
+          </ul>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-inner">
+        <div class="footer-brand">
+          <img src="/assets/logo.svg" alt="" width="28" height="28" />
+          <p>Cook, open source under Apache-2.0.</p>
+        </div>
+        <nav class="footer-links" aria-label="Footer">
+          <a href="https://github.com/weseegod/cook" rel="noopener">Source</a>
+          <a href="/docs/">Docs</a>
+          <a href="https://github.com/weseegod/cook/issues" rel="noopener">Issues</a>
+        </nav>
+      </div>
+      <div class="wrap footer-fine">
+        <span>
+          Built by <a href="https://grindy.io" rel="noopener">Grindy Technologies</a>
+        </span>
+        <span>&copy; <span data-year>2026</span> Cook contributors</span>
+      </div>
+    </footer>
+
+    <div class="toast" data-toast role="status" aria-live="polite"></div>
+    <script is:inline src="/assets/main.js"></script>
+  </body>
+</html>

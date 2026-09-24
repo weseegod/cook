@@ -55,3 +55,7 @@ Automate, script, and integrate Cook with other systems.
 | 24 | [Monitoring Usage (External OpenTelemetry)](24-monitoring-usage.md) | Customer OTEL export |
 | 25 | [Status Line](25-status-line.md) | The bottom status row: built-in segments, command scripts, and the stdin JSON contract |
 | 26 | [Configuration Reference](26-config-reference.md) | Field list for `config.toml`, `managed_config.toml`, and `requirements.toml` |
+| 27 | [Grok Clone](27-grok-clone.md) | Fetch a repository with Grove |
+| 28 | [Terminal CLI Reference](28-cli-reference.md) | Main terminal commands, common options, and one-shot use |
+| 29 | [Desktop App Reference](29-desktop-reference.md) | Desktop actions, shortcuts, and how they differ from the TUI |
+| 30 | [Common Workflows](30-workflows.md) | Goals, plan mode, compaction, and continuing sessions |

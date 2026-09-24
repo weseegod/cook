@@ -1,0 +1,58 @@
+---
+import DocsLayout from "../../layouts/DocsLayout.astro";
+import { getUserGuides } from "../../lib/docs.js";
+
+const guides = getUserGuides();
+const sections = [
+  "Getting started",
+  "Using Cook",
+  "Commands",
+  "Workflows",
+  "Configure and extend",
+  "Reference",
+].map((name) => ({
+  name,
+  guides: guides.filter((guide) => guide.section === name),
+}));
+const title = "Cook documentation";
+const summary = "Install Cook, use it in the terminal or desktop app, and learn about commands, workflows, models, permissions, and configuration.";
+---
+
+<DocsLayout title={title} summary={summary} canonical="https://letcook.dev/docs/">
+  <div slot="content" class="docs-home">
+    <p class="eyebrow">Cook documentation</p>
+    <h1>Find your way around Cook</h1>
+    <p class="docs-intro">Start with an install guide, then choose the app you use. These guides cover the terminal app, desktop app, commands, workflows, and settings.</p>
+
+    <section class="platform-grid" aria-label="Choose your app">
+      <a class="platform-card" href="/docs/guides/cli-reference/">
+        <span class="card-label">Terminal</span>
+        <h2>Cook CLI</h2>
+        <p>Install and sign in, use the interactive terminal app, or run Cook from scripts and CI.</p>
+        <span class="card-action">Terminal guide <span aria-hidden="true">→</span></span>
+      </a>
+      <a class="platform-card" href="/docs/guides/desktop-reference/">
+        <span class="card-label">Desktop</span>
+        <h2>Let Cook</h2>
+        <p>Choose a workspace, connect a model provider, search actions, and use desktop shortcuts.</p>
+        <span class="card-action">Desktop guide <span aria-hidden="true">→</span></span>
+      </a>
+    </section>
+
+    <section class="docs-index-sections" aria-label="All docs">
+      {sections.map((section) => (
+        <div class="docs-index-section">
+          <h2>{section.name}</h2>
+          <ul>
+            {section.guides.map((guide) => (
+              <li>
+                <a href={`/docs/guides/${guide.slug}/`}>{guide.title}</a>
+                <p>{guide.summary}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </section>
+  </div>
+</DocsLayout>
