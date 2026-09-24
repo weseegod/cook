@@ -2,6 +2,10 @@
 # Cook 1-click install: CLI (`cook`) + Let Cook desktop.
 # Landing / download host:
 #   curl -fsSL https://download.letcook.dev/install.sh | bash
+# Install only the CLI on macOS/Linux:
+#   curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash
+# Install only Let Cook Desktop on macOS/Linux:
+#   curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash
 # Later same-origin from the site:
 #   curl -fsSL https://letcook.dev/install.sh | bash
 set -euo pipefail

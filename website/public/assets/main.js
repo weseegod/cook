@@ -1,11 +1,11 @@
-/* Cook landing — download links, the Windows switch, and copy buttons.
+/* Cook landing — download links, install commands, and copy buttons.
 
    The markup ships static links, so the page works without JavaScript. When
    latest.json can be read, the version and the installer URLs are refreshed
    from it; if the read is blocked, the static links stay. */
 
 const PUBLIC_BASE = "https://download.letcook.dev";
-const FALLBACK_VERSION = "1.0.37";
+const FALLBACK_VERSION = "1.0.40";
 const LATEST_JSON = `${PUBLIC_BASE}/latest.json`;
 
 /** Card key -> file name inside the immutable release directory (v<version>/). */
@@ -70,7 +70,7 @@ function render(version, os, urls = {}) {
   const cliName = document.querySelector("[data-cli-platform]");
   if (cliName) cliName.textContent = cliPlatform(os);
 
-  // The curl installer refuses to run on Windows, so offer the download there.
+  // The curl installer supports macOS and Linux, so offer direct downloads on Windows.
   if (os === "windows") {
     const curl = document.querySelector("[data-curl-cta]");
     const win = document.querySelector("[data-windows-cta]");

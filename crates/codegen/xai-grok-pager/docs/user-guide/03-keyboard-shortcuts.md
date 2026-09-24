@@ -1,6 +1,9 @@
 # Keyboard Shortcuts
 
-Reference for key bindings in the Cook TUI. Bindings are built in and cannot currently be remapped.
+These key bindings are for the Cook CLI's terminal interface (TUI). Let Cook
+Desktop has a separate set of shortcuts; see the
+[Desktop App Reference](29-desktop-reference.md#keyboard-shortcuts). CLI
+bindings are built in and cannot currently be remapped.
 
 ---
 

@@ -15,7 +15,7 @@ const sectionByPrefix = [
   ["15-", "Using Cook"],
   ["04-", "Commands"],
   ["28-", "Commands"],
-  ["29-", "Commands"],
+  ["29-", "Using Cook"],
   ["16-", "Workflows"],
   ["17-", "Workflows"],
   ["19-", "Workflows"],

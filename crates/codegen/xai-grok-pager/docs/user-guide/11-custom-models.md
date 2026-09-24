@@ -111,7 +111,7 @@ Cook resolves the API key in this order:
 
 1. The `api_key` field in the model config
 2. The environment variable(s) named by `env_key` — a single string or an array of names. The first set, non-empty value wins (for example `env_key = ["ANTHROPIC_AUTH_TOKEN", "LC_ANTHROPIC_AUTH_TOKEN"]` for SSH `LC_*` forwarding)
-3. Your signed-in session token (from `grok login`), for a model with no `api_key`/`env_key` of its own
+3. Your signed-in session token (from `cook login`), for a model with no `api_key`/`env_key` of its own
 4. The `XAI_API_KEY` environment variable (global fallback; Cook also accepts `GROK_CODE_XAI_API_KEY` for backward compatibility)
 
 ### Context Window
@@ -344,7 +344,7 @@ When you use `[endpoints]` with partial model overrides, Cook inherits the `base
 
 ### Auth Behavior
 
-When you set `models_base_url`, Cook uses API key auth (`Authorization: Bearer`) instead of session auth. You do not need `grok login` -- the API key is enough.
+When you set `models_base_url`, Cook uses API key auth (`Authorization: Bearer`) instead of session auth. You do not need `cook login` -- the API key is enough.
 
 ---
 
@@ -380,13 +380,13 @@ supports_backend_search = true
 
 ```bash
 # List available models (including custom)
-grok models
+cook models
 
 # Use in the TUI via slash command
 /model my-model
 
 # Use in headless mode
-grok -p "Hello" -m my-model
+cook -p "Hello" -m my-model
 
 # Set as default in config.toml:
 [models]
@@ -429,7 +429,7 @@ telemetry = false
 
 ```bash
 # List available models
-grok models
+cook models
 
 # Check config.toml for typos in [model.*] sections
 ```
@@ -446,7 +446,7 @@ curl -s https://api.example.com/v1/models \
 ### Debug Logging
 
 ```bash
-RUST_LOG=debug GROK_LOG_FILE=/tmp/grok.log grok
+RUST_LOG=debug GROK_LOG_FILE=/tmp/cook.log cook
 tail -f /tmp/grok.log
 ```
 

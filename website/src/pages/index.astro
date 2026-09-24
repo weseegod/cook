@@ -6,7 +6,7 @@
     <title>Cook: a fast coding agent for CLI and desktop</title>
     <meta
       name="description"
-      content="Cook is a fast, open-source coding agent with a CLI and a desktop app for Windows, macOS, and Ubuntu. Bring your own API keys and run it locally."
+      content="A fast, open-source coding agent for terminal and desktop. Bring your API key or connect with OAuth."
     />
     <link rel="canonical" href="https://letcook.dev/" />
     <meta name="theme-color" content="#080c14" />
@@ -14,7 +14,7 @@
     <meta property="og:title" content="Cook: a fast coding agent for CLI and desktop" />
     <meta
       property="og:description"
-      content="Get work done with Cook, an open-source coding agent for CLI and desktop on Windows, macOS, and Ubuntu. Run it locally with your own API keys."
+      content="Get work done with Cook, an open-source coding agent for CLI and desktop. Bring your API key or connect with OAuth."
     />
     <meta property="og:url" content="https://letcook.dev/" />
     <meta property="og:image" content="https://letcook.dev/assets/icon.png" />
@@ -53,37 +53,53 @@
     <main id="main">
       <section class="hero">
         <div class="wrap">
-          <p class="badge">Open source &middot; Apache-2.0 &middot; written in Rust</p>
-          <h1>A fast coding agent that gets work done.</h1>
+          <p class="badge">Fast &middot; Open source &middot; written in Rust</p>
+          <h1>A coding agent for your terminal and desktop.</h1>
           <p class="lede">
-            Use Cook from your terminal with the CLI or in <strong>Let Cook</strong>, the desktop
-            app for Windows, macOS, and Ubuntu. It runs on your machine with your own API keys.
+            Use the Cook CLI in your terminal or <strong>Let Cook</strong> on Windows, macOS, or
+            Flexible BYOK, or connect through OAuth with Grok, ChatGPT, Claude, and more.
           </p>
 
-          <div class="cmd" data-curl-cta>
-            <code id="install-command">curl -fsSL https://download.letcook.dev/install.sh | bash</code>
-            <button
-              class="copy-btn"
-              type="button"
-              data-copy
-              data-copy-label="install command"
-              data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | bash"
-            >
-              Copy
-            </button>
+          <div class="install-options" data-curl-cta>
+            <p class="install-label">Cook CLI · macOS and Linux</p>
+            <div class="cmd">
+              <code>curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash</code>
+              <button
+                class="copy-btn"
+                type="button"
+                data-copy
+                data-copy-label="Cook CLI install command"
+                data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash"
+              >
+                Copy
+              </button>
+            </div>
+            <p class="install-label">Let Cook desktop · macOS and Linux</p>
+            <div class="cmd">
+              <code>curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash</code>
+              <button
+                class="copy-btn"
+                type="button"
+                data-copy
+                data-copy-label="Let Cook desktop install command"
+                data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash"
+              >
+                Copy
+              </button>
+            </div>
           </div>
           <div class="cmd" data-windows-cta hidden>
             <span class="cmd-text">
-              Download the CLI binary here, or choose the Windows desktop installer below.
+              On Windows, download the Cook CLI or choose the Let Cook desktop installer below.
             </span>
-            <a class="copy-btn" data-asset="cli" href="https://download.letcook.dev/cook-1.0.37-windows-x86_64">
-              Download
+            <a class="copy-btn" data-asset="cli" href="https://download.letcook.dev/cook-1.0.40-windows-x86_64">
+              Download CLI
             </a>
           </div>
 
           <p class="fine">
-            macOS, Linux, and Windows &middot;
-            <a href="#install">download an installer instead</a>
+            Windows users can download the CLI and desktop app below.
+            <a href="#install">See all downloads</a>
           </p>
         </div>
       </section>
@@ -134,46 +150,33 @@
         <div class="wrap">
           <h2>Get Cook running</h2>
           <p class="lede">
-            On macOS or Linux, one command installs the CLI and desktop app. Download the desktop
-            app for Windows, macOS, or Ubuntu below.
+            Install only the app you want. Use the commands on macOS or Linux, or choose a Windows
+            download below.
           </p>
 
-          <div class="cmd">
-            <code>curl -fsSL https://download.letcook.dev/install.sh | bash</code>
-            <button
-              class="copy-btn"
-              type="button"
-              data-copy
-              data-copy-label="install command"
-              data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | bash"
-            >
-              Copy
-            </button>
-          </div>
-
-          <h3>Desktop app</h3>
+          <h3>Let Cook desktop app</h3>
           <ul class="downloads">
             <li>
-              <a data-asset="mac-arm" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-macos-aarch64.dmg">macOS &middot; Apple Silicon</a>
+              <a data-asset="mac-arm" href="https://download.letcook.dev/v1.0.40/let-cook-1.0.40-macos-aarch64.dmg">macOS &middot; Apple Silicon</a>
             </li>
             <li>
-              <a data-asset="mac-intel" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-macos-x86_64.dmg">macOS &middot; Intel</a>
+              <a data-asset="mac-intel" href="https://download.letcook.dev/v1.0.40/let-cook-1.0.40-macos-x86_64.dmg">macOS &middot; Intel</a>
             </li>
             <li>
-              <a data-asset="linux-appimage" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-linux-x86_64.AppImage">Linux &middot; AppImage</a>
+              <a data-asset="linux-appimage" href="https://download.letcook.dev/v1.0.40/let-cook-1.0.40-linux-x86_64.AppImage">Linux &middot; AppImage</a>
             </li>
             <li>
-              <a data-asset="linux" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-linux-x86_64.deb">Ubuntu &middot; .deb</a>
+              <a data-asset="linux" href="https://download.letcook.dev/v1.0.40/let-cook-1.0.40-linux-x86_64.deb">Ubuntu &middot; .deb</a>
             </li>
             <li>
-              <a data-asset="windows" href="https://download.letcook.dev/v1.0.37/let-cook-1.0.37-windows-x86_64-setup.exe">Windows &middot; installer</a>
+              <a data-asset="windows" href="https://download.letcook.dev/v1.0.40/let-cook-1.0.40-windows-x86_64-setup.exe">Windows &middot; installer</a>
             </li>
           </ul>
 
-          <h3>CLI</h3>
+          <h3>Cook CLI</h3>
           <ul class="downloads">
             <li>
-              <a data-asset="cli" href="https://download.letcook.dev/cook-1.0.37-macos-aarch64">CLI binary &middot; <span data-cli-platform>macos-aarch64</span></a>
+              <a data-asset="cli" href="https://download.letcook.dev/cook-1.0.40-macos-aarch64">CLI binary &middot; <span data-cli-platform>macos-aarch64</span></a>
             </li>
           </ul>
         </div>

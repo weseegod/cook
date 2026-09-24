@@ -32,15 +32,27 @@ same agent runtime through any of these entry points:
 
 ## Install
 
-Prebuilt CLI + desktop installers are published to
+Prebuilt CLI and desktop installers are published to
 [download.letcook.dev](https://download.letcook.dev) (Cloudflare R2) for
 **macOS (Apple Silicon + Intel)**, **Linux x86_64**, and **Windows x86_64**.
 A tag `v*` starts the self-hosted GitHub Actions pipeline
 ([`docs/desktop-release.md`](docs/desktop-release.md)).
 
+Install the CLI only on macOS or Linux:
+
 ```sh
-curl -fsSL https://download.letcook.dev/install.sh | bash
+curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash
 ```
+
+Install Let Cook Desktop only on macOS or Linux:
+
+```sh
+curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash
+```
+
+On Windows, download the CLI and desktop installer separately from
+[letcook.dev](https://letcook.dev/#install). Some desktop packages include the
+Cook agent. If Let Cook asks for it, install the CLI too.
 
 A background updater keeps the binary fresh — the welcome screen shows
 `Update: vX available — press ctrl+u to restart`, or run `cook update`

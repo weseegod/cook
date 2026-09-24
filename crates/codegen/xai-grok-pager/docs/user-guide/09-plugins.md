@@ -20,12 +20,12 @@ Plugins stay off until you install and enable them, and a plugin's hooks and MCP
 A marketplace source is a GitHub repository, a git URL on any host, or a local folder. Add one from the command line:
 
 ```bash
-grok plugin marketplace add my-org/team-plugins                  # GitHub shorthand (owner/repo)
-grok plugin marketplace add https://gitlab.com/acme/plugins.git  # any git host, include https:// and .git
-grok plugin marketplace add ./my-marketplace                     # a local folder
+cook plugin marketplace add my-org/team-plugins                  # GitHub shorthand (owner/repo)
+cook plugin marketplace add https://gitlab.com/acme/plugins.git  # any git host, include https:// and .git
+cook plugin marketplace add ./my-marketplace                     # a local folder
 ```
 
-List, refresh, and remove sources with `grok plugin marketplace list`, `grok plugin marketplace update [<name>]`, and `grok plugin marketplace remove <url>`.
+List, refresh, and remove sources with `cook plugin marketplace list`, `cook plugin marketplace update [<name>]`, and `cook plugin marketplace remove <url>`.
 
 You can also declare sources in config so they are always present.
 
@@ -57,7 +57,7 @@ Add sources under `extraKnownMarketplaces`, keyed by name. Each entry's `source`
 }
 ```
 
-Place this file at `~/.grok/settings.json` or `~/.claude/settings.json`.
+Place this file at `~/.cook/settings.json` or `~/.claude/settings.json`.
 
 ---
 
@@ -66,7 +66,7 @@ Place this file at `~/.grok/settings.json` or `~/.claude/settings.json`.
 Once a marketplace is added, install a plugin by name. You can also install straight from a repository or a local path:
 
 ```bash
-grok plugin install deploy-tools --trust
+cook plugin install deploy-tools --trust
 ```
 
 The source you install accepts several forms:
@@ -75,7 +75,7 @@ The source you install accepts several forms:
 - a full git URL (`https://github.com/user/repo.git`) or SSH (`git@github.com:user/repo.git`)
 - a local path (`./local-dir` or `/absolute/path`)
 
-Run `grok plugin install <source>` without `--trust` and Cook shows the source, warns that installing activates the plugin's hooks, MCP servers, and skills, then stops. Add `--trust` to go ahead. Only install plugins from sources you trust (see [Trust and security](#trust-and-security)).
+Run `cook plugin install <source>` without `--trust` and Cook shows the source, warns that installing activates the plugin's hooks, MCP servers, and skills, then stops. Add `--trust` to go ahead. Only install plugins from sources you trust (see [Trust and security](#trust-and-security)).
 
 A plugin's skills appear in the slash menu. When a skill name is ambiguous, Cook shows the qualified form prefixed by the plugin name, for example `/deploy-tools:release`. To pick up a newly installed plugin, press `r` in the Plugins tab or start a new session.
 
@@ -86,12 +86,12 @@ A plugin's skills appear in the slash menu. When a skill name is ambiguous, Cook
 ### From the command line
 
 ```bash
-grok plugin list [--json] [--available]   # installed plugins (--available requires --json)
-grok plugin uninstall <name> [--confirm] [--keep-data]   # aliases: rm, remove
-grok plugin update [<name>]               # omit the name to update every plugin
-grok plugin enable <name>
-grok plugin disable <name>
-grok plugin details <name>                # show the plugin's component inventory
+cook plugin list [--json] [--available]   # installed plugins (--available requires --json)
+cook plugin uninstall <name> [--confirm] [--keep-data]   # aliases: rm, remove
+cook plugin update [<name>]               # omit the name to update every plugin
+cook plugin enable <name>
+cook plugin disable <name>
+cook plugin details <name>                # show the plugin's component inventory
 ```
 
 ### In the terminal UI
@@ -122,11 +122,11 @@ In the **Marketplace** tab, browse and install from your sources:
 
 Component summaries in the Marketplace tab appear only for marketplaces that publish a [`plugin-index.json`](#add-a-catalog-optional) catalog. Destructive actions ask for confirmation: press lowercase `y` to confirm, any other key (including `Esc`) to cancel.
 
-In the **Workflows** tab (open it directly with `/workflows`, or `Tab` from the commands above), browse the saved workflows Cook discovered: built-ins, project `.grok/workflows/`, and user `~/.grok/workflows/`. Each row shows the workflow's name, source, and description; press `Enter` to expand its path and when-to-use notes, `r` to reload the list, and `/` to search. Rows are browse-only — run one with `/workflow <name>` or its own slash command.
+In the **Workflows** tab (open it directly with `/workflows`, or `Tab` from the commands above), browse the saved workflows Cook discovered: built-ins, project `.grok/workflows/`, and user `~/.cook/workflows/`. Each row shows the workflow's name, source, and description; press `Enter` to expand its path and when-to-use notes, `r` to reload the list, and `/` to search. Rows are browse-only — run one with `/workflow <name>` or its own slash command.
 
 ### Turn plugins on or off in config
 
-Set these in `~/.grok/config.toml`:
+Set these in `~/.cook/config.toml`:
 
 ```toml
 [plugins]
@@ -135,9 +135,9 @@ disabled = ["user/a1b2c3d4/noisy-plugin"]    # names or IDs to skip
 enabled = ["project/9f8e7d6c/team-tools"]    # names or IDs to force on
 ```
 
-Plugins are off by default, so list one in `enabled` to turn it on, or in `disabled` to discover it but skip loading it. Each entry is a plain plugin name (from `grok plugin list`) or a full ID (`<scope>/<hash>/<name>`).
+Plugins are off by default, so list one in `enabled` to turn it on, or in `disabled` to discover it but skip loading it. Each entry is a plain plugin name (from `cook plugin list`) or a full ID (`<scope>/<hash>/<name>`).
 
-To hide the plugins and hooks interface entirely, set `disable_plugins = true` in `~/.grok/pager.toml`.
+To hide the plugins and hooks interface entirely, set `disable_plugins = true` in `~/.cook/pager.toml`.
 
 ---
 
@@ -145,13 +145,13 @@ To hide the plugins and hooks interface entirely, set `disable_plugins = true` i
 
 Plugins run with your privileges, so treat them like any software you install: only add marketplaces and install plugins from sources you trust.
 
-Enabled plugins require trust to load skills, commands, hooks, MCP servers, and LSP servers. Untrusted plugin agents remain listed with frontmatter only. Cook trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust. Install with `--trust` to grant it:
+Enabled plugins require trust to load skills, commands, hooks, MCP servers, and LSP servers. Untrusted plugin agents remain listed with frontmatter only. Cook trusts plugins in `~/.cook/plugins/` automatically; project plugins in `.grok/plugins/` require trust. Install with `--trust` to grant it:
 
 ```bash
-grok plugin install <source> --trust
+cook plugin install <source> --trust
 ```
 
-Trusted plugin `.mcp.json` servers attach to the session like other MCP config, and child agents inherit them. Plugin agents (`plugin-name:agent-name`) use the parent session's MCP servers by default, the same as user agents under `~/.grok/agents/`; restrict that with the `mcpInheritance` frontmatter (see [Subagents](16-subagents.md#mcp-inheritance)). For safety, plugin agent frontmatter cannot declare `mcpServers` or hooks, or set `permissionMode: bypassPermissions`.
+Trusted plugin `.mcp.json` servers attach to the session like other MCP config, and child agents inherit them. Plugin agents (`plugin-name:agent-name`) use the parent session's MCP servers by default, the same as user agents under `~/.cook/agents/`; restrict that with the `mcpInheritance` frontmatter (see [Subagents](16-subagents.md#mcp-inheritance)). For safety, plugin agent frontmatter cannot declare `mcpServers` or hooks, or set `permissionMode: bypassPermissions`.
 
 ---
 
@@ -230,11 +230,11 @@ A `plugin-index.json` catalog lets the marketplace browser show each plugin's sk
 
 ### Check and share it
 
-Validate a plugin before publishing with `grok plugin validate [<path>]`, and tag a release from the manifest version with `grok plugin tag [<path>] [--push]`. Then point people at the repository. They add it once and install the plugins they want:
+Validate a plugin before publishing with `cook plugin validate [<path>]`, and tag a release from the manifest version with `cook plugin tag [<path>] [--push]`. Then point people at the repository. They add it once and install the plugins they want:
 
 ```bash
-grok plugin marketplace add my-org/my-org-plugins   # GitHub shorthand, a git URL, or a local path
-grok plugin install gdrive --trust
+cook plugin marketplace add my-org/my-org-plugins   # GitHub shorthand, a git URL, or a local path
+cook plugin install gdrive --trust
 ```
 
 To install it for everyone automatically instead of person by person, see [Distribute across an organization](#distribute-across-an-organization).
@@ -243,14 +243,14 @@ To install it for everyone automatically instead of person by person, see [Distr
 
 ## Distribute across an organization
 
-Admins control plugins, marketplaces, and MCP servers through grok's TOML layers plus an optional Claude policy file:
+Admins control plugins, marketplaces, and MCP servers through Cook's TOML settings and an optional Claude policy file:
 
-- **`managed_config.toml` / `requirements.toml`** (and macOS MDM) are **native** policy. Put allowlists, denylists, and pins here when grok should enforce them on every server and marketplace, including ones defined in the user's own config or by plugins. `requirements.toml` / MDM is the tamper-resistant tier; user-writable `~/.grok` copies are self-imposed only.
-- **Claude `managed-settings.json`** is **advisory**. Its MCP and marketplace restrictions bind **foreign** subjects only — project files (`.grok/config.toml`, `.mcp.json`), imported Claude configs, CLI overrides, and client-injected servers. They never bind grok-native subjects (user/system `config.toml`, plugin-provided definitions, admin pins). **Adding** a marketplace or installing a new source is always treated as foreign, so an advisory strict list still refuses unlisted `marketplace add` / `plugin install` sources.
+- **`managed_config.toml` / `requirements.toml`** (and macOS MDM) are **native** policy. Put allowlists, denylists, and pins here when Cook must enforce them on every server and marketplace, including ones defined in the user's own settings or by plugins. `requirements.toml` / MDM is the tamper-resistant tier; user-writable `~/.cook` copies apply only to that user.
+- **Claude `managed-settings.json`** is **advisory**. Its MCP and marketplace restrictions apply to **external** sources such as project files (`.grok/config.toml`, `.mcp.json`), imported Claude settings, CLI overrides, and client-injected servers. They do not apply to Cook's user or system settings, plugin-provided definitions, or admin pins. **Adding** a marketplace or installing a new source is always treated as external, so an advisory strict list still refuses unlisted `marketplace add` / `plugin install` sources.
 
-Layers combine **strictest-wins**: any deny wins, every restricted source must allow, and boolean pins only tighten (`false` sticks; a later `true` cannot unpin). CamelCase Claude keys and snake_case grok keys are both accepted in TOML.
+Layers combine **strictest-wins**: any deny wins, every restricted source must allow, and boolean pins only tighten (`false` sticks; a later `true` cannot unpin). TOML accepts both Claude's camelCase keys and Cook's snake_case keys.
 
-`grok inspect` (and `grok inspect --json`) shows the loaded MCP/marketplace lists, whether `allowManagedMcpServersOnly` is `off` / `advisory` / `enforced`, extra marketplace pins, and tighten-only pins under **Enforced by policy**.
+`cook inspect` (and `cook inspect --json`) shows the loaded MCP/marketplace lists, whether `allowManagedMcpServersOnly` is `off` / `advisory` / `enforced`, extra marketplace pins, and tighten-only pins under **Enforced by policy**.
 
 ### Roll a marketplace out to everyone
 
@@ -261,13 +261,13 @@ Add the source, and turn on the plugins you want, in `managed_config.toml`:
 name = "My Org Plugins"
 git = "https://github.com/my-org/my-org-plugins.git"
 
-# Plugins stay off until enabled. List plugin names (from `grok plugin list`)
+# Plugins stay off until enabled. List plugin names (from `cook plugin list`)
 # or full IDs (`<scope>/<hash>/<name>`).
 [plugins]
 enabled = ["gdrive"]
 ```
 
-For a hands-off install with no per-person step, also place the plugin's files where Cook discovers and trusts them automatically: `~/.grok/plugins/`, or a directory your device-management tool manages that you point to with `[plugins].paths`. Then enable them with `[plugins].enabled`.
+For a hands-off install with no per-person step, also place the plugin's files where Cook discovers and trusts them automatically: `~/.cook/plugins/`, or a directory your device-management tool manages that you point to with `[plugins].paths`. Then enable them with `[plugins].enabled`.
 
 A managed workspace can also sync skills to users directly, without a plugin. Synced skills appear with the `server` scope and are administered by the workspace; a user's own skill of the same name shadows the synced one. See [Skills](08-skills.md).
 
@@ -277,7 +277,7 @@ List the only git sources people may add. Any other git URL is refused. Honored 
 
 The key being **present** is what restricts: an empty list (`strict_known_marketplaces = []`), a list whose every entry is unsupported, or a key with the wrong type is a complete lockdown that refuses every add and install until it is fixed. Leave the key out to leave marketplaces unrestricted.
 
-Adding a **local path** while a binding strict list is present is refused (paths never match a git-URL allowlist; fail closed), unless an **admin** `extraKnownMarketplaces` pin names that exact path. A pin from a user-writable `~/.grok` layer cannot carve that exception. Existing git sources that fail the list are dropped at load (`Marketplace source blocked by allowlist`).
+Adding a **local path** while a binding strict list is present is refused (paths never match a git-URL allowlist; fail closed), unless an **admin** `extraKnownMarketplaces` pin names that exact path. A pin from a user-writable `~/.cook` layer cannot carve that exception. Existing git sources that fail the list are dropped at load (`Marketplace source blocked by allowlist`).
 
 ```toml
 # /etc/grok/requirements.toml  (native: binds every marketplace)
@@ -290,9 +290,9 @@ source = "github"
 repo = "ACME/more-plugins"
 ```
 
-The same lists work in Claude `managed-settings.json` (advisory for already-configured grok-native sources). URL comparison folds case on the **scheme and host only**, and strips exactly one trailing `.git` (`repo.git.git` is a different repo). Use `grok inspect` to see the loaded allowlist.
+The same lists work in Claude `managed-settings.json` (advisory for already-configured Cook sources). URL comparison folds case on the **scheme and host only**, and strips exactly one trailing `.git` (`repo.git.git` is a different repo). Use `cook inspect` to see the loaded allowlist.
 
-Provision extra sources from policy with `extraKnownMarketplaces` / `extra_known_marketplaces`. First pinning layer wins a name; a configured source already holding that name with a different URL is not overwritten (logged). `autoUpdate = false` on an extra pin turns **global** session-start plugin auto-update off (there is no per-marketplace grok equivalent).
+Provision extra sources from policy with `extraKnownMarketplaces` / `extra_known_marketplaces`. The first pinning layer wins a name; a configured source with that name and a different URL is left unchanged and logged. `autoUpdate = false` on an extra pin turns off automatic plugin updates at session start. Updates are controlled for all marketplaces together.
 
 ```toml
 [extra_known_marketplaces.acme]
@@ -301,7 +301,7 @@ source = { source = "git", url = "https://github.com/ACME/my-org-plugins.git", r
 
 ### Restrict which MCP servers can run
 
-Cook enforces MCP allow/deny lists from every native TOML policy layer and from Claude `managed-settings.json` (advisory; see above). `grok inspect` prints the merged lists.
+Cook enforces MCP allow/deny lists from every native TOML policy layer and from Claude `managed-settings.json` (advisory; see above). `cook inspect` prints the merged lists.
 
 Each allow or deny entry is one of:
 
@@ -350,7 +350,7 @@ The deployment can also send MCP servers to users directly. Native allowlists st
 
 ### Turn off session-start plugin auto-update
 
-`plugin_auto_update = false` / `pluginAutoUpdate = false` is tighten-only. This global pin is Cook's own key with no Claude counterpart. When pinned, session start does not scan marketplaces or fan out per-plugin updates (no toast). Manual `grok plugin update` still works. Claude's per-marketplace `extraKnownMarketplaces.<name>.autoUpdate: false` pins the same global switch.
+`plugin_auto_update = false` / `pluginAutoUpdate = false` is tighten-only. This global pin is Cook's own key with no Claude counterpart. When pinned, session start does not scan marketplaces or fan out per-plugin updates (no toast). Manual `cook plugin update` still works. Claude's per-marketplace `extraKnownMarketplaces.<name>.autoUpdate: false` pins the same global switch.
 
 ### Require pinned versions
 
@@ -379,19 +379,19 @@ Marketplaces distribute Cook content: skills, commands, agents, hooks, and MCP s
 
 ## Troubleshooting
 
-**A plugin you installed isn't showing up.** Plugins are off until enabled. Check `grok plugin list`, then add the plugin's name or ID to `[plugins].enabled`, or press `Space` on it in the Plugins tab. Reload with `r` in the Plugins tab or start a new session.
+**A plugin you installed isn't showing up.** Plugins are off until enabled. Check `cook plugin list`, then add the plugin's name or ID to `[plugins].enabled`, or press `Space` on it in the Plugins tab. Reload with `r` in the Plugins tab or start a new session.
 
-**A plugin's skills, hooks, or MCP servers don't load.** They stay inactive until the plugin is trusted. Reinstall with `--trust`, or place the plugin under `~/.grok/plugins/` (auto-trusted). See [Trust and security](#trust-and-security).
+**A plugin's skills, hooks, or MCP servers don't load.** They stay inactive until the plugin is trusted. Reinstall with `--trust`, or place the plugin under `~/.cook/plugins/` (auto-trusted). See [Trust and security](#trust-and-security).
 
-**A skill or MCP server from a marketplace is missing.** Refresh the source with `grok plugin marketplace update`, confirm the plugin is installed and enabled, and, if your organization restricts sources, check that the marketplace is still allowed (see [Distribute across an organization](#distribute-across-an-organization)). Some MCP servers require a sign-in and will not appear until you authenticate.
+**A skill or MCP server from a marketplace is missing.** Refresh the source with `cook plugin marketplace update`, confirm the plugin is installed and enabled, and, if your organization restricts sources, check that the marketplace is still allowed (see [Distribute across an organization](#distribute-across-an-organization)). Some MCP servers require a sign-in and will not appear until you authenticate.
 
-**An MCP server is configured but never starts.** Org policy may have blocked it. `grok inspect` lists `allowedMcpServers` / `deniedMcpServers`, `mcpManagedServersOnly`, any locked-down policy files, and each server's source. A deny match, an allowlist / lockdown that does not grant the server, a locked-down policy file, or `enableAllProjectMcpServers = false` on a project-scoped server drops it before spawn. See [Restrict which MCP servers can run](#restrict-which-mcp-servers-can-run).
+**An MCP server is configured but never starts.** Org policy may have blocked it. `cook inspect` lists `allowedMcpServers` / `deniedMcpServers`, `mcpManagedServersOnly`, any locked-down policy files, and each server's source. A deny match, an allowlist / lockdown that does not grant the server, a locked-down policy file, or `enableAllProjectMcpServers = false` on a project-scoped server drops it before spawn. See [Restrict which MCP servers can run](#restrict-which-mcp-servers-can-run).
 
-**Adding a marketplace is refused.** A `strictKnownMarketplaces` list is in effect. Only the listed git / GitHub URLs can be added; local-path adds are refused unless an admin `extraKnownMarketplaces` pin names that exact path. If `grok inspect` shows the list as locked down, the key is present but empty, malformed, or names only unsupported sources, and nothing can be added until it is fixed.
+**Adding a marketplace is refused.** A `strictKnownMarketplaces` list is in effect. Only the listed git / GitHub URLs can be added; local-path adds are refused unless an admin `extraKnownMarketplaces` pin names that exact path. If `cook inspect` shows the list as locked down, the key is present but empty, malformed, or names only unsupported sources, and nothing can be added until it is fixed.
 
 **An install is refused as unpinned.** Your deployment requires pinned commits. Install an exact commit (`owner/repo@<sha>`), or use a marketplace whose `plugin-index.json` publishes `sha` values. See [Require pinned versions](#require-pinned-versions).
 
-**See exactly what loaded.** Run `grok inspect` (add `--json` for machine-readable output) to list every discovered plugin and the skills, agents, hooks, and MCP servers it provides, each labeled with its `plugin: <name>` source.
+**See exactly what loaded.** Run `cook inspect` (add `--json` for machine-readable output) to list every discovered plugin and the skills, agents, hooks, and MCP servers it provides, each labeled with its `plugin: <name>` source.
 
 ---
 
@@ -419,12 +419,12 @@ Cook discovers plugins from these locations, in priority order. The `.claude/plu
 | Location | Scope | Trust |
 |----------|-------|-------|
 | `_meta.pluginDirs` (`session/new` / `session/load`) | Session, that session only | Trusted automatically |
-| `--plugin-dir` (the `grok agent … stdio` flag) | Process, that agent process only | Trusted automatically |
+| `--plugin-dir` (the `cook agent … stdio` flag) | Process, that agent process only | Trusted automatically |
 | `.grok/plugins/` | Project, shared through version control | Requires trust |
-| `~/.grok/plugins/` | User, every project | Trusted automatically |
+| `~/.cook/plugins/` | User, every project | Trusted automatically |
 | `[plugins].paths` (config) | Custom directories you add | Depends on location |
 
-The `_meta.pluginDirs` field on the `session/new` and `session/load` requests loads plugins for a single session; because the caller supplies the directory, those plugins are trusted automatically and do not persist after the session. `--plugin-dir` is the process-wide equivalent for a dedicated `grok agent … stdio` process, repeatable (`grok agent --no-leader --plugin-dir A --plugin-dir B stdio`), and ignored in leader mode, where the shared leader discovers its own plugins.
+The `_meta.pluginDirs` field on the `session/new` and `session/load` requests loads plugins for a single session; because the caller supplies the directory, those plugins are trusted automatically and do not persist after the session. `--plugin-dir` is the process-wide equivalent for a dedicated `cook agent … stdio` process, repeatable (`cook agent --no-leader --plugin-dir A --plugin-dir B stdio`), and ignored in leader mode, where the shared leader discovers its own plugins.
 
 ### Environment variables in plugin hooks
 

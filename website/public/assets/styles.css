@@ -207,13 +207,28 @@ h1 {
   font-weight: 600;
 }
 
-/* the one command */
+/* install commands */
+
+.install-options {
+  margin-top: 28px;
+}
+
+.install-label {
+  margin-top: 18px;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 620;
+}
+
+.install-label:first-child {
+  margin-top: 0;
+}
 
 .cmd {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 30px;
+  margin-top: 10px;
   padding: 14px 14px 14px 18px;
   border: 1px solid var(--border-strong);
   border-radius: 12px;
@@ -455,6 +470,10 @@ h3 {
     align-items: stretch;
     gap: 12px;
     padding: 14px;
+  }
+
+  .install-label {
+    margin-top: 22px;
   }
 
   .cmd code {
