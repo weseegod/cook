@@ -611,9 +611,11 @@ impl AgentView {
                 }
                 Event::Paste(text) => {
                     let outcome = self.route_popup_paste(text);
-                    if self.plan_approval_view.as_ref().is_some_and(|view| {
-                        view.focus == PlanApprovalFocus::Prompt
-                    }) {
+                    if self
+                        .plan_approval_view
+                        .as_ref()
+                        .is_some_and(|view| view.focus == PlanApprovalFocus::Prompt)
+                    {
                         self.prompt.refresh_slash(&self.session.models);
                     }
                     outcome
@@ -819,9 +821,11 @@ impl AgentView {
                         .is_some_and(|view| view.focus != PlanApprovalFocus::Preview)
                     {
                         let outcome = self.route_popup_paste(text);
-                        if self.plan_approval_view.as_ref().is_some_and(|view| {
-                            view.focus == PlanApprovalFocus::Prompt
-                        }) {
+                        if self
+                            .plan_approval_view
+                            .as_ref()
+                            .is_some_and(|view| view.focus == PlanApprovalFocus::Prompt)
+                        {
                             self.prompt.refresh_slash(&self.session.models);
                         }
                         outcome

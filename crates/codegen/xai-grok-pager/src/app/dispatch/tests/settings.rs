@@ -1421,11 +1421,7 @@ fn set_default_model_keeps_plan_approval_overlay() {
     let info = acp::ModelInfo::new(id.clone(), "Grok 4.5".to_string());
     let agent_id = AgentId(0);
     let agent = app.agents.get_mut(&agent_id).unwrap();
-    agent
-        .session
-        .models
-        .available
-        .insert(id.clone(), info);
+    agent.session.models.available.insert(id.clone(), info);
     agent.plan_approval_view =
         Some(crate::app::agent_view::test_fixtures::make_plan_approval_view_state());
 

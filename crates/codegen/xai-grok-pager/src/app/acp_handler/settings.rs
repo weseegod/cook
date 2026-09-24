@@ -432,7 +432,10 @@ pub(super) fn handle_sessions_changed(notif: &acp::ExtNotification, app: &mut Ap
     affected
 }
 
-pub(super) fn handle_announcements_update(_notif: &acp::ExtNotification, _app: &mut AppView) -> bool {
+pub(super) fn handle_announcements_update(
+    _notif: &acp::ExtNotification,
+    _app: &mut AppView,
+) -> bool {
     false
 }
 

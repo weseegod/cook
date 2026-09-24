@@ -973,8 +973,14 @@ mod link_click_tests {
             screen.contains("2 commands still running"),
             "summary must show count; screen:\n{screen}"
         );
-        assert!(screen.contains("sleep 5"), "command 1 missing; screen:\n{screen}");
-        assert!(screen.contains("npm run dev"), "command 2 missing; screen:\n{screen}");
+        assert!(
+            screen.contains("sleep 5"),
+            "command 1 missing; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("npm run dev"),
+            "command 2 missing; screen:\n{screen}"
+        );
     }
     /// Bg twin: the `[↓]` demote button sits on the same turn-status row, so its rect must drop under an open dropdown too.
     /// A dropdown click must never background the running execute tool.

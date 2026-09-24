@@ -183,7 +183,10 @@ pub(crate) fn screen_mode_relaunch_resume_hint(session_id: &str, want_minimal: b
     } else {
         "--fullscreen"
     };
-    format!("{GROK_SCREEN_MODE_ENV}={mode} {} {flag} --resume {session_id}", xai_grok_version::CLI_BINARY_NAME)
+    format!(
+        "{GROK_SCREEN_MODE_ENV}={mode} {} {flag} --resume {session_id}",
+        xai_grok_version::CLI_BINARY_NAME
+    )
 }
 
 /// Replace the current process with a relaunch into the requested screen mode.

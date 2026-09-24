@@ -44,9 +44,9 @@ use super::permissions::{
 };
 use super::prompt::{
     dispatch_accept_word_select_tip, dispatch_clear_display, dispatch_clear_prompt,
-    dispatch_open_history_search,
-    dispatch_send_bash_command, dispatch_send_prompt, dispatch_send_prompt_inner,
-    dispatch_show_plan_nudge, dispatch_show_undo_tip, dispatch_show_word_select_tip,
+    dispatch_open_history_search, dispatch_send_bash_command, dispatch_send_prompt,
+    dispatch_send_prompt_inner, dispatch_show_plan_nudge, dispatch_show_undo_tip,
+    dispatch_show_word_select_tip,
 };
 use super::queue;
 use super::queue::dispatch_drain_queue;
