@@ -251,10 +251,23 @@ kbd { border: 1px solid #3e4653; border-bottom-width: 2px; border-radius: 4px; p
 .preset-card:hover { border-color: #59679e; background: #191e2c; }
 .preset-mark { flex: 0 0 30px; display: grid; place-items: center; width: 30px; height: 30px; border-radius: 8px; background: #232a3f; color: #b9c2ff; font-size: 20px; }
 .provider-logo { flex: 0 0 auto; display: block; }
-.provider-logo-openai { color: var(--text); }
-.provider-logo-claude { color: #d97757; }
-.provider-logo-grok { overflow: hidden; border-radius: 5px; }
-.provider-logo-grok path:first-child { fill: #000; }
+/* Monochrome marks from public/providers: mask + background-color keeps theme/brand colors. */
+.provider-logo-openai,
+.provider-logo-claude,
+.provider-logo-xiaomi {
+  -webkit-mask: var(--provider-logo-url) center / contain no-repeat;
+  mask: var(--provider-logo-url) center / contain no-repeat;
+}
+.provider-logo-openai { background-color: var(--text); }
+.provider-logo-claude { background-color: #d97757; }
+.provider-logo-xiaomi { background-color: #ff6900; }
+/* Multicolor / fixed-palette marks: paint the SVG as-is. */
+.provider-logo-grok,
+.provider-logo-deepseek,
+.provider-logo-openrouter {
+  border-radius: 5px;
+  background: var(--provider-logo-url) center / contain no-repeat;
+}
 .provider-logo-fallback { display: grid; place-items: center; border-radius: 6px; background: var(--accent-soft, #232a3f); color: var(--accent, #b9c2ff); font-size: 10px; font-weight: 650; letter-spacing: 0.02em; }
 .oauth-connect { display: grid; gap: 12px; }
 .oauth-waiting { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 0; color: var(--muted); font-size: 13px; }
