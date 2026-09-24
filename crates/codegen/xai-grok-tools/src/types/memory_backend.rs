@@ -144,10 +144,18 @@ pub trait MemoryBackend: Send + Sync {
 pub fn format_empty_search_message(durable_files: &[std::path::PathBuf]) -> String {
     let mut msg = String::from("No memory results found for query.");
     if !durable_files.is_empty() {
-        msg.push_str("\nDurable memory files (edit these to remember):");
+        let first = durable_files[0].display();
+        msg.push_str(
+            "\nNothing is stored yet. Persist the fact now with the write tool, then call \
+             memory_search again to verify. Prefer the write tool over todo lists for this step.",
+        );
+        msg.push_str("\nDurable memory files:");
         for path in durable_files {
             msg.push_str(&format!("\n- {}", path.display()));
         }
+        msg.push_str(&format!(
+            "\nExample write call: {{\"file_path\":\"{first}\",\"content\":\"- <fact to remember>\\n\"}}"
+        ));
     }
     msg
 }
@@ -300,8 +308,11 @@ mod tests {
             "pager parse_no_results keys on the first line: {msg}"
         );
         assert!(
-            msg.contains("Durable memory files (edit these to remember):"),
-            "missing durable-file header: {msg}"
+            msg.contains("Durable memory files:")
+                && msg.contains("write tool")
+                && msg.contains("Example write call")
+                && msg.contains("/home/u/.cook/memory/MEMORY.md"),
+            "missing durable-file write/re-search hint: {msg}"
         );
         assert!(msg.contains("/home/u/.cook/memory/MEMORY.md"), "{msg}");
         assert!(msg.contains("/home/u/proj/memory/MEMORY.md"), "{msg}");

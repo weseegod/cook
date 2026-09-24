@@ -21,7 +21,9 @@
     "search_replace",
     "read_file"
   ],
-  "forbid_tools": [],
+  "forbid_tools": [
+    "run_terminal_cmd"
+  ],
   "files": [
     {
       "path": "note.txt",
@@ -34,6 +36,7 @@
   "checks": [
     "no_session",
     "tool_called",
+    "tool_not_called",
     "ordered_tools",
     "file_equals",
     "text_contains",

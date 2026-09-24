@@ -5,10 +5,16 @@ Operator note for the next person who changes product code and needs a green `sc
 ## Why order matters
 
 1. **Unit tests first** — fail cheap and local; do not burn a model on a regression `cargo test` already catches.
-2. **Rebuild the pager** — `run.sh` executes `target/debug/xai-grok-pager`, not `~/.local/bin/cook`. `cargo test` does **not** rebuild that binary.
+2. **Rebuild the pager** — `run.sh` executes `target/debug/xai-grok-pager`, not `~/.local/bin/cook`. `cargo test` does **not** rebuild that binary. After `templates/prompt.md` edits, also run `python3 crates/codegen/xai-grok-agent/scripts/encrypt_templates.py` and keep `test_encrypted_templates_not_stale` green.
 3. **Quiet tree, one model** — `runner.isolated` fails if `git status --porcelain` or `~/.cook/config.toml` mtime changes during the phase. Another agent editing files mid-run pollutes the score. Launchers share port `8080`; only one model at a time.
-4. **Full phase, then re-score** — each `--case` overwrites `$OUT_ROOT/score.txt`. A clean score needs one full selected phase (or a merged evidence set you control).
-5. **Do not raise turn caps / rewrite prompts** to force a pass. Fix the product (or a scorer phrase gap if the oracle was wrong) and re-run.
+4. **Full phase, then re-score** — each `--case` overwrites `$OUT_ROOT/score.txt`. A clean score needs one full selected phase (or a merged evidence set you control). Fix a fail with a product unit test, re-run **only that case**, then re-run the **full phase** into a **new** `OUT_ROOT`.
+5. **Do not raise turn caps / rewrite case prompts** to force a pass. Fix the product (or a scorer phrase gap if the oracle was wrong) and re-run.
+
+### Harness contracts (do not re-loosen)
+
+- Empty top-level text with `stopReason != end_turn`: rewrite home to `max_completion_tokens=8192` and **re-run the same case once**. No second prompt (“Reply with the answer… Do not call any tool.”).
+- Non-zero exit is `fail`, except timeouts already scored as `hung` and `session.max_turns` (scored from `stopReason`).
+- `skip-nondeterministic` is not a fail.
 
 ## Order (copy-paste)
 
@@ -87,6 +93,18 @@ Never commit `OUT_ROOT`, wire logs, or suite `config.toml` files that contain an
 - [ ] Tree quiet for the whole phase (no concurrent edits)
 - [ ] Full selected phase → `score.txt` with **zero** ` fail` / ` hung`
 - [ ] Evidence (`score.txt`, `failures.md`, suite log, unit/self-test logs) saved under your scratch dir
+
+## Latest tools phase (2026-09-24, `mimo26-9b`)
+
+Evidence: `/tmp/real-model-suite-tools-20260924T051322Z` (`--phase tools --keep`).
+
+| Result | Cases |
+|---|---|
+| pass (19) | `sampler.noop`, `sampler.xml_arguments`, `tools.ask_user_headless` (`ask_user_question=success`), `tools.bash`, `tools.feedback_noop`, `tools.grep`, `tools.list_dir`, `tools.lsp_smoke`, `tools.memory_roundtrip`, `tools.parallel_reads`, `tools.plan_mode`, `tools.read_file`, `tools.read_file_range`, `tools.serial_edit_read`, `tools.todo_write`, `tools.update_goal`, `tools.web_fetch_public`, `tools.web_fetch_ssrf`, `tools.write_new` |
+| fail (4) | `tools.kill_and_wait` (no successful wait/output tool), `tools.monitor_short` (no successful `monitor`), `tools.scheduler_roundtrip` (`exit 1`), `tools.search_replace` (no successful `search_replace`) |
+| skip | `tools.unknown_and_sibling` (`skip-nondeterministic`) |
+
+Not green yet. Those four fails have each passed on earlier single-case retries with the same pillars; treat them as model flakes until a **full** tools `score.txt` has zero `fail`/`hung`. Do not loosen oracles. Next: fix or re-stabilize those four, full tools again, then `session` → `agents` → `--phase all`. Spec handoff: `docs/real-model-feature-suite.md` §15.
 
 ## Related docs
 

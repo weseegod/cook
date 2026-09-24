@@ -696,8 +696,8 @@ fn description_shows_required_inline_json_example() {
     );
 }
 
-/// File-input is ON in the live suite, so the model sees `FILE_INPUT_DESCRIPTION`
-/// via `versioned_definition` — that path must still ship the required inline JSON.
+/// File-input is ON in the live suite: description covers the three forms; the
+/// required inline JSON example lives on the schema root (not duplicated here).
 #[test]
 fn file_input_description_shows_required_inline_json_example() {
     use crate::types::tool_metadata::ToolMetadata;
@@ -730,16 +730,26 @@ fn file_input_description_shows_required_inline_json_example() {
     );
     let text = def.function.description.expect("description");
     assert!(
-        text.contains("never empty `{}`") || text.contains("never empty {}"),
+        text.contains("empty `{}`") || text.contains("empty {}"),
         "file-input description must forbid empty object args: {text}"
     );
+    let schema = &def.function.parameters;
+    let schema_desc = schema
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
     assert!(
-        text.contains(r#"{"tool_name": "<discovered name>", "tool_input": {"<param>": <value>}}"#),
-        "file-input description must show the required inline JSON shape: {text}"
+        schema_desc
+            .contains(r#"{"tool_name": "<discovered name>", "tool_input": {"<param>": <value>}}"#),
+        "schema root must show the required inline JSON shape: {schema}"
     );
     assert!(
-        text.contains(r#"{"tool_name": "echo__echo", "tool_input": {"text": "hello"}}"#),
-        "file-input description must show a concrete example: {text}"
+        schema_desc.contains(r#"{"tool_name": "echo__echo", "tool_input": {"text": "hello"}}"#),
+        "schema root must show a concrete example: {schema}"
+    );
+    assert!(
+        schema.get("oneOf").is_none(),
+        "file-input schema must omit oneOf: {schema}"
     );
 }
 

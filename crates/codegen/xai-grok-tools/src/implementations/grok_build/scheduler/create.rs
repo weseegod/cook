@@ -109,6 +109,7 @@ Usage notes:
 - Interval format: "5m" (minutes), "2h" (hours), "1d" (days), "60s" (seconds, min 60)
 - Maximum 50 scheduled tasks at once
 - Tasks auto-expire after {} days
+- Pass compact JSON fields only (interval, prompt, durable). Keep prompt to the exact text to run — do not embed XML tool_call markup inside arguments.
 - For one-time delayed work, run a background terminal command (e.g. `sleep 1800 && <command>`) instead; its completion notifies you"#,
                 super::types::RECURRING_TASK_TTL_DAYS
             )
@@ -447,6 +448,16 @@ mod tests {
         assert_eq!(updated.human_schedule, "every 10 minutes");
         assert_eq!(task_count(&resources).await, 1, "no second task");
         cancel.cancel();
+    }
+
+    #[test]
+    fn description_requires_compact_json_arguments() {
+        use crate::types::tool_metadata::ToolMetadata;
+        let desc = ToolMetadata::description_template(&SchedulerCreateTool);
+        assert!(
+            desc.contains("compact JSON") && desc.contains("tool_call markup"),
+            "scheduler_create must steer away from nested XML args:\n{desc}"
+        );
     }
 
     #[test]

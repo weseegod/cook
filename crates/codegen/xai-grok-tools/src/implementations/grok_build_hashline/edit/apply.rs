@@ -99,36 +99,6 @@ fn parse_arrow_write(content: &str, resolve: impl FnOnce(&str) -> Option<String>
     })
 }
 
-/// Resolve a write LHS that omitted the line number (`nlg`, `sce:nlg`) against
-/// the file's generated anchors. Unique match only — ambiguous hashes return `None`
-/// so the caller can error with the full anchor list.
-fn resolve_partial_arrow_anchor(before: &str, content: &str, scheme: &dyn AnchorScheme) -> Option<String> {
-    if before.is_empty() || before.contains(' ') || before.len() > 25 {
-        return None;
-    }
-    let lines = split_lines(content);
-    let anchors = scheme.generate_anchors(&lines);
-    let mut matches: Vec<String> = anchors
-        .iter()
-        .filter(|a| {
-            let full = a.render();
-            let suffix = anchor_suffix(a);
-            before == full
-                || before == suffix
-                || before == a.local
-                || a.context.as_deref() == Some(before)
-                || suffix.ends_with(&format!(":{before}"))
-        })
-        .map(|a| a.render())
-        .collect();
-    matches.sort();
-    matches.dedup();
-    match matches.len() {
-        1 => matches.pop(),
-        _ => None,
-    }
-}
-
 fn partial_arrow_write_error(
     write: &str,
     before: &str,
@@ -197,45 +167,6 @@ fn partial_arrow_write_error(
     }
 }
 
-/// Common edit-target sentinels. A unique line matching one of these is the
-/// intended replace target when a weak model sends a single-line `write`
-/// instead of `replace` (real-model agents.hashline_edit: reasoning said
-/// replace / `2:sce:nlg` but the sampled op stayed `write` + `DONE-EDIT`).
-fn looks_like_edit_placeholder(line: &str) -> bool {
-    let t = line.trim();
-    if t.is_empty() || t.len() > 64 {
-        return false;
-    }
-    const MARKERS: [&str; 8] = [
-        "REPLACE_ME",
-        "REPLACE-ME",
-        "PLACEHOLDER",
-        "CHANGEME",
-        "CHANGE_ME",
-        "TODO",
-        "FIXME",
-        "XXX",
-    ];
-    let upper = t.to_uppercase();
-    MARKERS.iter().any(|m| upper == *m || upper.contains(m))
-}
-
-/// Anchor for the unique placeholder line, if exactly one exists.
-fn unique_placeholder_anchor(content: &str, scheme: &dyn AnchorScheme) -> Option<String> {
-    let lines = split_lines(content);
-    let anchors = scheme.generate_anchors(&lines);
-    let mut hits: Vec<&Anchor> = anchors
-        .iter()
-        .zip(lines.iter())
-        .filter(|(_, line)| looks_like_edit_placeholder(line))
-        .map(|(a, _)| a)
-        .collect();
-    match hits.len() {
-        1 => Some(hits.pop()?.render()),
-        _ => None,
-    }
-}
-
 /// Hashline_read-style listing of every line for error context.
 fn full_anchor_listing(content: &str, scheme: &dyn AnchorScheme) -> String {
     let lines = split_lines(content);
@@ -250,11 +181,7 @@ fn full_anchor_listing(content: &str, scheme: &dyn AnchorScheme) -> String {
 
 fn single_line_write_rejected_error(content: &str, write: &str, scheme: &dyn AnchorScheme) -> HashlineEditError {
     let listing = full_anchor_listing(content, scheme);
-    let example_line = content
-        .lines()
-        .find(|l| looks_like_edit_placeholder(l))
-        .or_else(|| content.lines().nth(1))
-        .unwrap_or("LINE_CONTENT");
+    let example_line = content.lines().nth(1).unwrap_or("LINE_CONTENT");
     HashlineEditError {
         error: HashlineEditErrorKind::InvalidInput,
         message: format!(
@@ -370,12 +297,12 @@ pub(crate) fn apply_edits(
     {
         // A single-line `ANCHOR→content` write is a one-line edit pasted from
         // hashline_read — apply it as replace instead of rejecting or wiping.
+        // Full LINE:HASH only; do not guess truncated arrows or placeholder lines.
         if let Some(converted) = single_line_anchor_write_as_replace(new_content) {
             return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
         }
-        // Partial arrow write (`nlg→DONE-EDIT`, `sce:nlg→…`): resolve a unique
-        // anchor against this file; otherwise error with the full anchor list
-        // so the next turn can emit an exact replace (real-model agents.hashline_edit).
+        // Truncated arrow (`nlg→…`, `sce:nlg→…`): error with the full anchor list
+        // so the next turn can emit an exact replace — do not auto-resolve.
         if !new_content.contains('\n') {
             let trimmed = new_content.trim();
             if let Some((before, after)) = trimmed
@@ -384,28 +311,23 @@ pub(crate) fn apply_edits(
             {
                 let before = before.trim();
                 let after = after.to_owned();
-                if !before.is_empty() && !before.contains(' ') && before.len() <= 25 {
-                    if let Some(anchor) = resolve_partial_arrow_anchor(before, content, scheme) {
-                        let converted = HashlineOp::Replace {
-                            anchor,
-                            end_anchor: None,
-                            content: after,
-                        };
-                        return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
-                    }
-                    if !before.contains(':') || !before.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                        return ApplyResult {
-                            output: HashlineEditOutput::Error(partial_arrow_write_error(
-                                new_content,
-                                before,
-                                &after,
-                                content,
-                                scheme,
-                            )),
-                            new_content: None,
-                            edit_details: vec![],
-                        };
-                    }
+                if !before.is_empty()
+                    && !before.contains(' ')
+                    && before.len() <= 25
+                    && (!before.contains(':')
+                        || !before.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                {
+                    return ApplyResult {
+                        output: HashlineEditOutput::Error(partial_arrow_write_error(
+                            new_content,
+                            before,
+                            &after,
+                            content,
+                            scheme,
+                        )),
+                        new_content: None,
+                        edit_details: vec![],
+                    };
                 }
             }
         }
@@ -420,23 +342,12 @@ pub(crate) fn apply_edits(
                 edit_details: vec![],
             };
         }
-        // Partial write: single-line content over a multi-line file discards
-        // surrounding lines (real-model agents.hashline_edit used write with
-        // only the replacement token). If a unique placeholder line is present,
-        // apply as replace of that line (model often reasons "replace" but still
-        // samples op=write). Otherwise error with fresh anchors.
+        // Single-line write over a multi-line file would discard surrounding lines —
+        // reject with fresh anchors. No placeholder guessing.
         if !new_content.contains('\n')
             && content.lines().filter(|l| !l.trim().is_empty()).count() >= 2
             && content.trim() != new_content.trim()
         {
-            if let Some(anchor) = unique_placeholder_anchor(content, scheme) {
-                let converted = HashlineOp::Replace {
-                    anchor,
-                    end_anchor: None,
-                    content: new_content.trim().to_owned(),
-                };
-                return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
-            }
             return ApplyResult {
                 output: HashlineEditOutput::Error(single_line_write_rejected_error(
                     content,
@@ -2580,58 +2491,43 @@ mod tests {
     }
 
     #[test]
-    fn single_line_write_converts_via_unique_placeholder() {
-        // Model often samples op=write with only DONE-EDIT while intending
-        // replace of REPLACE_ME (real-model agents.hashline_edit).
+    fn single_line_write_over_placeholder_is_rejected() {
+        // No truncated-arrow / placeholder guessing — must error with anchors.
         let ops = vec![HashlineOp::Write {
             content: "DONE-EDIT".to_owned(),
         }];
-        let result = apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme());
-        let HashlineEditOutput::EditsApplied(_) = result.output else {
-            panic!("expected success, got: {:?}", result.output);
-        };
-        assert_eq!(
-            result.new_content.as_deref(),
-            Some("first\nDONE-EDIT\nlast\n")
-        );
+        match apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(e.message.contains("replace"), "msg: {}", e.message);
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
     }
 
     #[test]
-    fn partial_arrow_write_resolves_unique_anchor() {
+    fn partial_arrow_write_errors_without_guessing() {
         let file = "first\nREPLACE_ME\nlast\n";
         let anchors = anchors_for(file);
-        // Build `local→DONE-EDIT` from the unique local hash of line 2.
-        let full = nth(&anchors, 1); // "2:local:ctx" or "2:local"
+        let full = nth(&anchors, 1);
         let local = full.split(':').nth(1).expect("local").to_owned();
-        // Only unique if that local does not appear on another line.
-        let locals: Vec<&str> = anchors
-            .iter()
-            .map(|a| a.split(':').nth(1).unwrap_or(""))
-            .collect();
-        if locals.iter().filter(|x| **x == local.as_str()).count() == 1 {
-            let ops = vec![HashlineOp::Write {
-                content: format!("{local}\u{2192}DONE-EDIT"),
-            }];
-            let result = apply_edits(file, &ops, &test_path(), &*test_scheme());
-            let HashlineEditOutput::EditsApplied(_) = result.output else {
-                panic!("expected success, got: {:?}", result.output);
-            };
-            assert_eq!(
-                result.new_content.as_deref(),
-                Some("first\nDONE-EDIT\nlast\n")
-            );
-        } else {
-            // Context-only / shared local: must not wipe; error lists anchors.
-            let ops = vec![HashlineOp::Write {
-                content: "nlg\u{2192}DONE-EDIT".to_owned(),
-            }];
-            match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
-                HashlineEditOutput::Error(e) => {
-                    assert!(e.message.contains("replace"), "msg: {}", e.message);
-                    assert!(!e.ambiguous_candidates.is_empty(), "candidates listed");
-                }
-                other => panic!("Expected error, got: {other:?}"),
+        let ops = vec![HashlineOp::Write {
+            content: format!("{local}\u{2192}DONE-EDIT"),
+        }];
+        match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(e.message.contains("replace"), "msg: {}", e.message);
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
             }
+            other => panic!("Expected error, got: {other:?}"),
         }
     }
 
@@ -2642,7 +2538,7 @@ mod tests {
         let ops = vec![HashlineOp::Write {
             content: "nlg\u{2192}DONE-EDIT".to_owned(),
         }];
-            match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
+        match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
             HashlineEditOutput::Error(e) => {
                 assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
                 assert!(

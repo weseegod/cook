@@ -419,8 +419,12 @@ def check_lsp_smoke(case: dict[str, Any], root: Path) -> None:
             "no lsp server",
             "no lsp tool",
             "no lsp (language",
+            "no lsp/diagnostics",
             "no mcp server",
             "no mcp servers",
+            "no mcp tools",
+            "no mcp/lsp",
+            "mcp/lsp server",
             "not available",
             "not configured",
             "no server is configured",
@@ -571,6 +575,23 @@ def self_test() -> None:
             "stopReason": "end_turn",
         }))
         assert score({"checks": ["lsp_smoke"]}, root)[0], "no-lsp-tool phrasing must pass"
+        # mimo26 live wording from tools.lsp_smoke
+        (root / "stdout.json").write_text(json.dumps({
+            "text": "No LSP/diagnostics server is configured in this session, so diagnostics were not performed.",
+            "stopReason": "end_turn",
+        }))
+        assert score({"checks": ["lsp_smoke"]}, root)[0], "no-lsp/diagnostics phrasing must pass"
+        (root / "stdout.json").write_text(json.dumps({
+            "text": "No MCP tools are available in this session, so I can't query an LSP server.",
+            "stopReason": "end_turn",
+        }))
+        assert score({"checks": ["lsp_smoke"]}, root)[0], "no-mcp-tools phrasing must pass"
+        # mimo26: "No MCP/LSP server is configured…"
+        (root / "stdout.json").write_text(json.dumps({
+            "text": "No MCP/LSP server is configured in this session — I have no diagnostic tool to run against `lib.rs`.",
+            "stopReason": "end_turn",
+        }))
+        assert score({"checks": ["lsp_smoke"]}, root)[0], "no-mcp/lsp phrasing must pass"
         (root / "stdout.json").write_text(json.dumps({
             "text": "Diagnostics unavailable for other reasons.",
             "stopReason": "end_turn",
@@ -593,9 +614,10 @@ def self_test() -> None:
         assert score(scase, root)[0], "workflow result_summary must satisfy the marker check"
         (root / "stdout.json").write_text(json.dumps({"text": f"done {nonce}", "stopReason": "end_turn"}))
         assert score(scase, root)[0]
-        # max_tokens after a finished workflow: empty text, nonce only in result_summary,
+        # max_tokens after a finished workflow: empty text, nonce only in result_summary;
         # tool_called still sees the parent workflow completion once copy_session prefers
-        # the workflows-bearing session (run.sh scores workflow_live despite exit 1).
+        # the workflows-bearing session. run.sh fails on nonzero exit; this fixture only
+        # locks the score.py oracle.
         (root / "stdout.json").write_text(json.dumps({
             "type": "error",
             "message": "response truncated by max_tokens",

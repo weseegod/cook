@@ -22,12 +22,17 @@ impl crate::types::tool_metadata::ToolMetadata for MemorySearchImpl {
     fn description_template(&self) -> &str {
         "Search cross-session memory for relevant knowledge chunks. Returns ranked results \
          from global, workspace, and session memory files.\n\n\
+         When the user asks you to remember a fact as durable memory: call this tool first \
+         (empty results list durable MEMORY.md paths), write the fact with the write tool, \
+         then call this tool again to confirm. Do not claim the fact is stored until a search \
+         returns it.\n\n\
          Use this proactively when:\n\
          - A question references prior work, decisions, or context you don't have\n\
          - You need project conventions, coding patterns, or user preferences\n\
          - The user mentions something discussed or decided in a previous session\n\
          - Starting work in an unfamiliar part of the codebase\n\
-         - After compaction when prior context may have been lost\n\n\
+         - After compaction when prior context may have been lost\n\
+         - The user asks you to remember something as durable memory (see workflow above)\n\n\
          Memory is historical context, not automatically the current plan. Verify recalled facts \
          against live sources before relying on them."
     }

@@ -1418,9 +1418,13 @@ pub async fn run_single_turn(
                 .and_then(|v| v.as_str())
                 == Some(xai_grok_shell::session::commands::MAX_TURNS_REACHED_CATEGORY);
             if is_max_turns {
+                // Cap hit: still emit a normal JSON result with an explicit stopReason so
+                // headless callers (and the real-model suite) can score exit 0. Plain/stderr
+                // keeps the human-readable marker for session.max_turns.
                 emitter.on_max_turns();
-                emitter.on_end(&stop_reason, sid, rid);
-                Err(anyhow::anyhow!("max turns reached"))
+                eprintln!("max turns reached");
+                emitter.on_end("max_turn_requests", sid, rid);
+                Ok(())
             } else {
                 emitter.on_end(&stop_reason, sid, rid);
                 Ok(())
