@@ -4145,10 +4145,12 @@ fn classify_terminal_command(arguments: &str) -> TerminalCommandClass {
         [] => "",
     };
     let basename = executable.rsplit('/').next().unwrap_or(executable);
-    if matches!(
-        basename,
-        "run-audit.sh" | "run.sh" | "start-audit.sh" | "nohup" | "kill" | "killall" | "pkill"
-    ) || (basename == "model.sh" && words.iter().any(|word| matches!(*word, "start" | "stop")))
+    if lower.trim_end().ends_with('&')
+        || matches!(
+            basename,
+            "run-audit.sh" | "run.sh" | "start-audit.sh" | "nohup" | "kill" | "killall" | "pkill"
+        )
+        || (basename == "model.sh" && words.iter().any(|word| matches!(*word, "start" | "stop")))
         || words.starts_with(&["docker", "stop"])
     {
         return TerminalCommandClass::Effect;
@@ -4366,6 +4368,25 @@ mod terminal_fanout_tests {
         let batch = [Some(ToolKind::Execute); 8];
         assert_eq!(guard.inspect(batch), (8, true));
         assert_eq!(guard.inspect(batch), (8, false));
+        let independent = [
+            "cat /tmp/file",
+            "head /tmp/file",
+            "tail /tmp/file",
+            "wc /tmp/file",
+            "sha256sum /tmp/file",
+        ]
+        .iter()
+        .enumerate()
+        .map(|(i, command)| call(i, command))
+        .collect::<Vec<_>>();
+        assert!(terminal_observer_skip_indices(&independent, execute_kind).is_empty());
+        let repeated_observers = (0..8)
+            .map(|i| call(i, &format!("bash -n /tmp/start-audit.sh && echo probe_{i}")))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            terminal_observer_skip_indices(&repeated_observers, execute_kind),
+            (1..8).collect()
+        );
     }
 
     #[test]
@@ -4420,6 +4441,11 @@ mod terminal_fanout_tests {
             serde_json::json!({"command": "SKIP_BUILD=1 ./run.sh --phase safeguard"}).to_string();
         assert_eq!(
             classify_terminal_command(&arguments),
+            TerminalCommandClass::Effect
+        );
+        let background = serde_json::json!({"command": "bash /tmp/audit-worker.sh &"}).to_string();
+        assert_eq!(
+            classify_terminal_command(&background),
             TerminalCommandClass::Effect
         );
     }
