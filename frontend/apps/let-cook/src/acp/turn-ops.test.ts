@@ -68,13 +68,11 @@ describe("turn-ops (P9)", () => {
       sessionId: "s1",
       id: "p1",
       expectedVersion: 2,
-      owner: "grok-desktop",
     });
     expect(notify).toHaveBeenCalledWith("x.ai/queue/interject", {
       sessionId: "s1",
       id: "p1",
       expectedVersion: 2,
-      owner: "grok-desktop",
       newText: "edited",
     });
     expect(notify).toHaveBeenCalledWith("x.ai/queue/hold_edit", { sessionId: "s1", id: "p1" });

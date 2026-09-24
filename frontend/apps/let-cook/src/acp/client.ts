@@ -29,9 +29,10 @@ import { normalizeError } from "./errors";
 import { CAPABILITIES } from "./handshake";
 import { elicitInteraction } from "./reverse";
 import { PromptCorrelation, SessionEventDedupe } from "./session-events";
+import { sendQueuedPromptNow } from "./turn-ops";
 import { desktopTrace } from "./trace";
 import { useCatalogStore } from "../state/catalog";
-import { useSessionStore, type TurnOutcome } from "../state/session";
+import { useSessionStore, type QueuedPromptEntry, type TurnOutcome } from "../state/session";
 import {
   notify,
   onLog,
@@ -64,6 +65,11 @@ export class CookAcpClient {
   private restartInFlight: Promise<void> | null = null;
   private startup: Promise<void> | null = null;
   private pendingPromptRequests = 0;
+  private readonly pendingQueuedIds = new Map<string, string[]>();
+  private readonly queuedImagesById = new Map<string, string[]>();
+  private readonly paintedPromotions = new Set<string>();
+  private sendNowAwaitingConfirmation: { sessionId: string; id: string } | null = null;
+  private readonly sendNowInFlight = new Map<string, number>();
   private readonly sessionEvents = new SessionEventDedupe();
   private readonly promptCorrelation = new PromptCorrelation();
   private readonly sessionUpdates: SessionNotificationCoalescer;
@@ -81,6 +87,7 @@ export class CookAcpClient {
       sessionUpdates: this.sessionUpdates,
       refreshPlanFiles: () => { void this.refreshPlanFiles(); },
       refreshModels: () => this.refreshModels(),
+      onQueueChanged: (params, previousEntries) => this.onQueueChanged(params, previousEntries),
     };
   }
 
@@ -99,6 +106,11 @@ export class CookAcpClient {
   private async connectInner(cwd: string): Promise<void> {
     this.stopping = false;
     this.cwd = cwd;
+    this.pendingQueuedIds.clear();
+    this.queuedImagesById.clear();
+    this.paintedPromotions.clear();
+    this.sendNowAwaitingConfirmation = null;
+    this.sendNowInFlight.clear();
     const store = useSessionStore.getState();
     const hadWorking =
       store.turnRunning || Object.keys(store.workingSessions).length > 0;
@@ -154,6 +166,10 @@ export class CookAcpClient {
 
   async newSession(): Promise<string> {
     if (!this.cwd) throw new Error("Choose a workspace first");
+    this.sendNowAwaitingConfirmation = null;
+    this.sendNowInFlight.clear();
+    this.queuedImagesById.clear();
+    this.paintedPromotions.clear();
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: NewSessionRequest = {
@@ -192,6 +208,10 @@ export class CookAcpClient {
   async loadSession(sessionId: string, cwd?: string): Promise<void> {
     const activeCwd = cwd ?? this.cwd;
     if (!activeCwd) throw new Error("Session has no workspace");
+    this.sendNowAwaitingConfirmation = null;
+    this.sendNowInFlight.clear();
+    this.queuedImagesById.clear();
+    this.paintedPromotions.clear();
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: LoadSessionRequest = {
@@ -286,10 +306,89 @@ export class CookAcpClient {
   queuePrompt(text: string, attachments: Attachment[] = []): void {
     const store = useSessionStore.getState();
     if (!store.sessionId) throw new Error("Start a conversation before queueing a prompt");
+    const promptId = crypto.randomUUID();
+    this.queuedImagesById.set(promptId, optimisticImages(attachments));
+    const pending = this.pendingQueuedIds.get(store.sessionId) ?? [];
+    this.pendingQueuedIds.set(store.sessionId, [...pending, promptId]);
     store.set({ queuedPromptCount: store.queuedPromptCount + 1 });
     // A second session/prompt RPC is the agent's authoritative queue input.
     // Keep the promise live in the background; it resolves when that queued turn finishes.
-    void this.dispatchPrompt(store.sessionId, this.buildParts(text, attachments)).catch(() => undefined);
+    void this.dispatchPrompt(store.sessionId, this.buildParts(text, attachments), promptId).catch(() => undefined);
+  }
+
+  /** Promote an authoritative row, or remember an immediate second Enter until its enqueue is confirmed. */
+  async sendQueueEntryNow(sessionId: string, selected?: QueuedPromptEntry): Promise<void> {
+    const store = useSessionStore.getState();
+    if (store.sessionId !== sessionId) return;
+    const entry = selected
+      ? store.queuedEntries.find((row) => row.id === selected.id)
+      : store.queuedEntries[0];
+    if (selected && !entry) return;
+    if (!entry) {
+      const id = this.pendingQueuedIds.get(sessionId)?.[0];
+      if (id && !this.sendNowAwaitingConfirmation) {
+        this.sendNowAwaitingConfirmation = { sessionId, id };
+      }
+      return;
+    }
+    if (this.sendNowInFlight.has(entry.id)) return;
+    this.sendNowAwaitingConfirmation = null;
+    this.sendNowInFlight.set(entry.id, entry.version);
+    try {
+      await sendQueuedPromptNow(sessionId, entry.id, entry.version);
+    } catch (error) {
+      this.sendNowInFlight.delete(entry.id);
+      throw error;
+    }
+  }
+
+  private onQueueChanged(params: Record<string, unknown>, previousEntries: QueuedPromptEntry[]): void {
+    const sessionId = typeof params.sessionId === "string" ? params.sessionId : null;
+    if (!sessionId || useSessionStore.getState().sessionId !== sessionId) return;
+    const entries = useSessionStore.getState().queuedEntries;
+    const runningId = typeof params.runningPromptId === "string" ? params.runningPromptId : null;
+    const pending = this.pendingQueuedIds.get(sessionId);
+    const previousRow = previousEntries.find((entry) => entry.id === runningId);
+    const promotionKey = `${sessionId}:${runningId}`;
+    if (
+      runningId
+      && (previousRow || pending?.includes(runningId))
+      && (params.runningKind ?? previousRow?.kind ?? "prompt") === "prompt"
+      && !this.paintedPromotions.has(promotionKey)
+    ) {
+      const text = typeof params.runningText === "string" ? params.runningText : previousRow?.text ?? "";
+      const images = this.queuedImagesById.get(runningId) ?? [];
+      if (text.trim() || images.length > 0) {
+        this.paintedPromotions.add(promotionKey);
+        useSessionStore.getState().appendOptimisticUser(text, images);
+      }
+    }
+    if (runningId) this.queuedImagesById.delete(runningId);
+    if (pending) {
+      const remaining = pending.filter((id) => id !== runningId && !entries.some((entry) => entry.id === id));
+      if (remaining.length) this.pendingQueuedIds.set(sessionId, remaining);
+      else this.pendingQueuedIds.delete(sessionId);
+    }
+    for (const [id, version] of this.sendNowInFlight) {
+      const entry = entries.find((row) => row.id === id);
+      if (id === runningId || !entry || entry.version !== version) this.sendNowInFlight.delete(id);
+    }
+    const awaiting = this.sendNowAwaitingConfirmation;
+    if (!awaiting || awaiting.sessionId !== sessionId) return;
+    if (awaiting.id === runningId) {
+      this.sendNowAwaitingConfirmation = null;
+      return;
+    }
+    const entry = entries.find((row) => row.id === awaiting.id);
+    if (entry) {
+      this.sendNowAwaitingConfirmation = null;
+      void this.sendQueueEntryNow(sessionId, entry).catch((error) => {
+        const store = useSessionStore.getState();
+        if (store.sessionId === sessionId) {
+          store.set({ error: normalizeError(error, "Could not send the queued prompt") });
+        }
+      });
+    }
   }
 
   imageAttachEnabled(): boolean {
@@ -300,13 +399,16 @@ export class CookAcpClient {
     return composePromptParts(text, attachments);
   }
 
-  private async dispatchPrompt(sessionId: string, parts: PromptRequest["prompt"]): Promise<PromptResponse> {
-    const promptId = crypto.randomUUID();
+  private async dispatchPrompt(
+    sessionId: string,
+    parts: PromptRequest["prompt"],
+    promptId = crypto.randomUUID(),
+  ): Promise<PromptResponse> {
     this.promptCorrelation.begin(promptId);
     const params: PromptRequest = {
       sessionId,
       prompt: parts,
-      _meta: { promptId },
+      _meta: { promptId, clientIdentifier: CAPABILITIES.clientIdentifier },
     };
     this.pendingPromptRequests += 1;
     trackWorking(sessionId, Date.now());
@@ -321,6 +423,14 @@ export class CookAcpClient {
       throw new Error(message);
     } finally {
       await this.inboundMessages;
+      const pending = this.pendingQueuedIds.get(sessionId);
+      if (pending?.includes(promptId)) {
+        const remaining = pending.filter((id) => id !== promptId);
+        if (remaining.length) this.pendingQueuedIds.set(sessionId, remaining);
+        else this.pendingQueuedIds.delete(sessionId);
+      }
+      if (this.sendNowAwaitingConfirmation?.id === promptId) this.sendNowAwaitingConfirmation = null;
+      this.queuedImagesById.delete(promptId);
       this.sessionUpdates.flushNow();
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       this.promptCorrelation.end(promptId);
@@ -478,6 +588,11 @@ export class CookAcpClient {
     if (useSessionStore.getState().turnRunning) await this.cancel();
     await stopProcess();
     this.promptCorrelation.clear();
+    this.pendingQueuedIds.clear();
+    this.queuedImagesById.clear();
+    this.paintedPromotions.clear();
+    this.sendNowAwaitingConfirmation = null;
+    this.sendNowInFlight.clear();
     for (const dispose of this.unlisten.splice(0)) dispose();
   }
 }

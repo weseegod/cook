@@ -25,6 +25,7 @@ describe("CAPABILITIES honesty (C1)", () => {
     const params = buildInitializeRequest("1.0.0");
     expect(params._meta?.clientIdentifier).toBe("grok-desktop");
     expect(params.clientCapabilities?.terminal).toBe(false);
+    expect(params.clientCapabilities?._meta?.["x.ai/userMessageEcho"]).toBe(true);
     expect((params._meta as { mcpApps?: boolean })?.mcpApps).toBe(false);
   });
 

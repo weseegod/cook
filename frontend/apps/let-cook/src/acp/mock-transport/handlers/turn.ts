@@ -6,8 +6,8 @@ const emptyResponse: MethodHandler = ({ respond }) => {
     return respond({});
 };
 
-function queueBroadcast(sessionId: string) {
-  mockQueueChanged(undefined, sessionId);
+function queueBroadcast(sessionId: string, running?: { id: string; text: string; kind?: string }) {
+  mockQueueChanged(undefined, sessionId, running);
 }
 
 export const turnHandlers: Record<string, MethodHandler> = {
@@ -87,8 +87,9 @@ export const turnHandlers: Record<string, MethodHandler> = {
   },
   "x.ai/queue/interject": ({ p, sessionId, respond }) => {
     const id = String(p.id ?? "");
+    const promoted = state.queueEntries.find((entry) => entry.id === id);
     state.queueEntries = state.queueEntries.filter((entry) => entry.id !== id);
-    queueBroadcast(String(p.sessionId ?? sessionId));
+    queueBroadcast(String(p.sessionId ?? sessionId), promoted);
     return respond({});
   },
   "x.ai/queue/edit": ({ p, sessionId, respond }) => {

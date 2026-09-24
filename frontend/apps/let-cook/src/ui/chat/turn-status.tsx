@@ -106,9 +106,9 @@ export function TurnStatus() {
   const phaseStartedAt = usePhaseClock(phaseKey(resolved));
   const hasTps = showTps && tps != null && tps > 0;
   const blocked = Boolean(pendingPermission || pendingQuestion);
-  const queuedHint = !resolved || queued === 0
+  const queuedHint = !resolved || queued === 0 || blocked
     ? null
-    : isSendableWait(resolved) ? ` · ${queued} queued, Enter to send now` : ` · ${queued} queued`;
+    : turnRunning || isSendableWait(resolved) ? ` · ${queued} queued, Enter to send now` : ` · ${queued} queued`;
 
   if (!resolved && !hasTps) {
     return <ComposerMetricsHost />;

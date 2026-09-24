@@ -1,6 +1,6 @@
 import type { SessionNotification } from "@agentclientprotocol/sdk";
 import { useCatalogStore } from "../../state/catalog";
-import { useSessionStore } from "../../state/session";
+import { useSessionStore, type QueuedPromptEntry } from "../../state/session";
 import { SessionNotificationCoalescer } from "../client-coalesce";
 import type { RpcMessage } from "../host";
 import { dispatchNotification } from "../notifications";
@@ -17,6 +17,7 @@ export interface InboundPipeline {
   readonly sessionUpdates: SessionNotificationCoalescer;
   readonly refreshPlanFiles: () => void;
   readonly refreshModels: () => Promise<void>;
+  readonly onQueueChanged?: (params: Record<string, unknown>, previousEntries: QueuedPromptEntry[]) => void;
 }
 
 // The store is frame-coalesced, so two goal updates in one wire batch cannot reliably compare
@@ -110,7 +111,11 @@ async function handleMessage(
   }
 
   // Layer 3 — notifications.
+  const previousEntries = method === "x.ai/queue/changed"
+    ? useSessionStore.getState().queuedEntries
+    : [];
   await dispatchNotification(message, method, params, {
     refreshModels: pipeline.refreshModels,
   });
+  if (method === "x.ai/queue/changed") pipeline.onQueueChanged?.(params, previousEntries);
 }

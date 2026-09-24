@@ -269,6 +269,7 @@ export const notificationEntries: NotificationEntry[] = [
     mapId: "N-queue",
     method: "x.ai/queue/changed",
     handle: (ctx) => {
+      if (ctx.params.sessionId !== useSessionStore.getState().sessionId) return;
       const entries = Array.isArray(ctx.params.entries) ? ctx.params.entries : null;
       if (!entries) return;
       const queuedEntries = entries.filter(isRecord).map((entry) => ({

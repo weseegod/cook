@@ -100,7 +100,7 @@ test.describe("goal and plan presentation", () => {
   });
 
   test("queues a follow-up while a turn is running", async ({ page }) => {
-    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 250 });
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 1500 });
     const input = page.getByTestId("composer-input");
     await input.fill("hello");
     await input.press("Enter");
@@ -111,6 +111,7 @@ test.describe("goal and plan presentation", () => {
     await input.press("Enter");
     const prompts = await waitForCalls(page, "session/prompt", 2);
     expect((prompts.at(-1)?.params.prompt as Array<Record<string, unknown>>)).toEqual([{ type: "text", text: "follow up" }]);
+    expect((prompts.at(-1)?.params._meta as Record<string, unknown>).clientIdentifier).toBe("grok-desktop");
     await expect(page.getByTestId("send-button")).toContainText("Queue");
 
     // Agent queue list paints above turn-status (TUI §3 / §9.7).
@@ -124,8 +125,44 @@ test.describe("goal and plan presentation", () => {
     const statusBox = await page.getByTestId("turn-status").boundingBox();
     expect(queueBox && statusBox && queueBox.y < statusBox.y).toBe(true);
     await expect(page.getByTestId("queue-send-now-q1")).toBeVisible();
+    await expect(page.getByTestId("turn-status")).toContainText("Enter to send now");
     await expect(page.getByTestId("queue-edit-q1")).toBeVisible();
     await expect(page.getByTestId("queue-remove-q1")).toBeVisible();
+  });
+
+  test("empty Enter sends a just-queued prompt once its row is confirmed", async ({ page }) => {
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 1500 });
+    const input = page.getByTestId("composer-input");
+    await input.fill("first turn");
+    await input.press("Enter");
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+    await input.fill("follow up now");
+    await input.press("Enter");
+    const prompts = await waitForCalls(page, "session/prompt", 2);
+    const promptId = String((prompts[1].params._meta as Record<string, unknown>).promptId);
+
+    await input.press("Enter");
+    await input.press("Enter");
+    expect((await api(page).requests()).filter((entry) => entry.method === "x.ai/queue/interject")).toHaveLength(0);
+
+    await page.evaluate((id) => window.__cookMock!.queueChanged([
+      { id, version: 0, text: "follow up now", kind: "prompt", position: 0 },
+    ]), promptId);
+    await expect.poll(async () =>
+      (await api(page).requests()).filter((entry) => entry.method === "x.ai/queue/interject"),
+    ).toHaveLength(1);
+    const interject = (await api(page).requests()).find((entry) => entry.method === "x.ai/queue/interject");
+    expect(interject?.params).toMatchObject({ id: promptId, expectedVersion: 0 });
+    expect(interject?.params).not.toHaveProperty("owner");
+    expect((await api(page).requests()).some((entry) => entry.method === "session/cancel")).toBe(false);
+    const promoted = page.locator(".message-user").filter({ hasText: "follow up now" });
+    await expect(promoted).toHaveCount(1);
+    await page.evaluate((id) => window.__cookMock!.sessionUpdate("mock-session", {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "follow up now" },
+    }, { promptId: id }), promptId);
+    await expect(page.locator('[id^="transcript-row-user-"]').filter({ hasText: "follow up now" })).toHaveCount(1);
+    await expect(promoted).toHaveCount(1);
   });
 
   test("queue pane can edit, send now, and remove held prompts", async ({ page }) => {
@@ -154,6 +191,10 @@ test.describe("goal and plan presentation", () => {
     await expect.poll(async () =>
       (await api(page).requests()).filter((entry) => entry.method === "x.ai/queue/interject").length,
     ).toBeGreaterThan(0);
+    const interject = (await api(page).requests()).find((entry) => entry.method === "x.ai/queue/interject");
+    expect(interject?.params).toMatchObject({ id: "q-b", expectedVersion: 0 });
+    expect(interject?.params).not.toHaveProperty("owner");
+    await expect(page.locator(".message-user").filter({ hasText: "second queued" })).toHaveCount(1);
 
     await page.evaluate(() => window.__cookMock!.queueChanged([
       { id: "q-c", version: 0, text: "drop me", kind: "prompt", position: 0 },

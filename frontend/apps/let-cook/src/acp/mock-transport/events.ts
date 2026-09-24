@@ -199,6 +199,7 @@ export function mockSessionNotification(update: Record<string, unknown>, session
 export function mockQueueChanged(
   entries?: Array<{ id: string; version: number; text: string; kind?: string; position?: number }>,
   sessionId = "mock-session",
+  running?: { id: string; text: string; kind?: string },
 ): void {
   if (entries) {
     state.queueEntries = entries.map((entry, index) => ({
@@ -212,6 +213,11 @@ export function mockQueueChanged(
       ...entry,
       position: entry.position ?? index,
     })),
+    ...(running ? {
+      runningPromptId: running.id,
+      runningText: running.text,
+      runningKind: running.kind ?? "prompt",
+    } : {}),
   });
 }
 

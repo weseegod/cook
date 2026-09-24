@@ -238,6 +238,7 @@ export interface MockControl {
   queueChanged(
     entries?: Array<{ id: string; version: number; text: string; kind?: string; position?: number }>,
     sessionId?: string,
+    running?: { id: string; text: string; kind?: string },
   ): void;
   /** A plain `session/update` under any session, with `_meta` — how a child session streams. */
   sessionUpdate(sessionId: string, update: Record<string, unknown>, meta?: Record<string, unknown>): void;

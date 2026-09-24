@@ -410,6 +410,28 @@ pane → agent → global) → `dispatch/` produces new state + `Effect`s →
 effects spawn tasks → `Presenter` coalesces draws → `render::draw::draw_frame`
 (`xai-grok-pager-render`) writes frames on a dedicated writer thread.
 
+### 5.5 Desktop prompt queue and Send now
+
+`frontend/apps/let-cook/` is an ACP client. Its Tauri host
+(`src-tauri/src/acp_host.rs`) forwards concurrent `session/prompt` requests and
+`x.ai/queue/*` notifications to `cook agent stdio`. The React composer
+(`src/ui/chat/composer.tsx`) submits a second `session/prompt` while a turn is
+running; `src/acp/client.ts` assigns its prompt ID and sends
+`_meta.clientIdentifier: grok-desktop`. The shell uses that identifier as the
+queue row owner. The agent's `x.ai/queue/changed` notification is the source
+of truth for row ID, version, and order in the Desktop queue bar.
+
+Empty Enter selects the first queued row; the queue bar's **Send now** button
+selects its own row. Both go through `CookAcpClient.sendQueueEntryNow`, which
+sends `x.ai/queue/interject` with the row ID and version. If Enter arrives
+before the queue notification, the client waits for confirmation of that
+prompt ID and sends once. The shell's queue actor promotes the row and cancels
+the running turn when appropriate. The promotion notification's `runningText`
+paints the queued user message in chat; Desktop also opts into live
+`user_message_chunk` echoes and reconciles one against the painted message.
+The TUI follows the same queue notification path in
+`xai-grok-pager/src/app/dispatch/queue.rs`.
+
 ---
 
 ## 6. Storage layout (`~/.cook`)
@@ -453,6 +475,7 @@ separate workspace config and is unchanged.
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
 | Read the TUI presentation catalog (screens, realtime, timers, tool rows, folds, cards) | [`docs/tui-presentation.md`](docs/tui-presentation.md) |
 | Change / start the desktop app | `frontend/apps/let-cook/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); client fold [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md); wire map [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md). Keep model/tool execution in `cook agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). Do not add `src-tauri` to the Cargo workspace. |
+| Change Desktop queue or Send now | `frontend/apps/let-cook/src/acp/client.ts` owns prompt IDs, confirmation, and sending; `src/ui/chat/composer.tsx` and `queue-bar.tsx` provide Enter and button input; `src/acp/notifications/handlers.ts` applies the agent queue snapshot. See §5.5. |
 
 ### Agent / shell
 

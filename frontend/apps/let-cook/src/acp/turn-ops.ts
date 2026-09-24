@@ -61,7 +61,6 @@ export function sendQueuedPromptNow(sessionId: string, id: string, expectedVersi
     sessionId,
     id,
     expectedVersion,
-    owner: CAPABILITIES.clientIdentifier,
     ...(newText !== undefined ? { newText } : {}),
   });
 }

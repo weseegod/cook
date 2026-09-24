@@ -44,6 +44,15 @@ describe("P9/P10 notification handlers", () => {
     ]);
   });
 
+  it("ignores queue snapshots from another session", async () => {
+    await dispatchNotification(
+      { method: "x.ai/queue/changed", params: {} },
+      "x.ai/queue/changed",
+      { sessionId: "other-session", entries: [{ id: "foreign", version: 0, text: "other" }] },
+    );
+    expect(useSessionStore.getState().queuedEntries).toEqual([]);
+  });
+
   it("N-interject appends a user row for foreign broadcasts", async () => {
     useSessionStore.setState({
       transcriptCursor: { turnId: "turn-1", assistantId: null, thoughtId: null, optimisticUserId: null },

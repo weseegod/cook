@@ -12,6 +12,8 @@ export const CAPABILITIES = {
   terminal: false,
   plan: {},
   folderTrustInteractive: true,
+  /** Live user-message echoes let queued turns appear in the Desktop transcript. */
+  userMessageEcho: true,
   /** H-mcp — do not advertise until R-sdk exists. */
   mcpApps: false,
   clientIdentifier: "grok-desktop" as const,
@@ -58,6 +60,7 @@ export function buildInitializeRequest(version: string): InitializeRequest {
       plan: CAPABILITIES.plan,
       _meta: {
         "x.ai/folderTrust": { interactive: CAPABILITIES.folderTrustInteractive },
+        "x.ai/userMessageEcho": CAPABILITIES.userMessageEcho,
       },
     },
     clientInfo: { name: "Let Cook", title: "Let Cook", version },

@@ -2,7 +2,7 @@ import { CornerDownLeft, FileText, LoaderCircle, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
-import { askBtw, sendQueuedPromptNow } from "../../acp/turn-ops";
+import { askBtw } from "../../acp/turn-ops";
 import { useCatalogStore, useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { planFeedback } from "../../state/plan-review";
@@ -35,7 +35,6 @@ export function Composer() {
   const setText = useSessionStore((state) => state.setComposerDraft);
   const turnRunning = useSessionStore((state) => state.turnRunning);
   const editingQueueEntry = useSessionStore((state) => state.editingQueueEntry);
-  const queuedEntries = useSessionStore((state) => state.queuedEntries);
   const activity = useSessionStore((state) => state.activity);
   const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const interactionPending = useSessionStore((state) => Boolean(state.pendingPermission || state.pendingQuestion));
@@ -168,9 +167,9 @@ export function Composer() {
       }
       return;
     }
-    // Empty Enter on a sendable wait promotes the top held queue row (TUI §9.7).
+    // Empty Enter promotes the top held row while a turn runs (TUI §9.7).
     if (!prompt && attachments.length === 0) {
-      if (!sessionId || queuedEntries.length === 0) return;
+      if (!sessionId) return;
       const goalVerifying = useSessionStore.getState().goal?.verifyingCompletion === true;
       const resolved = resolveTurnActivity({
         derived: activity,
@@ -178,11 +177,10 @@ export function Composer() {
         goalVerifying,
         askDetail: pendingQuestion?.kind === "question" ? pendingQuestion.title ?? "" : null,
       });
-      if (!isSendableWait(resolved)) return;
-      const top = queuedEntries[0];
+      if (!turnRunning && !isSendableWait(resolved)) return;
       const finish = beginWork();
       try {
-        await sendQueuedPromptNow(sessionId, top.id, top.version);
+        await acpClient.sendQueueEntryNow(sessionId);
       } catch (error) {
         reportError(error);
       } finally {

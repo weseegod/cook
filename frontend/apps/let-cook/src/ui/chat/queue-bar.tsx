@@ -4,8 +4,8 @@ import {
   holdQueuedPromptEdit,
   releaseQueuedPromptEdit,
   removeQueuedPrompt,
-  sendQueuedPromptNow,
 } from "../../acp/turn-ops";
+import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
 import { useSessionStore, type QueuedPromptEntry } from "../../state/session";
 import { isSendableWait, resolveTurnActivity } from "./turn-activity";
@@ -56,7 +56,7 @@ export function QueueBar() {
                   className="queue-bar-chip"
                   data-testid={`queue-send-now-${entry.id}`}
                   disabled={editingId === entry.id}
-                  onClick={() => void sendNow(sessionId, entry).catch(reportError)}
+                  onClick={() => void acpClient.sendQueueEntryNow(sessionId, entry).catch(reportError)}
                 >
                   Send now
                 </button>
@@ -85,10 +85,6 @@ export function QueueBar() {
       </ul>
     </div>
   );
-}
-
-async function sendNow(sessionId: string, entry: QueuedPromptEntry) {
-  await sendQueuedPromptNow(sessionId, entry.id, entry.version);
 }
 
 async function beginEdit(sessionId: string, entry: QueuedPromptEntry) {
