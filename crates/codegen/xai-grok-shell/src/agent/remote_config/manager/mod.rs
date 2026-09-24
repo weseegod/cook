@@ -70,6 +70,9 @@ struct Inner {
     catalog_progress: tokio::sync::watch::Sender<CatalogProgress>,
     /// Set once the user explicitly picks a model (`/model`); guards the first-catalog reselect from clobbering that choice.
     user_selected_model: AtomicBool,
+    /// Last `(current_model_id, model-id list)` broadcast. Unchanged repeats are dropped so a
+    /// config/auth/cache flap cannot flood `x.ai/models/update` at the client.
+    last_notify_fingerprint: RwLock<Option<String>>,
 }
 
 /// Clears an in-flight flag on drop so a panicking task can't wedge future refreshes.
@@ -219,6 +222,7 @@ impl ModelsManagerBuilder {
                 model_switch_watch: tokio::sync::watch::channel(0u64).0,
                 catalog_progress: tokio::sync::watch::channel(CatalogProgress::Pending).0,
                 user_selected_model: AtomicBool::new(false),
+                last_notify_fingerprint: RwLock::new(None),
             }),
         }
     }
@@ -377,6 +381,8 @@ impl ModelsManager {
     pub(crate) fn apply_config_reselecting_default(&self, new_config: config::Config) {
         self.apply_config(new_config.clone());
         self.reselect_default_model(&new_config);
+        // apply_config already notified; a reselect can move `current_model_id`, and the
+        // fingerprint gate drops this call when it did not.
         self.notify_models_updated();
     }
 
@@ -752,6 +758,23 @@ impl ModelsManager {
         let available = self.available();
         let current = self.current_model_id();
         let count = available.len();
+        // Collapse config/auth/cache flaps: the same (current, id list) is one client update.
+        let fingerprint = format!(
+            "{}|{}",
+            current.0.as_ref(),
+            available
+                .keys()
+                .map(|id| id.0.as_ref())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        {
+            let mut last = self.inner.last_notify_fingerprint.write();
+            if last.as_deref() == Some(fingerprint.as_str()) {
+                return;
+            }
+            *last = Some(fingerprint);
+        }
         xai_grok_telemetry::unified_log::info(
             "model catalog: notifying clients",
             None,

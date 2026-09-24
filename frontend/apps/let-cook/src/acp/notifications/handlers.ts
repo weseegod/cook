@@ -159,10 +159,20 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/models/update",
     handle: async (ctx) => {
       const catalog = modelCatalog(ctx.params);
+      // A storm of identical `x.ai/models/update` notifications must not thrash React or
+      // re-list on the prompt hot path. Skip when the payload is what we already show.
+      const current = useCatalogStore.getState();
+      const identical =
+        current.currentModelId === catalog.currentModelId &&
+        current.models.length === catalog.models.length &&
+        current.models.every((m, i) => m.id === catalog.models[i]?.id);
+      if (identical) return;
       // Re-list through the client so Desktop/config provider metadata is merged back in. The
       // notification payload often omits provider names, which would otherwise put OpenAI's
-      // unnamespaced models back under the xAI fallback bucket.
-      if (ctx.refreshModels) {
+      // unnamespaced models back under the xAI fallback bucket. Skip while a turn is streaming —
+      // the extra `x.ai/models/list` round-trip adds latency on the hot path.
+      const turnRunning = useSessionStore.getState().turnRunning;
+      if (ctx.refreshModels && !turnRunning) {
         try {
           await ctx.refreshModels();
         } catch {
