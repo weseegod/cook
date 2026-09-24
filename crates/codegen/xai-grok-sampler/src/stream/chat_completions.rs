@@ -277,13 +277,69 @@ fn collapse_duplicate_calls(calls: Vec<ToolCall>) -> Vec<ToolCall> {
     for call in calls {
         if unique.iter().any(|seen| {
             seen.name == call.name
-                && json_arguments_equal(seen.arguments.as_ref(), call.arguments.as_ref())
+                && (json_arguments_equal(seen.arguments.as_ref(), call.arguments.as_ref())
+                    || terminal_execution_equal(seen, &call))
         }) {
             continue;
         }
         unique.push(call);
     }
     unique
+}
+
+/// Descriptions label a terminal call but do not change the command it runs.
+/// Keep execution options in the comparison: a foreground and background call
+/// with the same command are not interchangeable.
+fn terminal_execution_equal(left: &ToolCall, right: &ToolCall) -> bool {
+    if left.name != "run_terminal_command" {
+        return false;
+    }
+    let (Ok(mut left), Ok(mut right)) = (
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&left.arguments),
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&right.arguments),
+    ) else {
+        return false;
+    };
+    left.remove("description");
+    right.remove("description");
+    left == right
+}
+
+#[cfg(test)]
+mod terminal_dedup_tests {
+    use super::*;
+
+    fn call(id: &str, arguments: &str) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            name: "run_terminal_command".into(),
+            arguments: arguments.into(),
+        }
+    }
+
+    #[test]
+    fn duplicate_terminal_commands_ignore_description_only() {
+        let calls = vec![
+            call(
+                "first",
+                r#"{"command":"./job.sh","description":"one","background":true}"#,
+            ),
+            call(
+                "second",
+                r#"{"description":"two","background":true,"command":"./job.sh"}"#,
+            ),
+            call(
+                "foreground",
+                r#"{"command":"./job.sh","background":false}"#,
+            ),
+            call("other", r#"{"command":"echo done","background":true}"#),
+        ];
+        let unique = collapse_duplicate_calls(calls);
+        assert_eq!(
+            unique.iter().map(|c| c.id.as_ref()).collect::<Vec<_>>(),
+            ["first", "foreground", "other"]
+        );
+    }
 }
 
 /// The output stream emits exactly one terminal event per request.
