@@ -105,19 +105,19 @@ Never commit `OUT_ROOT`, wire logs, or suite `config.toml` files that contain an
 
 ## Latest core-agent audit (2026-09-24, `spark25-4b`)
 
-Evidence: `/tmp/real-model-safeguard-20260924T083113Z` and `/tmp/real-model-session-20260924T083459Z`. Full report: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
+Evidence: `/tmp/real-model-safeguard-20260924T100456Z` and `/tmp/real-model-session-20260924T101101Z` (post-fix). Pre-fix: `/tmp/real-model-safeguard-20260924T083113Z` and `/tmp/real-model-session-20260924T083459Z`. Full report: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
 
 | Phase | Result |
 |---|---|
-| safeguard | 6 pass / 1 fail (`safeguard.identical_reread` → `max_tokens_truncation`) |
+| safeguard | 5 pass / 2 fail (`identical_reread`, `offset_walk`) |
 | session | 12 pass / 0 fail |
 
 | Result | Cases |
 |---|---|
-| pass | `safeguard.bash_bound`, `safeguard.dangerous_rm`, `safeguard.large_read`, `safeguard.terminal_fanout`, `safeguard.offset_walk`, `safeguard.pin_failure` |
-| fail | `safeguard.identical_reread` (`fail exit 1`, `error_kind=max_tokens_truncation`, 0 tool calls) |
+| pass | `safeguard.bash_bound`, `safeguard.dangerous_rm`, `safeguard.large_read`, `safeguard.terminal_fanout`, `safeguard.pin_failure` |
+| fail | `safeguard.identical_reread` (`tool_called: no successful read_file`, exit 0, `stopReason=max_tokens`); `safeguard.offset_walk` (`measured-nothing`, 3 reads then `max_tokens`) |
 
-Next product fix: `max_tokens_hard_stop` in the audit report. Then re-run `run-phase.sh safeguard` into a new `OUT_ROOT`.
+`max_tokens_hard_stop` and `large_read_silent_cap` are fixed in tree (LengthSalvage on top-level max-tokens; line-cap continuation marker). Residual fails are oracle/model measurement, not Internal error. Next: re-run those two cases; do not loosen oracles or raise `MAX_COMPLETION_TOKENS`.
 
 ## Latest tools phase (2026-09-24, `mimo26-9b`)
 

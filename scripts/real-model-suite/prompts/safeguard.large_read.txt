@@ -1,5 +1,5 @@
 Read the file `{{WORKDIR}}/big.txt` with the read tool. The file has 1201 lines and two special marker lines whose text contains `-HEAD` and `-TAIL`.
 
-A whole-file read stops at 1000 lines and may omit a continuation marker. After the first read, keep calling the read tool with a start offset after the last line you saw until you have both marker lines. Prefer offset=1001 if the first window ended at line 1000.
+A whole-file read is capped. When the tool response ends with a continuation notice that names `rerun with offset=N`, use that offset on the next read. If there is no such notice, continue from the line after the last line you saw. Keep reading until you have both marker lines.
 
 Reply with exactly those two marker lines, one per line. Do not invent lines. Do not edit any file.

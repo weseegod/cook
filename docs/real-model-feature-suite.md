@@ -698,8 +698,9 @@ Latest full tools `score.txt` (`mimo26-9b`, 2026-09-24):
 
 Remaining for the next implementer:
 
-- [ ] Fix product gap `max_tokens_hard_stop` (audit report) so `safeguard.identical_reread` can observe stationarity; re-run `run-phase.sh safeguard`.
-- [ ] Fix product gaps `large_read_silent_cap` / `file_too_large_no_next_offset` (next-offset continuation on line/token clip).
+- [x] Fix product gap `max_tokens_hard_stop` (audit report): top-level `MaxTokensTruncation` completes via `LengthSalvage` as `stopReason=max_tokens` / exit 0. Residual: `safeguard.identical_reread` still needs 4–12 identical `read_file` calls (oracle not loosened).
+- [x] Fix product gap `large_read_silent_cap`: `MAX_LINES_READ` clip emits the shared next-offset continuation marker; `safeguard.large_read` follows the tool-named offset. `file_too_large_no_next_offset` stays design §6.2 (refusal without a computed offset).
+- [ ] Clear residual `safeguard.identical_reread` / `safeguard.offset_walk` measurement fails (model must emit the loops; do not loosen oracles or raise `MAX_COMPLETION_TOKENS`).
 - [ ] Clear the four tools fails above without loosening oracles (prefer pillar discoverability + unit tests). Re-run each fail, then a **full** `--phase tools` into a new `OUT_ROOT` until zero `fail`/`hung`.
 - [ ] Once tools is green: `--phase agents`, then `--phase all` for `cli.export` / `cli.sessions_after` / `cli.usage` (session is already green on spark25).
 - [ ] Operator order checklist: `docs/real-model-suite-run-order.md`.

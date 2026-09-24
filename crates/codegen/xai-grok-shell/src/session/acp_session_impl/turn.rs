@@ -3200,9 +3200,8 @@ impl SessionActor {
                     (r, latency)
                 }
                 Err(error) => {
-                    if salvage.awaiting_continuation()
-                        && crate::sampling::error::is_max_tokens_turn_error(&error)
-                    {
+                    let is_max_tokens = crate::sampling::error::is_max_tokens_turn_error(&error);
+                    if salvage.awaiting_continuation() && is_max_tokens {
                         salvage.response_arrived();
                         xai_grok_telemetry::unified_log::warn(
                             "shell.turn.length_empty_continuation",
@@ -3227,6 +3226,9 @@ impl SessionActor {
                             );
                             continue;
                         }
+                        // The failed sample never entered the ledger; do not invent zeros.
+                        self.chat_state_handle
+                            .mark_usage_incomplete_nowait(true, true);
                         self.chat_state_handle.pop_stranded_continue_reminder();
                         let structured_output = match structured_output_validator.as_ref() {
                             Some(validator) => self
@@ -3249,9 +3251,67 @@ impl SessionActor {
                         });
                     }
                     salvage.response_arrived();
-                    salvage.step_boundary();
-                    self.tool_context.fail_task_output_usage_closed();
-                    return Err(error);
+                    let budgeted_child = self.tool_context.task_output_token_budget.is_some()
+                        || self.tool_context.sampler_retry_only_before_output;
+                    match super::length_salvage::classify_top_level_max_tokens(
+                        is_max_tokens,
+                        budgeted_child,
+                        salvage,
+                    ) {
+                        super::length_salvage::MaxTokensAction::Fail => {
+                            salvage.step_boundary();
+                            self.tool_context.fail_task_output_usage_closed();
+                            return Err(error);
+                        }
+                        super::length_salvage::MaxTokensAction::Continue { inject_reminder } => {
+                            // Discarded Length sample: usage never reached the ledger.
+                            self.chat_state_handle
+                                .mark_usage_incomplete_nowait(true, true);
+                            if inject_reminder {
+                                let tag = self.reminder_wrapper_tag();
+                                self.chat_state_handle.push_user_message(
+                                    ConversationItem::length_continue_reminder(format!(
+                                        "<{tag}>{}</{tag}>",
+                                        super::length_salvage::LENGTH_CONTINUE_REMINDER_BODY
+                                    )),
+                                );
+                            }
+                            xai_grok_telemetry::unified_log::warn(
+                                "shell.turn.length_truncation_continue",
+                                Some(self.session_info.id.0.as_ref()),
+                                Some(serde_json::json!({
+                                    "continue_attempts": salvage.continues(),
+                                    "continue_budget": salvage.budget(),
+                                    "source": "max_tokens_error",
+                                })),
+                            );
+                            continue;
+                        }
+                        super::length_salvage::MaxTokensAction::CompleteTruncated => {
+                            self.chat_state_handle
+                                .mark_usage_incomplete_nowait(true, true);
+                            self.chat_state_handle.pop_stranded_continue_reminder();
+                            let structured_output = match structured_output_validator.as_ref() {
+                                Some(validator) => self
+                                    .chat_state_handle
+                                    .get_trailing_assistant_report()
+                                    .await
+                                    .map(|text| validate_structured_output(validator, &text)),
+                                None => None,
+                            };
+                            self.finalize_turn_bookkeeping(
+                                req_id,
+                                std::mem::take(&mut turn_span_totals),
+                                turn_sampling,
+                            )
+                            .await;
+                            return Ok(TurnOutcome::Completed {
+                                tools_called: turn_tools_called,
+                                structured_output,
+                                stop: CompletedStop::MaxTokens,
+                            });
+                        }
+                    }
                 }
                 Ok(SamplerTurnOutcome::RetryTransient { kind, status_code }) => {
                     if matches!(kind, xai_grok_sampler::SamplingErrorKind::Api) {

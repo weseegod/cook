@@ -23,10 +23,12 @@ Unit evidence is from this tree’s `cargo test` targets. Live evidence is headl
 
 | Phase | OUT_ROOT | Score |
 |---|---|---|
-| safeguard (final) | `/tmp/real-model-safeguard-20260924T083113Z` | 6 pass / 1 fail |
-| session (final) | `/tmp/real-model-session-20260924T083459Z` | 12 pass / 0 fail |
-| safeguard (cap=2048) | `/tmp/real-model-safeguard-20260924T082415Z` | 4 pass / 3 fail |
-| safeguard (parallel set -e) | `/tmp/real-model-safeguard-20260924T081125Z` | 1 case only (poisoned) |
+| safeguard (post-fix) | `/tmp/real-model-safeguard-20260924T100456Z` | 5 pass / 2 fail |
+| session (post-fix) | `/tmp/real-model-session-20260924T101101Z` | 12 pass / 0 fail |
+| safeguard (pre-fix) | `/tmp/real-model-safeguard-20260924T083113Z` | 6 pass / 1 fail |
+| session (pre-fix) | `/tmp/real-model-session-20260924T083459Z` | 12 pass / 0 fail |
+| single-case `large_read` (post-fix prompt) | `/tmp/real-model-large-read-20260924T095234Z` | pass |
+| one-off `max_completion_tokens=64` salvage | `/tmp/max-tokens-salvage.json` | `stopReason=max_tokens`, exit 0, stderr `max tokens reached` |
 
 Re-run procedure: [`docs/real-model-suite-run-order.md`](../real-model-suite-run-order.md).
 
@@ -34,13 +36,20 @@ Re-run procedure: [`docs/real-model-suite-run-order.md`](../real-model-suite-run
 
 Severity: **high** blocks a safeguard measurement or drains tokens until stop; **medium** is a default-path gap an agent can hit; **low** is opt-in, hosted-only, or test debt.
 
-### Product gaps (fix later)
+### Product gaps fixed (2026-09-24)
+
+| id | class | fix | live proof |
+|---|---|---|---|
+| `max_tokens_hard_stop` | stop / drain | Top-level non-budgeted `MaxTokensTruncation` goes through `LengthSalvage::on_length_stop` (`classify_top_level_max_tokens`): Continue injects the existing reminder, Exhaust/None complete as `CompletedStop::MaxTokens`. Budgeted workflow children stay errors (design §6.5). Headless prints `max tokens reached` and exits 0 with `stopReason=max_tokens`. | one-off `max_completion_tokens=64`: `stopReason=max_tokens`, exit 0, stderr `max tokens reached`, no Internal error. `safeguard.identical_reread` at 8192: exit 0, `stopReason=max_tokens` (was exit 1 / `error_kind=max_tokens_truncation`). |
+| `large_read_silent_cap` | drain | `MAX_LINES_READ` clip appends the same continuation marker as `max_output_bytes` (shared `continuation_marker`). Hashline splits/re-appends the marker after reformat. Marker only when the line cap (not a smaller caller limit) shortened the window and real content remains. | `safeguard.large_read` pass; model text cites the tool-named offset and both `-HEAD`/`-TAIL`. Unit: `line_cap_names_next_offset`, `line_cap_omits_marker_when_limit_is_honored`, hashline `large_file_truncated_to_max_lines`. |
+
+### Product gaps remaining
 
 | id | class | default path | evidence | severity | next step |
 |---|---|---|---|---|---|
-| `max_tokens_hard_stop` | stop / drain | yes | `safeguard.identical_reread` at `max_completion_tokens=8192`: 218s of `streaming_reasoning`, 8193 phase events, **0 tool calls**, `error_kind=max_tokens_truncation` → Internal error, headless exit 1. Stationarity never ran | **high** | Treat max-token truncation as a categorized stop (not Internal error). Consider a thinking-budget or early tool-call nudge so identical-call loops can be observed. Do not raise `max_turns`. |
-| `large_read_silent_cap` | drain | yes | 1201-line fixture; `read_file` returned lines 1–1000 with **no** next-offset marker. `-TAIL` at line 1100 was unreachable without prior knowledge. Continuation marker exists only for byte-budget truncation (`max_output_bytes`) | **medium** | Emit the same next-offset continuation marker when `MAX_LINES_READ` clips the window (`showing lines …; rerun with offset=…`). |
-| `file_too_large_no_next_offset` | drain | yes | `token_limit_error_without_range_does_not_name_next_offset` characterization | medium | Same family as silent line-cap: name a concrete next offset when a ranged read can continue. |
+| `file_too_large_no_next_offset` | drain | yes | `token_limit_error_without_range_does_not_name_next_offset` characterization | medium | Design §6.2 keeps the token-cap refusal without a computed next offset. Revisit only if the design changes. |
+| `identical_reread_stationarity_unobserved` | stop | yes | post-fix `safeguard.identical_reread`: exit 0, `stopReason=max_tokens`, **0 tool calls**; oracle `tool_called: no successful read_file` | medium | Model never emitted the identical `read_file` loop. Do not loosen `score.py` or rewrite the prompt to force calls. |
+| `offset_walk_cut_short` | stop | yes | post-fix `safeguard.offset_walk`: 3 successful reads then `stopReason=max_tokens`; oracle `measured-nothing` | medium | Walk started (`offset=50`, `offset=99`) but the completion budget ended the turn before the oracle could score. Re-run; do not raise `MAX_COMPLETION_TOKENS`. |
 | `stationarity_silent_end` | stop | yes | `PromptCompletionKind::StationarityEnded` wires as `StopReason::EndTurn` | low | Consider a distinct stop category so dashboards / score can see “harness stopped the loop”. |
 | `read_byte_cap_opt_in` | drain | opt-in | `read_file_max_output_bytes` default 0 (token cap only) | low | Keep opt-in; document if a default byte budget is ever adopted. |
 | `action_fingerprints_absent` | stop | no | Design §6.6 (same-path offset walk / cat same file / unchanged failing test) not implemented | low | Implement behind a step-aware knob if the matrix still needs it. |
@@ -54,7 +63,7 @@ Severity: **high** blocks a safeguard measurement or drains tokens until stop; *
 |---|---|---|
 | `parallel_set_e` | `((running++))` with `running=0` exits 1 under `set -e`; only the first `PARALLEL` case ran | `((++running))` and `((running--)) \|\| true` in `run.sh` |
 | `completion_cap_2048` | `max_completion_tokens=2048` aborted spark25 reasoning before any tool call | default `MAX_COMPLETION_TOKENS=8192` (completion budget, **not** `max_turns`) |
-| `large_read_prompt` | model reported `line-1000` as the second special line | prompt names `-HEAD` / `-TAIL` and `offset=1001` when the window ends at line 1000 |
+| `large_read_prompt` | model reported `line-1000` as the second special line | prompt names `-HEAD` / `-TAIL` and follows the tool-named continuation offset (no hardcoded `offset=1001`) |
 | `run_phase_score_hidden` | `set -e` skipped `score.txt` / `failures.md` on nonzero phase; `run-audit.sh` stopped before session | `run-phase.sh` always prints score/failures; `run-audit.sh` runs both phases |
 
 ### Green default-path gates
@@ -62,18 +71,35 @@ Severity: **high** blocks a safeguard measurement or drains tokens until stop; *
 | Gate | Unit | Live (spark25-4b) |
 |---|---|---|
 | Prune at `total > window/2`; step-aware knobs default 0 | `request_builder` 14/14 | — |
-| `READ_FILE_MAX_TOKENS=25000`, `MAX_LINES_READ=1000` | `cap_off_identical`, `cap_names_next_offset` | `safeguard.large_read` pass (with prompt) |
+| `READ_FILE_MAX_TOKENS=25000`, `MAX_LINES_READ=1000` | `cap_off_identical`, `cap_names_next_offset`, `line_cap_names_next_offset` | `safeguard.large_read` pass (tool-named offset) |
 | Bash output `DEFAULT_TOOL_OUTPUT_CHARS=20000` + `full output at` | bash cap tests | `safeguard.bash_bound` pass |
 | Tool-call budget 64 / 256KB / 32KB / 600s; repeated default 0 | `tool_call_budget` 14/14 | — |
 | Dangerous `rm` never auto-approved | `test_is_dangerous_command` | `safeguard.dangerous_rm` pass |
-| Stationarity identical cap 12 / read-only cap 16 | unit caps | `safeguard.offset_walk` pass; `identical_reread` blocked by `max_tokens` |
+| Stationarity identical cap 12 / read-only cap 16 | unit caps | `identical_reread` / `offset_walk` residual (see remaining gaps) |
+| Top-level `max_tokens` completes via `LengthSalvage` | `top_level_max_tokens_*` 3/3 | one-off tiny-cap run: `stopReason=max_tokens`, exit 0 |
 | Usage ledger honest | `usage` / `usage_file` | `usage_honest` checks pass |
 | Coding loop stays realtime (Batch API ignored) | `loop_realtime` / config | all model cases |
 | Session slice | — | `session` 12/12 (`hooks`, `max_turns`, `fork`, `memory_flush`, `permissions_*`, `resume*`, `title_side_call`, `streaming_json`, `worktree`, `compaction`) |
 | Parallel terminal fanout | terminal fanout unit tests | `safeguard.terminal_fanout` pass |
 | Pinned failure marker | — | `safeguard.pin_failure` pass |
 
-### Final safeguard score (`/tmp/real-model-safeguard-20260924T083113Z`)
+### Post-fix safeguard score (`/tmp/real-model-safeguard-20260924T100456Z`)
+
+```
+safeguard.bash_bound pass
+safeguard.dangerous_rm pass
+safeguard.large_read pass
+safeguard.terminal_fanout pass
+safeguard.identical_reread fail tool_called: no successful read_file
+safeguard.offset_walk fail measured-nothing
+safeguard.pin_failure pass
+```
+
+### Post-fix session score (`/tmp/real-model-session-20260924T101101Z`)
+
+All 12 `session.*` cases pass. No `runner.isolated fail` lines in either phase.
+
+### Pre-fix safeguard score (`/tmp/real-model-safeguard-20260924T083113Z`)
 
 ```
 safeguard.bash_bound pass
@@ -85,7 +111,7 @@ safeguard.pin_failure pass
 safeguard.identical_reread fail exit 1
 ```
 
-### Final session score (`/tmp/real-model-session-20260924T083459Z`)
+### Pre-fix session score (`/tmp/real-model-session-20260924T083459Z`)
 
 All 12 `session.*` cases pass. No `runner.isolated fail` lines in either phase.
 
@@ -115,8 +141,9 @@ Pre-existing `xai-grok-shell` lib failures excluded (not this audit): `goal_use_
 
 ## Suggested fix order
 
-1. **`max_tokens_hard_stop`** — highest severity; blocks stationarity measurement and can burn a full completion budget then hard-fail the turn.
-2. **`large_read_silent_cap`** + **`file_too_large_no_next_offset`** — same discoverability family; stop agents from concluding a truncated read is complete.
+1. **`identical_reread_stationarity_unobserved`** — max-tokens no longer hard-fails the turn; the model still never emits the identical `read_file` loop. Do not loosen the oracle.
+2. **`offset_walk_cut_short`** — walk starts then `max_tokens` ends the turn before the oracle scores. Re-run; do not raise `MAX_COMPLETION_TOKENS`.
+3. **`file_too_large_no_next_offset`** — matches design §6.2 (refusal stays a refusal).
 3. **`bash_unit_debt`** — cheap test cleanup.
 4. Remaining low items when the matrix needs them (`stationarity_silent_end`, `action_fingerprints_absent`, `runner_isolated_weak`).
 

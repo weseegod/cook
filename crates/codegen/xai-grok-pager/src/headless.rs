@@ -432,6 +432,11 @@ mod stop_reason_wire_tests {
             "max_turn_requests"
         );
     }
+
+    #[test]
+    fn max_tokens_wires_as_max_tokens() {
+        assert_eq!(stop_reason_wire(StopReason::MaxTokens), "max_tokens");
+    }
 }
 fn auto_respond_to_permissions(
     args: &acp::RequestPermissionRequest,
@@ -877,7 +882,11 @@ pub async fn run_single_turn(
         raw_config: &raw_config,
         remote_settings: None,
         is_headless: true,
-        cli_subagents: if options.no_subagents { Some(false) } else { None },
+        cli_subagents: if options.no_subagents {
+            Some(false)
+        } else {
+            None
+        },
         cli_web_search_model: None,
         cli_session_summary_model: None,
         memory_enabled_override: options.memory_enabled_override,
@@ -1445,6 +1454,9 @@ pub async fn run_single_turn(
                 emitter.on_end("max_turn_requests", sid, rid);
                 Ok(())
             } else {
+                if stop_reason == "max_tokens" {
+                    eprintln!("max tokens reached");
+                }
                 emitter.on_end(&stop_reason, sid, rid);
                 Ok(())
             }

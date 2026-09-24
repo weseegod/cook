@@ -234,7 +234,18 @@ impl xai_tool_runtime::Tool for HashlineReadTool {
                 let (hashline_content, _raw) =
                     format_hashline_content(&full_content, fc.offset, effective_limit, &*scheme);
 
+                // Hashline rewrites `content` from the full file; keep the shared
+                // read-continuation marker that `run_read_file` already computed.
+                let (_body, marker) =
+                    crate::implementations::grok_build::read_file::split_trailing_continuation_marker(
+                        &fc.content,
+                    );
+                let marker = marker.map(str::to_owned);
                 fc.content = hashline_content;
+                if let Some(marker) = marker {
+                    fc.content.push('\n');
+                    fc.content.push_str(&marker);
+                }
                 fc.content_concise = None; // hashline has only one format
                 // Drop tool-layer captures: `hashline_content` keeps the
                 // original URIs intact, so session-layer extraction will
@@ -824,7 +835,13 @@ mod tests {
 
         match result {
             ReadFileOutput::FileContent(fc) => {
-                let content_lines: Vec<&str> = fc.content.lines().collect();
+                let (body, marker) = crate::implementations::grok_build::read_file::split_trailing_continuation_marker(&fc.content);
+                assert!(
+                    marker.is_some(),
+                    "line cap must name the next offset: {}",
+                    fc.content
+                );
+                let content_lines: Vec<&str> = body.lines().collect();
                 assert_eq!(content_lines.len(), MAX_LINES_READ);
                 let Some(first) = content_lines.first() else {
                     panic!("expected content lines: {content_lines:?}");
@@ -834,6 +851,12 @@ mod tests {
                 assert!(
                     last.trim_start()
                         .starts_with(&format!("{}:", MAX_LINES_READ))
+                );
+                assert!(
+                    marker
+                        .unwrap()
+                        .contains(&format!("rerun with offset={}", MAX_LINES_READ + 1)),
+                    "marker: {marker:?}"
                 );
             }
             other => panic!("Expected FileContent, got {:?}", other),
@@ -892,7 +915,13 @@ mod tests {
 
         match result {
             ReadFileOutput::FileContent(fc) => {
-                let content_lines: Vec<&str> = fc.content.lines().collect();
+                let (body, marker) = crate::implementations::grok_build::read_file::split_trailing_continuation_marker(&fc.content);
+                assert!(
+                    marker.is_some(),
+                    "line cap must name the next offset: {}",
+                    fc.content
+                );
+                let content_lines: Vec<&str> = body.lines().collect();
                 assert_eq!(content_lines.len(), MAX_LINES_READ);
                 assert_eq!(fc.limit, Some(2000));
             }
