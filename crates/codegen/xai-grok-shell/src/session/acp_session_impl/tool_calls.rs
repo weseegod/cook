@@ -554,6 +554,36 @@ impl SessionActor {
         );
         Ok(allowed)
     }
+    /// Preserve a result for every observer removed from a post-reminder batch.
+    pub(super) async fn skip_terminal_observers(
+        &self,
+        skipped: Vec<crate::sampling::types::ToolCallResponse>,
+    ) -> Result<(), acp::Error> {
+        for call in skipped {
+            let tool_call_id = acp::ToolCallId::new(std::sync::Arc::from(call.id.clone()));
+            let raw_input =
+                serde_json::from_str::<serde_json::Value>(&call.function.arguments).ok();
+            let meta = self.stamp_tool_meta(None, &call.function.name, None);
+            self.send_update(
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new(tool_call_id.clone(), call.function.name)
+                        .kind(acp::ToolKind::Execute)
+                        .status(acp::ToolCallStatus::Pending)
+                        .raw_input(raw_input)
+                        .meta(meta),
+                ),
+                None,
+            )
+            .await;
+            self.handle_tool_not_executed(
+                &call.id,
+                &tool_call_id,
+                "A status check in this response was already kept. Read that result or monitor the existing task before checking again.".to_string(),
+            )
+            .await?;
+        }
+        Ok(())
+    }
     /// Runs prepare, then dispatch, then post-flight.
     /// Caller owns the outer tail flush.
     async fn execute_tool_calls_batch(
