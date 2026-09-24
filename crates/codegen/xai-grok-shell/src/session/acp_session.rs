@@ -2090,6 +2090,9 @@ mod turn_end_guard_tests;
 #[path = "acp_session_tests/turn_end_reporting_tests.rs"]
 mod turn_end_reporting_tests;
 #[cfg(test)]
+#[path = "acp_session_tests/turn/turn_start_anchor_tests.rs"]
+mod turn_start_anchor_tests;
+#[cfg(test)]
 #[path = "acp_session_tests/wait_for_mcp_prefix_tests.rs"]
 mod wait_for_mcp_prefix_tests;
 #[cfg(test)]

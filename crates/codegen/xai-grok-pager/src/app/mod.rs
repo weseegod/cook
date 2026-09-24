@@ -30,6 +30,9 @@ pub(crate) mod prompt_ack;
 pub(crate) fn is_daemon_session_row(_source: &str) -> bool {
     false
 }
+pub(crate) fn is_daemon_or_remote_control_row(_source: &str) -> bool {
+    false
+}
 pub use xai_prompt_queue as prompt_queue;
 mod acp_handler;
 mod connect_timeout;
@@ -1255,12 +1258,11 @@ fn print_exit_resume_hint(info: &ExitInfo, max_width: usize, w: &mut impl Write)
         }
         let _ = writeln!(w);
     }
-    let cli = xai_grok_version::CLI_BINARY_NAME;
     let _ = writeln!(w, "Resume this session with:");
     if info.minimal {
-        let _ = writeln!(w, "  {cli} --minimal --resume {}", info.session_id);
+        let _ = writeln!(w, "  grok --minimal --resume {}", info.session_id);
     } else {
-        let _ = writeln!(w, "  {cli} --resume {}", info.session_id);
+        let _ = writeln!(w, "  grok --resume {}", info.session_id);
     }
 }
 /// Screen-mode relaunch failure fallback (same quit tail as plain resume).
@@ -2248,9 +2250,9 @@ mod tests {
         assert!(!args.no_alt_screen);
     }
     #[test]
-    fn cli_command_name_is_cook() {
+    fn cli_command_name_is_grok() {
         use clap::CommandFactory;
-        assert_eq!(PagerArgs::command().get_name(), "cook");
+        assert_eq!(PagerArgs::command().get_name(), "grok");
     }
     #[test]
     fn cli_help_output_header() {
@@ -2260,9 +2262,9 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "Cook — Let Cook TUI",
+                "Grok Build TUI",
                 "",
-                "Usage: cook [OPTIONS] [PROMPT] [COMMAND]",
+                "Usage: grok [OPTIONS] [PROMPT] [COMMAND]",
                 "",
                 "Arguments:",
             ]
@@ -2308,7 +2310,7 @@ mod tests {
         print_exit_resume_hint(&bare_exit_info("sess-abc", false), 80, &mut buf);
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "\nResume this session with:\n  cook --resume sess-abc\n"
+            "\nResume this session with:\n  grok --resume sess-abc\n"
         );
     }
     #[test]
@@ -2317,7 +2319,7 @@ mod tests {
         print_exit_resume_hint(&bare_exit_info("sess-abc", true), 80, &mut buf);
         assert_eq!(
             String::from_utf8(buf).unwrap(),
-            "\nResume this session with:\n  cook --minimal --resume sess-abc\n"
+            "\nResume this session with:\n  grok --minimal --resume sess-abc\n"
         );
     }
     #[test]
@@ -2342,7 +2344,7 @@ mod tests {
                 "  Pinned the seed; 200 consecutive green runs.\n",
                 "\n",
                 "Resume this session with:\n",
-                "  cook --resume sess-abc\n",
+                "  grok --resume sess-abc\n",
             )
         );
     }
@@ -2363,7 +2365,7 @@ mod tests {
         assert!(out.contains(&format!("\n{}…\n", "t".repeat(19))));
         assert!(out.contains(&format!("\n> {}…\n", "p".repeat(17))));
         assert!(out.contains(&format!("\n  {}…\n", "r".repeat(17))));
-        assert!(out.contains("  cook --resume sess-abc\n"));
+        assert!(out.contains("  grok --resume sess-abc\n"));
     }
     #[test]
     fn print_relaunch_failure_hint_writes_expected_lines() {

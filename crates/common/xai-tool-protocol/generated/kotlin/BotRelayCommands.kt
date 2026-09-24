@@ -18,6 +18,7 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "approveCredentialRequest",
     "attachUpload",
     "authenticateMcpServer",
+    "clearTrays",
     "completeGithubConnect",
     "completeMcpOAuth",
     "connectChannel",
@@ -32,6 +33,7 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "denyCredentialRequest",
     "discardDraft",
     "disconnectChannel",
+    "dismissTray",
     "dismissUserForm",
     "dismissWidget",
     "generateAgentAvatarImage",
@@ -60,6 +62,7 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "getPublicBotTemplate",
     "getSubagents",
     "getTeachRecordingStatus",
+    "getTrays",
     "getVoiceCall",
     "handBackForeverBox",
     "injectChromeCookies",
@@ -146,6 +149,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "authenticateMcpServer"
+        }
+    }
+
+    @Serializable
+    data class ClearTrays(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsClearTrays,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "clearTrays"
         }
     }
 
@@ -300,6 +314,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "disconnectChannel"
+        }
+    }
+
+    @Serializable
+    data class DismissTray(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: SandAsyncTaskLabelParams,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "dismissTray"
         }
     }
 
@@ -608,6 +633,17 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "getTeachRecordingStatus"
+        }
+    }
+
+    @Serializable
+    data class GetTrays(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsClearTrays,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "getTrays"
         }
     }
 
@@ -1136,6 +1172,7 @@ object BotCommandSerializer :
             BotCommand.ApproveCredentialRequest.NAME -> BotCommand.ApproveCredentialRequest.serializer()
             BotCommand.AttachUpload.NAME -> BotCommand.AttachUpload.serializer()
             BotCommand.AuthenticateMcpServer.NAME -> BotCommand.AuthenticateMcpServer.serializer()
+            BotCommand.ClearTrays.NAME -> BotCommand.ClearTrays.serializer()
             BotCommand.CompleteGithubConnect.NAME -> BotCommand.CompleteGithubConnect.serializer()
             BotCommand.CompleteMcpOAuth.NAME -> BotCommand.CompleteMcpOAuth.serializer()
             BotCommand.ConnectChannel.NAME -> BotCommand.ConnectChannel.serializer()
@@ -1150,6 +1187,7 @@ object BotCommandSerializer :
             BotCommand.DenyCredentialRequest.NAME -> BotCommand.DenyCredentialRequest.serializer()
             BotCommand.DiscardDraft.NAME -> BotCommand.DiscardDraft.serializer()
             BotCommand.DisconnectChannel.NAME -> BotCommand.DisconnectChannel.serializer()
+            BotCommand.DismissTray.NAME -> BotCommand.DismissTray.serializer()
             BotCommand.DismissUserForm.NAME -> BotCommand.DismissUserForm.serializer()
             BotCommand.DismissWidget.NAME -> BotCommand.DismissWidget.serializer()
             BotCommand.GenerateAgentAvatarImage.NAME -> BotCommand.GenerateAgentAvatarImage.serializer()
@@ -1178,6 +1216,7 @@ object BotCommandSerializer :
             BotCommand.GetPublicBotTemplate.NAME -> BotCommand.GetPublicBotTemplate.serializer()
             BotCommand.GetSubagents.NAME -> BotCommand.GetSubagents.serializer()
             BotCommand.GetTeachRecordingStatus.NAME -> BotCommand.GetTeachRecordingStatus.serializer()
+            BotCommand.GetTrays.NAME -> BotCommand.GetTrays.serializer()
             BotCommand.GetVoiceCall.NAME -> BotCommand.GetVoiceCall.serializer()
             BotCommand.HandBackForeverBox.NAME -> BotCommand.HandBackForeverBox.serializer()
             BotCommand.InjectChromeCookies.NAME -> BotCommand.InjectChromeCookies.serializer()
@@ -1239,6 +1278,7 @@ object BotCommandSerializer :
 typealias BotCommandReplyApproveCredentialRequest = ReplyApproveCredentialRequest
 typealias BotCommandReplyAttachUpload = SandUploadAttachmentResult
 typealias BotCommandReplyAuthenticateMcpServer = SandMcpAuthResult
+typealias BotCommandReplyClearTrays = JsonElement
 typealias BotCommandReplyCompleteGithubConnect = SandGithubConnectCompletion
 typealias BotCommandReplyCompleteMcpOAuth = JsonElement
 typealias BotCommandReplyConnectChannel = SandChannelsView
@@ -1253,6 +1293,7 @@ typealias BotCommandReplyDeleteBotTemplate = JsonElement
 typealias BotCommandReplyDenyCredentialRequest = ReplyDenyCredentialRequest
 typealias BotCommandReplyDiscardDraft = SandWidgetAnswerResult
 typealias BotCommandReplyDisconnectChannel = SandChannelsView
+typealias BotCommandReplyDismissTray = JsonElement
 typealias BotCommandReplyDismissUserForm = JsonElement
 typealias BotCommandReplyDismissWidget = SandWidgetAnswerResult
 typealias BotCommandReplyGenerateAgentAvatarImage = SandGeneratedAvatarImage
@@ -1281,6 +1322,7 @@ typealias BotCommandReplyGetMcpState = SandMcpState
 typealias BotCommandReplyGetPublicBotTemplate = BotTemplateImport?
 typealias BotCommandReplyGetSubagents = List<SandSubagentInfo>
 typealias BotCommandReplyGetTeachRecordingStatus = SandTeachRecordingStatus
+typealias BotCommandReplyGetTrays = List<SandErrorTray>
 typealias BotCommandReplyGetVoiceCall = SandVoiceCallRecord?
 typealias BotCommandReplyHandBackForeverBox = JsonElement
 typealias BotCommandReplyInjectChromeCookies = ReplyInjectChromeCookies

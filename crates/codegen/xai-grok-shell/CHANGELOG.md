@@ -4,10 +4,8 @@
 
 ## Features
 
-- **Added a new `sports_search` tool** that can look up live NFL scores, standings, schedules, player stats, and team records directly from X data.
 - **Subagent model inheritance** setting added to /settings; persists in config.toml and respects managed/overlay layers.
 - **Per-model request size limits** can now be configured to match provider HTTP body caps and control inline image eviction.
-- **Long reasoning reminder** can now be enabled via config to nudge the model after long hidden-reasoning steps.
 
 ## Bug Fixes
 

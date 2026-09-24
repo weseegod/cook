@@ -76,11 +76,8 @@ impl AgentView {
         // Or undo puts the draft back while the slot still holds it, and the next send restores a second copy over the top
         self.prompt.clear_history();
 
-        // A replaced entry loses its slot and its images, so keep its text reachable via Up.
-        // Held in `prompt_stash_evicted` so a late `PromptHistoryLoaded` cannot wipe it.
-        if let Some(old) = self.prompt_stash.replace(entry) {
-            crate::app::agent::remember_prompt(&mut self.prompt_stash_evicted, &old.history_text());
-        }
+        // A second stash discards the draft in the slot
+        self.prompt_stash = Some(entry);
 
         self.note_stash_change_in_minimal(
             "Draft stashed. Press the stash key again to restore it.",
@@ -208,6 +205,7 @@ impl AgentView {
     fn restore_stash_entry(&mut self, entry: PromptStashEntry) {
         self.prompt_input_mode = entry.input_mode;
         self.prompt.restore(entry.prompt);
+        self.prompt.set_cursor(self.prompt.text().len());
         self.prompt.refresh_slash(&self.session.models);
     }
 }
@@ -285,14 +283,17 @@ mod tests {
             );
             assert_eq!(agent.prompt.text(), "half-typed thought");
             assert!(agent.prompt_stash.is_none());
-            assert_eq!(agent.prompt.cursor(), 4, "cursor returns to where it was");
+            assert_eq!(
+                agent.prompt.cursor(),
+                agent.prompt.text().len(),
+                "cursor is at the end of the restored draft"
+            );
         }
     }
 
-    /// A second stash evicts the first into the recall list, keeping its `! ` prefix or `populate_prompt_from_history` cannot restore shell mode.
-    /// A late history fetch replaces `session.prompt_history` wholesale, so the evicted draft has to live somewhere the fetch cannot reach.
+    /// A second stash discards the draft in the slot. Neither draft was sent, so neither reaches the history.
     #[test]
-    fn a_replaced_draft_keeps_its_shell_prefix_and_survives_a_history_fetch() {
+    fn a_replaced_draft_is_discarded_and_stays_out_of_the_history() {
         let mut agent = test_fixtures::make_agent();
         agent.prompt_input_mode = PromptInputMode::Bash;
         agent.prompt.set_text("git status");
@@ -313,7 +314,7 @@ mod tests {
         let history = agent.combined_prompt_history();
         let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
 
-        assert_eq!(texts, ["second", "! git status", "fetched from the shell"]);
+        assert_eq!(texts, ["fetched from the shell"]);
     }
 
     /// The prompt border is the only place the stash reports itself, and it shares that row with the `/rename` title.
@@ -367,23 +368,23 @@ mod tests {
         assert_eq!(agent.prompt.text(), "");
     }
 
-    /// The stash ranks first in the Up browse, so recalling it is the ordinary way to get a draft back.
-    /// That has to empty the slot: two live copies means the post-send restore puts back the prompt the user just sent.
+    /// The Up browse lists sent prompts only. A committed entry is not the stashed draft, so the slot keeps it.
     #[test]
-    fn recalling_the_stash_from_the_up_browse_empties_the_slot() {
+    fn the_up_browse_skips_the_stash_and_keeps_the_slot() {
         for commit in [
             KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
             KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE),
         ] {
             let mut agent = test_fixtures::make_agent();
+            agent.session.prompt_history = vec!["sent prompt".to_owned()];
             agent.prompt.set_text("fix the retry loop");
             agent.stash_prompt_draft(StashCause::Chord);
 
             agent.handle_prompt_key_for_test(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
             assert_eq!(
                 agent.prompt.text(),
-                "fix the retry loop",
-                "{commit:?}: Up recalls the stash"
+                "sent prompt",
+                "{commit:?}: Up browses the sent prompts, not the stash"
             );
 
             await_history_results(&mut agent);
@@ -391,10 +392,10 @@ mod tests {
             agent.handle_prompt_key_for_test(&commit);
 
             assert!(
-                agent.prompt_stash.is_none(),
-                "{commit:?} committed the draft, so the slot must be empty"
+                agent.prompt_stash.is_some(),
+                "{commit:?} committed a history entry, so the draft stays stashed"
             );
-            assert!(agent.prompt.text().starts_with("fix the retry loop"));
+            assert!(agent.prompt.text().starts_with("sent prompt"));
         }
     }
 
@@ -630,9 +631,9 @@ mod tests {
         );
     }
 
-    /// A shell draft carries the `! ` prefix that `populate_prompt_from_history` turns back into shell mode.
+    /// A stashed draft was never sent, so the browse must not list it. The chord is how it comes back.
     #[test]
-    fn stashed_draft_ranks_first_in_history_with_its_shell_prefix() {
+    fn a_stashed_draft_stays_out_of_the_history() {
         let mut agent = test_fixtures::make_agent();
         // The browse reads the recall list, not the scrollback, so seed what the send would record.
         agent.session.prompt_history = vec!["sent prompt".to_owned()];
@@ -641,8 +642,8 @@ mod tests {
         agent.stash_prompt_draft(StashCause::ClearedDraft);
 
         let history = agent.combined_prompt_history();
+        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
 
-        assert_eq!(history[0].text, "! git status");
-        assert_eq!(history[1].text, "sent prompt");
+        assert_eq!(texts, ["sent prompt"]);
     }
 }

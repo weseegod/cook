@@ -1,12 +1,12 @@
 # Cross-Session Memory
 
-Memory lets Cook recall facts, decisions, and patterns from earlier sessions. Cook indexes the information you save and searches it automatically, so a new session can reuse relevant context.
+Memory lets Grok recall facts, decisions, and patterns from earlier sessions. Grok indexes the information you save and searches it automatically, so a new session can reuse relevant context.
 
 ---
 
 ## What Is Memory?
 
-Without memory, each Cook session starts fresh: the model knows nothing about previous sessions. When you enable memory, Cook can:
+Without memory, each Grok session starts fresh: the model knows nothing about previous sessions. When you enable memory, Grok can:
 
 - Recall project conventions you explained before.
 - Reuse debugging steps that worked.
@@ -22,13 +22,14 @@ projects; workspace memory holds facts about one repository. Clones and
 worktrees of the same repository share one workspace scope.
 
 Each scope keeps its knowledge as ordinary Markdown files. `topics/` holds
-curated notes, one file per subject, and is what Cook reads at the start of a
-session. New facts captured from a completed turn land as small observations
-that a later consolidation pass (`/dream`) folds into topics. A bounded generated
+curated notes, one file per subject, and is what Grok reads at the start of a
+session. New facts captured after each turn, including a turn you stop before it
+finishes, land as small observations that a later consolidation pass (`/dream`)
+folds into topics. A bounded generated
 index of both scopes is injected into the model's context once per session so
 it can decide which topics to open.
 
-Notes you recorded with earlier versions of Cook are carried over
+Notes you recorded with earlier versions of Grok Build are carried over
 automatically the first time a workspace is opened after updating: each section
 of the earlier notes becomes a topic, and sections whose name already matches a
 topic are appended to it under a "From earlier sessions" heading. The earlier
@@ -45,7 +46,7 @@ paths, model output, or free-form errors.
 ### Config (Persistent)
 
 ```toml
-# ~/.cook/config.toml
+# ~/.grok/config.toml
 [memory]
 enabled = true
 ```
@@ -54,7 +55,7 @@ enabled = true
 
 ```bash
 export GROK_MEMORY=1
-cook
+grok
 ```
 
 ### Force-Disable
@@ -91,36 +92,19 @@ internal hardening notes, not here.
 
 ## How Memory Is Stored
 
-With `[memory_v2] enabled`, each scope stores Markdown under
-`~/.cook/memory-v2/`: `topics/` for curated notes and
-`observations/_inbox/` for new facts. With v2 off and legacy memory on,
-files live under `~/.cook/memory/`:
-
-| Location | Scope | Description |
-|----------|-------|-------------|
-| `~/.cook/memory/MEMORY.md` | Global | Facts that apply across all your projects |
-| `~/.cook/memory/<project-slug>-<hash8>/MEMORY.md` | Workspace | Project-specific conventions and context |
-| `~/.cook/memory/<project-slug>-<hash8>/sessions/` | Sessions | Per-session summaries and logs |
-
-Cook suffixes each workspace directory with a short hash of the repository's identity. The identity is the `origin` remote in `org/repo` form when the directory is a Git repository with an `origin` remote, or the directory path otherwise. Because clones and worktrees of the same repository share an `origin` remote, they also share one memory directory.
-
-An SQLite index supports search across all memory files:
-- **FTS5** provides the default full-text search for keyword matching.
-- **vec0** adds vector search for semantic similarity when an embedding model is configured.
-
-`[memory] enabled` and `[memory_v2] enabled` both default off.
+When v2 is on (`[memory_v2] enabled`), each scope stores Markdown under `~/.grok/memory-v2/`: `topics/` for curated notes and `observations/_inbox/` for new facts. When v2 is off and legacy memory is on, files live under `~/.grok/memory/` (`MEMORY.md` plus hashed workspace directories). `[memory] enabled` and `[memory_v2] enabled` both default off.
 
 ---
 
 ## Automatic Saves
 
-When a session ends, Cook saves a structured metadata summary to that session's daily log. The summary contains:
+When a session ends, Grok saves a structured metadata summary to that session's daily log. The summary contains:
 
 - Message counts (user, assistant, and tool results).
 - Topics: the first few substantive user prompts from the session, up to five.
 - The session date and time (UTC).
 
-Cook builds the summary from conversation metadata without an LLM call, without added latency. Cook skips the save for trivial sessions -- those with fewer than three substantive prompts, or fewer than 50 bytes of user text.
+Grok builds the summary from conversation metadata without an LLM call, without added latency. Grok skips the save for trivial sessions -- those with fewer than three substantive prompts, or fewer than 50 bytes of user text.
 
 The summary does not record tool usage, file paths, or shell commands. The session ID forms part of the log filename. To turn automatic saves off, set `session.save_on_end = false`. For richer capture of decisions, patterns, and reasoning, use `/flush`.
 
@@ -147,13 +131,13 @@ Use `/flush` when you want to preserve important context:
 
 ### Remember
 
-Ask Cook to remember something, and it appends the note to a `MEMORY.md` file -- the workspace file for project-specific items, or the global `~/.cook/memory/MEMORY.md` for cross-project preferences:
+Ask Grok to remember something, and it appends the note to a `MEMORY.md` file -- the workspace file for project-specific items, or the global `~/.grok/memory/MEMORY.md` for cross-project preferences:
 
 ```
 > remember to always open PR links after pushing
 ```
 
-Cook records entries as durable statements under organized headings, such as `## Preferences`, `## Project Context`, or `## Debugging`. The file watcher reindexes the change on the next memory search, so the new entry is searchable within the current session.
+Grok records entries as durable statements under organized headings, such as `## Preferences`, `## Project Context`, or `## Debugging`. The file watcher reindexes the change on the next memory search, so the new entry is searchable within the current session.
 
 You can also save a note directly with the `/remember` command:
 
@@ -161,31 +145,31 @@ You can also save a note directly with the `/remember` command:
 /remember always open PR links after pushing
 ```
 
-Run `/remember` with no text to enter remember mode, where the next line you type becomes the note. Either way, Cook opens a review panel showing the note (with an optional rewritten version you can toggle with `Tab`); the note is written only after you confirm. On save, Cook shows `Memory saved to ~/.cook/memory/MEMORY.md`.
+Run `/remember` with no text to enter remember mode, where the next line you type becomes the note. Either way, Grok opens a review panel showing the note (with an optional rewritten version you can toggle with `Tab`); the note is written only after you confirm. On save, Grok shows `Memory saved to ~/.grok/memory/MEMORY.md`.
 
 ### Forget
 
-Ask Cook to forget something, and it finds and removes the matching entry:
+Ask Grok to forget something, and it finds and removes the matching entry:
 
 ```
 > forget the snake_case convention
 ```
 
-Forget is best-effort: the model searches memory and removes entries that match. For guaranteed removal, edit the files under `~/.cook/memory/` directly and delete the entry yourself. To locate a file, open the `/memory` browser and press `y` to copy its path.
+Forget is best-effort: the model searches memory and removes entries that match. For guaranteed removal, edit the files under `~/.grok/memory/` directly and delete the entry yourself. To locate a file, open the `/memory` browser and press `y` to copy its path.
 
 ### Recall
 
-Ask what Cook remembers:
+Ask what Grok remembers:
 
 ```
 > what do you remember?
 ```
 
-Cook searches across all memory files and summarizes what it knows, grouped by source: global preferences, project-specific knowledge, and session history. Use `/memory` to browse the raw files.
+Grok searches across all memory files and summarizes what it knows, grouped by source: global preferences, project-specific knowledge, and session history. Use `/memory` to browse the raw files.
 
 ### Direct Editing
 
-You can edit memory files directly under `~/.cook/memory/`. The file watcher reindexes your changes on the next memory search. Use `/flush` to save the current session now, and `/dream` to consolidate session logs into organized topics.
+You can edit memory files directly under `~/.grok/memory/`. The file watcher reindexes your changes on the next memory search. Use `/flush` to save the current session now, and `/dream` to consolidate session logs into organized topics.
 
 ---
 
@@ -230,13 +214,13 @@ You can also open `/memory` from the command palette.
 
 ## Memory Notifications
 
-When you save a note with `/remember`, Cook confirms in the scrollback:
+When you save a note with `/remember`, Grok confirms in the scrollback:
 
 ```
-Memory saved to ~/.cook/memory/MEMORY.md
+Memory saved to ~/.grok/memory/MEMORY.md
 ```
 
-Background saves — automatic flush, automatic Dream, and session-end — run silently and do not post a scrollback message. `/flush` and `/dream` report their outcome in scrollback when you run them yourself. Use `/memory` at any time to browse what Cook has stored.
+Background saves — automatic flush, automatic Dream, and session-end — run silently and do not post a scrollback message. `/flush` and `/dream` report their outcome in scrollback when you run them yourself. Use `/memory` at any time to browse what Grok has stored.
 
 ---
 
@@ -252,7 +236,7 @@ Dream reorganizes individual session logs and memory entries into a coherent, de
 
 ### Auto-Dream
 
-Dream also runs automatically. By default, Cook checks the consolidation gates at launch and periodically during a session, and runs Dream once enough time has passed and enough sessions have accumulated:
+Dream also runs automatically. By default, Grok checks the consolidation gates at launch and periodically during a session, and runs Dream once enough time has passed and enough sessions have accumulated:
 
 ```toml
 [memory.dream]
@@ -268,7 +252,7 @@ check_interval_secs = 3600 # Also check the gates hourly
 
 ### First-Turn Injection
 
-On the first turn of each session, Cook automatically searches memory for content relevant to the current project and injects it as context. This means Cook starts with knowledge from previous sessions without a reminder.
+On the first turn of each session, Grok automatically searches memory for content relevant to the current project and injects it as context. This means Grok starts with knowledge from previous sessions without a reminder.
 
 First-turn injection can be configured:
 
@@ -286,7 +270,7 @@ Memory is also searched after auto-compaction to recover relevant context that m
 
 ## Memory Search
 
-Cook searches memory automatically, but you can also trigger searches manually in the chat:
+Grok searches memory automatically, but you can also trigger searches manually in the chat:
 
 ```
 Search memory for "auth middleware patterns"
@@ -337,26 +321,26 @@ lambda = 0.7             # 0.0 = max diversity, 1.0 = pure relevance
 
 ## CLI Commands
 
-The `cook memory` command manages memory from the shell. It has one subcommand, `clear`:
+The `grok memory` command manages memory from the shell. It has one subcommand, `clear`:
 
 ```bash
 # Clear workspace memory (MEMORY.md, sessions/, and index.sqlite). This is the default scope.
-cook memory clear
+grok memory clear
 
 # The same scope, stated explicitly
-cook memory clear --workspace
+grok memory clear --workspace
 
 # Clear the global MEMORY.md
-cook memory clear --global
+grok memory clear --global
 
 # Clear both workspace and global memory
-cook memory clear --all
+grok memory clear --all
 
 # Skip the confirmation prompt (-y is the short form)
-cook memory clear --yes
+grok memory clear --yes
 ```
 
-To edit memory from the shell, open the files in your editor directly -- for example, `$EDITOR ~/.cook/memory/MEMORY.md`.
+To edit memory from the shell, open the files in your editor directly -- for example, `$EDITOR ~/.grok/memory/MEMORY.md`.
 
 ---
 
@@ -368,7 +352,7 @@ To edit memory from the shell, open the files in your editor directly -- for exa
 |-----|---------|-------------|
 | `enabled` | `false` | Enable memory |
 | `session.save_on_end` | `true` | Write metadata summary on session end |
-| `watcher.enabled` | `true` | Watch `~/.cook/memory/` for external edits and reindex |
+| `watcher.enabled` | `true` | Watch `~/.grok/memory/` for external edits and reindex |
 
 ### Index Settings (`[memory.index]`)
 
@@ -420,7 +404,7 @@ You configure flush under `[compaction]`, not `[memory]`, because it is a compac
 | `enabled` | `true` | Enable the pre-compaction memory flush |
 | `soft_threshold_tokens` | `4000` | Token headroom before the compact threshold that triggers a flush |
 | `max_flush_write_chars` | `8000` | Maximum characters the flush may write to memory |
-| `flush_model` | unset | Model for the flush turn. When unset or `""`, Cook uses the session's primary model. |
+| `flush_model` | unset | Model for the flush turn. When unset or `""`, Grok uses the session's primary model. |
 | `idle_timeout_secs` | `300` | Idle seconds before a background flush. Set `0` to disable idle flushes. |
 | `semantic_dedup_threshold` | unset | Cosine-similarity threshold for de-duplicating flushed content. When unset, defaults to `0.92`. |
 
@@ -432,26 +416,22 @@ You configure pruning under `[compaction]`, not `[memory]`, because it is a comp
 |-----|---------|-------------|
 | `enabled` | `true` | Enable tool-result pruning |
 | `keep_last_n_turns` | `3` | Number of recent turns whose tool results are never pruned |
-| `keep_last_n_tool_rounds` | `0` | Opt-in step-age limit inside one user turn; `0` preserves turn-only pruning |
-| `recent_tool_result_char_budget` | `0` | Opt-in raw-result character budget for recent tool rounds; `0` disables the budget |
 | `soft_trim_threshold` | `4000` | Character threshold above which old tool results are soft-trimmed |
 | `soft_trim_head` | `1500` | Characters kept from the start of a soft-trimmed result |
 | `soft_trim_tail` | `1500` | Characters kept from the end of a soft-trimmed result |
 | `hard_clear_age_turns` | `10` | Turn age after which tool results are replaced with a placeholder |
 
-When either step-aware setting is non-zero, Cook always retains the active tool round. Older rounds in recent user turns remain raw only while they satisfy every enabled step limit; omitted results keep their tool-call pairing and are replaced with an explicit placeholder. A cost-conscious experiment can start with `keep_last_n_tool_rounds = 6` and `recent_tool_result_char_budget = 64000` (about 16k tokens under the bytes/4 estimator).
-
 ---
 
 ## Memory Staleness
 
-When a session memory is old, Cook attaches a staleness note to it in search results. Older results get a stronger reminder to verify the current state before you rely on them. These notes help you spot stored facts that might no longer be accurate. Global and workspace memories never receive staleness notes, because they hold curated long-term knowledge.
+When a session memory is old, Grok attaches a staleness note to it in search results. Older results get a stronger reminder to verify the current state before you rely on them. These notes help you spot stored facts that might no longer be accurate. Global and workspace memories never receive staleness notes, because they hold curated long-term knowledge.
 
 ---
 
 ## File Watcher
 
-By default, Cook watches `~/.cook/memory/` for external file changes. If you edit memory files directly (e.g., in your editor), the changes are picked up automatically on the next memory search:
+By default, Grok watches `~/.grok/memory/` for external file changes. If you edit memory files directly (e.g., in your editor), the changes are picked up automatically on the next memory search:
 
 - Created or modified files are reindexed.
 - Deleted files have their stale chunks removed from the index.
@@ -467,7 +447,7 @@ enabled = true    # default
 
 ### Memory Not Working
 
-1. Verify memory is enabled: check `cook inspect` output.
+1. Verify memory is enabled: check `grok inspect` output.
 2. Check `GROK_MEMORY` or `[memory] enabled` in effective TOML.
 3. Check for `GROK_MEMORY=0` or a deprecated compatibility flag overriding config.
 
@@ -480,14 +460,14 @@ Memory is injected on the first turn. If you started a session before enabling m
 Use `/memory` in the TUI to browse all memory files with a preview. You can also access them directly:
 
 ```bash
-ls ~/.cook/memory/
-cat ~/.cook/memory/MEMORY.md
-$EDITOR ~/.cook/memory/MEMORY.md
+ls ~/.grok/memory/
+cat ~/.grok/memory/MEMORY.md
+$EDITOR ~/.grok/memory/MEMORY.md
 ```
 
 ### Debug Logging
 
 ```bash
-RUST_LOG=debug GROK_LOG_FILE=/tmp/cook.log cook
-grep "memory" /tmp/cook.log
+RUST_LOG=debug GROK_LOG_FILE=/tmp/grok.log grok
+grep "memory" /tmp/grok.log
 ```

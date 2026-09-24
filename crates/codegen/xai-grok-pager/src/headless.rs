@@ -41,8 +41,10 @@ mod ext_protocol;
 mod mcp_init;
 mod prompt_ack;
 mod reducer;
+mod signals;
 use ext_protocol::{ExtEvent, handle_ext_notification, reply_headless_ext_method};
 use prompt_ack::{abort_unacknowledged_prompt, headless_ack_signal};
+use signals::HeadlessSignals;
 mod cli;
 pub use cli::{HeadlessPrompt, OutputFormat, parse_json_schema, parse_permission_rules_lenient};
 pub(crate) use cli::{ResolvedAgent, resolve_agent_arg};
@@ -90,8 +92,6 @@ pub struct HeadlessOptions {
     pub memory_flush: bool,
     /// CLI `--experimental-memory` / `--no-memory` override for the headless agent.
     pub memory_enabled_override: Option<bool>,
-    /// CLI `--no-subagents` (`true` force-disables spawn; `false` leaves resolve default).
-    pub no_subagents: bool,
 }
 struct HeadlessEmitter {
     format: OutputFormat,
@@ -105,8 +105,6 @@ struct HeadlessEmitter {
     reducer: Option<Box<dyn Reducer>>,
     /// Set when the prompt is sent; `result.duration_ms` on the terminal line is measured from it.
     prompt_started: Option<Instant>,
-    /// Last JSON terminal object written by [`Self::on_end`] (Json format only; for tests).
-    last_terminal_json: Option<serde_json::Value>,
     out: std::io::Stdout,
     /// Latched once stdout is unwritable so later writes are dropped instead of panicking.
     output_closed: bool,
@@ -124,7 +122,6 @@ impl HeadlessEmitter {
             usage: None,
             reducer: reducer_for(format),
             prompt_started: None,
-            last_terminal_json: None,
             out: std::io::stdout(),
             output_closed: false,
             write_error: None,
@@ -250,7 +247,6 @@ impl HeadlessEmitter {
                 self.reduce_and_emit(StreamEvent::AgentMessage(text.to_string()));
             }
             OutputFormat::StreamingJson => {
-                self.text_buffer.push_str(text);
                 self.reduce_and_emit(StreamEvent::AgentMessage(text.to_string()));
             }
         }
@@ -310,7 +306,6 @@ impl HeadlessEmitter {
             }
             OutputFormat::Json => {
                 let result = self.build_json_result(stop_reason, session_id, request_id);
-                self.last_terminal_json = Some(result.clone());
                 let mut rendered =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
                 rendered.push('\n');
@@ -334,12 +329,6 @@ impl HeadlessEmitter {
                     reducer.finish(&end)
                 });
                 if let Some(lines) = lines {
-                    // Pin the terminal `end` line for tests so streaming can assert the marker path.
-                    if let Some(last) = lines.last()
-                        && last.get("type").and_then(|t| t.as_str()) == Some("end")
-                    {
-                        self.last_terminal_json = Some(last.clone());
-                    }
                     self.emit_lines(lines);
                 }
             }
@@ -385,17 +374,6 @@ impl HeadlessEmitter {
 pub(crate) fn attach_result_usage(result: &mut serde_json::Value, usage: &serde_json::Value) {
     xai_grok_shell::extensions::notification::attach_result_usage_fail_closed(result, usage);
 }
-
-/// Terminal result when headless exits without a prompt future result
-/// (flush-only / `--memory-flush` with an empty prompt).
-///
-/// Emits a real `end` so stdout always carries a sessionId; empty stdout makes
-/// callers (and the suite) retry without `--memory-flush`.
-fn finish_without_prompt_result(emitter: &mut HeadlessEmitter, session_id: &str) -> Result<()> {
-    emitter.on_end("end_turn", session_id, "");
-    Ok(())
-}
-
 /// Snake_case wire token for an ACP stop reason.
 fn stop_reason_wire(reason: acp::StopReason) -> String {
     match reason {
@@ -413,30 +391,6 @@ fn stop_reason_wire(reason: acp::StopReason) -> String {
         }
     }
     .to_string()
-}
-
-#[cfg(test)]
-mod stop_reason_wire_tests {
-    use super::stop_reason_wire;
-    use agent_client_protocol::StopReason;
-
-    /// Characterization: stationarity reports as a silent EndTurn. The
-    /// `action_stationarity` category lives on `_meta.cancellationCategory`, not
-    /// in this wire token, so headless JSON looks like a clean `end_turn`.
-    #[test]
-    fn stationarity_end_turn_wires_as_end_turn() {
-        assert_eq!(stop_reason_wire(StopReason::EndTurn), "end_turn");
-        assert_eq!(stop_reason_wire(StopReason::Cancelled), "cancelled");
-        assert_eq!(
-            stop_reason_wire(StopReason::MaxTurnRequests),
-            "max_turn_requests"
-        );
-    }
-
-    #[test]
-    fn max_tokens_wires_as_max_tokens() {
-        assert_eq!(stop_reason_wire(StopReason::MaxTokens), "max_tokens");
-    }
 }
 fn auto_respond_to_permissions(
     args: &acp::RequestPermissionRequest,
@@ -458,14 +412,14 @@ fn auto_respond_to_permissions(
 /// "Not signed in" error message, tailored to the session type.
 fn auth_required_message(interactive: bool) -> String {
     if interactive {
-        "Not signed in. Run `cook login` to authenticate \
-         (or `cook login --device-code` if no browser is available)."
+        "Not signed in. Run `grok login` to authenticate \
+         (or `grok login --device-code` if no browser is available)."
             .to_string()
     } else {
         "Not signed in. To authenticate without a browser, run:\n  \
-         cook login --device-code\n\n\
+         grok login --device-code\n\n\
          Alternatively, set the XAI_API_KEY environment variable \
-         or run `cook login` on a machine with a browser."
+         or run `grok login` on a machine with a browser."
             .to_string()
     }
 }
@@ -810,7 +764,7 @@ async fn apply_headless_model_and_effort(
     .map_err(|e| {
         if let Some(name) = model_name {
             anyhow::anyhow!(
-                "Couldn't set model '{}': {}. Run 'cook models' to see available models.",
+                "Couldn't set model '{}': {}. Run 'grok models' to see available models.",
                 name,
                 e
             )
@@ -852,6 +806,7 @@ pub async fn run_single_turn(
     verbatim: bool,
     options: HeadlessOptions,
 ) -> Result<()> {
+    let signals = HeadlessSignals::install().await?;
     xai_grok_shell::http::set_process_client_mode_headless();
     let cwd = match options.cwd {
         None => std::env::current_dir()?,
@@ -882,11 +837,7 @@ pub async fn run_single_turn(
         raw_config: &raw_config,
         remote_settings: None,
         is_headless: true,
-        cli_subagents: if options.no_subagents {
-            Some(false)
-        } else {
-            None
-        },
+        cli_subagents: None,
         cli_web_search_model: None,
         cli_session_summary_model: None,
         memory_enabled_override: options.memory_enabled_override,
@@ -947,7 +898,7 @@ pub async fn run_single_turn(
             anyhow::bail!("{msg}");
         }
     };
-    let _agent_guard = AgentShutdownGuard::new(cancel.clone(), Some(spawned.thread_handle));
+    let agent_guard = AgentShutdownGuard::new(cancel.clone(), Some(spawned.thread_handle));
     let (acp_tx, mut acp_rx) = (spawned.channel.tx, spawned.channel.rx);
     crate::unified_log::init(acp_tx.clone());
     crate::unified_log::info(
@@ -1247,7 +1198,9 @@ pub async fn run_single_turn(
     let mut prompt_done_at: Option<Instant> = None;
     let mut connection_closed = false;
     let mut prompt_unacknowledged = false;
+    let mut terminated_by_signal = None;
     if let Some(mut prompt_fut) = prompt_fut {
+        let deferred_exit = signals.defer_exit();
         loop {
             if emitter.write_error.is_some() {
                 tracing::warn!("headless: stdout write failed; stopping the stream loop");
@@ -1301,6 +1254,8 @@ pub async fn run_single_turn(
             };
             tokio::select! {
                 biased;
+                // First in the biased order so an ACP firehose cannot starve the signal
+                () = deferred_exit.signalled() => break,
                 msg = acp_rx.recv() => {
                     let Some(msg) = msg else {
                         emitter.on_error("Connection closed unexpectedly", None);
@@ -1376,6 +1331,7 @@ pub async fn run_single_turn(
                 }
             }
         }
+        terminated_by_signal = deferred_exit.release();
         drain_pending_acp_messages(
             &mut acp_rx,
             &mut emitter,
@@ -1393,23 +1349,22 @@ pub async fn run_single_turn(
             reap_pending_background_tasks(&pending_bg, &session_id, &acp_tx).await;
         }
     }
-    if prompt_unacknowledged {
-        if tokio::time::timeout(
-            prompt_ack::HEADLESS_ABORT_SEND_TIMEOUT,
-            crate::unified_log::flush_blocking(),
-        )
-        .await
-        .is_err()
-        {
-            tracing::warn!(
-                "headless: unified log flush timed out behind the unacknowledged prompt"
-            );
-        }
-    } else {
-        crate::unified_log::flush_blocking().await;
-    }
+    flush_unified_log_at_exit(
+        crate::unified_log::flush_blocking(),
+        prompt_unacknowledged,
+        terminated_by_signal,
+    )
+    .await;
     if track_active {
         let _ = xai_grok_active_sessions::try_unregister(&session_id);
+    }
+    if let Some(code) = terminated_by_signal {
+        tracing::info!(
+            exit_code = code,
+            "headless: a signal during the turn ends the run"
+        );
+        drop(agent_guard);
+        crate::app::signal_handler::force_exit(code);
     }
     let outcome: Result<()> = match prompt_result {
         _ if connection_closed => Err(anyhow::anyhow!("Connection closed unexpectedly")),
@@ -1446,17 +1401,10 @@ pub async fn run_single_turn(
                 .and_then(|v| v.as_str())
                 == Some(xai_grok_shell::session::commands::MAX_TURNS_REACHED_CATEGORY);
             if is_max_turns {
-                // Cap hit: still emit a normal JSON result with an explicit stopReason so
-                // headless callers (and the real-model suite) can score exit 0. Plain/stderr
-                // keeps the human-readable marker for session.max_turns.
                 emitter.on_max_turns();
-                eprintln!("max turns reached");
-                emitter.on_end("max_turn_requests", sid, rid);
-                Ok(())
+                emitter.on_end(&stop_reason, sid, rid);
+                Err(anyhow::anyhow!("max turns reached"))
             } else {
-                if stop_reason == "max_tokens" {
-                    eprintln!("max tokens reached");
-                }
                 emitter.on_end(&stop_reason, sid, rid);
                 Ok(())
             }
@@ -1488,7 +1436,7 @@ pub async fn run_single_turn(
             emitter.on_error(&msg, stop_reason_override);
             Err(anyhow::anyhow!("{msg}"))
         }
-        None => finish_without_prompt_result(&mut emitter, session_id.0.as_ref()),
+        None => Ok(()),
     };
     let flush_error = if options.memory_flush && outcome.is_ok() {
         run_headless_memory_flush(
@@ -1599,6 +1547,24 @@ fn reap_request_for_work(
         ),
     };
     Ok(acp::ExtRequest::new(method, params.into()))
+}
+/// The flush waits on the shell's reply, which may never come when the shell never took the prompt,
+/// or when a signal ends the run and a closed terminal leaves nobody to send the second one.
+async fn flush_unified_log_at_exit(
+    flush: impl Future<Output = ()>,
+    prompt_unacknowledged: bool,
+    terminated_by_signal: Option<i32>,
+) {
+    if !prompt_unacknowledged && terminated_by_signal.is_none() {
+        flush.await;
+        return;
+    }
+    if tokio::time::timeout(prompt_ack::HEADLESS_ABORT_SEND_TIMEOUT, flush)
+        .await
+        .is_err()
+    {
+        tracing::warn!("headless: unified log flush timed out at exit");
+    }
 }
 /// Best-effort kill of background work still pending at exit so it never outlives the process.
 async fn reap_pending_background_tasks(

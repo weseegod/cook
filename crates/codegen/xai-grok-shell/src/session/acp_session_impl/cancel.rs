@@ -503,6 +503,7 @@ impl SessionActor {
             had_queued_user_prompt,
             turn_epoch,
             message_completions,
+            captures_cancelled_turn,
         ) = {
             let mut state = self.state.lock().await;
             debug_assert!(
@@ -636,6 +637,12 @@ impl SessionActor {
                 }
                 return CancelOutcome::noop();
             }
+            // Read before the front drains; teardown ends the session and rewind drops the turn.
+            let captures_cancelled_turn = kind != Some(crate::session::CancelKind::Teardown)
+                && rewound_input.is_none()
+                && cancelled_prompt_id
+                    .as_deref()
+                    .is_some_and(|prompt_id| Self::is_capturable_front(&state, prompt_id));
 
             // Only an interactive stop (Ctrl+C / Esc / [stop]) also removes queued task/workflow completion wakes.
             // Preserve real user prompts and unrelated synthetic entries so `maybe_start_running_task` can promote the next genuine user turn.
@@ -709,6 +716,7 @@ impl SessionActor {
                 had_queued_user_prompt,
                 turn_epoch,
                 message_completions,
+                captures_cancelled_turn,
             )
         };
         // True iff this cancel aborted a live task: the Keep-with-task rail and
@@ -960,6 +968,11 @@ impl SessionActor {
                     },
                 }))
                 .ok();
+        }
+        // The aborted task skips the completion arm; no next turn starts before this returns.
+        if captures_cancelled_turn && let Some(session) = self.weak_self.upgrade() {
+            let source_prompt_index = *self.tool_context.prompt_index.lock().await;
+            session.enqueue_v2_turn_capture(source_prompt_index).await;
         }
         let settled = match &mut finalization {
             CancelFinalization::Keep(lease) => self.finish_finalization_lease(lease).await,

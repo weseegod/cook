@@ -353,7 +353,7 @@
     #[test]
     fn auto_gate_killswitch_notifies_agents_to_leave_auto() {
         // The kill-switch must tell live sessions to leave Auto, else the agent keeps classifier-approving while the UI shows "Ask"
-        // The notification is CLIENT-scoped, so exactly ONE fires regardless of how many tabs were in auto
+        // Every live Auto tab receives its own notification
         // It omits `yolo_mode` so a sibling always-approve tab is preserved
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = AppView::new(tx, ModelState::default(), Vec::new(), crate::render::draw::EscapeWriter::disconnected());
@@ -383,7 +383,7 @@
             "sibling always-approve must stay yolo after the auto kill-switch"
         );
 
-        let mut leave_auto_notifs = 0;
+        let mut notified_sessions = Vec::new();
         while let Ok(msg) = rx.try_recv() {
             if let xai_acp_lib::AcpAgentMessage::ExtNotification(args) = msg {
                 if args.request.method.as_ref() != "x.ai/yolo_mode_changed" {
@@ -403,12 +403,21 @@
                     params.get("yolo_mode").is_none(),
                     "yolo_mode must be omitted so a sibling always-approve session is preserved"
                 );
-                leave_auto_notifs += 1;
+                notified_sessions.push(
+                    params
+                        .get("sessionId")
+                        .and_then(serde_json::Value::as_str)
+                        .expect("notification names its session")
+                        .to_owned(),
+                );
             }
         }
+        notified_sessions.sort();
+
         assert_eq!(
-            leave_auto_notifs, 1,
-            "exactly one client-scoped leave-auto notification, regardless of agent count"
+            notified_sessions,
+            vec!["sess-0".to_owned(), "sess-1".to_owned()],
+            "each auto session receives one targeted leave-auto notification"
         );
     }
 

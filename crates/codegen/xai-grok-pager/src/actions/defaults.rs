@@ -966,7 +966,7 @@ pub(super) fn default_actions(
             hint_key_display: None,
             requires_confirmation: false,
             long_help: Some(
-                "On a busy top-level row, Ctrl+X cancels the running turn. Once the row is idle, press Ctrl+X again within 2s to permanently delete the session.\nOn a subagent row, Ctrl+X kills the subagent.",
+                "On a busy top-level row, Ctrl+X cancels the running turn.\nOnce the row is idle, press Ctrl+X again within 2s to permanently delete the session.",
             ),
         },
         ActionDef {

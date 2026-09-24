@@ -1,66 +1,148 @@
-# Clone repositories with Grove
+# grok clone
 
-`cook clone` fetches a Git repository through Grove and mounts a projected
-working tree. It uses NFS on macOS and FUSE on Linux. Windows is not supported.
+`grok clone` fetches a Git repository into a Grove content store and mounts a
+projected working tree (NFS on macOS, FUSE on Linux). Each invocation reads
+`GROK_CLONE` / `GROVE_CLONE` in this process, then grok enable-all
+(`GROK_GROVE` or `[cli] grove` in `~/.grok/config.toml`), then `[clone] enabled`
+authorize Clone IPC.
 
-## Enable cloning
+This does **not** enable Grove for session / `-w` worktrees. Those use a
+separate gate (`GROK_WORKTREE_TYPE` and `[cli] grove_worktree` in
+`~/.grok/config.toml`; see [Configuration reference](26-config-reference.md)).
+`GROK_WORKTREE_TYPE` and `[cli] grove_worktree` do **not** enable `grok clone`.
+`GROK_CLONE` / `GROVE_CLONE` / `[clone] enabled` do **not** enable session /
+`-w` Grove.
 
-Cloning is off by default. Enable it with one of these options:
+To turn **both** surfaces on without touching the specific knobs:
 
 ```bash
-export GROK_CLONE=1
-# or set [clone] enabled = true in your Grove config
+export GROK_GROVE=1
+# or in ~/.grok/config.toml:
+# [cli]
+# grove = true
 ```
 
-Then clone a repository:
+Specific knobs still win: `GROK_WORKTREE_TYPE=copy` keeps session worktrees on
+copy while clone can stay on; `GROK_CLONE=0` keeps `grok clone` off while
+worktrees can stay on.
 
 ```bash
-cook clone <url> [dir] [--branch NAME] [--cone PATH]... [--full-history]
+grok clone <url> [dir] [--branch NAME] [--full-history]
 ```
 
-By default, Cook downloads only the latest commit from the selected branch.
-Use `--full-history` to download its complete history, tags, and other remote
-branches.
+## History
 
-You can also enable Grove for cloning and session worktrees together with
-`GROK_GROVE=1` or `[cli] grove = true` in `~/.cook/config.toml`. The specific
-clone and worktree settings still take priority. See the
-[configuration reference](26-config-reference.md#cli) for details.
+**Default is a depth-1 bootstrap** of the selected branch (`blob:none` +
+`--depth=1`). Only that branch is advertised as a remote-tracking ref.
 
-## Fetch more history
+Use `--full-history` when you need complete commit history, tags, or every
+remote branch at clone time (the previous default).
 
-After a shallow clone, these commands download more history for the selected
-branch:
+After a depth-1 clone, these commands deepen **only the selected branch**:
 
 ```bash
 git fetch --deepen=N origin
 git fetch --unshallow origin
 ```
 
-To fetch another branch, use an explicit refspec:
+Fetching another branch needs an explicit depth-limited refspec. An ordinary
+`git fetch origin` or `git fetch origin other` will not pull that branch's
+full history through the default refspec:
 
 ```bash
 git fetch --depth=1 origin refs/heads/NAME:refs/remotes/origin/NAME
 ```
 
+`clone_shallow` RPC. If the client refuses, restart or update the daemon (or
+pass `--full-history`):
+
+```bash
+```
+
+On macOS you can also install a KeepAlive agent:
+
+```bash
+```
+
 ## Authentication
 
-Cook sign-in is for model access. It does not sign you in to GitHub or other Git
-hosts, and `cook clone` does not read `~/.cook/auth.json` for Git credentials.
-Use your Git credential manager or `gh auth` to sign in to the remote.
+The two are separate worlds:
 
-If Grove reports a credential problem, run `grove status` to see which Git
-credential provider it is using. After you update your Git credentials, run:
+| World | Covers | Commands | Store |
+|-------|--------|----------|-------|
+| Grok | the model and API | `grok login`, `grok logout` | `~/.grok/auth.json` |
+
+`grok clone` never reads `~/.grok/auth.json` for Git. Signing into Grok does not
+give the daemon a credential for the remote, and neither does
+`[clone] enabled = true`: that flag is a **product gate** deciding whether
+`grok clone` runs at all, not authorization for GitHub.
+
+When Grove classifies a failure as a credential problem, the clone prints the
+class and the commands that own it, without the remote URL:
+
+```
+Grove Git credentials rejected (unavailable).
+Check `grove status` then `grove reload-credentials`.
+```
+
+| Class | Meaning | Next step |
+|-------|---------|-----------|
+| `unavailable` | the daemon had no usable credential, or the remote rejected it | `grove status` names the live provider; fix that source, then `grove reload-credentials` |
+| `expired-static` | the token expired and this deployment does not refresh tokens | start a new session, or enable `GROVE_TOKEN_ROTATION=expected` |
+| `carrier-stale` | the daemon waited for a carrier rewrite and still holds the rejected token | wait for the rewrite, or `grove reload-credentials` |
+| `other` | the credential provider failed for another reason | `grove status`, then `grove reload-credentials` |
+
+Only `expired-static` and `carrier-stale` add their own line to the message. The
+advice for `unavailable` depends on which provider the daemon holds, and the
+
+One credential rejection stays unclassified: when a token cannot see a private
+repository, GitHub answers as if the repository did not exist. That is
+indistinguishable from a typo in a public URL, so the clone reports it as a
+missing repository rather than guessing at credentials.
+
+`grove status` prints a daemon-scoped auth block even with no mounts:
+
+```
+  auth: mode=auto live=git-delegate health=ok last=- reload=supported
+        hint=credentials look healthy
+```
+
+`mode` is the configured `auth_mode`; `live` is the provider the daemon actually
+holds. `mode` and `live` can disagree — that is the case
+`grove reload-credentials` exists to fix. For example, with `auth_mode = auto`,
+a daemon that started before a token file was written stays on `git-delegate`
+until the cell is rebuilt.
 
 ```bash
 grove reload-credentials
+# grove: credentials reloaded → token-file
 ```
 
-For Cook model sign-in options, see [Authentication](02-authentication.md).
+Reload rebuilds the cell from env and disk and prints the provider it landed on;
+it prints no secrets. It cannot create a login: with `auto` or `git` and no
+carrier token, configure `git credential` or `gh auth` first, then reload.
 
-## Platform requirements
+`auth.degraded`, `auth.unavailable`, `auth.daemon-down`, or `auth.old-daemon`.
 
-- **macOS:** Grove uses NFS.
-- **Linux:** Grove uses FUSE. Make sure `/dev/fuse` is available and your user
-  can access it.
-- **Windows:** Use `git clone` instead.
+## Daemon
+
+`grok` does not take the daemon or its mounts down) and waits for the socket.
+
+The `grove` binary is resolved from `PATH`, then from the directory of the
+`grok` executable (for example `~/.grok/bin/grove` next to `grok`). There is
+no separate install location. macOS has no PATH package for grove; build it
+from the monorepo:
+
+```bash
+cargo build -p grove --release
+```
+
+On Linux, clone needs a usable FUSE before it starts a daemon: `/dev/fuse` must
+exist, and either this user can open it or a setuid `fusermount3` / `fusermount`
+error with install commands, not a hang. When a daemon is already running the
+check is skipped, since that daemon may hold privileges this process does not.
+
+On Windows, clone mounts through ProjFS (Windows Projected File System),
+whether it is enabled. Build-output directories such as `target` and
+`node_modules` are redirected out of the projected tree as NTFS junctions
+(`[redirects] windows_junction`, on by default).

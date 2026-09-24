@@ -247,7 +247,7 @@ fn dispatch_load_session_ungated(
     agent_mut.apply_app_scoped_gates(
         app.sharing_enabled,
         app.usage_visible,
-        false, // BYOK fork: no grok.com usage/limits UI
+        !app.has_external_auth_provider,
         app.chat_mode,
         app.screen_mode,
         &app.active_announcements,
@@ -282,6 +282,7 @@ fn dispatch_load_session_ungated(
         agent_mut.workspace_mode = mode;
         agent_mut.workspace_mode_cli_locked = cli_locked;
     }
+    agent_mut.apply_credit_balance(app.credit_balance.clone(), app.auto_topup.clone());
     agent_mut
         .prompt
         .slash_controller
@@ -406,7 +407,7 @@ pub(in crate::app::dispatch) fn dispatch_pick_session(
             app.welcome_history_load_as_build = true;
         }
     }
-    if crate::app::is_daemon_session_row(&source) {
+    if crate::app::is_daemon_or_remote_control_row(&source) {
         return dispatch_daemon_session_pick(app, session_id, cwd);
     }
     if chat_kind {
@@ -524,7 +525,7 @@ pub(in crate::app::dispatch) fn dispatch_pick_session_in_worktree(
         app.show_toast("Chat conversations can't be resumed in a worktree");
         return vec![];
     }
-    if crate::app::is_daemon_session_row(&source) {
+    if crate::app::is_daemon_or_remote_control_row(&source) {
         app.show_toast("Daemon sessions can't be resumed in a worktree");
         return vec![];
     }
@@ -1164,7 +1165,7 @@ pub(in crate::app::dispatch) fn dispatch_load_session_with_restore(
         agent.apply_app_scoped_gates(
             app.sharing_enabled,
             app.usage_visible,
-            false, // BYOK fork: no grok.com usage/limits UI
+            !app.has_external_auth_provider,
             app.chat_mode,
             app.screen_mode,
             &app.active_announcements,
@@ -1193,6 +1194,7 @@ pub(in crate::app::dispatch) fn dispatch_load_session_with_restore(
             agent.workspace_mode = mode;
             agent.workspace_mode_cli_locked = cli_locked;
         }
+        agent.apply_credit_balance(app.credit_balance.clone(), app.auto_topup.clone());
         agent
             .prompt
             .slash_controller
@@ -1329,6 +1331,11 @@ pub(in crate::app::dispatch) fn handle_session_loaded(
                 session_id: hydrate_sid.clone(),
             });
         }
+        effects.push(Effect::FetchBilling {
+            agent_id,
+            silent: true,
+            nonce: Default::default(),
+        });
         if let Some(switch) = deferred {
             agent.session.model_switch_pending = true;
             effects.push(Effect::SwitchModel {
@@ -1511,6 +1518,7 @@ pub(in crate::app::dispatch) fn handle_session_restored(
             agent.workspace_mode = mode;
             agent.workspace_mode_cli_locked = cli_locked;
         }
+        agent.apply_credit_balance(app.credit_balance.clone(), app.auto_topup.clone());
         agent.scrollback.push_block(RenderBlock::system(format!(
             "Session restored. Loading {local_session_id}..."
         )));

@@ -311,9 +311,12 @@ pub enum PersistenceMsg {
         release: tokio::sync::oneshot::Receiver<()>,
     },
     Signals(SessionSignals),
+    /// Persist this turn's session usage, then ack. Callers that publish turn-end
+    /// (and `x.ai/session/state`) wait so `usage.json` is visible before the turn resolves.
     UsageTurn {
         turn_number: u32,
         live: crate::session::usage_file::UsageSummary,
+        respond_to: tokio::sync::oneshot::Sender<io::Result<()>>,
     },
     /// Persist announcement tracking state (MCP and skill announcement dedup).
     AnnouncementState(crate::session::announcement_state::AnnouncementState),
@@ -2498,10 +2501,16 @@ impl SessionPersistence {
                         tracing::warn!(?e, "failed to write session signals");
                     }
                 }
-                PersistenceMsg::UsageTurn { turn_number, live } => {
-                    if let Err(e) = self.persist_usage_turn(turn_number, &live).await {
+                PersistenceMsg::UsageTurn {
+                    turn_number,
+                    live,
+                    respond_to,
+                } => {
+                    let result = self.persist_usage_turn(turn_number, &live).await;
+                    if let Err(e) = &result {
                         tracing::warn!(?e, turn_number, "failed to write session usage");
                     }
+                    let _ = respond_to.send(result);
                 }
                 PersistenceMsg::AnnouncementState(state) => {
                     if let Err(e) = self

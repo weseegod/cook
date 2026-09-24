@@ -942,6 +942,7 @@ impl WorkspaceShared {
                 session.viewer_ctx().cloned(),
                 self.compose_session_notification_handle(session.system_notify_handle()),
                 session.terminal_backend().clone(),
+                crate::session::tool_config::truncation_config_for_host(self.host_kind),
             ) {
                 Ok((effective, toolset)) => {
                     session

@@ -188,7 +188,7 @@ use crate::session::swap_policy::{
     DeferReason, SessionSnapshot, SwapAction, SwapDecision, SwapPolicy, SwapTrigger,
     record_swap_decision, record_toolset_swap,
 };
-use crate::session::tool_config::resolve_session_toolset;
+use crate::session::tool_config::resolve_session_toolset_for_host;
 use crate::session::{WorkspaceMcpBinding, WorkspaceSession, WorkspaceShared};
 use crate::telemetry::dc_log;
 use crate::workspace_ops::{
@@ -836,7 +836,7 @@ impl WorkspaceHandle {
         let (effective, toolset, terminal_backend) = {
             let _span = LocalSpan::enter_with_local_parent("tool_server.toolset_resolve")
                 .with_property(|| ("session_id", session_id.clone()));
-            resolve_session_toolset(
+            resolve_session_toolset_for_host(
                 config,
                 capability,
                 &mcp_snapshot,
@@ -850,6 +850,7 @@ impl WorkspaceHandle {
                 viewer_ctx.clone(),
                 self.shared
                     .compose_session_notification_handle(system_notify_handle),
+                self.shared.host_kind,
             )
         }?;
         let session = Arc::new(WorkspaceSession::new(
@@ -1020,6 +1021,8 @@ impl WorkspaceHandle {
             .shared
             .compose_session_notification_handle(session.system_notify_handle());
         let terminal_backend = session.terminal_backend().clone();
+        let truncation =
+            crate::session::tool_config::truncation_config_for_host(self.shared.host_kind);
         let resolve_result = tokio::task::spawn_blocking(move || {
             crate::session::tool_config::resolve_session_toolset_rebuild(
                 new_config,
@@ -1035,6 +1038,7 @@ impl WorkspaceHandle {
                 viewer_ctx,
                 notification_handle,
                 terminal_backend,
+                truncation,
             )
         })
         .await
@@ -2963,7 +2967,7 @@ impl WorkspaceHandle {
         let mcp_snapshot = self.shared.mcp_tools_snapshot.load_full();
         let hub_snapshot = self.shared.hub_tools_snapshot.load_full();
         let inherited_viewer_ctx = parent.viewer_ctx().cloned();
-        let (effective, toolset, terminal_backend) = resolve_session_toolset(
+        let (effective, toolset, terminal_backend) = resolve_session_toolset_for_host(
             baseline,
             config.capability_mode,
             &mcp_snapshot,
@@ -2976,6 +2980,7 @@ impl WorkspaceHandle {
             self.shared.lsp.clone(),
             inherited_viewer_ctx.clone(),
             self.shared.compose_session_notification_handle(None),
+            self.shared.host_kind,
         )?;
         let (hunk_event_tx, _hunk_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let hunk_cancel = tokio_util::sync::CancellationToken::new();
@@ -3699,7 +3704,7 @@ impl WorkspaceHandle {
             let session_env = Arc::new(std::collections::HashMap::new());
             let mcp_snapshot = self.shared.mcp_tools_snapshot.load_full();
             let hub_snapshot = self.shared.hub_tools_snapshot.load_full();
-            let (_, template_toolset, _template_backend) = resolve_session_toolset(
+            let (_, template_toolset, _template_backend) = resolve_session_toolset_for_host(
                 self.shared.default_tool_config.clone(),
                 crate::capability::CapabilityMode::All,
                 &mcp_snapshot,
@@ -3712,6 +3717,7 @@ impl WorkspaceHandle {
                 self.shared.lsp.clone(),
                 None,
                 None,
+                self.shared.host_kind,
             )?;
             let mut handlers = build_session_routed_handlers(&template_toolset, self);
             let tool_names: Vec<String> = handlers

@@ -15,7 +15,6 @@ use crate::scrollback::text_selection::ResolvedSelectionModel;
 use crate::views::prompt_widget::PromptWidget;
 use crate::views::queue_mutation::QueueMutation;
 use crate::views::queue_pane::QueuePane;
-use crate::views::subagent_catalog_pane::SubagentCatalogPane;
 use crate::views::tasks_pane::TasksPane;
 use crate::views::todo_pane::TodoPane;
 use ratatui::layout::Rect;
@@ -138,7 +137,6 @@ impl AgentView {
             tip_typing_dismissed: false,
             todo: TodoPane::new(),
             tasks: TasksPane::new(),
-            catalog: SubagentCatalogPane::new(),
             queue: QueuePane::new(),
             shared_queue: Vec::new(),
             attached_as_viewer: false,
@@ -275,7 +273,6 @@ impl AgentView {
             hit_todo_close: Default::default(),
             hit_bg_close: Default::default(),
             hit_subagent_close: Default::default(),
-            hit_catalog_close: Default::default(),
             hit_bg_status: Default::default(),
             hit_goal_status: Default::default(),
             hit_goal_close: Default::default(),
@@ -478,14 +475,13 @@ impl AgentView {
         child_view.queue.set_mutation(QueueMutation::ReadOnly);
         self.subagent_views.insert(child_sid, child_view);
     }
+    #[cfg(test)]
     pub(crate) fn subagent_view(&self, child_sid: &str) -> Option<&AgentView> {
         self.subagent_views.get(child_sid).map(|v| &**v)
     }
+    #[cfg(test)]
     pub(crate) fn subagent_view_mut(&mut self, child_sid: &str) -> Option<&mut AgentView> {
         self.subagent_views.get_mut(child_sid).map(|v| &mut **v)
-    }
-    pub(crate) fn has_subagent_view(&self, child_sid: &str) -> bool {
-        self.subagent_views.contains_key(child_sid)
     }
     /// Called at every turn-termination site; clears the wall anchor so a turn that reuses a prompt id cannot report the prior attempt's wall span.
     pub(crate) fn mark_turn_finished(&mut self, end: TurnEnd) {
@@ -1341,7 +1337,6 @@ impl AgentView {
             ActivePane::Queue => ActivePaneSnapshot::Queue,
             ActivePane::Prompt => ActivePaneSnapshot::Prompt,
             ActivePane::Tasks => ActivePaneSnapshot::Tasks,
-            ActivePane::Catalog => ActivePaneSnapshot::Catalog,
             ActivePane::Dock => ActivePaneSnapshot::Other,
         };
         let outcome_snap = match outcome {

@@ -99,14 +99,6 @@ impl AgentView {
                     }
                     return InputOutcome::Changed;
                 }
-                if self.hit_catalog_close.contains(mouse.column, mouse.row) {
-                    self.catalog.overlay.escape();
-                    self.catalog.on_state_change();
-                    if self.active_pane == AgentPane::Catalog {
-                        self.set_active_pane(AgentPane::Scrollback, false);
-                    }
-                    return InputOutcome::Changed;
-                }
                 if self.hit_bg_close.contains(mouse.column, mouse.row) {
                     self.tasks.overlay.escape();
                     self.tasks.on_state_change();
@@ -694,16 +686,6 @@ impl AgentView {
                         self.last_bg_click = Some(now);
                         InputOutcome::Changed
                     }
-                    Some(AgentPane::Catalog) => {
-                        self.set_active_pane(AgentPane::Catalog, false);
-                        self.catalog.handle_mouse(
-                            mouse.kind,
-                            mouse.column,
-                            mouse.row,
-                            self.pane_areas.catalog,
-                        );
-                        InputOutcome::Changed
-                    }
                     Some(AgentPane::Scrollback) => {
                         self.set_active_pane(AgentPane::Scrollback, false);
                         if self.block_viewer.is_some() {
@@ -972,7 +954,6 @@ impl AgentView {
                         | AgentPane::Queue
                         | AgentPane::Prompt
                         | AgentPane::Tasks
-                        | AgentPane::Catalog
                         | AgentPane::Dock => None,
                     })
                 };
@@ -1083,7 +1064,6 @@ impl AgentView {
                 changed |= self.hit_bg_status.update_hover(mouse.column, mouse.row);
                 changed |= self.hit_goal_status.update_hover(mouse.column, mouse.row);
                 changed |= self.hit_bg_close.update_hover(mouse.column, mouse.row);
-                changed |= self.hit_catalog_close.update_hover(mouse.column, mouse.row);
                 changed |= self.hit_cwd.update_hover(mouse.column, mouse.row);
                 changed |= self.hit_dashboard.update_hover(mouse.column, mouse.row);
                 changed |= self.hit_overlay_prev.update_hover(mouse.column, mouse.row);
