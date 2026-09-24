@@ -12,6 +12,10 @@ their models, keys, and source code.
 
 Project website: **[letcook.dev](https://letcook.dev)**
 
+The website and product docs live in [`website/`](website/README.md). The site
+renders the user guide directly from
+[`crates/codegen/xai-grok-pager/docs/user-guide/`](crates/codegen/xai-grok-pager/docs/user-guide/).
+
 > Cook began as a focused fork of **Grok Build**. The product, documentation,
 > and public direction of this repository are maintained as Cook.
 
@@ -28,15 +32,27 @@ same agent runtime through any of these entry points:
 
 ## Install
 
-Prebuilt CLI + desktop installers are published to
+Prebuilt CLI and desktop installers are published to
 [download.letcook.dev](https://download.letcook.dev) (Cloudflare R2) for
 **macOS (Apple Silicon + Intel)**, **Linux x86_64**, and **Windows x86_64**.
 A tag `v*` starts the self-hosted GitHub Actions pipeline
 ([`docs/desktop-release.md`](docs/desktop-release.md)).
 
+Install the CLI only on macOS or Linux:
+
 ```sh
-curl -fsSL https://download.letcook.dev/install.sh | bash
+curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash
 ```
+
+Install Let Cook Desktop only on macOS or Linux:
+
+```sh
+curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash
+```
+
+On Windows, download the CLI and desktop installer separately from
+[letcook.dev](https://letcook.dev/#install). Some desktop packages include the
+Cook agent. If Let Cook asks for it, install the CLI too.
 
 A background updater keeps the binary fresh — the welcome screen shows
 `Update: vX available — press ctrl+u to restart`, or run `cook update`

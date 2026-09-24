@@ -331,7 +331,7 @@ cook clone https://example.com/org/repo.git --no-redirects
 
 ### Checking Disk Usage
 
-`cook du` (alias: `cook disk-usage`) reports what the Cook home (`~/.cook`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
+`cook du` (alias: `cook disk-usage`) reports how much disk space Cook's home (`~/.cook`) uses. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
 
 ```text
 Disk usage for ~/.cook
@@ -356,7 +356,7 @@ After the Cook home table, `cook du` may print **Redirections**, **Orphaned redi
 
 Sizes are physical block counts on Unix and logical file sizes elsewhere, matching what `cook worktree show` reports. A worktree clone shares storage with its source and each copy counts in full, so the total can exceed both `du -sh` and the space actually in use. When the total exceeds the used space on the volume, the report says so. `--json` carries the same figures as `volume_capacity_bytes` and `volume_available_bytes`.
 
-The report measures a single filesystem, the one holding the Cook home. A directory on any other filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug cook du` to name each one.
+The report measures one filesystem: the one holding Cook's home. A directory on another filesystem stays out of the total and is counted in `other_filesystem_dirs`, and its worktree rows show `-` for size (`null` in `--json`). A top-level symlink to a directory, such as a relocated `worktrees`, is counted in `unfollowed_dir_symlinks`; its target stays out of the total, though the rows below it are still sized. Directories and entries the report could not read are counted in `unreadable_dirs` and `unstatable_entries`. Run `RUST_LOG=debug cook du` to name each one.
 
 Every worktree row in `--json` also carries `created_at`, `last_accessed_at`, and `last_modified_at` in unix seconds, plus `repo_name` and `git_ref`. Registry fields are `null` for untracked rows. `git_ref` is the branch recorded when the worktree was registered, not the branch checked out now.
 

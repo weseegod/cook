@@ -47,14 +47,14 @@ To block specific files (e.g. `.env` or credential paths) on top of a profile, d
 
 ### Direct global write protection
 
-Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the kernel **write-denies** the Cook-owned direct disk paths used as user-global hook sources, plus its configuration and trust files (they stay readable when granted). Built-in `strict` can read `~/.grok` (they stay readable); writes are CWD + `~/.grok/sessions` + temp, not the whole tree. Write-deny still applies where the profile grants write:
+Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the kernel **write-denies** the Cook-owned direct disk paths used as user-global hook sources, plus its configuration and trust files (they stay readable when granted). Built-in `strict` can read `~/.cook` (they stay readable); writes are CWD + `~/.cook/sessions` + temp, not the whole tree. Write-deny still applies where the profile grants write:
 
 - `~/.cook/hooks/` (hook directory)
 - `~/.cook/hooks-paths` (registry file; not loaded as hook JSON — only its absolute targets are)
 - Absolute targets listed in `hooks-paths` (relative lines are ignored; missing targets refuse sandbox start)
-- `~/.grok/config.toml`, `~/.grok/trusted_folders.toml`, `~/.grok/managed_config.toml`, `~/.grok/requirements.toml`, `~/.grok/sandbox.toml` (settings, folder trust, managed policy, requirements, and sandbox profiles)
+- `~/.cook/config.toml`, `~/.cook/trusted_folders.toml`, `~/.cook/managed_config.toml`, `~/.cook/requirements.toml`, `~/.cook/sandbox.toml` (settings, folder trust, managed policy, requirements, and sandbox profiles)
 
-Because these files are read-only under these profiles, a change that would be saved to them applies to the current session only. Accepting a folder-trust prompt, switching the model with `/model`, and changing the permission mode (`/auto` or Shift+Tab) take effect for the session but are not saved. To save folder trust, run `grok --trust` in the directory before starting the sandbox. To change the default model or permission mode, edit `~/.grok/config.toml` directly.
+Because these files are read-only under these profiles, a change that would be saved to them applies to the current session only. Accepting a folder-trust prompt, switching the model with `/model`, and changing the permission mode (`/auto` or Shift+Tab) take effect for the session but are not saved. To save folder trust, run `cook --trust` in the directory before starting the sandbox. To change the default model or permission mode, edit `~/.cook/config.toml` directly.
 
 On first launch under these profiles, Cook creates a real empty `hooks/` directory and empty `hooks-paths` file when they are missing (never symlinks or wrong types). Claude/Cursor global settings are **not** covered by this write-deny; discovery of those vendors remains separately gated by compatibility settings.
 
@@ -167,7 +167,7 @@ If the user and project files define the same custom profile differently, Cook u
 
 ## How It Works
 
-The sandbox is applied to the **entire grok process** at startup using kernel primitives -- not per-command wrapping. This means all tool operations are covered:
+The sandbox is applied to the **entire Cook process** at startup using kernel primitives -- not per-command wrapping. This means all tool operations are covered:
 
 - `read_file`, `search_replace`, `list_dir` -- restricted by Landlock/Seatbelt in-process
 - `bash` commands, `grep` (rg) -- child processes inherit FS restrictions automatically

@@ -1,15 +1,19 @@
 # Authentication
 
-Cook supports several authentication methods, including interactive browser login, enterprise single sign-on (SSO), and headless CI/CD runners.
+The Cook CLI supports browser login, API keys, enterprise single sign-on
+(SSO), and external auth providers for automation. This page covers the CLI.
+In Let Cook, connect a provider from the first-run screen or **Settings →
+Models**; see the [Desktop App Reference](29-desktop-reference.md#first-launch).
 
 ---
 
 ## Browser Login (Default)
 
-On first launch, Cook opens your browser to authenticate with grok.com:
+On first launch, Cook can open your browser to sign in with the configured
+provider:
 
 ```bash
-grok
+cook
 ```
 
 Cook stores credentials in `~/.cook/auth.json` and reuses them across sessions. Cook refreshes access tokens automatically in the background. When a token can't be refreshed, Cook prompts you to sign in again. Credentials without a server-provided expiry fall back to a 30-day lifetime.
@@ -47,7 +51,7 @@ For CI/CD, automation, or environments without browser access, use an API key fr
 
 ```bash
 export XAI_API_KEY="xai-..."
-grok
+cook
 ```
 
 Cook uses the API key as a fallback when no session token is active. If you have already signed in interactively, the stored session token takes precedence. To fall back to the API key, run `cook logout` or delete `~/.cook/auth.json`.
@@ -88,7 +92,7 @@ You can also override the API endpoint to point at your own proxy:
 export GROK_CLI_CHAT_PROXY_BASE_URL="https://grok-proxy.acme.com/v1"
 ```
 
-### 3. Run `grok`
+### 3. Run `cook`
 
 The CLI discovers endpoints via `{issuer}/.well-known/openid-configuration`, opens the IdP login page, and stores tokens in `~/.cook/auth.json`. Tokens auto-refresh silently via the stored `refresh_token`.
 
@@ -247,7 +251,7 @@ goes to `~/.cook/leader.log` rather than to you.
 For headless environments (SSH sessions, Docker containers, remote VMs) where no browser is available locally:
 
 ```bash
-cook login --device-auth    # or: grok login --device-code
+cook login --device-auth    # or: cook login --device-code
 ```
 
 This prints a URL and code to the terminal. Open the URL on any device, enter the code, and complete authentication. Cook polls until the login is confirmed.
@@ -300,10 +304,10 @@ During a session, the active method handles all mid-session refreshes.
 
 ---
 
-## Grove Git credentials (not this page's `grok login`)
+## Grove Git credentials (separate from Cook sign-in)
 
 
-**`~/.grok/auth.json` is never read for Git.** `grok login` does not create a Git credential and `grok logout` does not revoke one; the daemon builds its own credential cell from `auth_mode` in Grove config. Those credentials are managed with `grove status` and `grove reload-credentials` -- see [grok clone](27-grok-clone.md#authentication) for the failure classes and their next steps.
+**`~/.cook/auth.json` is never read for Git.** `cook login` does not create a Git credential and `cook logout` does not revoke one; the daemon builds its own credential cell from `auth_mode` in Grove config. Those credentials are managed with `grove status` and `grove reload-credentials` -- see [Grove clone](27-grok-clone.md#authentication) for the failure classes and their next steps.
 
 ---
 
@@ -338,8 +342,8 @@ Set `RUST_LOG` to control the verbosity of the file log and headless stderr outp
 In the TUI, set `GROK_LOG_FILE` to an absolute path to write logs to that file:
 
 ```bash
-GROK_LOG_FILE=/tmp/grok.log RUST_LOG=debug grok
-tail -f /tmp/grok.log
+GROK_LOG_FILE=/tmp/cook.log RUST_LOG=debug cook
+tail -f /tmp/cook.log
 ```
 
 `GROK_LOG_FILE` is treated as a literal file path. A relative value such as `1` writes a file named `1` in the current directory.
@@ -347,7 +351,7 @@ tail -f /tmp/grok.log
 In headless mode, logs go to stderr. Redirect them to a file:
 
 ```bash
-RUST_LOG=debug grok -p "hello" 2> /tmp/grok.log
+RUST_LOG=debug cook -p "hello" 2> /tmp/cook.log
 ```
 
 ### Common log messages

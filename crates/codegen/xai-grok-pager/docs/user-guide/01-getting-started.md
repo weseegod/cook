@@ -1,18 +1,35 @@
 # Getting Started
 
-Cook is a terminal-based AI coding assistant. It runs as a TUI (Terminal User
-Interface) that understands your codebase, executes shell commands, edits
-files, searches the web, and manages tasks.
+Cook has two apps. The **Cook CLI** runs in your terminal, and **Let Cook** is
+the desktop app for Windows, macOS, and Ubuntu. Both work with your local
+projects and use the same Cook agent. This page introduces the CLI; see the
+[Desktop App Reference](29-desktop-reference.md) for Let Cook.
 
-You can use it interactively as a full-screen TUI, run it headlessly for scripting and CI/CD, or integrate it into editors via the Agent Client Protocol (ACP).
+Use the CLI as an interactive terminal app, run it in scripts and CI, or
+connect it to an editor through the Agent Client Protocol (ACP).
 
 ---
 
 ## Installation
 
-Prebuilt downloads and release notes are published at
-[letcook.dev](https://letcook.dev). To build Cook from source, install Rust
-and [DotSlash](https://dotslash-cli.com), then run:
+Install the CLI on macOS or Linux:
+
+```bash
+curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash
+```
+
+Install only Let Cook Desktop on macOS or Linux:
+
+```bash
+curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash
+```
+
+On Windows, download the Let Cook installer and Cook CLI separately from the
+[download page](https://letcook.dev/#install). Some desktop packages include
+the Cook agent. If Let Cook asks for the agent, install the CLI too.
+
+To build the CLI from source, install Rust and
+[DotSlash](https://dotslash-cli.com), then run:
 
 ```bash
 ./build.sh
@@ -44,14 +61,14 @@ cook clone <url> [dir]
 The default is a depth-1 checkout of the selected branch. Pass `--full-history`
 for a complete clone. Clone enablement is independent of session / `-w` Grove
 worktrees (the convenience above turns both on; the specific knobs still win).
-the sign-in flow below — see [clone authentication](27-grok-clone.md#authentication)
-and [Configuration reference](26-config-reference.md).
+For Git credential help, see [Grove clone](27-grok-clone.md#authentication).
+For other settings, see the [Configuration reference](26-config-reference.md).
 
 ---
 
 ## First Launch
 
-Start Cook by running:
+Start the terminal app by running:
 
 ```bash
 cook
@@ -70,7 +87,10 @@ export LOCAL_API_KEY="..."
 cook
 ```
 
-See [Authentication](02-authentication.md) for the full set of auth options including OIDC, external auth providers, and device code flow.
+See [Authentication](02-authentication.md) for terminal sign-in, API keys,
+OIDC, external auth providers, and device-code flow. In Let Cook, choose a
+workspace folder and connect a provider in the app; see the
+[Desktop App Reference](29-desktop-reference.md#first-launch).
 
 ---
 
@@ -255,6 +275,7 @@ Deeper files take precedence. Cook also reads `CLAUDE.md` files for compatibilit
 | Document | What You Will Learn |
 |----------|-------------------|
 | [Authentication](02-authentication.md) | Browser login, API keys, OIDC, external auth, device code flow |
+| [Desktop App](29-desktop-reference.md) | Install and use Let Cook on Windows, macOS, and Ubuntu |
 | [Keyboard Shortcuts](03-keyboard-shortcuts.md) | Complete reference for all key bindings |
 | [Slash Commands](04-slash-commands.md) | All available `/` commands |
 | [Configuration](05-configuration.md) | config.toml, pager.toml, environment variables |

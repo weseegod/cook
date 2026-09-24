@@ -201,7 +201,7 @@ A fleet policy that arrives afterwards still applies; it can only ever
 something your local configuration did not.
 
 If your collector receives nothing at all, check the debug log
-(`grok --debug`) for `external otel:` lines — they record whether the stream
+(`cook --debug`) for `external otel:` lines — they record whether the stream
 resolved its configuration, and whether it is exporting or suppressed.
 
 ## Resource attributes

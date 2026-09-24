@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!--
+    Dock icon source (transparent — no plate / no background fill).
+    Artwork is centered with ~10% margin so macOS Dock squircle framing fits.
+  -->
+  <defs>
+    <linearGradient id="toqueBody" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="75%" stop-color="#F1F5F9"/>
+      <stop offset="100%" stop-color="#E2E8F0"/>
+    </linearGradient>
+    <linearGradient id="bandWhite" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F8FAFC"/>
+    </linearGradient>
+  </defs>
+
+  <!--
+    Original art was ~330×310 in a 512 canvas (too much empty margin in Dock).
+    Scale 1.35 and center so the hat fills the Dock icon without clipping.
+  -->
+  <g transform="translate(256 268) scale(1.35) translate(-256 -205)">
+    <!-- Toque crown -->
+    <path d="M 152 285
+             C 95 250, 100 160, 155 130
+             C 165 75, 210 55, 256 55
+             C 302 55, 347 75, 357 130
+             C 412 160, 417 250, 360 285 Z"
+          fill="url(#toqueBody)"
+          stroke="#0F172A"
+          stroke-width="9"
+          stroke-linejoin="round"/>
+
+    <!-- Pleats -->
+    <path d="M 188 120 C 180 170, 182 230, 185 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
+    <path d="M 225 72 C 220 150, 222 220, 222 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
+    <path d="M 287 72 C 292 150, 290 220, 290 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
+    <path d="M 324 120 C 332 170, 330 230, 327 285" fill="none" stroke="#CBD5E1" stroke-width="3" stroke-linecap="round"/>
+
+    <!-- Code between pleats -->
+    <g font-family="'JetBrains Mono', 'Fira Code', 'Courier New', monospace" font-size="10.5" font-weight="700" letter-spacing="0.5">
+      <text x="168" y="155" transform="rotate(90 168 155)" fill="#EA580C" opacity="0.8">
+        const <tspan fill="#0284C7">app</tspan>;
+      </text>
+      <text x="204" y="115" transform="rotate(90 204 115)" fill="#0F172A" opacity="0.85">
+        <tspan fill="#EA580C">fn</tspan> cook() {
+      </text>
+      <text x="256" y="70" transform="rotate(90 256 70)" fill="#0F172A" opacity="0.9">
+        <tspan fill="#EA580C">import</tspan> { <tspan fill="#0284C7">Cook</tspan> } <tspan fill="#EA580C">from</tspan> <tspan fill="#10B981">'harness'</tspan>;
+      </text>
+      <text x="307" y="115" transform="rotate(90 307 115)" fill="#0F172A" opacity="0.85">
+        <tspan fill="#EA580C">yield*</tspan> stream;
+      </text>
+      <text x="344" y="155" transform="rotate(90 344 155)" fill="#10B981" opacity="0.8">
+        <tspan fill="#EA580C">return</tspan> ok;
+      </text>
+    </g>
+
+    <!-- Band + terminal -->
+    <rect x="150" y="280" width="212" height="70" rx="10" fill="url(#bandWhite)" stroke="#0F172A" stroke-width="9"/>
+    <rect x="165" y="295" width="182" height="40" rx="6" fill="#0F172A"/>
+    <text x="256" y="320"
+          font-family="'JetBrains Mono', 'Fira Code', 'Courier New', monospace"
+          font-size="13"
+          font-weight="700"
+          fill="#38BDF8"
+          text-anchor="middle"
+          letter-spacing="0.5">
+      Let Him Cook...<tspan fill="#F97316">_</tspan>
+    </text>
+  </g>
+</svg>

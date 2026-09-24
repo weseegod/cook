@@ -428,7 +428,7 @@ cook -p "Review staged changes for obvious bugs. Reply OK if fine, or list issue
 
 ```bash
 for file in src/*.js; do
-  grok -p "Migrate $file from CommonJS to ES modules." --yolo
+  cook -p "Migrate $file from CommonJS to ES modules." --yolo
 done
 ```
 
@@ -453,7 +453,7 @@ class GrokChat:
         self.env = {**os.environ}
 
     def _build_cmd(self, prompt, model, stream):
-        return ["grok", "-p", prompt, "-m", model, "--cwd", self.cwd,
+        return ["cook", "-p", prompt, "-m", model, "--cwd", self.cwd,
                 "--output-format", "streaming-json" if stream else "json",
                 "--yolo"]
 
@@ -508,7 +508,7 @@ asyncio.run(main())
 #!/bin/bash
 # Run a code review and exit with failure if issues are found
 
-RESULT=$(grok -p "Review this PR for bugs. Output JSON with 'issues' array." \
+RESULT=$(cook -p "Review this PR for bugs. Output JSON with 'issues' array." \
   --output-format json --yolo | jq -r '.text')
 
 ISSUE_COUNT=$(echo "$RESULT" | jq '.issues | length' 2>/dev/null || echo "0")
@@ -585,7 +585,7 @@ If you've previously logged in, cached credentials are used automatically.
 - Headless mode starts a **fresh session by default**. Use `-r/--resume` or `-c/--continue` to maintain context across calls.
 - The `--output-format json` response always includes a `sessionId` you can use with `--resume` for follow-up calls.
 - Combine `--yolo` with `--rules` to set guardrails: `cook -p "..." --yolo --rules "Never delete files"`.
-- For debugging, raise the log level and capture stderr: `RUST_LOG=debug grok -p "..." 2> debug.log`.
+- For debugging, raise the log level and capture stderr: `RUST_LOG=debug cook -p "..." 2> debug.log`.
 
 ---
 
