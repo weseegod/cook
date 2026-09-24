@@ -52,6 +52,7 @@ ${%- if tools.by_kind.execute or tools.by_kind.monitor %}
 <background_tasks>
 ${%- if tools.by_kind.execute %}
 - Run a long-lived command you own (a build, test suite, or server) as a background command in `${{ tools.by_kind.execute }}`, then continue independent work${%- if system_reminders_enabled %}; its completion is reported to you${%- endif %}.
+- Use one task for each goal or condition you are waiting on. Check the existing task's result or completion notice before starting another command that waits for the same condition. Run terminal commands in parallel only when their work is independent; split larger batches across steps.
 ${%- endif %}
 ${%- if tools.by_kind.monitor %}
 - Use `${{ tools.by_kind.monitor }}` for watch processes, polling, and ongoing observation of external conditions (CI status, log tailing, API polling), SPECIFICALLY for status changes.

@@ -1,0 +1,30 @@
+{
+  "id": "safeguard.terminal_fanout",
+  "phase": "safeguard",
+  "pillar": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Bash(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/safeguard.terminal_fanout.txt",
+  "expect_tools": [
+    "run_terminal_cmd"
+  ],
+  "forbid_tools": [
+    "read_file"
+  ],
+  "text_contains": [
+    "real-model suite fixture"
+  ],
+  "checks": [
+    "tool_called",
+    "text_contains",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

@@ -2732,6 +2732,7 @@ impl SessionActor {
         let mut turn_span_totals = TurnSpanTotals::default();
         let mut structured_output_retries: u32 = 0;
         let mut media_gen_resamples: u32 = 0;
+        let mut terminal_fanout = TerminalFanoutGuard::default();
         let structured_output_validator = json_schema.as_ref().map(|schema| {
             jsonschema::validator_for(schema).map_err(|e| format!("invalid output schema: {e}"))
         });
@@ -3584,6 +3585,49 @@ impl SessionActor {
                 self.turn_phases.discard_uncommitted_first_meaningful();
                 continue;
             }
+            let (terminal_count, remind_terminal_fanout) = {
+                let bridge = self.tool_bridge_handle();
+                terminal_fanout.inspect(tool_calls.iter().map(|call| bridge.tool_kind(&call.name)))
+            };
+            if remind_terminal_fanout {
+                tracing::warn!(
+                    session_id = %self.session_info.id,
+                    terminal_count,
+                    "terminal command fanout — discarding generation and resampling once"
+                );
+                xai_grok_telemetry::unified_log::info(
+                    "shell.terminal_safeguard.batch_resampled",
+                    Some(self.session_info.id.0.as_ref()),
+                    Some(serde_json::json!({
+                        "terminal_count": terminal_count,
+                        "max_before_reminder": MAX_TERMINAL_CALLS_BEFORE_REMINDER,
+                        "attempt": 1,
+                    })),
+                );
+                self.send_xai_notification(XaiSessionUpdate::RetryState(
+                    crate::extensions::notification::RetryState::Retrying {
+                        attempt: 1,
+                        max_retries: 1,
+                        reason: "Too many parallel terminal commands; retrying".to_string(),
+                        error_type: None,
+                    },
+                ))
+                .await;
+                self.push_system_reminder(TERMINAL_FANOUT_REMINDER);
+                self.turn_phases.discard_uncommitted_first_token();
+                self.turn_phases.discard_uncommitted_first_meaningful();
+                continue;
+            }
+            if terminal_fanout.reminded {
+                xai_grok_telemetry::unified_log::info(
+                    "shell.terminal_safeguard.after_reminder",
+                    Some(self.session_info.id.0.as_ref()),
+                    Some(serde_json::json!({
+                        "terminal_count": terminal_count,
+                        "disposition": "dispatch_all",
+                    })),
+                );
+            }
             metrics_drop_guard.record_model_response(tool_calls.len());
             if !tool_calls.is_empty() {
                 self.record_turn_first_token(None);
@@ -4000,6 +4044,52 @@ impl SessionActor {
 }
 /// Discard an egregious (2x cap) media-gen generation and re-sample this many times; later over-caps in the same turn use first-K.
 const MAX_MEDIA_GEN_OVER_CAP_RESAMPLES: u32 = 1;
+const MAX_TERMINAL_CALLS_BEFORE_REMINDER: usize = 4;
+const TERMINAL_FANOUT_REMINDER: &str = "Your last response proposed more than four terminal commands in parallel, so none were run. Check the user's task and any already-running task IDs. For each goal or condition, use one command or monitor and consume its result before starting another equivalent command. Reissue only the commands still needed.";
+
+#[derive(Default)]
+struct TerminalFanoutGuard {
+    reminded: bool,
+}
+
+impl TerminalFanoutGuard {
+    fn inspect(&mut self, kinds: impl IntoIterator<Item = Option<ToolKind>>) -> (usize, bool) {
+        let count = kinds
+            .into_iter()
+            .filter(|kind| matches!(kind, Some(ToolKind::Execute)))
+            .count();
+        let remind = count > MAX_TERMINAL_CALLS_BEFORE_REMINDER && !self.reminded;
+        self.reminded |= remind;
+        (count, remind)
+    }
+}
+
+#[cfg(test)]
+mod terminal_fanout_tests {
+    use super::*;
+
+    #[test]
+    fn reminds_once_then_dispatches_even_if_fanout_persists() {
+        let mut guard = TerminalFanoutGuard::default();
+        let batch = [Some(ToolKind::Execute); 8];
+        assert_eq!(guard.inspect(batch), (8, true));
+        assert_eq!(guard.inspect(batch), (8, false));
+    }
+
+    #[test]
+    fn small_parallel_batches_and_other_tools_do_not_trigger_reminder() {
+        let mut guard = TerminalFanoutGuard::default();
+        let batch = [
+            Some(ToolKind::Execute),
+            Some(ToolKind::Execute),
+            Some(ToolKind::Execute),
+            Some(ToolKind::Execute),
+            Some(ToolKind::Read),
+        ];
+        assert_eq!(guard.inspect(batch), (4, false));
+        assert_eq!(guard.inspect([Some(ToolKind::Execute); 5]), (5, true));
+    }
+}
 const NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES: u32 = 2;
 const MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES: u32 = 4;
 const _: () =

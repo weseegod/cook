@@ -6,6 +6,7 @@ mod grep;
 mod read;
 mod schema_utils;
 pub mod serde_lenient;
+pub mod terminal_command;
 mod task;
 mod types;
 mod web_search;

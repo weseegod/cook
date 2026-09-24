@@ -302,6 +302,11 @@ fn terminal_execution_equal(left: &ToolCall, right: &ToolCall) -> bool {
     };
     left.remove("description");
     right.remove("description");
+    for arguments in [&mut left, &mut right] {
+        if let Some(serde_json::Value::String(command)) = arguments.get_mut("command") {
+            *command = xai_tool_types::terminal_command::command_execution_key(command);
+        }
+    }
     left == right
 }
 
@@ -338,6 +343,20 @@ mod terminal_dedup_tests {
         assert_eq!(
             unique.iter().map(|c| c.id.as_ref()).collect::<Vec<_>>(),
             ["first", "foreground", "other"]
+        );
+    }
+
+    #[test]
+    fn duplicate_terminal_commands_share_runtime_execution_key() {
+        let calls = vec![
+            call("first", r#"{"command":"export A=1; B=2 job --fast"}"#),
+            call("same", r#"{"command":"export A=1 B=2; job --fast"}"#),
+            call("different", r#"{"command":"echo ready > out; job --fast"}"#),
+        ];
+        let unique = collapse_duplicate_calls(calls);
+        assert_eq!(
+            unique.iter().map(|c| c.id.as_ref()).collect::<Vec<_>>(),
+            ["first", "different"]
         );
     }
 }

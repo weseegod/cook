@@ -14416,6 +14416,7 @@ dependencies = [
  "xai-grok-sampling-types",
  "xai-grok-test-support",
  "xai-grok-version",
+ "xai-tool-types",
  "zstd",
 ]
 
