@@ -8,7 +8,7 @@ describe("windowRange", () => {
       scrollTop: 0,
       viewportHeight: 600,
       heights: [],
-    })).toEqual({ start: 0, end: 20, padTop: 0, padBottom: 0 });
+    })).toEqual({ start: 0, end: 20, tailStart: null, padTop: 0, padBottom: 0 });
   });
 
   it("keeps the live tail mounted while following", () => {
@@ -21,6 +21,7 @@ describe("windowRange", () => {
     });
     expect(result.start).toBe(160);
     expect(result.end).toBe(200);
+    expect(result.tailStart).toBeNull();
     expect(result.padTop).toBe(160 * 72);
     expect(result.padBottom).toBe(0);
   });
@@ -40,7 +41,7 @@ describe("windowRange", () => {
     expect(result.padBottom).toBe((200 - result.end) * 75);
   });
 
-  it("forces the final row into the tree for a live turn", () => {
+  it("keeps the live final row separate from the bounded history window", () => {
     const result = windowRange(200, {
       follow: false,
       scrollTop: 0,
@@ -49,7 +50,8 @@ describe("windowRange", () => {
       turnRunning: true,
     });
     expect(result.start).toBe(0);
-    expect(result.end).toBe(200);
-    expect(result.padBottom).toBe(0);
+    expect(result.end).toBeLessThan(30);
+    expect(result.tailStart).toBe(199);
+    expect(result.padBottom).toBe((199 - result.end) * 72);
   });
 });

@@ -38,6 +38,7 @@ export function ChatView() {
 
   return (
     <TranscriptPane
+      key={sessionId ?? "new-session"}
       blocks={blocks}
       live={turnRunning}
       empty={<EmptyChat sessionId={sessionId} onDraft={draft} />}

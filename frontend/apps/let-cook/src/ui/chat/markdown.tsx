@@ -17,6 +17,8 @@ type ShikiHighlighter = {
 let highlighterPromise: Promise<ShikiHighlighter> | null = null;
 const highlightedCache = new Map<string, string>();
 const highlightedInFlight = new Map<string, Promise<string>>();
+const MAX_HIGHLIGHT_CACHE_CHARS = 4_000_000;
+let highlightedCacheChars = 0;
 let mermaidPromise: Promise<typeof import("mermaid")["default"]> | null = null;
 
 /**
@@ -160,7 +162,12 @@ async function getHighlighter(): Promise<ShikiHighlighter> {
 async function highlightCode(code: string, language: string): Promise<string> {
   const cacheKey = `${language}\0${code}`;
   const cached = highlightedCache.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    // Keep recently viewed blocks warm as a long conversation is scrolled back and forth.
+    highlightedCache.delete(cacheKey);
+    highlightedCache.set(cacheKey, cached);
+    return cached;
+  }
   const running = highlightedInFlight.get(cacheKey);
   if (running) return running;
 
@@ -169,7 +176,16 @@ async function highlightCode(code: string, language: string): Promise<string> {
       await (highlighter.loadLanguage as unknown as (lang: string) => Promise<void>)(language);
     }
     const html = highlighter.codeToHtml(code, { lang: language, theme: "github-dark-default" });
-    highlightedCache.set(cacheKey, html);
+    if (html.length <= MAX_HIGHLIGHT_CACHE_CHARS) {
+      while (highlightedCacheChars + html.length > MAX_HIGHLIGHT_CACHE_CHARS) {
+        const oldestKey = highlightedCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        highlightedCacheChars -= highlightedCache.get(oldestKey)?.length ?? 0;
+        highlightedCache.delete(oldestKey);
+      }
+      highlightedCache.set(cacheKey, html);
+      highlightedCacheChars += html.length;
+    }
     return html;
   });
   highlightedInFlight.set(cacheKey, promise);
@@ -181,14 +197,19 @@ async function highlightCode(code: string, language: string): Promise<string> {
 }
 
 function HighlightedCode({ code, language }: { code: string; language: string }) {
-  const [html, setHtml] = useState<string | null>(() => highlightedCache.get(`${language}\0${code}`) ?? null);
+  const cacheKey = `${language}\0${code}`;
+  const [highlighted, setHighlighted] = useState<{ key: string; html: string } | null>(() => {
+    const html = highlightedCache.get(cacheKey);
+    return html ? { key: cacheKey, html } : null;
+  });
   useEffect(() => {
     let active = true;
     void highlightCode(code, language)
-      .then((value) => active && setHtml(value))
-      .catch(() => active && setHtml(null));
+      .then((value) => active && setHighlighted({ key: cacheKey, html: value }))
+      .catch(() => active && setHighlighted(null));
     return () => { active = false; };
-  }, [code, language]);
+  }, [cacheKey, code, language]);
+  const html = highlighted?.key === cacheKey ? highlighted.html : highlightedCache.get(cacheKey);
   return html ? <div className="shiki-wrap" dangerouslySetInnerHTML={{ __html: html }} /> : <pre><code>{code}</code></pre>;
 }
 

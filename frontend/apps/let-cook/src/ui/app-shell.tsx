@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { acpClient } from "../acp/client";
 import { normalizeError } from "../acp/errors";
@@ -19,11 +19,13 @@ import { openRewind } from "./chat/view-rewind";
 import { CommandPalette } from "./palette/command-palette";
 import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
-import { SettingsPanel, type SettingsTab } from "./settings/settings-panel";
+import type { SettingsTab } from "./settings/settings-panel";
 import { ShortcutsSheet } from "./shortcuts/shortcuts-sheet";
 import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
+
+const SettingsPanel = lazy(() => import("./settings/settings-panel").then(({ SettingsPanel }) => ({ default: SettingsPanel })));
 
 const DISMISSED_KEY = "cook.connectProviderDismissed";
 const NOTICE_TIMEOUT_MS = 3_000;
@@ -279,7 +281,11 @@ export function AppShell() {
         )}
       </main>
       {cwd && utilityPanelOpen && <UtilityPanel onClose={() => setUtilityPanelOpen(false)} />}
-      {settingsTab && <SettingsPanel initialTab={settingsTab} closeRequest={settingsCloseRequest} onClose={() => setSettingsTab(null)} />}
+      {settingsTab && (
+        <Suspense fallback={<div className="settings-panel deferred-panel-loading" role="status">Opening settings…</div>}>
+          <SettingsPanel initialTab={settingsTab} closeRequest={settingsCloseRequest} onClose={() => setSettingsTab(null)} />
+        </Suspense>
+      )}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSelect={runPaletteAction} />}
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
     </div>

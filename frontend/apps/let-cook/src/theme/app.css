@@ -1330,8 +1330,9 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .composer-model-name { min-width: 0; max-width: 125px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-model-effort { color: var(--muted); font-size: 9px; }
 .composer-model-trigger:focus-visible { outline: 2px solid color-mix(in srgb, var(--accent), transparent 45%); outline-offset: 1px; }
-.composer-model-picker-menu { position: fixed; z-index: 120; display: flex; flex-direction: column; gap: 1px; width: 290px; max-width: calc(100vw - 12px); max-height: min(520px, calc(100vh - 12px)); padding: 4px; overflow: visible; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-soft); background: var(--panel-elevated); box-shadow: var(--shadow); }
-.composer-model-picker-submenu { position: absolute; top: -4px; left: calc(100% + 3px); z-index: 1; min-width: 160px; max-width: calc(100vw - 12px); padding: 4px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-soft); background: var(--panel-elevated); box-shadow: var(--shadow); }
+.composer-model-picker-menu { position: fixed; z-index: 120; display: flex; flex-direction: column; width: 290px; max-width: calc(100vw - 12px); max-height: min(520px, calc(100vh - 12px)); padding: 4px; overflow: visible; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-soft); background: var(--panel-elevated); box-shadow: var(--shadow); }
+.composer-model-picker-list { min-height: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 1px; overflow-y: auto; overflow-x: hidden; }
+.composer-model-picker-submenu { position: fixed; z-index: 130; min-width: 160px; max-width: calc(100vw - 12px); max-height: calc(100vh - 12px); overflow-y: auto; padding: 4px; border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text-soft); background: var(--panel-elevated); box-shadow: var(--shadow); }
 .composer-model-picker-group + .composer-model-picker-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border); }
 .composer-model-picker-group-label { padding: 4px 7px 3px; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .04em; }
 .composer-model-picker-item { position: relative; display: flex; align-items: center; border-radius: 4px; }
@@ -1529,7 +1530,6 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
   .utility-panel { width: 240px; flex-basis: 240px; }
   .composer-model-picker, .composer-model-trigger { max-width: 150px; }
   .composer-model-name { max-width: 75px; }
-  .composer-model-picker-submenu { right: calc(100% + 3px); left: auto; }
 }
 
 /* Current shell pass: process-first chrome, readable type, and higher-contrast controls. */
@@ -2874,6 +2874,7 @@ body.session-dragging .session-list { user-select: none; }
 .session-open .session-turn-timer { flex: 0 0 auto; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 /* The chat frame owns its gutters; the composer no longer has a second width cap. */
+.deferred-panel-loading { display: grid; place-items: center; color: var(--muted); font-size: 12px; }
 @container main-shell (max-width: 700px) {
   .transcript { padding-inline: 16px; }
   .prompt-slot, .chat-error { width: calc(100% - 32px); margin-inline: 16px; }

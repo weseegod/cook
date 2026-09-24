@@ -30,10 +30,13 @@ export function ModelPicker({
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const submenuRef = useRef<HTMLDivElement>(null);
+  const focusSubmenuRef = useRef(false);
   const [open, setOpen] = useState(false);
   const [hoveredModelId, setHoveredModelId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [menuPosition, setMenuPosition] = useState<{ top: number; left: number } | null>(null);
+  const [submenuPosition, setSubmenuPosition] = useState<{ top: number; left: number } | null>(null);
   const sessionEffort = useSessionStore((state) => state.reasoningEffort);
   const selected = models.find((model) => model.id === selectedModel) ?? null;
   const selectedOptions = reasoningEffortOptions(selected);
@@ -45,20 +48,24 @@ export function ModelPicker({
     ?? null;
 
   const groups = useMemo(() => groupByProvider(models), [models]);
+  const hoveredModel = models.find((model) => model.id === hoveredModelId);
+  const hoveredOptions = reasoningEffortOptions(hoveredModel);
 
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const target = event.target as Node;
-      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target) && !submenuRef.current?.contains(target)) {
         setOpen(false);
         setHoveredModelId(null);
+        focusSubmenuRef.current = false;
       }
     };
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       setOpen(false);
       setHoveredModelId(null);
+      focusSubmenuRef.current = false;
       triggerRef.current?.focus();
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
@@ -98,12 +105,52 @@ export function ModelPicker({
       window.removeEventListener("resize", updateMenuPosition);
       window.removeEventListener("scroll", updateMenuPosition, true);
     };
-  }, [open, models.length, selectedModelKnown, hoveredModelId]);
+  }, [open, models.length, selectedModelKnown]);
+
+  // The reasoning submenu is portaled (fixed) so a scrolling model list cannot clip it. Anchor it
+  // to the hovered row and flip left when the window cannot hold it on the right.
+  useLayoutEffect(() => {
+    if (!open || !hoveredModelId) {
+      setSubmenuPosition(null);
+      return;
+    }
+
+    const updateSubmenuPosition = () => {
+      const row = menuRef.current?.querySelector<HTMLElement>(
+        `[data-model-picker-row="${CSS.escape(hoveredModelId)}"]`,
+      );
+      const submenu = submenuRef.current;
+      if (!row || !submenu) return;
+
+      const rowRect = row.getBoundingClientRect();
+      const submenuRect = submenu.getBoundingClientRect();
+      const gutter = 6;
+      const width = Math.min(submenuRect.width, window.innerWidth - gutter * 2);
+      const preferLeft = rowRect.right + 3 + width > window.innerWidth - gutter;
+      const left = preferLeft
+        ? Math.max(gutter, rowRect.left - 3 - width)
+        : Math.min(rowRect.right + 3, window.innerWidth - gutter - width);
+      const top = Math.min(
+        Math.max(gutter, rowRect.top - 4),
+        Math.max(gutter, window.innerHeight - submenuRect.height - gutter),
+      );
+      setSubmenuPosition({ top, left });
+    };
+
+    updateSubmenuPosition();
+    window.addEventListener("resize", updateSubmenuPosition);
+    window.addEventListener("scroll", updateSubmenuPosition, true);
+    return () => {
+      window.removeEventListener("resize", updateSubmenuPosition);
+      window.removeEventListener("scroll", updateSubmenuPosition, true);
+    };
+  }, [open, hoveredModelId, menuPosition]);
 
   function toggle() {
     if (disabled || busy) return;
     setOpen((current) => !current);
     setHoveredModelId(null);
+    focusSubmenuRef.current = false;
   }
 
   async function choose(model: ModelSummary, effort?: ReasoningEffortOption) {
@@ -113,6 +160,7 @@ export function ModelPicker({
       await onSelect(model.id, effort?.value);
       setOpen(false);
       setHoveredModelId(null);
+      focusSubmenuRef.current = false;
     } catch (error) {
       useSessionStore.getState().set({ error: normalizeError(error, "Could not switch model") });
     } finally {
@@ -128,8 +176,7 @@ export function ModelPicker({
 
   function focusEffortItem(offset: number, current: HTMLElement, options: ReasoningEffortOption[]) {
     const submenu = current.closest("[data-model-picker-submenu]");
-    const items = [...(submenu?.querySelectorAll<HTMLElement>("[data-model-picker-effort-item]") ?? [])]
-      .filter((item) => item.closest("[data-model-picker-submenu]")?.getAttribute("data-model-picker-submenu") === current.closest("[data-model-picker-submenu]")?.getAttribute("data-model-picker-submenu"));
+    const items = [...(submenu?.querySelectorAll<HTMLElement>("[data-model-picker-effort-item]") ?? [])];
     const index = items.indexOf(current);
     if (options.length === 0) return;
     items[(index + offset + items.length) % items.length]?.focus();
@@ -143,14 +190,24 @@ export function ModelPicker({
     }
     if (event.key === "ArrowRight" && options.length > 0) {
       event.preventDefault();
+      focusSubmenuRef.current = true;
       setHoveredModelId(model.id);
-      requestAnimationFrame(() => {
-        const submenu = [...(menuRef.current?.querySelectorAll<HTMLElement>("[data-model-picker-submenu]") ?? [])]
-          .find((entry) => entry.dataset.modelPickerSubmenu === model.id);
-        submenu?.querySelector<HTMLElement>("[data-model-picker-effort-item]")?.focus();
-      });
+      // Hover may already have opened this submenu, in which case no layout effect will rerun.
+      if (hoveredModelId === model.id && submenuPosition) {
+        focusSubmenuRef.current = false;
+        submenuRef.current?.querySelector<HTMLElement>("[data-model-picker-effort-item]")?.focus();
+      }
     }
   }
+
+  // ArrowRight opens the portaled submenu; focus lands once that portal is positioned and visible.
+  useLayoutEffect(() => {
+    if (!focusSubmenuRef.current || !submenuRef.current || !submenuPosition) return;
+    const first = submenuRef.current.querySelector<HTMLElement>("[data-model-picker-effort-item]");
+    if (!first) return;
+    focusSubmenuRef.current = false;
+    first.focus();
+  }, [hoveredModelId, submenuPosition]);
 
   function effortKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, options: ReasoningEffortOption[]) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -160,9 +217,9 @@ export function ModelPicker({
     }
     if (event.key === "ArrowLeft") {
       event.preventDefault();
-      event.currentTarget
-        .closest(".composer-model-picker-item")
-        ?.querySelector<HTMLButtonElement>(":scope > [data-model-picker-item]")
+      const id = event.currentTarget.closest("[data-model-picker-submenu]")?.getAttribute("data-model-picker-submenu");
+      menuRef.current
+        ?.querySelector<HTMLElement>(`[data-model-picker-row="${CSS.escape(id ?? "")}"] [data-model-picker-item]`)
         ?.focus();
     }
   }
@@ -200,71 +257,86 @@ export function ModelPicker({
             visibility: menuPosition ? "visible" : "hidden",
           }}
         >
-          {groups.map(([provider, entries]) => (
-            <div key={provider} className="composer-model-picker-group">
-              <div className="composer-model-picker-group-label">{providerDisplayName(provider)}</div>
-              {entries.map((model) => {
-                const options = reasoningEffortOptions(model);
-                const isSelected = model.id === selectedModel;
-                const isHovered = model.id === hoveredModelId;
-                return (
-                  <div
-                    key={model.id}
-                    className={`composer-model-picker-item${isHovered ? " hovered" : ""}`}
-                    onMouseEnter={() => setHoveredModelId(options.length > 0 ? model.id : null)}
-                  >
-                    <button
-                      type="button"
-                      role="menuitem"
-                      tabIndex={0}
-                      data-model-picker-item
-                      className={isSelected ? "selected" : ""}
-                      aria-haspopup={options.length > 0 ? "menu" : undefined}
-                      aria-expanded={options.length > 0 ? isHovered : undefined}
-                      onFocus={() => setHoveredModelId(options.length > 0 ? model.id : null)}
-                      onClick={() => void choose(model)}
-                      onKeyDown={(event) => modelKeyDown(event, model, options)}
+          <div className="composer-model-picker-list">
+            {groups.map(([provider, entries]) => (
+              <div key={provider} className="composer-model-picker-group">
+                <div className="composer-model-picker-group-label">{providerDisplayName(provider)}</div>
+                {entries.map((model) => {
+                  const options = reasoningEffortOptions(model);
+                  const isSelected = model.id === selectedModel;
+                  const isHovered = model.id === hoveredModelId;
+                  return (
+                    <div
+                      key={model.id}
+                      className={`composer-model-picker-item${isHovered ? " hovered" : ""}`}
+                      data-model-picker-row={model.id}
+                      onMouseEnter={() => setHoveredModelId(options.length > 0 ? model.id : null)}
                     >
-                      <span>{model.name ?? model.id}</span>
-                      {isSelected && <Check size={13} aria-label="Selected" />}
-                      {options.length > 0 && <ChevronRight size={13} aria-hidden="true" />}
-                    </button>
-                    {isHovered && options.length > 0 && (
-                      <div
-                        className="composer-model-picker-submenu"
-                        role="menu"
-                        data-model-picker-submenu={model.id}
-                        aria-label={`${model.name ?? model.id} reasoning levels`}
+                      <button
+                        type="button"
+                        role="menuitem"
+                        tabIndex={0}
+                        data-model-picker-item
+                        className={isSelected ? "selected" : ""}
+                        aria-haspopup={options.length > 0 ? "menu" : undefined}
+                        aria-expanded={options.length > 0 ? isHovered : undefined}
+                        onFocus={() => setHoveredModelId(options.length > 0 ? model.id : null)}
+                        onClick={() => void choose(model)}
+                        onKeyDown={(event) => modelKeyDown(event, model, options)}
                       >
-                        <div className="composer-model-picker-group-label">Reasoning</div>
-                        {options.map((option) => (
-                          <button
-                            key={`${model.id}:${option.id}`}
-                            type="button"
-                            role="menuitemradio"
-                            aria-checked={isSelected && activeEffort === option.value}
-                            data-model-picker-effort-item
-                            className={isSelected && activeEffort === option.value ? "selected" : ""}
-                            title={option.description}
-                            onClick={() => void choose(model, option)}
-                            onKeyDown={(event) => effortKeyDown(event, options)}
-                          >
-                            <span>{option.label}</span>
-                            {isSelected && activeEffort === option.value && <Check size={13} aria-hidden="true" />}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+                        <span>{model.name ?? model.id}</span>
+                        {isSelected && <Check size={13} aria-label="Selected" />}
+                        {options.length > 0 && <ChevronRight size={13} aria-hidden="true" />}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
           {!selectedModelKnown && selectedModel && (
             <div className="composer-model-picker-unknown">Current: {selectedModel}</div>
           )}
         </div>,
         document.body,
+      )}
+      {open && hoveredModel && (
+        createPortal(
+          <div
+            ref={submenuRef}
+            className="composer-model-picker-submenu"
+            role="menu"
+            data-model-picker-submenu={hoveredModel.id}
+            aria-label={`${hoveredModel.name ?? hoveredModel.id} reasoning levels`}
+            style={{
+              top: submenuPosition?.top ?? 0,
+              left: submenuPosition?.left ?? 0,
+              visibility: submenuPosition ? "visible" : "hidden",
+            }}
+          >
+            <div className="composer-model-picker-group-label">Reasoning</div>
+            {hoveredOptions.map((option) => {
+              const isSelected = hoveredModel.id === selectedModel && activeEffort === option.value;
+              return (
+                <button
+                  key={`${hoveredModel.id}:${option.id}`}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={isSelected}
+                  data-model-picker-effort-item
+                  className={isSelected ? "selected" : ""}
+                  title={option.description}
+                  onClick={() => void choose(hoveredModel, option)}
+                  onKeyDown={(event) => effortKeyDown(event, hoveredOptions)}
+                >
+                  <span>{option.label}</span>
+                  {isSelected && <Check size={13} aria-hidden="true" />}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )
       )}
     </div>
   );

@@ -67,6 +67,8 @@ export function TranscriptPane({
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
   const scrollFrame = useRef<number | null>(null);
+  const scrollMetricsFrame = useRef<number | null>(null);
+  const pendingScrollMetrics = useRef<ScrollMetrics | null>(null);
   const rowHeights = useRef(new Map<string, number>());
   const rowObserver = useRef<ResizeObserver | null>(null);
   const [follow, setFollow] = useState(true);
@@ -90,11 +92,17 @@ export function TranscriptPane({
 
   const updateScrollState = useCallback((element: HTMLDivElement) => {
     const nextFollow = !hasContentBelow(element.scrollHeight, element.scrollTop, element.clientHeight);
-    setFollowMode(nextFollow);
-    setScrollMetrics({
+    if (nextFollow !== followRef.current) setFollowMode(nextFollow);
+    pendingScrollMetrics.current = {
       scrollTop: element.scrollTop,
       viewportHeight: element.clientHeight,
       scrollHeight: element.scrollHeight,
+    };
+    if (scrollMetricsFrame.current !== null) return;
+    scrollMetricsFrame.current = scheduleFrame(() => {
+      scrollMetricsFrame.current = null;
+      const metrics = pendingScrollMetrics.current;
+      if (metrics) setScrollMetrics(metrics);
     });
   }, [setFollowMode]);
 
@@ -132,9 +140,16 @@ export function TranscriptPane({
       });
     }
     rowObserver.current.observe(node);
+    return () => rowObserver.current?.unobserve(node);
   }, []);
 
-  useEffect(() => () => rowObserver.current?.disconnect(), []);
+  useEffect(() => () => {
+    rowObserver.current?.disconnect();
+    if (scrollMetricsFrame.current !== null) {
+      if (typeof window.cancelAnimationFrame === "function") window.cancelAnimationFrame(scrollMetricsFrame.current);
+      else window.clearTimeout(scrollMetricsFrame.current);
+    }
+  }, []);
 
   const range = useMemo(() => windowRange(projected.length, {
     follow,
@@ -197,7 +212,7 @@ export function TranscriptPane({
       else window.clearTimeout(scrollFrame.current);
       scrollFrame.current = null;
     };
-  }, [follow, measurementVersion, projected, range.end, range.padBottom, range.padTop, range.start, streaming, updateScrollState]);
+  }, [follow, measurementVersion, projected, range.end, range.padBottom, range.padTop, range.start, range.tailStart, streaming, updateScrollState]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -207,7 +222,7 @@ export function TranscriptPane({
       scrollHeight: transcript.scrollHeight,
       viewportHeight: transcript.clientHeight,
     }));
-  }, [projected, range.end, range.start]);
+  }, [projected, range.end, range.padBottom, range.padTop, range.start, range.tailStart]);
 
   const actions = useMemo(() => ({ enableFollow, pageScroll }), [enableFollow, pageScroll]);
   const contentBelow = hasContentBelow(
@@ -216,6 +231,20 @@ export function TranscriptPane({
     scrollMetrics.viewportHeight,
   );
   const stickyBlock = stickyIndex === null ? null : projected[stickyIndex];
+
+  function renderRow(block: DisplayBlock) {
+    return (
+      <div
+        key={block.id}
+        id={rowDomId(block.id)}
+        className="transcript-row"
+        data-transcript-row={block.id}
+        ref={observeRow}
+      >
+        <TranscriptRow block={block} />
+      </div>
+    );
+  }
 
   return (
     <TranscriptActionsContext.Provider value={actions}>
@@ -232,18 +261,9 @@ export function TranscriptPane({
               ) : (
                 <>
                   {range.padTop > 0 && <div className="transcript-spacer" style={{ height: range.padTop }} aria-hidden="true" />}
-                  {projected.slice(range.start, range.end).map((block) => (
-                    <div
-                      key={block.id}
-                      id={rowDomId(block.id)}
-                      className="transcript-row"
-                      data-transcript-row={block.id}
-                      ref={observeRow}
-                    >
-                      <TranscriptRow block={block} />
-                    </div>
-                  ))}
+                  {projected.slice(range.start, range.end).map(renderRow)}
                   {range.padBottom > 0 && <div className="transcript-spacer" style={{ height: range.padBottom }} aria-hidden="true" />}
+                  {range.tailStart !== null && renderRow(projected[range.tailStart])}
                 </>
               )}
             </div>

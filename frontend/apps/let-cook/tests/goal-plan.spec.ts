@@ -166,7 +166,8 @@ test.describe("goal and plan presentation", () => {
   });
 
   test("queue pane can edit, send now, and remove held prompts", async ({ page }) => {
-    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 400 });
+    // Keep the turn open through the edit flow, even under parallel browser-test load.
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 10_000 });
     const input = page.getByTestId("composer-input");
     await input.fill("hello");
     await input.press("Enter");

@@ -15,6 +15,8 @@ export interface WindowRange {
   /** Inclusive start, exclusive end. */
   start: number;
   end: number;
+  /** Live last row mounted separately when it lies outside the visible window. */
+  tailStart: number | null;
   padTop: number;
   padBottom: number;
 }
@@ -72,7 +74,7 @@ export function windowRange(count: number, options: WindowRangeOptions): WindowR
   const overscan = Math.max(0, Math.floor(options.overscan ?? 8));
   const minCount = Math.max(0, Math.floor(options.minCount ?? 64));
 
-  if (safeCount < minCount) return { start: 0, end: safeCount, padTop: 0, padBottom: 0 };
+  if (safeCount < minCount) return { start: 0, end: safeCount, tailStart: null, padTop: 0, padBottom: 0 };
   const prefix = cumulativeHeights(safeCount, options.heights, estimate);
 
   let start: number;
@@ -89,14 +91,15 @@ export function windowRange(count: number, options: WindowRangeOptions): WindowR
     end = Math.min(safeCount, Math.max(firstVisible + 1, firstAfterViewport) + overscan);
   }
 
-  // A live assistant/tool can be the last row while the user is reading older content. The
-  // explicit turnRunning rule keeps that tail in the tree; the tail is still represented by the
-  // same native scrollbar and is not copied into Zustand.
-  if (options.turnRunning) end = safeCount;
   if (end < start) end = start;
 
   const total = prefix[safeCount];
   const padTop = prefix[start];
-  const padBottom = Math.max(0, total - prefix[end]);
-  return { start, end, padTop, padBottom };
+  // Keep the live last row mounted for its local state and size measurement. A spacer represents
+  // the intervening history, so reading back during a long turn still mounts only a small window.
+  const tailStart = options.turnRunning && !options.follow && end < safeCount - 1
+    ? safeCount - 1
+    : null;
+  const padBottom = Math.max(0, (tailStart === null ? total : prefix[tailStart]) - prefix[end]);
+  return { start, end, tailStart, padTop, padBottom };
 }
