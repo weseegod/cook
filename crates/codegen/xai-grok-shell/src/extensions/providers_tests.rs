@@ -134,6 +134,7 @@ fn presets_cover_every_documented_provider() {
         "groq",
         "mistral",
         "moonshot",
+        "xiaomi",
         "together",
         "fireworks",
         "ollama",
@@ -146,6 +147,21 @@ fn presets_cover_every_documented_provider() {
     assert_eq!(anthropic.extra_headers, &[("anthropic-version", "2023-06-01")]);
     let ollama = PRESETS.iter().find(|p| p.id == "ollama").unwrap();
     assert!(ollama.env_key.is_none(), "Ollama needs no key");
+    let xiaomi = PRESETS.iter().find(|p| p.id == "xiaomi").unwrap();
+    assert_eq!(xiaomi.base_url, Some("https://api.xiaomimimo.com/v1"));
+    assert_eq!(xiaomi.env_key, Some("MIMO_API_KEY"));
+    assert_eq!(
+        xiaomi
+            .models
+            .iter()
+            .map(|model| model.id)
+            .collect::<Vec<_>>(),
+        [
+            "mimo-v2.6-pro",
+            "mimo-v2.6-flash",
+            "mimo-v2.6-pro-ultraspeed"
+        ]
+    );
     let zai = PRESETS.iter().find(|p| p.id == "zai").unwrap();
     assert_eq!(zai.base_url, Some("https://api.z.ai/api/paas/v4/"));
     assert_eq!(zai.env_key, Some("ZAI_API_KEY"));

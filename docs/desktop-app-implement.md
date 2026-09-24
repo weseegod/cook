@@ -149,6 +149,7 @@ could reuse later). User can still pick **Custom**.
 | `groq` | Groq | `https://api.groq.com/openai/v1` | `chat_completions` | discover |
 | `mistral` | Mistral | `https://api.mistral.ai/v1` | `chat_completions` | discover |
 | `moonshot` | Moonshot / Kimi | `https://api.moonshot.ai/v1` | `chat_completions` | `kimi-k2.6`, `kimi-k3` |
+| `xiaomi` | Xiaomi MiMo | `https://api.xiaomimimo.com/v1` | `chat_completions` | `mimo-v2.6-pro`, `mimo-v2.6-flash`, `mimo-v2.6-pro-ultraspeed` |
 | `together` | Together | `https://api.together.xyz/v1` | `chat_completions` | discover |
 | `fireworks` | Fireworks | `https://api.fireworks.ai/inference/v1` | `chat_completions` | discover |
 | `ollama` | Ollama (local) | `http://127.0.0.1:11434/v1` | `chat_completions` | discover; key optional |

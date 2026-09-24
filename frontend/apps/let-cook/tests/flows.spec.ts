@@ -35,6 +35,7 @@ test.describe("first run", () => {
     await expect(page.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
     await expect(page.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
     await expect(page.getByTestId("preset-deepseek")).toBeVisible();
+    await expect(page.getByTestId("preset-xiaomi")).toBeVisible();
     await expect(page.getByTestId("preset-ollama")).toHaveCount(0);
     await expect(page.getByTestId("preset-custom")).toHaveCount(0);
 
@@ -232,10 +233,12 @@ test.describe("chat, attachments and the model picker", () => {
     await openWorkspace(page, CONNECTED_SEED);
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Models" }).click();
-    await expect(page.locator("[data-testid^='provider-row-']")).toHaveCount(8);
+    await expect(page.locator("[data-testid^='provider-row-']")).toHaveCount(9);
     await expect(page.getByTestId("provider-row-openai")).toContainText("Connected · API key");
     await expect(page.getByTestId("provider-row-openai").locator(".provider-logo-openai")).toBeVisible();
     await expect(page.getByTestId("provider-row-anthropic")).toContainText("Not connected");
+    await expect(page.getByTestId("provider-row-xiaomi")).toContainText("Not connected");
+    await expect(page.getByTestId("provider-row-xiaomi")).toContainText("Xiaomi MiMo");
     await expect(page.getByTestId("provider-row-anthropic").locator(".provider-logo-claude")).toBeVisible();
     await expect(page.getByTestId("provider-row-xai").locator(".provider-logo-grok")).toBeVisible();
     await page.getByTestId("provider-add").click();
@@ -244,6 +247,8 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(dialog.getByTestId("preset-openai").locator(".provider-logo-openai")).toBeVisible();
     await expect(dialog.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
     await expect(dialog.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
+    await expect(dialog.getByTestId("preset-xiaomi")).toBeVisible();
+    await expect(dialog.getByTestId("preset-xiaomi")).toContainText("Xiaomi MiMo");
     await expect(dialog.getByText("Choose a provider")).toHaveCount(0);
     await dialog.getByLabel("Close dialog").click();
     await expect(dialog).toHaveCount(0);

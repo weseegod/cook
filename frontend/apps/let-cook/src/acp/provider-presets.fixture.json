@@ -282,6 +282,45 @@
     ]
   },
   {
+    "id": "xiaomi",
+    "label": "Xiaomi MiMo",
+    "baseUrl": "https://api.xiaomimimo.com/v1",
+    "apiBackend": "chat_completions",
+    "envKey": "MIMO_API_KEY",
+    "help": "Create a key at platform.xiaomimimo.com",
+    "discover": true,
+    "extraHeaders": {},
+    "models": [
+      {
+        "id": "mimo-v2.6-pro",
+        "model": "mimo-v2.6-pro",
+        "name": "MiMo V2.6 Pro",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "mimo-v2.6-flash",
+        "model": "mimo-v2.6-flash",
+        "name": "MiMo V2.6 Flash",
+        "input": [
+          "text",
+          "image"
+        ]
+      },
+      {
+        "id": "mimo-v2.6-pro-ultraspeed",
+        "model": "mimo-v2.6-pro-ultraspeed",
+        "name": "MiMo V2.6 Pro Ultraspeed",
+        "input": [
+          "text",
+          "image"
+        ]
+      }
+    ]
+  },
+  {
     "id": "together",
     "label": "Together",
     "baseUrl": "https://api.together.xyz/v1",

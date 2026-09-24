@@ -378,6 +378,36 @@ const PRESETS: &[ProviderPreset] = &[
         ],
     },
     ProviderPreset {
+        id: "xiaomi",
+        label: "Xiaomi MiMo",
+        base_url: Some("https://api.xiaomimimo.com/v1"),
+        api_backend: "chat_completions",
+        env_key: Some("MIMO_API_KEY"),
+        help: "Create a key at platform.xiaomimimo.com",
+        discover: true,
+        extra_headers: &[],
+        models: &[
+            seed(
+                "mimo-v2.6-pro",
+                "mimo-v2.6-pro",
+                "MiMo V2.6 Pro",
+                TEXT_IMAGE,
+            ),
+            seed(
+                "mimo-v2.6-flash",
+                "mimo-v2.6-flash",
+                "MiMo V2.6 Flash",
+                TEXT_IMAGE,
+            ),
+            seed(
+                "mimo-v2.6-pro-ultraspeed",
+                "mimo-v2.6-pro-ultraspeed",
+                "MiMo V2.6 Pro Ultraspeed",
+                TEXT_IMAGE,
+            ),
+        ],
+    },
+    ProviderPreset {
         id: "together",
         label: "Together",
         base_url: Some("https://api.together.xyz/v1"),

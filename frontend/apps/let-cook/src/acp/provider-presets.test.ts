@@ -30,6 +30,7 @@ describe("preset catalog", () => {
       "groq",
       "mistral",
       "moonshot",
+      "xiaomi",
       "together",
       "fireworks",
       "ollama",
@@ -47,6 +48,16 @@ describe("preset catalog", () => {
     });
     expect(findPreset("zai")?.models.map((model) => model.id)).toEqual(["glm-5.1", "glm-5", "glm-4.7"]);
     expect(findPreset("ollama")?.envKey).toBeNull();
+    expect(findPreset("xiaomi")).toMatchObject({
+      baseUrl: "https://api.xiaomimimo.com/v1",
+      apiBackend: "chat_completions",
+      envKey: "MIMO_API_KEY",
+    });
+    expect(findPreset("xiaomi")?.models.map((model) => model.id)).toEqual([
+      "mimo-v2.6-pro",
+      "mimo-v2.6-flash",
+      "mimo-v2.6-pro-ultraspeed",
+    ]);
     expect(findPreset("custom")?.baseUrl).toBeNull();
     expect(isOauthProvider("openai")).toBe(true);
     expect(isOauthProvider("anthropic")).toBe(true);

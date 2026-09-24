@@ -62,6 +62,11 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     { id: "kimi-k2.6", model: "kimi-k2.6", name: "Kimi K2.6", input: text },
     { id: "kimi-k3", model: "kimi-k3", name: "Kimi K3", input: text },
   ]),
+  preset("xiaomi", "Xiaomi MiMo", "https://api.xiaomimimo.com/v1", "chat_completions", "MIMO_API_KEY", "Create a key at platform.xiaomimimo.com", [
+    { id: "mimo-v2.6-pro", model: "mimo-v2.6-pro", name: "MiMo V2.6 Pro", input: textImage },
+    { id: "mimo-v2.6-flash", model: "mimo-v2.6-flash", name: "MiMo V2.6 Flash", input: textImage },
+    { id: "mimo-v2.6-pro-ultraspeed", model: "mimo-v2.6-pro-ultraspeed", name: "MiMo V2.6 Pro Ultraspeed", input: textImage },
+  ]),
   preset("together", "Together", "https://api.together.xyz/v1", "chat_completions", "TOGETHER_API_KEY", "Create a key at api.together.ai/settings/api-keys", []),
   preset("fireworks", "Fireworks", "https://api.fireworks.ai/inference/v1", "chat_completions", "FIREWORKS_API_KEY", "Create a key at fireworks.ai/account/api-keys", []),
   preset("ollama", "Ollama (local)", "http://127.0.0.1:11434/v1", "chat_completions", null, "Runs locally; no API key required", []),
@@ -79,6 +84,7 @@ export const VISIBLE_PROVIDER_IDS = new Set([
   "xai",
   "google",
   "moonshot",
+  "xiaomi",
 ]);
 
 /** Providers whose Settings → Models Connect starts OAuth (ChatGPT, Claude, Grok). */
