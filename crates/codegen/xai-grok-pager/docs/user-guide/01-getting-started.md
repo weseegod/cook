@@ -61,8 +61,8 @@ cook clone <url> [dir]
 The default is a depth-1 checkout of the selected branch. Pass `--full-history`
 for a complete clone. Clone enablement is independent of session / `-w` Grove
 worktrees (the convenience above turns both on; the specific knobs still win).
-the sign-in flow below — see [clone authentication](27-grok-clone.md#authentication)
-and [Configuration reference](26-config-reference.md).
+For Git credential help, see [Grove clone](27-grok-clone.md#authentication).
+For other settings, see the [Configuration reference](26-config-reference.md).
 
 ---
 
