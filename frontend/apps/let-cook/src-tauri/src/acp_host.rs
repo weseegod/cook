@@ -5,7 +5,6 @@
 //! Terminal stub arms are intentionally absent while `terminal: false` (H-term / C1).
 
 use std::collections::HashMap;
-use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -147,8 +146,10 @@ impl AcpHost {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         // Pin the child to the same home Settings uses so agent and desktop never
-        // read two different config.toml files. Upstream agent still keys off GROK_HOME.
-        command.env("GROK_HOME", crate::bin_resolve::cook_home());
+        // read two different config.toml files. The agent accepts COOK_HOME, then GROK_HOME.
+        let home = crate::bin_resolve::cook_home();
+        command.env("COOK_HOME", &home);
+        command.env("GROK_HOME", &home);
         #[cfg(unix)]
         unsafe {
             use std::os::unix::process::CommandExt;
@@ -623,7 +624,7 @@ fn exit_detail(
 /// for the renderer Layer 2 typed-decline path (`docs/desktop-app.md` §5.4).
 ///
 /// With Always approve off, `fs/*` may touch the workspace cwd **and** the agent's session store
-/// (`$COOK_HOME/sessions` / `$GROK_HOME/sessions` / `~/.cook/sessions`) so plan mode can write
+/// (`$COOK_HOME/sessions`, else `$GROK_HOME/sessions`, else `~/.cook/sessions`) so plan mode can write
 /// its plan file outside any workspace. With Always approve on, the host mirrors the CLI/TUI
 /// LocalFs backend and does not add a path allowlist.
 fn handle_host_request(
@@ -673,27 +674,7 @@ fn host_native_outcome(
 /// (`<session>/plan.md`, or `<session>/plans/<utc>.md` / `<slug>-<utc>.md` per episode) through this client
 /// filesystem, so that tree has to stay reachable even though it sits outside any workspace.
 fn agent_state_root() -> PathBuf {
-    agent_state_root_from(
-        std::env::var_os("GROK_HOME").as_deref(),
-        std::env::var_os("COOK_HOME").as_deref(),
-        std::env::var_os("THANH_HOME").as_deref(),
-        crate::bin_resolve::cook_home(),
-    )
-}
-
-fn agent_state_root_from(
-    grok_home: Option<&OsStr>,
-    cook_home: Option<&OsStr>,
-    thanh_home: Option<&OsStr>,
-    app_home: PathBuf,
-) -> PathBuf {
-    let home = grok_home
-        .filter(|value| !value.is_empty())
-        .or(cook_home.filter(|value| !value.is_empty()))
-        .or(thanh_home.filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
-        .unwrap_or(app_home);
-    let sessions = home.join("sessions");
+    let sessions = crate::bin_resolve::cook_home().join("sessions");
     // The compared path is canonicalized, and on macOS both `$HOME` and `$TMPDIR` may be symlinks.
     sessions.canonicalize().unwrap_or(sessions)
 }
@@ -980,32 +961,6 @@ mod tests {
         assert!(is_yolo_mode_change("x.ai/yolo_mode_changed"));
         assert!(is_yolo_mode_change("_x.ai/yolo_mode_changed"));
         assert!(!is_yolo_mode_change("x.ai/other"));
-    }
-
-    #[test]
-    fn session_store_prefers_grok_then_cook_then_thanh_alias() {
-        let cook = OsStr::new("/fake/cook-home");
-        let grok = OsStr::new("/fake/grok-home");
-        let thanh = OsStr::new("/fake/thanh-home");
-        let app_home = || PathBuf::from("/fake/app-home");
-        let sessions = |base: &str| PathBuf::from(format!("{base}/sessions"));
-
-        assert_eq!(
-            agent_state_root_from(Some(grok), Some(cook), Some(thanh), app_home()),
-            sessions("/fake/grok-home")
-        );
-        assert_eq!(
-            agent_state_root_from(None, Some(cook), Some(thanh), app_home()),
-            sessions("/fake/cook-home")
-        );
-        assert_eq!(
-            agent_state_root_from(None, None, Some(thanh), app_home()),
-            sessions("/fake/thanh-home")
-        );
-        assert_eq!(
-            agent_state_root_from(Some(OsStr::new("")), None, None, app_home()),
-            sessions("/fake/app-home")
-        );
     }
 
     /// Plan mode writes its plan file through the client filesystem; the session store is

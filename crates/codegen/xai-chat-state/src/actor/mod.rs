@@ -204,6 +204,27 @@ impl ChatStateActor {
             } => {
                 self.record_model_call_usage(model_id, &usage, api_duration_ms, cost_usd_ticks);
             }
+            ChatStateCommand::RecordSideCallUsage {
+                purpose,
+                model_id,
+                usage,
+                api_duration_ms,
+                cost_usd_ticks,
+            } => {
+                self.record_side_call_usage(
+                    purpose,
+                    &model_id,
+                    &usage,
+                    api_duration_ms,
+                    cost_usd_ticks,
+                );
+            }
+            ChatStateCommand::RecordUsageMissing { purpose } => {
+                self.record_usage_missing(purpose);
+            }
+            ChatStateCommand::RecordRequestComponents { components } => {
+                self.record_request_components(&components);
+            }
             ChatStateCommand::RecordSubagentUsage {
                 by_model,
                 attribute_to_prompt,
@@ -313,8 +334,8 @@ impl ChatStateActor {
             ChatStateCommand::FlushHarnessTraceTurn => {
                 self.state.seal_harness_trace_turn();
             }
-            ChatStateCommand::RepairDanglingAfterHarnessHalt { class } => {
-                self.repair_dangling_after_harness_halt(class);
+            ChatStateCommand::RepairDanglingAfterHarnessHalt { class, answers } => {
+                self.repair_dangling_after_harness_halt(class, answers);
             }
             ChatStateCommand::PopStrandedContinueReminder => {
                 self.pop_stranded_continue_reminder();

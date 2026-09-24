@@ -1,0 +1,1 @@
+Enter plan mode, write the plan text “plan-ok” into the plan, and exit plan mode. Do not edit files in the workdir.

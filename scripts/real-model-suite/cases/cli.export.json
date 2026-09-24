@@ -1,0 +1,12 @@
+{
+  "id": "cli.export",
+  "phase": "cli",
+  "needs_model": false,
+  "after": "sampler.noop",
+  "commands": [
+    [
+      "export",
+      "{{SESSION_ID}}"
+    ]
+  ]
+}

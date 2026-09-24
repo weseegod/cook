@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}} with read_file and reply with its exact line.

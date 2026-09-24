@@ -190,6 +190,23 @@ async fn side_question_projects_agent_messages_without_mutating_history() {
                 serde_json::to_vec(&actor.chat_state_handle.get_conversation().await).unwrap(),
                 raw_bytes
             );
+
+            // `/btw` spends provider tokens outside the tool loop: its usage must land under its
+            // own purpose row without ever advancing the reported turn count.
+            let session = actor
+                .chat_state_handle
+                .try_get_session_usage()
+                .await
+                .expect("session ledger");
+            let btw = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::Btw)
+                .expect("btw row");
+            assert_eq!(btw.model_calls, 1);
+            assert!(btw.input_tokens > 0, "the mock reports prompt tokens");
+            assert_eq!(btw.usage_missing_calls, 0);
+            assert_eq!(session.main_loop_model_calls, 0);
+            assert_eq!(session.side_call_model_calls, 1);
         })
         .await;
 }

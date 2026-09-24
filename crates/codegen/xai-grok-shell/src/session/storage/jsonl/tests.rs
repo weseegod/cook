@@ -1301,7 +1301,7 @@ fn write_test_summary(
         generated_title: None,
         title_is_manual: false,
         worktree_label: None,
-        agent_name: None,
+        agent: Default::default(),
         sandbox_profile: None,
         reasoning_effort: None,
         last_turn_summary: None,
@@ -2660,6 +2660,7 @@ async fn usage_json_rewrites_session_and_appends_turns() {
         reasoning_tokens: 0,
         cached_prompt_tokens: 0,
         cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: (0) != 0,
     };
     let mut ledger = UsageLedger::default();
     ledger.record_main_loop_call("grok-4", &tu(100, 20), Some(10), Some(50));

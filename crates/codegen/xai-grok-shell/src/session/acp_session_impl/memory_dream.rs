@@ -6,6 +6,11 @@ use xai_grok_telemetry::session_end::{self, Phase};
 const DREAM_MODEL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 /// Stale-lock floor: the whole dream (model call plus post-call reindex) must finish inside this, so it must exceed the model timeout; doubling it leaves reindex headroom.
 const DREAM_LOCK_STALE_FLOOR_SECS: u64 = DREAM_MODEL_TIMEOUT.as_secs() * 2;
+/// Output budget for the flush summarizer. The suite sets the session
+/// `max_completion_tokens` to 2048; a free-form markdown summary needs its own
+/// room so a Length stop does not discard the whole flush under the default
+/// `CompleteToolCalls` policy.
+pub(super) const MEMORY_FLUSH_MAX_OUTPUT_TOKENS: u32 = 4096;
 
 /// Whether a dream attempt reached the model call. `Ran` reports its own result; `Skipped` returned
 /// before the model call, so a user-initiated caller surfaces the reason and `/dream` is never silent.
@@ -519,7 +524,7 @@ impl SessionActor {
                 ConversationItem::system(crate::session::memory::dream::DREAM_SYSTEM_PROMPT),
                 ConversationItem::user(user_message),
             ],
-            model: Some(model),
+            model: Some(model.clone()),
             x_grok_conv_id: Some(format!("dream-{}", uuid::Uuid::new_v4())),
             x_grok_req_id: Some(format!("xai-dream-{}", uuid::Uuid::new_v4())),
             x_grok_session_id: Some(session_id),
@@ -532,7 +537,38 @@ impl SessionActor {
             .map_err(|e| {
                 acp::Error::internal_error().data(format!("dream model call failed: {e}"))
             })?;
+        crate::session::side_call_usage::record_side_call_response(
+            &self.chat_state_handle,
+            xai_chat_state::CallPurpose::MemoryDream,
+            &model,
+            &response,
+            None,
+        );
         Ok(response.assistant_text())
+    }
+
+    /// Build the one-shot flush `ConversationRequest`.
+    ///
+    /// Flush is free-form prose: give it its own output budget and accept a
+    /// Length-truncated partial summary under `CompletePartial` rather than
+    /// discarding the whole call under the default `CompleteToolCalls` policy.
+    fn build_memory_flush_request(
+        items: Vec<ConversationItem>,
+        model: String,
+        session_id: &str,
+    ) -> ConversationRequest {
+        ConversationRequest {
+            items,
+            model: Some(model),
+            tools: vec![],
+            x_grok_conv_id: Some(format!("flush-{}", uuid::Uuid::new_v4())),
+            x_grok_req_id: Some(format!("xai-flush-{}", uuid::Uuid::new_v4())),
+            x_grok_session_id: Some(session_id.to_owned()),
+            x_grok_agent_id: Some(xai_grok_telemetry::id::agent_id()),
+            max_output_tokens: Some(MEMORY_FLUSH_MAX_OUTPUT_TOKENS),
+            length_policy: xai_grok_sampling_types::LengthPolicy::CompletePartial,
+            ..Default::default()
+        }
     }
 
     /// Run a memory flush turn that summarizes recent conversation into a session log.
@@ -567,6 +603,28 @@ impl SessionActor {
 
         self.send_xai_notification(XaiSessionUpdate::MemoryFlushStarted)
             .await;
+
+        // Explicit flush must not skip a write when the conversation has content:
+        // `NO_REPLY` still becomes a session log so `$COOK_HOME/memory` carries the turn.
+        let user_message_count_before = {
+            let counts = self.chat_state_handle.get_conversation_counts().await;
+            counts.user
+        };
+        let force_write_on_no_reply =
+            Self::force_flush_write_for_trigger(trigger, user_message_count_before);
+        let mut force_flush_content: Option<String> = None;
+        if force_write_on_no_reply {
+            let conversation = self.chat_state_handle.get_conversation().await;
+            let chat_history =
+                xai_chat_state::compaction_utils::prepare_conversation_for_summarization(
+                    conversation,
+                );
+            let recent = crate::session::helpers::memory_flush_window::select_flush_window(
+                chat_history,
+                20,
+            );
+            force_flush_content = Some(Self::force_flush_content_from_window(&recent));
+        }
 
         let result = async {
             let sampling_client = self.prepare_chat_completion(false).await?;
@@ -632,15 +690,10 @@ impl SessionActor {
                 "MEMORY_FLUSH: using model={model}"
             );
             let session_id = self.session_info.id.to_string();
-            let request = ConversationRequest {
-                items,
-                model: Some(model),
-                x_grok_conv_id: Some(format!("flush-{}", uuid::Uuid::new_v4())),
-                x_grok_req_id: Some(format!("xai-flush-{}", uuid::Uuid::new_v4())),
-                x_grok_session_id: Some(session_id.clone()),
-                x_grok_agent_id: Some(xai_grok_telemetry::id::agent_id()),
-                ..Default::default()
-            };
+            // The flush runs on a spawned task, so the ledger handle and the model name travel with it.
+            let chat_state_handle = self.chat_state_handle.clone();
+            let flush_model = model.clone();
+            let request = Self::build_memory_flush_request(items, model, &session_id);
 
             // Run on the multi-threaded runtime so it doesn't block the session's LocalSet
             let handle = tokio::spawn(async move {
@@ -648,6 +701,13 @@ impl SessionActor {
                     .conversation_collect(request)
                     .await
                     .map_err(|e| format!("flush model call failed: {e}"))?;
+                crate::session::side_call_usage::record_side_call_response(
+                    &chat_state_handle,
+                    xai_chat_state::CallPurpose::MemoryFlush,
+                    &flush_model,
+                    &response,
+                    None,
+                );
                 Ok::<_, String>(response.assistant_text())
             });
             // Abort the spawned task if this future is dropped (session cancellation), preventing orphan HTTP streams
@@ -672,7 +732,18 @@ impl SessionActor {
         let (outcome, response_len, accepted_len, was_truncated, flush_path) = match result {
             Ok(response_text) => {
                 let resp_len = response_text.len();
-                match process_flush_response(&response_text, &self.memory.flush_config) {
+                let mut processed = process_flush_response(&response_text, &self.memory.flush_config);
+                if matches!(processed, FlushResult::NothingToStore)
+                    && force_write_on_no_reply
+                {
+                    if let Some(forced) = force_flush_content.clone() {
+                        tracing::info!(
+                            "memory flush: NO_REPLY on explicit flush with content; forcing a write"
+                        );
+                        processed = FlushResult::Accepted(forced);
+                    }
+                }
+                match processed {
                     FlushResult::NothingToStore => {
                         tracing::debug!("memory flush: nothing to store");
                         ("nothing to store".to_string(), resp_len, 0, false, None)
@@ -725,9 +796,14 @@ impl SessionActor {
                         } else if let Some(storage) = self.memory.storage() {
                             let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             let session_id = &self.session_info.id.0;
-                            match storage
-                                .write_daily_log(&date, trigger, session_id, &content, true)
-                            {
+                            // Durable: ephemeral `/tmp` cwd must not skip an explicit flush.
+                            match storage.write_daily_log_durable(
+                                &date,
+                                trigger,
+                                session_id,
+                                &content,
+                                true,
+                            ) {
                                 Ok(path) => {
                                     tracing::info!("memory flush wrote session log");
                                     self.reindex_and_embed(&path, "session").await;
@@ -817,12 +893,41 @@ impl SessionActor {
         });
 
         self.memory.release_flush_lock();
+        // Side-call usage lives only in the in-memory ledger until a turn ends.
+        // Flush-only / post-flush resumes never end a turn, so persist now.
+        self.persist_live_usage().await;
         self.send_xai_notification(XaiSessionUpdate::MemoryFlushCompleted {
             result: outcome,
             path: flush_path,
         })
         .await;
         true
+    }
+
+    /// Explicit triggers (`user_requested`, `slash_command`) with conversation content must not drop the write on `NO_REPLY`.
+    pub(super) fn force_flush_write_for_trigger(trigger: &str, user_message_count: usize) -> bool {
+        matches!(trigger, "user_requested" | "slash_command") && user_message_count > 0
+    }
+
+    /// Minimal markdown log built from the flush window so an explicit force-write still carries conversation markers.
+    pub(super) fn force_flush_content_from_window(window: &[ConversationItem]) -> String {
+        let mut out = String::from("## Session flush (explicit)\n");
+        for item in window {
+            match item {
+                ConversationItem::User(_) => {
+                    out.push_str("\n### User\n");
+                    out.push_str(&item.text_content());
+                    out.push('\n');
+                }
+                ConversationItem::Assistant(_) => {
+                    out.push_str("\n### Assistant\n");
+                    out.push_str(&item.text_content());
+                    out.push('\n');
+                }
+                _ => {}
+            }
+        }
+        out
     }
 
     /// Capture the flush inputs before compaction mutates conversation history.
@@ -908,5 +1013,54 @@ impl SessionActor {
                 Err(format!("rewrite inference failed: {e}"))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use xai_grok_sampling_types::LengthPolicy;
+
+    #[test]
+    fn memory_flush_request_accepts_partial_length_stop() {
+        let request = SessionActor::build_memory_flush_request(
+            vec![ConversationItem::user("summarize")],
+            "spark25".to_owned(),
+            "sess-flush",
+        );
+        assert_eq!(
+            request.length_policy,
+            LengthPolicy::CompletePartial,
+            "flush must salvage a Length-truncated prose summary"
+        );
+        assert_eq!(
+            request.max_output_tokens,
+            Some(MEMORY_FLUSH_MAX_OUTPUT_TOKENS),
+            "flush needs its own output budget above the session cap"
+        );
+        assert!(MEMORY_FLUSH_MAX_OUTPUT_TOKENS > 1024);
+        assert_eq!(request.x_grok_session_id.as_deref(), Some("sess-flush"));
+        assert!(request.tools.is_empty());
+    }
+
+    #[test]
+    fn explicit_no_reply_force_write_requires_content() {
+        assert!(SessionActor::force_flush_write_for_trigger("user_requested", 1));
+        assert!(SessionActor::force_flush_write_for_trigger("slash_command", 2));
+        assert!(!SessionActor::force_flush_write_for_trigger("user_requested", 0));
+        assert!(!SessionActor::force_flush_write_for_trigger("interval", 3));
+        assert!(!SessionActor::force_flush_write_for_trigger("pre_compaction", 3));
+    }
+
+    #[test]
+    fn force_flush_content_carries_window_markers() {
+        let window = vec![
+            ConversationItem::user("Read NONCE-abc and reply with its exact line."),
+            ConversationItem::assistant("NONCE-abc"),
+        ];
+        let content = SessionActor::force_flush_content_from_window(&window);
+        assert!(content.contains("NONCE-abc"), "content: {content}");
+        assert!(content.contains("### User"), "content: {content}");
+        assert!(content.contains("## Session flush"), "content: {content}");
     }
 }

@@ -1,0 +1,27 @@
+{
+  "id": "agents.workflow_validate",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/agents.workflow_validate.txt",
+  "expect_tools": [
+    "workflow"
+  ],
+  "forbid_tools": [],
+  "agent_budget": 0,
+  "checks": [
+    "no_session",
+    "tool_called",
+    "child_budget",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

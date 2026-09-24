@@ -7,7 +7,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::animation::{Animation, NEEDS_INPUT_BLINK_DIVISOR, PaintedAnimations, SPINNER_DIVISOR};
 pub use super::chrome::HeaderUpgradeCta;
-use super::layout::{MIN_DASHBOARD_WIDTH, compute_layout};
+use super::layout::MIN_DASHBOARD_WIDTH;
 use super::row::{DashboardRow, build_rows_with_roster, build_rows_with_workspace};
 use super::state::{
     DashboardRowId, DashboardState, DashboardStopAction, Filter, Focusable, Grouping,
@@ -23,32 +23,6 @@ use crate::views::dashboard::row_title::RowTitle;
 // Row markers use the filled (◆) / hollow (◇) diamonds from `crate::glyphs` (with CP437 fallbacks on legacy consoles)
 // The dashboard uses diamonds instead of circles so this view reads differently from sibling activity views, which use circles
 // Filled marks the non-working states that need a strong visual presence (needs-input, completed, failed, blocked); hollow marks idle rows
-
-fn ensure_peek_viewport_lifecycle(
-    state: &mut DashboardState,
-    agents: &mut IndexMap<AgentId, AgentView>,
-) {
-    if state.attached_agent.is_some() {
-        return;
-    }
-    // When a peek row exists, begin or keep the viewport lease; otherwise restore the agent viewport
-    let Some(row) = state.peek.as_ref().map(|p| p.row.clone()) else {
-        state.restore_peek_viewport(agents);
-        return;
-    };
-    if state
-        .peek_viewport
-        .as_ref()
-        .is_some_and(|lease| lease.row == row)
-    {
-        return;
-    }
-    if super::state::scrollback_available_for_row(&row, agents) {
-        state.begin_peek_viewport(row, agents);
-    } else {
-        state.restore_peek_viewport(agents);
-    }
-}
 
 // The thin left bar marking the selected row is `crate::glyphs::selection_bar()`, with a `│` fallback on legacy CP437 consoles
 // It is painted on every content line of a selected row so it spans the row's full visual height
@@ -158,91 +132,7 @@ pub(crate) fn render_dashboard(
         return None;
     }
 
-    // Peek: list-first allocation (see layout::allocate_peek and docs/internal/33-dashboard-peek-responsive-layout.md)
-    // The provisional layout gives the dispatch width for reply wrapping before we decide whether peek fits
-    let mut layout = compute_layout(area, false);
-    let fixed = super::layout::chrome_overhead(area);
-    let reply_text_w = layout.dispatch.width.saturating_sub(6);
-
-    if !state.search_mode {
-        match state.selected.clone() {
-            Some(sel) => match super::peek::compute_peek_fields(&sel, agents) {
-                Some(fields) => {
-                    let question = fields.question.is_some();
-                    let peek_min = if question {
-                        super::layout::PEEK_MIN_BOX_QUESTION
-                    } else {
-                        super::layout::PEEK_MIN_BOX_LIVE_TAIL
-                    };
-                    let content_rows = if question {
-                        1 + fields.options.len().min(9) as u16
-                    } else {
-                        let reply_rows = super::peek::reply_row_count(
-                            &state.peek_reply,
-                            reply_text_w,
-                            super::peek::MAX_REPLY_ROWS,
-                        );
-                        let max_content = super::layout::max_peek_content_rows(area);
-                        // The middle content width is the dispatch box width minus borders and insets
-                        let middle_w = layout.dispatch.width.saturating_sub(4);
-                        let (body_measured, pin_user) =
-                            super::state::scrollback_mut_for_row(&sel, agents)
-                                .map(|sb| {
-                                    (
-                                        super::peek_tail::densified_body_line_count(sb, middle_w),
-                                        super::peek_tail::scrollback_has_last_user(sb),
-                                    )
-                                })
-                                .unwrap_or((0, false));
-                        super::layout::peek_live_tail_desired_content(
-                            max_content,
-                            reply_rows,
-                            body_measured,
-                            pin_user,
-                        )
-                        .content_rows
-                    };
-                    let alloc =
-                        super::layout::allocate_peek(area.height, fixed, content_rows, peek_min);
-                    if alloc.show_peek {
-                        state.set_peek_reply_target_cwd(peeked_agent_cwd(&sel, agents));
-                        let badge = super::peek::peek_model_and_mode(&sel, agents);
-                        match state.peek.as_mut() {
-                            Some(p) => {
-                                if p.apply_fields(sel, fields) {
-                                    state.clear_peek_reply();
-                                }
-                            }
-                            None => {
-                                state.set_peek(Some(super::peek::PeekPanelState::new(sel, fields)))
-                            }
-                        }
-                        if let Some(p) = state.peek.as_mut() {
-                            p.model_name = badge.model;
-                            p.auto_approve = badge.yolo;
-                            p.auto = badge.auto;
-                            p.mode_label = badge.mode_label;
-                        }
-                        layout =
-                            super::layout::compute_layout_with_peek_box(area, alloc.peek_box_h);
-                    } else {
-                        state.set_peek_reply_target_cwd(None);
-                        state.set_peek(None);
-                    }
-                }
-                None => {
-                    state.set_peek_reply_target_cwd(None);
-                    state.set_peek(None);
-                }
-            },
-            None => {
-                state.set_peek_reply_target_cwd(None);
-                state.set_peek(None);
-            }
-        }
-    }
-
-    ensure_peek_viewport_lifecycle(state, agents);
+    let mut layout = state.layout_with_preview(area, agents);
 
     if state.peek.is_none() && area.height > 8 && !state.dispatch.text().is_empty() {
         let rows = dispatch_text_rows(state, layout.dispatch.width, area.height);
@@ -2614,23 +2504,6 @@ fn render_slash_dropdown(
         theme,
     );
     state.slash_dropdown_items_area = Some(items_area);
-}
-
-/// Working directory of the agent owning the peeked `row`, used to root the reply's `@` file picker.
-/// Top-level rows use their own cwd; subagent rows reply to (and resolve `@paths` against) their parent; roster rows have no local agent (`None`).
-/// `None` too when the agent has since vanished.
-fn peeked_agent_cwd(
-    row: &super::DashboardRowId,
-    agents: &IndexMap<AgentId, AgentView>,
-) -> Option<std::path::PathBuf> {
-    let id = match row {
-        super::DashboardRowId::TopLevel(id) => *id,
-        super::DashboardRowId::Subagent { parent, .. } => *parent,
-        super::DashboardRowId::Roster { .. } | super::DashboardRowId::Workspace { .. } => {
-            return None;
-        }
-    };
-    agents.get(&id).map(|a| a.session.cwd.clone())
 }
 
 /// Render the session-less `@` file-context picker dropdown above the dispatch box.

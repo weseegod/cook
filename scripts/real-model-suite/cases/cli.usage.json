@@ -1,0 +1,12 @@
+{
+  "id": "cli.usage",
+  "phase": "cli",
+  "needs_model": false,
+  "after": "sampler.noop",
+  "commands": [
+    [
+      "usage",
+      "{{SESSION_ID}}"
+    ]
+  ]
+}

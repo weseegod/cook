@@ -58,8 +58,19 @@ impl From<ChatRequestMessage> for ConversationItem {
                     tool_call_id: msg.tool_call_id.unwrap_or_default(),
                     content: Arc::<str>::from(content),
                     images: Vec::new(),
+                    // A wire reconstruction has no execution provenance to carry.
+                    ..Default::default()
                 })
             }
+            // An unknown role can only arrive on the response side; a response message is the
+            // assistant's, so its content and calls still belong there rather than being dropped.
+            Role::Unknown(_) => ConversationItem::Assistant(AssistantItem {
+                content: Arc::<str>::from(msg.text_content()),
+                tool_calls: Vec::new(),
+                model_id: msg.model_id,
+                model_fingerprint: None,
+                reasoning_effort: None,
+            }),
         }
     }
 }
@@ -285,6 +296,7 @@ impl From<ConversationRequest> for ChatCompletionRequest {
             messages,
             temperature: req.temperature,
             max_tokens: req.max_output_tokens,
+            max_completion_tokens: None,
             top_p: req.top_p,
             frequency_penalty: None,
             presence_penalty: None,
@@ -294,6 +306,7 @@ impl From<ConversationRequest> for ChatCompletionRequest {
             search_parameters: None,
             response_format,
             reasoning_effort: req.reasoning_effort,
+            thinking: None,
             x_grok_conv_id: req.x_grok_conv_id,
             x_grok_req_id: req.x_grok_req_id,
             x_grok_session_id: req.x_grok_session_id,

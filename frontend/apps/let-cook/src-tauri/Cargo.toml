@@ -23,6 +23,7 @@ tauri-build = { version = "2.5", features = [] }
 [dependencies]
 base64 = "0.22"
 dirs = "6"
+dunce = "1"
 fs2 = "0.4"
 ignore = "0.4"
 parking_lot = "0.12"

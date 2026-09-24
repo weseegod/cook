@@ -1,0 +1,32 @@
+{
+  "id": "session.permissions_deny_bash",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "dont_ask",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [
+    "Bash(*)"
+  ],
+  "extra_args": [],
+  "prompt": "prompts/session.permissions_deny_bash.txt",
+  "expect_tools": [
+    "run_terminal_cmd"
+  ],
+  "denial_required": false,
+  "forbid_tools": [],
+  "absent_files": [
+    "pwned.txt"
+  ],
+  "checks": [
+    "no_session",
+    "denied",
+    "file_absent",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

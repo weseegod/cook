@@ -1,0 +1,35 @@
+{
+  "id": "tools.search_replace",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Edit(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.search_replace.txt",
+  "expect_tools": [
+    "search_replace"
+  ],
+  "forbid_tools": [
+    "run_terminal_cmd"
+  ],
+  "files": [
+    {
+      "path": "note.txt",
+      "equals": "first\nDONE-EDIT\nlast\n"
+    }
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "tool_not_called",
+    "file_equals",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

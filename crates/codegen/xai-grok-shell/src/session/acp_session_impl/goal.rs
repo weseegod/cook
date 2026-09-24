@@ -185,6 +185,15 @@ impl SessionActor {
                     continue;
                 }
             };
+            // The evaluator spends provider tokens on every attempt, including the ones whose
+            // verdict is unusable or whose usage is missing.
+            crate::session::side_call_usage::record_side_call_response(
+                &self.chat_state_handle,
+                xai_chat_state::CallPurpose::GoalEvaluator,
+                &model,
+                &response,
+                None,
+            );
             if response.usage.is_none() {
                 let _ = self
                     .chat_state_handle

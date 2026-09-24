@@ -48,6 +48,19 @@ where
     Option::<T>::deserialize(deserializer).map(|opt| opt.unwrap_or_default())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatThinkingType {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub struct ChatThinking {
+    #[serde(rename = "type")]
+    pub kind: ChatThinkingType,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -57,6 +70,8 @@ pub struct ChatCompletionRequest {
     pub temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,6 +90,8 @@ pub struct ChatCompletionRequest {
     pub response_format: Option<crate::rs::ResponseFormat>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ChatThinking>,
 
     /// custom headers
     #[serde(skip)]
@@ -110,6 +127,7 @@ impl ChatCompletionRequest {
             messages,
             temperature: None,
             max_tokens: None,
+            max_completion_tokens: None,
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
@@ -119,6 +137,7 @@ impl ChatCompletionRequest {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            thinking: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,
@@ -138,6 +157,7 @@ impl ChatCompletionRequest {
             messages,
             temperature: None,
             max_tokens: None,
+            max_completion_tokens: None,
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
@@ -147,6 +167,7 @@ impl ChatCompletionRequest {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            thinking: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,
@@ -346,13 +367,17 @@ impl ChatRequestMessage {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,
     User,
     Assistant,
     Tool,
+    /// Catch-all so a role this client does not know (`developer` on some OpenAI-compatible servers, or anything newer) does not fail the message parse.
+    /// Preserves the wire string. Must stay the LAST variant: serde tries the named variants above first.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
 /// Calculate how many chat messages to keep for a given target prompt index (0-based, inclusive).
@@ -467,7 +492,7 @@ pub struct ChatChoice {
     pub finish_reason: Option<FinishReason>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FinishReason {
     Stop,
@@ -475,6 +500,11 @@ pub enum FinishReason {
     ToolCalls,
     ContentFilter,
     FunctionCall,
+    /// Catch-all so a provider-specific stop value — MiMo's `repetition_truncation`, for one — never fails the chunk parse and discards an already-streamed response.
+    /// Preserves the wire string for logging and faithful re-serialization.
+    /// Must stay the LAST variant: serde tries the named variants above first.
+    #[serde(untagged)]
+    Unknown(String),
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -934,7 +964,21 @@ enum RawReasoningEffortOption {
     },
 }
 
-/// Uppercase the first character of an id for a default label; `"xhigh"` becomes `"Xhigh"`, `"deep"` becomes `"Deep"`.
+/// Display label for a known level; the bare-string menu shorthand and the shell's built-in effort picker share it.
+pub fn effort_label(effort: ReasoningEffort) -> String {
+    match effort {
+        ReasoningEffort::None => "None",
+        ReasoningEffort::Minimal => "Minimal",
+        ReasoningEffort::Low => "Low",
+        ReasoningEffort::Medium => "Medium",
+        ReasoningEffort::High => "High",
+        ReasoningEffort::Xhigh => "X-High",
+        ReasoningEffort::Max => "Max",
+    }
+    .to_string()
+}
+
+/// Uppercase the first character of a custom id for a default label; `"deep"` becomes `"Deep"`.
 fn humanize_effort_id(id: &str) -> String {
     let mut chars = id.chars();
     match chars.next() {
@@ -953,12 +997,10 @@ impl<'de> serde::Deserialize<'de> for ReasoningEffortOption {
                 let value = s
                     .parse::<ReasoningEffort>()
                     .map_err(serde::de::Error::custom)?;
-                let id = value.as_ref().to_string();
-                let label = humanize_effort_id(&id);
                 ReasoningEffortOption {
-                    id,
+                    id: value.as_ref().to_string(),
                     value,
-                    label,
+                    label: effort_label(value),
                     description: None,
                     default: false,
                 }
@@ -970,8 +1012,11 @@ impl<'de> serde::Deserialize<'de> for ReasoningEffortOption {
                 description,
                 default,
             } => {
+                let label = label.unwrap_or_else(|| match &id {
+                    Some(id) => humanize_effort_id(id),
+                    None => effort_label(value),
+                });
                 let id = id.unwrap_or_else(|| value.as_ref().to_string());
-                let label = label.unwrap_or_else(|| humanize_effort_id(&id));
                 ReasoningEffortOption {
                     id,
                     value,
@@ -986,14 +1031,17 @@ impl<'de> serde::Deserialize<'de> for ReasoningEffortOption {
 
 /// Parse a JSON array of reasoning-effort options element-by-element, skipping and warning on any entry whose `value` fails to parse.
 /// That keeps tiers a newer server introduces from breaking the whole list.
-/// The meta reader and the remote `/models` parser both call this, so the skip rule lives in one place.
-pub fn parse_reasoning_effort_options(arr: &[serde_json::Value]) -> Vec<ReasoningEffortOption> {
+/// The meta reader and the remote `/models` parser both call this, so the skip rule lives in one place; `field` names the source key in the warn.
+pub fn parse_reasoning_effort_options(
+    arr: &[serde_json::Value],
+    field: &str,
+) -> Vec<ReasoningEffortOption> {
     arr.iter()
         .filter_map(
             |el| match serde_json::from_value::<ReasoningEffortOption>(el.clone()) {
                 Ok(opt) => Some(opt),
                 Err(err) => {
-                    tracing::warn!(value = %el, error = %err, "reasoningEfforts: skipping invalid entry");
+                    tracing::warn!(value = %el, error = %err, "{field}: skipping invalid entry");
                     None
                 }
             },
@@ -1015,7 +1063,7 @@ pub fn parse_reasoning_efforts_meta(
             return None;
         }
     };
-    let options = parse_reasoning_effort_options(arr);
+    let options = parse_reasoning_effort_options(arr, REASONING_EFFORTS_META_KEY);
     (!options.is_empty()).then_some(options)
 }
 
@@ -1125,6 +1173,15 @@ impl ApiBackend {
     pub fn forwards_prompt_cache_key(&self) -> bool {
         matches!(self, Self::Responses)
     }
+
+    /// Request-body cap the hosts speaking this protocol enforce; the budget when a model sets no `max_request_bytes`.
+    /// The xAI inference proxy rejects bodies over 50 MiB (nginx `proxy-body-size`); Messages API hosts reject bodies over 30 MB.
+    pub const fn default_max_request_bytes(&self) -> NonZeroU64 {
+        match self {
+            Self::ChatCompletions | Self::Responses => NonZeroU64::new(50 * 1024 * 1024).unwrap(),
+            Self::Messages => NonZeroU64::new(30_000_000).unwrap(),
+        }
+    }
 }
 
 /// Stable identifier shared by every model request in one root conversation tree.
@@ -1156,6 +1213,17 @@ impl From<&str> for ConversationGroupId {
     }
 }
 
+/// Request shape for OpenAI-compatible Chat Completions endpoints.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatCompletionsRequestFormat {
+    #[default]
+    Standard,
+    /// DeepSeek-style thinking request and reasoning replay used by MiMo.
+    #[serde(rename = "deepseek_thinking")]
+    DeepSeekThinking,
+}
+
 /// Sampling client configuration (API key excluded; that stays in the client).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SamplingConfig {
@@ -1176,6 +1244,9 @@ pub struct SamplingConfig {
     /// Which API backend to use for this model
     #[serde(default)]
     pub api_backend: ApiBackend,
+    /// Chat Completions request shape for this model.
+    #[serde(default)]
+    pub chat_completions_request_format: ChatCompletionsRequestFormat,
     /// Extra headers to send with requests (e.g., for bring-your-own-key (BYOK) scenarios).
     #[serde(default, skip_serializing_if = "indexmap::IndexMap::is_empty")]
     pub extra_headers: indexmap::IndexMap<String, String>,
@@ -1190,6 +1261,9 @@ pub struct SamplingConfig {
     pub env_http_headers: indexmap::IndexMap<String, String>,
     /// Total context window size in tokens; auto-compact thresholds derive from it.
     pub context_window: NonZeroU64,
+    /// Provider request-body cap, already defaulted from `api_backend` by model resolution; `None` budgets to 50 MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_request_bytes: Option<NonZeroU64>,
     /// Reasoning effort level for reasoning models.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -1215,11 +1289,13 @@ impl Default for SamplingConfig {
             max_retries: None,
             rate_limit_retry_threshold: None,
             api_backend: ApiBackend::default(),
+            chat_completions_request_format: ChatCompletionsRequestFormat::default(),
             extra_headers: indexmap::IndexMap::new(),
             conversation_group_id: None,
             query_params: indexmap::IndexMap::new(),
             env_http_headers: indexmap::IndexMap::new(),
             context_window: NonZeroU64::MIN,
+            max_request_bytes: None,
             reasoning_effort: None,
             reasoning_summary: None,
             stream_tool_calls: None,
@@ -1423,7 +1499,7 @@ mod tests {
             ReasoningEffortOption {
                 id: "xhigh".to_string(),
                 value: ReasoningEffort::Xhigh,
-                label: "Xhigh".to_string(),
+                label: "X-High".to_string(),
                 description: None,
                 default: false,
             }
@@ -1681,5 +1757,61 @@ mod tests {
         let inner: &dyn TraceContext = &*cloned_trace;
         let downcast = inner.as_any().downcast_ref::<TestTrace>().unwrap();
         assert_eq!(downcast.0, "trace-data");
+    }
+
+    /// A provider-specific wire value must not fail the parse: the chunk carrying it is the one
+    /// that ends an already-streamed response, so losing it discards the whole generation.
+    #[test]
+    fn finish_reason_catches_unknown_wire_values() {
+        let parse = |raw: &str| -> FinishReason {
+            serde_json::from_str(&format!("\"{raw}\""))
+                .unwrap_or_else(|e| panic!("finish_reason {raw:?} must parse: {e}"))
+        };
+        assert_eq!(parse("stop"), FinishReason::Stop);
+        assert_eq!(parse("length"), FinishReason::Length);
+        assert_eq!(parse("tool_calls"), FinishReason::ToolCalls);
+        assert_eq!(parse("content_filter"), FinishReason::ContentFilter);
+        assert_eq!(parse("function_call"), FinishReason::FunctionCall);
+        // MiMo reports its own repetition cutoff this way (observed in session 01a0c8a1).
+        assert_eq!(
+            parse("repetition_truncation"),
+            FinishReason::Unknown("repetition_truncation".to_string())
+        );
+        assert_eq!(
+            serde_json::to_string(&FinishReason::Unknown("repetition_truncation".into())).unwrap(),
+            "\"repetition_truncation\"",
+            "catch-all must re-serialize the wire string faithfully"
+        );
+
+        // The catch-all has to work through the chunk field it is parsed from in production.
+        let chunk: ChatCompletionChunk = serde_json::from_str(
+            r#"{"id":"c1","object":"chat.completion.chunk","created":0,"model":"mimo-v2.6-flash","choices":[{"index":0,"delta":{},"finish_reason":"repetition_truncation"}]}"#,
+        )
+        .expect("a chunk with an unknown finish reason must parse");
+        assert_eq!(
+            chunk.choices[0].finish_reason,
+            Some(FinishReason::Unknown("repetition_truncation".to_string()))
+        );
+    }
+
+    #[test]
+    fn role_catches_unknown_wire_values() {
+        let parse = |raw: &str| -> Role {
+            serde_json::from_str(&format!("\"{raw}\""))
+                .unwrap_or_else(|e| panic!("role {raw:?} must parse: {e}"))
+        };
+        assert_eq!(parse("system"), Role::System);
+        assert_eq!(parse("user"), Role::User);
+        assert_eq!(parse("assistant"), Role::Assistant);
+        assert_eq!(parse("tool"), Role::Tool);
+        assert_eq!(
+            parse("developer"),
+            Role::Unknown("developer".to_string()),
+            "an OpenAI-compatible server may use roles this client does not model"
+        );
+        assert_eq!(
+            serde_json::to_string(&Role::Unknown("developer".into())).unwrap(),
+            "\"developer\""
+        );
     }
 }

@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}}, then set the session goal to that exact line using the goal tool. Reply with the goal.

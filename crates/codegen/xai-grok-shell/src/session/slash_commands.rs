@@ -323,6 +323,30 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
         },
     },
     BuiltinCommand {
+        name: "goal_batch",
+        description: "Run the main goal agent through asynchronous Batch API model rounds",
+        argument_hint: Some("<objective> [--budget <tokens>] [--base-url <provider Batch URL>]"),
+        aliases: &[],
+        model_authored_eligibility: ModelAuthoredEligibility::Denied,
+        gate: BuiltinGate::Goal,
+        workflow_projection: WorkflowProjection::None,
+        resolve: |args| {
+            let trimmed = args.trim();
+            let (objective_args, batch_base_url) =
+                match trailing_flag_with_value(trimmed, "--base-url") {
+                    Some((head, url)) => (head, Some(url.to_string())),
+                    None => (trimmed, None),
+                };
+            let parsed = parse_goal_args(objective_args);
+            BuiltinAction::GoalBatchSet {
+                objective: parsed.objective,
+                token_budget: parsed.token_budget,
+                plan_source: parsed.plan_source,
+                batch_base_url,
+            }
+        },
+    },
+    BuiltinCommand {
         name: "goal",
         description: "Set, manage, or check an autonomous goal",
         argument_hint: Some(
@@ -867,12 +891,7 @@ pub(super) fn available_commands(
         catalog.builtins.len() + catalog.skills.commands.len() + catalog.workflows.len(),
     );
     commands.extend(catalog.builtins.iter().map(|builtin| {
-        acp::AvailableCommand::new(builtin.name.to_string(), builtin.description.to_string())
-            .input(builtin.argument_hint.map(|hint| {
-                acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(
-                    hint.to_string(),
-                ))
-            }))
+        available_command(builtin)
             .meta(exact_workflow_projection(builtin, workflows).map(workflow_meta))
     }));
     commands.extend(catalog.skills.commands.iter().map(|command| {
@@ -940,16 +959,25 @@ pub(crate) fn builtin_commands(availability: CommandAvailability) -> Vec<acp::Av
     BUILTIN_COMMANDS
         .iter()
         .filter(|cmd| availability.allows(cmd.gate))
-        .map(|cmd| {
-            acp::AvailableCommand::new(cmd.name.to_string(), cmd.description.to_string()).input(
-                cmd.argument_hint.map(|hint| {
-                    acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(
-                        hint.to_string(),
-                    ))
-                }),
-            )
-        })
+        .map(available_command)
         .collect()
+}
+/// One builtin by name, as `builtin_commands` would advertise it. For backends that serve a
+/// subset of the shell's commands and must describe them identically.
+pub fn builtin_command(name: &str) -> Option<acp::AvailableCommand> {
+    BUILTIN_COMMANDS
+        .iter()
+        .find(|cmd| cmd.name == name)
+        .map(available_command)
+}
+fn available_command(cmd: &BuiltinCommand) -> acp::AvailableCommand {
+    acp::AvailableCommand::new(cmd.name.to_string(), cmd.description.to_string()).input(
+        cmd.argument_hint.map(|hint| {
+            acp::AvailableCommandInput::Unstructured(acp::UnstructuredCommandInput::new(
+                hint.to_string(),
+            ))
+        }),
+    )
 }
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1305,6 +1333,8 @@ pub(crate) struct ParsedSkillRef {
     /// Plugin name if this is a plugin skill.
     pub plugin_name: Option<String>,
     pub scope: SkillScope,
+    /// Validated frontmatter `origin` slug, used for telemetry.
+    pub origin: Option<String>,
 }
 #[derive(Debug)]
 pub(super) enum SlashCommandOutcome {
@@ -1369,6 +1399,12 @@ pub(super) enum BuiltinAction {
         token_budget: Option<i64>,
         plan_source: Option<GoalPlanSource>,
     },
+    GoalBatchSet {
+        objective: String,
+        token_budget: Option<i64>,
+        plan_source: Option<GoalPlanSource>,
+        batch_base_url: Option<String>,
+    },
     GoalStatus,
     GoalPause,
     GoalResume,
@@ -1409,6 +1445,7 @@ impl BuiltinAction {
             BuiltinAction::PluginsUpdate { .. } => "plugins-update",
             BuiltinAction::Feedback { .. } => "feedback",
             BuiltinAction::MemoryBrowse => "memory",
+            BuiltinAction::GoalBatchSet { .. } => "goal_batch",
             BuiltinAction::GoalSet { .. }
             | BuiltinAction::GoalStatus
             | BuiltinAction::GoalPause
@@ -1442,7 +1479,7 @@ impl BuiltinAction {
             BuiltinAction::PluginsUpdate { name } => name.is_some(),
             BuiltinAction::Feedback { text } => !text.is_empty(),
             BuiltinAction::MemoryBrowse => false,
-            BuiltinAction::GoalSet { .. } => true,
+            BuiltinAction::GoalSet { .. } | BuiltinAction::GoalBatchSet { .. } => true,
             BuiltinAction::GoalStatus
             | BuiltinAction::GoalPause
             | BuiltinAction::GoalResume
@@ -1554,6 +1591,7 @@ fn parse_skill_references_with_catalog(
                     qualified_name: format_skill_name(hit.skill),
                     plugin_name: hit.skill.plugin_name.clone(),
                     scope: hit.skill.scope,
+                    origin: hit.skill.origin.clone(),
                 }
             })
             .collect(),
@@ -1668,6 +1706,7 @@ pub(super) fn resolve_model_authored_skill(
             qualified_name: format_skill_name(skill),
             plugin_name: skill.plugin_name.clone(),
             scope: skill.scope,
+            origin: skill.origin.clone(),
         }],
     })
 }

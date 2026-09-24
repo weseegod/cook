@@ -1,0 +1,1 @@
+Read {{WORKDIR}}/script.rhai, then call workflow with its exact contents as an inline source of type script and agent_budget 2. Reply with the workflow result.

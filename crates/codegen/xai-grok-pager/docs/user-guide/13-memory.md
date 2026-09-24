@@ -91,7 +91,10 @@ internal hardening notes, not here.
 
 ## How Memory Is Stored
 
-Memory is stored as Markdown files under `~/.cook/memory/`:
+With `[memory_v2] enabled`, each scope stores Markdown under
+`~/.cook/memory-v2/`: `topics/` for curated notes and
+`observations/_inbox/` for new facts. With v2 off and legacy memory on,
+files live under `~/.cook/memory/`:
 
 | Location | Scope | Description |
 |----------|-------|-------------|
@@ -104,6 +107,8 @@ Cook suffixes each workspace directory with a short hash of the repository's ide
 An SQLite index supports search across all memory files:
 - **FTS5** provides the default full-text search for keyword matching.
 - **vec0** adds vector search for semantic similarity when an embedding model is configured.
+
+`[memory] enabled` and `[memory_v2] enabled` both default off.
 
 ---
 
@@ -427,10 +432,14 @@ You configure pruning under `[compaction]`, not `[memory]`, because it is a comp
 |-----|---------|-------------|
 | `enabled` | `true` | Enable tool-result pruning |
 | `keep_last_n_turns` | `3` | Number of recent turns whose tool results are never pruned |
+| `keep_last_n_tool_rounds` | `0` | Opt-in step-age limit inside one user turn; `0` preserves turn-only pruning |
+| `recent_tool_result_char_budget` | `0` | Opt-in raw-result character budget for recent tool rounds; `0` disables the budget |
 | `soft_trim_threshold` | `4000` | Character threshold above which old tool results are soft-trimmed |
 | `soft_trim_head` | `1500` | Characters kept from the start of a soft-trimmed result |
 | `soft_trim_tail` | `1500` | Characters kept from the end of a soft-trimmed result |
 | `hard_clear_age_turns` | `10` | Turn age after which tool results are replaced with a placeholder |
+
+When either step-aware setting is non-zero, Cook always retains the active tool round. Older rounds in recent user turns remain raw only while they satisfy every enabled step limit; omitted results keep their tool-call pairing and are replaced with an explicit placeholder. A cost-conscious experiment can start with `keep_last_n_tool_rounds = 6` and `recent_tool_result_char_budget = 64000` (about 16k tokens under the bytes/4 estimator).
 
 ---
 

@@ -1,0 +1,1 @@
+Use five separate terminal tool calls in one response to inspect {{WORKDIR}}/README.txt: run cat, head, tail, wc, and sha256sum as separate commands. Then reply with the exact line from the file.

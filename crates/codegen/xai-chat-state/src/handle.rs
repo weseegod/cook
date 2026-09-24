@@ -1,6 +1,6 @@
 //! Handle to communicate with ChatStateActor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use tokio::sync::{mpsc, oneshot};
 use xai_grok_sampling_types::{
@@ -169,6 +169,44 @@ impl ChatStateHandle {
             api_duration_ms,
             cost_usd_ticks,
         });
+    }
+
+    /// Fold one side call (compaction) into the session ledger under its purpose.
+    /// Fire-and-forget, like [`Self::record_model_call_usage`].
+    pub fn record_side_call_usage(
+        &self,
+        purpose: crate::usage::CallPurpose,
+        model_id: String,
+        usage: TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+    ) {
+        let _ = self.cmd_tx.send(ChatStateCommand::RecordSideCallUsage {
+            purpose,
+            model_id,
+            usage,
+            api_duration_ms,
+            cost_usd_ticks,
+        });
+    }
+
+    /// Record a completed call whose provider response omitted usage.
+    /// Fire-and-forget so it orders ahead of later commands on this handle.
+    pub fn record_usage_missing(&self, purpose: crate::usage::CallPurpose) {
+        let _ = self
+            .cmd_tx
+            .send(ChatStateCommand::RecordUsageMissing { purpose });
+    }
+
+    /// Record the estimated component composition of a main-loop request that was sent.
+    /// Fire-and-forget so it orders behind the call's own usage on this handle.
+    pub fn record_request_components(
+        &self,
+        components: crate::request_components::RequestComponents,
+    ) {
+        let _ = self
+            .cmd_tx
+            .send(ChatStateCommand::RecordRequestComponents { components });
     }
 
     /// Apply subagent usage; returns false if the actor did not acknowledge.
@@ -366,11 +404,16 @@ impl ChatStateHandle {
         let _ = self.cmd_tx.send(ChatStateCommand::FlushHarnessTraceTurn);
     }
 
-    /// Repair dangling tool calls after a harness-initiated halt.
-    pub fn repair_dangling_after_harness_halt(&self, class: &'static str) {
+    /// Repair dangling tool calls after a harness-initiated halt. `answers` are
+    /// written only for ids still dangling; the rest are dropped.
+    pub fn repair_dangling_after_harness_halt(
+        &self,
+        class: &'static str,
+        answers: HashMap<String, String>,
+    ) {
         let _ = self
             .cmd_tx
-            .send(ChatStateCommand::RepairDanglingAfterHarnessHalt { class });
+            .send(ChatStateCommand::RepairDanglingAfterHarnessHalt { class, answers });
     }
 
     /// Drop a trailing continue reminder whose continuation will never

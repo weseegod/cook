@@ -1,0 +1,11 @@
+{
+  "id": "cli.leader_list",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "leader",
+      "list"
+    ]
+  ]
+}

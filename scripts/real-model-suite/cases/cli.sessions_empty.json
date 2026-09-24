@@ -1,0 +1,11 @@
+{
+  "id": "cli.sessions_empty",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "sessions",
+      "list"
+    ]
+  ]
+}

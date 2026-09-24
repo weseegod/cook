@@ -1,0 +1,40 @@
+{
+  "id": "tools.write_new",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)",
+    "Edit(*)",
+    "Write(*)",
+    "Bash(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.write_new.txt",
+  "expect_tools": [],
+  "expect_any_tools": [
+    [
+      "search_replace",
+      "run_terminal_cmd",
+      "write"
+    ]
+  ],
+  "forbid_tools": [],
+  "files": [
+    {
+      "path": "notes.txt",
+      "equals": "{{MARKER}}\n"
+    }
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "file_equals",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

@@ -352,6 +352,73 @@ async fn tool_use_block_assembles_into_tool_call() {
     }
 }
 
+/// Lesson 4 lock: the Messages transform must forward tool-call progress as it arrives.
+/// The rest of the stream is withheld until a delta is observed, so a transform that buffers the
+/// whole generation before emitting anything stalls here instead of emitting deltas at the end.
+#[tokio::test]
+async fn a_tool_call_delta_reaches_the_consumer_before_the_terminal_event() {
+    let (release, hold) = tokio::sync::oneshot::channel::<()>();
+    let tool_start = MessageStreamEvent::ContentBlockStart {
+        index: 0,
+        content_block: ContentBlock::ToolUse {
+            id: "call_xyz".into(),
+            name: "do_thing".into(),
+            input: serde_json::json!({}),
+            cache_control: None,
+        },
+    };
+    let raw = stream::iter([Ok(message_start()), Ok(tool_start)])
+        .chain(stream::once(async move {
+            let _ = hold.await;
+            Ok(MessageStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: StreamDelta::InputJsonDelta {
+                    partial_json: "{\"x\":1}".into(),
+                },
+            })
+        }))
+        .chain(stream::iter([
+            Ok(block_stop(0)),
+            Ok(message_delta_with_stop(messages::StopReason::ToolUse)),
+            Ok(MessageStreamEvent::MessageStop),
+        ]))
+        .boxed();
+
+    let mut stream = Box::pin(stream_messages(raw, None, rid(), Duration::from_secs(60)));
+    let mut release = Some(release);
+    let mut events = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
+            Ok(Some(event)) => {
+                if matches!(event, SamplingEvent::ToolCallDelta { .. })
+                    && let Some(tx) = release.take()
+                {
+                    let _ = tx.send(());
+                }
+                events.push(event);
+                if matches!(
+                    events.last(),
+                    Some(SamplingEvent::Completed { .. } | SamplingEvent::Failed { .. })
+                ) {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => panic!(
+                "timed out waiting for a ToolCallDelta: the transform buffered the stream instead of forwarding tool-call progress"
+            ),
+        }
+    }
+    assert!(
+        release.is_none(),
+        "expected a ToolCallDelta before the terminal event"
+    );
+    assert!(
+        matches!(events.last(), Some(SamplingEvent::Completed { .. })),
+        "{events:?}"
+    );
+}
+
 /// Regression: a stream whose terminal `message_delta` carries `stop_reason: "refusal"` must complete cleanly.
 /// Erroring out would discard the already-streamed response.
 #[tokio::test]

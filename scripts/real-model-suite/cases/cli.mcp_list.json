@@ -1,0 +1,12 @@
+{
+  "id": "cli.mcp_list",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "mcp",
+      "list",
+      "--json"
+    ]
+  ]
+}

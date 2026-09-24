@@ -1,0 +1,29 @@
+{
+  "id": "agents.opencode_read",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--tools",
+    "read"
+  ],
+  "prompt": "prompts/agents.opencode_read.txt",
+  "expect_tools": [
+    "read"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

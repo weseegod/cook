@@ -1,0 +1,1 @@
+Start a background terminal command that sleeps 2 seconds and then writes the exact line from {{MARKER_FILE}} into {{WORKDIR}}/out.txt. Then wait for it with wait_tasks or read it with get_terminal_command_output. Do not use a persistent monitor.

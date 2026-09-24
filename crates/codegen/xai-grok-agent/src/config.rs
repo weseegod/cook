@@ -398,6 +398,7 @@ fn grok_build_plan_toolset() -> ToolServerConfig {
             kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
             task_output_tool_config(),
+            wait_tasks_tool_config(),
             task_tool_config(),
             (&grok_build::SchedulerCreateTool).into(),
             (&grok_build::SchedulerDeleteTool).into(),
@@ -477,6 +478,7 @@ fn grok_build_plan_no_subagents_toolset() -> ToolServerConfig {
             kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
             task_output_tool_config(),
+            wait_tasks_tool_config(),
             (&grok_build::SchedulerCreateTool).into(),
             (&grok_build::SchedulerDeleteTool).into(),
             (&grok_build::SchedulerListTool).into(),
@@ -777,7 +779,7 @@ pub struct AgentDefinition {
     #[serde(skip)]
     pub system_prompt: TemplateOverride,
     /// First-user-message template selector.
-    /// `Default` (the default) lets the shell layer build the legacy `<user_info>` and `<git_status>` prefix.
+    /// `Default` (the default) lets the shell layer build the legacy `<user_info>` prefix.
     /// `Custom` uses a caller-supplied template string.
     #[serde(default)]
     pub user_message_template: UserMessageTemplate,
@@ -1349,6 +1351,13 @@ impl AgentDefinition {
     ) -> bool {
         false
     }
+    /// True for a client-supplied inline profile: no built-in, plugin, or on-disk provenance.
+    pub fn is_inline_profile(&self) -> bool {
+        self.builtin_name.is_none()
+            && self.plugin_name.is_none()
+            && self.source_path.is_none()
+            && self.scope == AgentScope::BuiltIn
+    }
     pub fn include_browser_verification(&self) -> bool {
         matches!(
             self.builtin_name,
@@ -1640,6 +1649,32 @@ mod tests {
             );
         }
         assert!(toolset_for_preset("does-not-exist").is_none());
+    }
+    /// Default headless/`grok-build-plan` must advertise the wait tool: background bash
+    /// is kept in that toolset, and the real-model `tools.kill_and_wait` case expects
+    /// `wait_tasks` (client name `wait_commands_or_subagents`).
+    #[test]
+    fn grok_build_plan_toolset_includes_wait_tasks() {
+        let wait_id = wait_tasks_tool_config().id;
+        let wait_name = wait_tasks_tool_config()
+            .name_override
+            .expect("wait tool is renamed for the wire");
+        for (label, tools) in [
+            ("grok-build-plan", &grok_build_plan_toolset().tools),
+            (
+                "grok-build-plan-no-subagents",
+                &grok_build_plan_no_subagents_toolset().tools,
+            ),
+        ] {
+            assert!(
+                tools
+                    .iter()
+                    .any(|t| t.id == wait_id
+                        && t.name_override.as_deref() == Some(wait_name.as_str())),
+                "{label} toolset must include wait_tasks as {wait_name}; tools: {:?}",
+                tools.iter().map(|t| t.id.as_str()).collect::<Vec<_>>()
+            );
+        }
     }
     #[test]
     fn presets_select_distinct_toolsets_by_size() {
@@ -2437,6 +2472,22 @@ description: Test default tool config
         assert_eq!(recovered.permission_mode, PermissionMode::DontAsk);
         assert_eq!(recovered.tools, vec!["read_file", "grep"]);
         assert_eq!(recovered.disallowed_tools, vec!["web_search"]);
+    }
+    #[test]
+    fn is_inline_profile_only_for_client_supplied_definitions() {
+        let inline = AgentDefinition::from_json(&serde_json::json!({
+            "name": "custom-profile",
+            "description": "A custom profile",
+        }))
+        .unwrap();
+        assert!(inline.is_inline_profile());
+        assert!(!AgentDefinition::grok_build_plan().is_inline_profile());
+        let mut project = inline.clone();
+        project.scope = AgentScope::Project;
+        assert!(!project.is_inline_profile());
+        let mut on_disk = inline.clone();
+        on_disk.source_path = Some(std::path::PathBuf::from("/tmp/custom.md"));
+        assert!(!on_disk.is_inline_profile());
     }
     #[test]
     fn test_model_override_serde_inherit() {

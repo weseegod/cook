@@ -1,0 +1,26 @@
+{
+  "id": "sampler.xml_arguments",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-sampler",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/sampler.xml_arguments.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

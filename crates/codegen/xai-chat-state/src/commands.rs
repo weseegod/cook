@@ -1,6 +1,6 @@
 //! Commands sent to the ChatStateActor.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use tokio::sync::oneshot;
 use xai_grok_sampling_types::{
@@ -114,6 +114,23 @@ pub enum ChatStateCommand {
         cost_usd_ticks: Option<i64>,
     },
 
+    /// Fold one side call (compaction) with its purpose. Never counts as a turn.
+    RecordSideCallUsage {
+        purpose: crate::usage::CallPurpose,
+        model_id: String,
+        usage: TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+    },
+
+    /// Record a completed call whose provider response omitted usage.
+    RecordUsageMissing { purpose: crate::usage::CallPurpose },
+
+    /// Record the estimated component composition of a main-loop request that was sent.
+    RecordRequestComponents {
+        components: crate::request_components::RequestComponents,
+    },
+
     /// Subagent usage into session (and prompt when attributable). Replies when applied.
     RecordSubagentUsage {
         by_model: Vec<(String, crate::usage::UsageTotals)>,
@@ -204,8 +221,12 @@ pub enum ChatStateCommand {
     /// after each verifier panel). No-op when nothing was recorded.
     FlushHarnessTraceTurn,
 
-    /// Repair dangling tool calls after a harness-initiated halt.
-    RepairDanglingAfterHarnessHalt { class: &'static str },
+    /// Repair dangling tool calls after a harness-initiated halt. `answers` are
+    /// written only for ids still dangling; the rest are dropped.
+    RepairDanglingAfterHarnessHalt {
+        class: &'static str,
+        answers: HashMap<String, String>,
+    },
 
     /// Drop a trailing continue reminder whose continuation will never
     /// sample (the turn is completing truncated after a failed

@@ -70,9 +70,11 @@ pub enum HashlineOp {
     },
 
     /// Replace entire file content. No anchors needed.
+    /// NEVER use write for a one-line change on a multi-line file — every other
+    /// line is discarded. Prefer op "replace" with a full LINE:HASH anchor.
     #[serde(rename = "write")]
     Write {
-        /// Complete new file content.
+        /// Complete new file content (full multi-line body only).
         content: String,
     },
 }

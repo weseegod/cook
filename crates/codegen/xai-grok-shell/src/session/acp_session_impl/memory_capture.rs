@@ -1024,6 +1024,15 @@ impl SessionActor {
                 format!("extraction model failed: {error}"),
             )
         })?;
+        // The extraction is a real model call outside the main loop: fold it into the session bill
+        // under its own purpose whether or not the output turns out to be usable.
+        crate::session::side_call_usage::record_side_call_response(
+            &chat_state_handle,
+            xai_chat_state::CallPurpose::MemoryCapture,
+            &model,
+            &response,
+            None,
+        );
         let text = response.assistant_text();
         let stop_reason: &'static str = response
             .stop_reason

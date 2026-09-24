@@ -1,0 +1,29 @@
+{
+  "id": "agents.no_subagents_flag",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-agent",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--no-subagents"
+  ],
+  "prompt": "prompts/agents.no_subagents_flag.txt",
+  "expect_tools": [],
+  "forbid_tools": [
+    "task"
+  ],
+  "checks": [
+    "no_session",
+    "tool_not_called",
+    "text_contains_marker",
+    "subagent_absent",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

@@ -1,20 +1,29 @@
 //! Headless single-turn mode (`grok -p "prompt"`).
 //!
-//! Runs the agent in-process via `spawn_grok_shell` and drives the ACP lifecycle (init, auth, session, prompt).
+//! Runs the agent in-process and drives the ACP lifecycle (init, auth, session, prompt).
 //! Streams to stdout and exits via `CancellationToken`.
-
+use crate::acp::model_state::{EffortTokenError, ModelState};
+use crate::acp::spawn::{AgentShutdownGuard, SpawnedAgent, spawn_grok_shell};
+use crate::app::prompt_ack::{PromptAckDeadlines, PromptAckWatch};
 use crate::app::subagent::{
     SubagentLifecycleEffect, SubagentLifecycleReduction, SubagentLifecycleState,
     SubagentLifecycleTransition,
 };
+use crate::app::worktree_session::{
+    WorktreeSpec, create_worktree, new_worktree_id, note_orphaned_worktree,
+    resume_session_into_worktree,
+};
+use crate::best_effort_stderr::eprint_line;
+use crate::client_identity::{HEADLESS_CLIENT_TYPE, PAGER_CLIENT_VERSION};
+use crate::headless::reducer::{
+    Lifecycle, Reducer, SessionContext, StreamEvent, TurnEnd, map_session_update, reducer_for,
+};
+use agent_client_protocol as acp;
+use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-
-use anyhow::Result;
 use tokio_util::sync::CancellationToken;
-
-use agent_client_protocol as acp;
 use xai_acp_lib::{AcpAgentTx, AcpClientMessageBox, AcpClientRx, acp_send};
 use xai_grok_shell::agent::auth_method::AuthMethodKind;
 use xai_grok_shell::agent::config::Config as AgentConfig;
@@ -28,32 +37,16 @@ use xai_grok_shell::sampling::types::{
 };
 use xai_grok_shell::util::config as cli_config;
 use xai_grok_telemetry::startup::PendingStartup;
-
-use crate::acp::model_state::{EffortTokenError, ModelState};
-use crate::acp::spawn::{AgentShutdownGuard, spawn_grok_shell};
-use crate::app::prompt_ack::{PromptAckDeadlines, PromptAckWatch};
-use crate::app::worktree_session::{
-    WorktreeSpec, create_worktree, new_worktree_id, note_orphaned_worktree,
-    resume_session_into_worktree,
-};
-use crate::best_effort_stderr::eprint_line;
-use crate::client_identity::{HEADLESS_CLIENT_TYPE, PAGER_CLIENT_VERSION};
-use crate::headless::reducer::{
-    Lifecycle, Reducer, SessionContext, StreamEvent, TurnEnd, map_session_update, reducer_for,
-};
-
 mod ext_protocol;
 mod mcp_init;
 mod prompt_ack;
 mod reducer;
 use ext_protocol::{ExtEvent, handle_ext_notification, reply_headless_ext_method};
 use prompt_ack::{abort_unacknowledged_prompt, headless_ack_signal};
-
 mod cli;
 pub use cli::{HeadlessPrompt, OutputFormat, parse_json_schema, parse_permission_rules_lenient};
 pub(crate) use cli::{ResolvedAgent, resolve_agent_arg};
 use cli::{apply_agent_flag, parse_cli_agents, parse_comma_list, parse_permission_rules_strict};
-
 #[derive(Debug, Clone)]
 pub struct HeadlessOptions {
     pub session_id: Option<String>,
@@ -87,7 +80,7 @@ pub struct HeadlessOptions {
     pub deny_rules: Vec<String>,
     pub max_turns: Option<u32>,
     pub permission_mode_flag: Option<String>,
-    /// Effort token (`--reasoning-effort` / `--effort`); resolved like `/effort` after models load.
+    /// Effort token (`--reasoning-effort` / `--effort`); a menu id or canonical level after models load.
     pub reasoning_effort: Option<String>,
     /// Wait for background tasks to report `task_completed` before exiting (default true).
     pub wait_for_background: bool,
@@ -97,8 +90,9 @@ pub struct HeadlessOptions {
     pub memory_flush: bool,
     /// CLI `--experimental-memory` / `--no-memory` override for the headless agent.
     pub memory_enabled_override: Option<bool>,
+    /// CLI `--no-subagents` (`true` force-disables spawn; `false` leaves resolve default).
+    pub no_subagents: bool,
 }
-
 struct HeadlessEmitter {
     format: OutputFormat,
     parse_structured_output: bool,
@@ -111,13 +105,14 @@ struct HeadlessEmitter {
     reducer: Option<Box<dyn Reducer>>,
     /// Set when the prompt is sent; `result.duration_ms` on the terminal line is measured from it.
     prompt_started: Option<Instant>,
+    /// Last JSON terminal object written by [`Self::on_end`] (Json format only; for tests).
+    last_terminal_json: Option<serde_json::Value>,
     out: std::io::Stdout,
     /// Latched once stdout is unwritable so later writes are dropped instead of panicking.
     output_closed: bool,
     /// First hard stdout IO error (not a broken pipe), surfaced so the process exits non-zero.
     write_error: Option<std::io::Error>,
 }
-
 impl HeadlessEmitter {
     fn new(format: OutputFormat, parse_structured_output: bool) -> Self {
         Self {
@@ -129,12 +124,12 @@ impl HeadlessEmitter {
             usage: None,
             reducer: reducer_for(format),
             prompt_started: None,
+            last_terminal_json: None,
             out: std::io::stdout(),
             output_closed: false,
             write_error: None,
         }
     }
-
     /// Checked write to stdout: broken pipe latches a clean stop, any other error is latched and returned.
     fn write_out(&mut self, bytes: &[u8], flush: bool) -> std::io::Result<()> {
         if self.output_closed {
@@ -149,7 +144,6 @@ impl HeadlessEmitter {
         };
         self.record_write_result(result)
     }
-
     /// Fold a write result into the latches: broken pipe is a clean stop, any other error is surfaced.
     fn record_write_result(&mut self, result: std::io::Result<()>) -> std::io::Result<()> {
         let Err(e) = result else {
@@ -166,29 +160,24 @@ impl HeadlessEmitter {
         }
         Err(e)
     }
-
     /// Take the latched hard stdout error, if any.
     fn take_output_error(&mut self) -> Option<std::io::Error> {
         self.write_error.take()
     }
-
     /// Emit one compact NDJSON wire line plus newline.
     fn emit_line(&mut self, line: &serde_json::Value) {
         let mut buf = line.to_string();
         buf.push('\n');
         let _ = self.write_out(buf.as_bytes(), false);
     }
-
     /// Mark the wall-clock start of the run for `result.duration_ms`.
     fn mark_prompt_started(&mut self) {
         self.prompt_started = Some(Instant::now());
     }
-
     fn duration_ms(&self) -> u64 {
         self.prompt_started
             .map_or(0, |t| t.elapsed().as_millis() as u64)
     }
-
     /// Emit the reducer preamble once the session context is known.
     fn begin_session(&mut self, ctx: SessionContext) {
         let Some(reducer) = self.reducer.as_mut() else {
@@ -197,14 +186,12 @@ impl HeadlessEmitter {
         let lines = reducer.begin(ctx);
         self.emit_lines(lines);
     }
-
     /// Emit a batch of NDJSON wire lines produced by the reducer.
     fn emit_lines(&mut self, lines: Vec<serde_json::Value>) {
         for line in lines {
             self.emit_line(&line);
         }
     }
-
     /// Render an `x.ai/*` lifecycle notification for the active format.
     fn on_lifecycle(&mut self, event: Lifecycle) {
         match self.format {
@@ -215,7 +202,6 @@ impl HeadlessEmitter {
             }
         }
     }
-
     /// Fold one event through the reducer and emit its lines; a no-op for `plain`/`json`.
     fn reduce_and_emit(&mut self, event: StreamEvent) {
         let Some(reducer) = self.reducer.as_mut() else {
@@ -224,7 +210,6 @@ impl HeadlessEmitter {
         let lines = reducer.reduce(event);
         self.emit_lines(lines);
     }
-
     /// Schema output for a terminal line: `Ok`, `Err`, or `None` when not requested.
     fn resolved_structured_output(&self) -> Option<Result<serde_json::Value, String>> {
         if !self.parse_structured_output {
@@ -236,7 +221,6 @@ impl HeadlessEmitter {
                 .unwrap_or_else(|| Err("model did not produce structured output".to_string())),
         )
     }
-
     /// Read structured output (or its error) from the prompt-response `_meta`.
     fn set_structured_output_from_meta(&mut self, meta: Option<&acp::Meta>) {
         if !self.parse_structured_output {
@@ -249,12 +233,10 @@ impl HeadlessEmitter {
             self.structured_output = Some(Ok(value.clone()));
         }
     }
-
     fn set_usage_from_meta(&mut self, meta: Option<&acp::Meta>) {
         let Some(meta) = meta else { return };
         self.usage = meta.get("usage").cloned();
     }
-
     fn on_text_chunk(&mut self, text: &str) {
         match self.format {
             OutputFormat::Plain => {
@@ -268,14 +250,14 @@ impl HeadlessEmitter {
                 self.reduce_and_emit(StreamEvent::AgentMessage(text.to_string()));
             }
             OutputFormat::StreamingJson => {
+                self.text_buffer.push_str(text);
                 self.reduce_and_emit(StreamEvent::AgentMessage(text.to_string()));
             }
         }
     }
-
     fn on_thought_chunk(&mut self, text: &str) {
         match self.format {
-            OutputFormat::Plain => { /* no-op */ }
+            OutputFormat::Plain => {}
             OutputFormat::Json => {
                 self.thought_buffer.push_str(text);
             }
@@ -284,19 +266,16 @@ impl HeadlessEmitter {
             }
         }
     }
-
     fn attach_structured_output(&self, target: &mut serde_json::Value) {
         if !self.parse_structured_output {
             return;
         }
-        // Only the agent's validated `_meta` output is trusted; never parse the raw text buffer.
         let result = self
             .structured_output
             .clone()
             .unwrap_or_else(|| Err("model did not produce structured output".to_string()));
         crate::headless::reducer::attach_structured_output(target, Some(result));
     }
-
     /// Final object for `--output-format json`, including spend fields when present.
     fn build_json_result(
         &self,
@@ -324,7 +303,6 @@ impl HeadlessEmitter {
         self.attach_structured_output(&mut result);
         result
     }
-
     fn on_end(&mut self, stop_reason: &str, session_id: &str, request_id: &str) {
         match self.format {
             OutputFormat::Plain => {
@@ -332,6 +310,7 @@ impl HeadlessEmitter {
             }
             OutputFormat::Json => {
                 let result = self.build_json_result(stop_reason, session_id, request_id);
+                self.last_terminal_json = Some(result.clone());
                 let mut rendered =
                     serde_json::to_string_pretty(&result).unwrap_or_else(|_| result.to_string());
                 rendered.push('\n');
@@ -355,17 +334,21 @@ impl HeadlessEmitter {
                     reducer.finish(&end)
                 });
                 if let Some(lines) = lines {
+                    // Pin the terminal `end` line for tests so streaming can assert the marker path.
+                    if let Some(last) = lines.last()
+                        && last.get("type").and_then(|t| t.as_str()) == Some("end")
+                    {
+                        self.last_terminal_json = Some(last.clone());
+                    }
                     self.emit_lines(lines);
                 }
             }
         }
     }
-
     /// Emit the max turns marker for the active format.
     fn on_max_turns(&mut self) {
         match self.format {
             OutputFormat::Plain => eprint_line("Max turns reached"),
-            // Conveyed by `stopReason` in the terminal JSON and result.
             OutputFormat::Json => {}
             OutputFormat::StreamingJson | OutputFormat::StreamingMessagesJson => {
                 let lines = self.reducer.as_mut().map(|reducer| reducer.max_turns());
@@ -375,7 +358,6 @@ impl HeadlessEmitter {
             }
         }
     }
-
     /// Emit the terminal error; `stop_reason_override` stamps a Messages stop reason (e.g. `max_tokens`).
     fn on_error(&mut self, message: &str, stop_reason_override: Option<&str>) {
         match self.format {
@@ -400,9 +382,18 @@ impl HeadlessEmitter {
         }
     }
 }
-
 pub(crate) fn attach_result_usage(result: &mut serde_json::Value, usage: &serde_json::Value) {
     xai_grok_shell::extensions::notification::attach_result_usage_fail_closed(result, usage);
+}
+
+/// Terminal result when headless exits without a prompt future result
+/// (flush-only / `--memory-flush` with an empty prompt).
+///
+/// Emits a real `end` so stdout always carries a sessionId; empty stdout makes
+/// callers (and the suite) retry without `--memory-flush`.
+fn finish_without_prompt_result(emitter: &mut HeadlessEmitter, session_id: &str) -> Result<()> {
+    emitter.on_end("end_turn", session_id, "");
+    Ok(())
 }
 
 /// Snake_case wire token for an ACP stop reason.
@@ -413,7 +404,6 @@ fn stop_reason_wire(reason: acp::StopReason) -> String {
         acp::StopReason::MaxTurnRequests => "max_turn_requests",
         acp::StopReason::Refusal => "refusal",
         acp::StopReason::Cancelled => "cancelled",
-        // Fail loud on an unknown future variant, then degrade to `end_turn`.
         other => {
             tracing::warn!(
                 stop_reason = ?other,
@@ -425,6 +415,29 @@ fn stop_reason_wire(reason: acp::StopReason) -> String {
     .to_string()
 }
 
+#[cfg(test)]
+mod stop_reason_wire_tests {
+    use super::stop_reason_wire;
+    use agent_client_protocol::StopReason;
+
+    /// Characterization: stationarity reports as a silent EndTurn. The
+    /// `action_stationarity` category lives on `_meta.cancellationCategory`, not
+    /// in this wire token, so headless JSON looks like a clean `end_turn`.
+    #[test]
+    fn stationarity_end_turn_wires_as_end_turn() {
+        assert_eq!(stop_reason_wire(StopReason::EndTurn), "end_turn");
+        assert_eq!(stop_reason_wire(StopReason::Cancelled), "cancelled");
+        assert_eq!(
+            stop_reason_wire(StopReason::MaxTurnRequests),
+            "max_turn_requests"
+        );
+    }
+
+    #[test]
+    fn max_tokens_wires_as_max_tokens() {
+        assert_eq!(stop_reason_wire(StopReason::MaxTokens), "max_tokens");
+    }
+}
 fn auto_respond_to_permissions(
     args: &acp::RequestPermissionRequest,
     option_kinds: &[acp::PermissionOptionKind],
@@ -442,7 +455,6 @@ fn auto_respond_to_permissions(
     }
     None
 }
-
 /// "Not signed in" error message, tailored to the session type.
 fn auth_required_message(interactive: bool) -> String {
     if interactive {
@@ -457,7 +469,16 @@ fn auth_required_message(interactive: bool) -> String {
             .to_string()
     }
 }
-
+/// The same backend switch the TUI applies; the shell unless another backend is enabled.
+async fn spawn_agent(
+    agent_config: AgentConfig,
+    cancel: &CancellationToken,
+    memory_config: Option<xai_grok_shell::config::MemoryConfig>,
+    options: &HeadlessOptions,
+) -> Result<SpawnedAgent> {
+    let _ = options;
+    spawn_grok_shell(agent_config, cancel, memory_config).await
+}
 /// Authenticate via the agent's `defaultAuthMethodId`, failing closed when none is available.
 /// Returns whether the selected method is API-key auth.
 async fn authenticate(
@@ -473,7 +494,6 @@ async fn authenticate(
             anyhow::anyhow!("{}", auth_required_message(interactive))
         })?;
     let kind = AuthMethodKind::from_id(&method_id);
-    // Prefer non-interactive methods only; interactive login is not usable headless.
     if kind.needs_interactive_login() {
         use std::io::IsTerminal;
         let interactive =
@@ -489,7 +509,6 @@ async fn authenticate(
     .await?;
     Ok(is_api_key_auth)
 }
-
 fn build_headless_init_request(
     rules: Option<&str>,
     system_prompt_override: Option<&str>,
@@ -512,12 +531,9 @@ fn build_headless_init_request(
             "startupHints".into(),
             serde_json::json!({
                 "nonInteractive": true,
-                "skipGitStatus": true,
-                "skipProjectLayout": true,
             }),
         );
     }
-
     acp::InitializeRequest::new(acp::ProtocolVersion::V1)
         .client_capabilities(
             acp::ClientCapabilities::new()
@@ -526,7 +542,6 @@ fn build_headless_init_request(
         )
         .meta(meta.as_object().cloned())
 }
-
 #[derive(Debug)]
 struct OpenedSession {
     session_id: acp::SessionId,
@@ -534,17 +549,14 @@ struct OpenedSession {
     /// Directory the session is anchored to (launch cwd, resume `original_cwd`, or fork `write_cwd`).
     cwd: PathBuf,
 }
-
 async fn open_session(
     acp_tx: &AcpAgentTx,
     cwd: &Path,
     session_id_flag: Option<&str>,
     restore_code: Option<bool>,
 ) -> anyhow::Result<OpenedSession> {
-    // Sessions open before the agent resolves per-vendor compat; default all-on until it does.
     let mcp_servers =
         cli_config::load_mcp_servers(cwd, &xai_grok_tools::types::compat::CompatConfig::default());
-
     if let Some(sid) = session_id_flag {
         let try_load: Result<acp::LoadSessionResponse, _> = acp_send(
             acp::LoadSessionRequest::new(acp::SessionId::new(sid.to_string()), cwd.to_path_buf())
@@ -569,8 +581,6 @@ async fn open_session(
         }
         anyhow::bail!("Session does not exist");
     }
-
-    // Fresh `-p` sessions persist as headless so `/resume` keeps them off its default pages; the load path above never restamps
     let mut meta = serde_json::json!({ "sessionKind": "headless" })
         .as_object()
         .cloned();
@@ -588,7 +598,6 @@ async fn open_session(
         cwd: cwd.to_path_buf(),
     })
 }
-
 async fn open_session_with_id(
     acp_tx: &AcpAgentTx,
     cwd: &Path,
@@ -615,7 +624,6 @@ async fn open_session_with_id(
         cwd: cwd.to_path_buf(),
     })
 }
-
 async fn fork_then_open(
     acp_tx: &AcpAgentTx,
     launch_cwd: &Path,
@@ -629,7 +637,6 @@ async fn fork_then_open(
         fork_response_new_session_id, fork_session_params, parent_session_is_worktree,
     };
     let launch_cwd_str = launch_cwd.to_string_lossy().into_owned();
-    // Match interactive: child lands under the parent session cwd, not the launch cwd.
     let new_cwd_str = effective_fork_new_cwd(&launch_cwd_str, parent_cwd);
     let write_cwd = PathBuf::from(&new_cwd_str);
     if let Some(nid) = new_id {
@@ -637,8 +644,6 @@ async fn fork_then_open(
     }
     let parent_is_worktree = parent_session_is_worktree(parent_id, &write_cwd);
     let mut payload = fork_session_params(parent_id, &write_cwd, new_id, parent_is_worktree);
-    // Shared helper stamps `fork` for interactive `/fork`
-    // `-p` children must stay headless: the load path below never restamps
     if let Some(obj) = payload.as_object_mut() {
         obj.insert(
             "sessionKind".into(),
@@ -661,7 +666,6 @@ async fn fork_then_open(
         )),
     }
 }
-
 /// Mirrors `Effect::CreateWorktreeSession`. A `-s` UUID also names the worktree, and
 /// `open_session_with_id` checks its availability under the worktree cwd, which is why
 /// `materialize_startup_for_cwd` skipped that check when `has_worktree` is set.
@@ -691,7 +695,6 @@ async fn open_session_in_new_worktree(
         )
     })
 }
-
 /// Mirrors the `load_session_id` branch of `Effect::CreateWorktreeSession`: the agent creates the
 /// worktree and restores into it, then the session is loaded at the cwd it reports.
 async fn resume_session_in_new_worktree(
@@ -719,7 +722,6 @@ async fn resume_session_in_new_worktree(
         code_restored = resumed.code_restored,
         "headless: session resumed into worktree"
     );
-    // resume_session already restored code; asking again on load would redo it.
     open_session(
         acp_tx,
         &resumed.session_cwd,
@@ -734,7 +736,6 @@ async fn resume_session_in_new_worktree(
         )
     })
 }
-
 /// Apply `-m` / effort after session open.
 /// Effort is soft-ignored on a non-supporting model (still applying `-m`) but hard-fails on a genuinely unknown token.
 async fn apply_headless_model_and_effort(
@@ -747,20 +748,25 @@ async fn apply_headless_model_and_effort(
     if model_name.is_none() && effort_token.is_none() {
         return Ok(());
     }
-
     let model_id = if let Some(name) = model_name {
         models
             .resolve_by_name_or_id(name)
             .unwrap_or_else(|| acp::ModelId::new(name))
     } else {
-        models.current.clone().ok_or_else(|| {
-            anyhow::anyhow!("--effort/--reasoning-effort: no active model to apply effort to")
-        })?
+        match models.current.clone() {
+            Some(id) => id,
+            None if effort_token
+                .is_some_and(|token| parse_canonical_effort_token(token).is_some()) =>
+            {
+                return Ok(());
+            }
+            None => {
+                anyhow::bail!("--effort/--reasoning-effort: no active model to apply effort to");
+            }
+        }
     };
-
     let effort = match effort_token {
         None => None,
-        // Pre-catalog: canonical tokens are already stamped; remapped menu ids can't resolve yet.
         Some(token) if models.available.is_empty() => {
             if parse_canonical_effort_token(token).is_none() {
                 anyhow::bail!(
@@ -770,7 +776,7 @@ async fn apply_headless_model_and_effort(
             }
             None
         }
-        Some(token) => match models.resolve_effort_for_model(&model_id, token) {
+        Some(token) => match models.resolve_cli_effort_for_model(&model_id, token) {
             Ok(effort) => Some(effort),
             Err(EffortTokenError::Unsupported) => {
                 tracing::warn!(
@@ -780,14 +786,14 @@ async fn apply_headless_model_and_effort(
                 );
                 None
             }
-            Err(err) => anyhow::bail!("--effort/--reasoning-effort: {}", err.message()),
+            Err(err) => {
+                anyhow::bail!("--effort/--reasoning-effort: {}", err.message())
+            }
         },
     };
-
     if model_name.is_none() && effort.is_none() {
         return Ok(());
     }
-
     let meta = effort.map(|eff| {
         let mut m = acp::Meta::new();
         m.insert(
@@ -796,7 +802,6 @@ async fn apply_headless_model_and_effort(
         );
         m
     });
-
     acp_send(
         acp::SetSessionModelRequest::new(session_id.clone(), model_id.clone()).meta(meta),
         acp_tx,
@@ -820,7 +825,6 @@ async fn apply_headless_model_and_effort(
     );
     Ok(())
 }
-
 /// Startup-materialization context for headless (`-p`) runs; never chat mode.
 fn headless_materialize_ctx(
     resume_title_pinned: bool,
@@ -842,23 +846,18 @@ fn headless_materialize_ctx(
         restore_progress_on_stdout: false,
     }
 }
-
 /// Run a headless single-turn prompt: spawn the agent, drive the ACP lifecycle, stream to stdout.
 pub async fn run_single_turn(
     prompt: Option<HeadlessPrompt>,
     verbatim: bool,
     options: HeadlessOptions,
 ) -> Result<()> {
-    // Stamp proxy requests as headless before the agent issues its first request.
     xai_grok_shell::http::set_process_client_mode_headless();
-
     let cwd = match options.cwd {
         None => std::env::current_dir()?,
         Some(ref p) => dunce::canonicalize(p)?,
     };
-
     let mut emitter = HeadlessEmitter::new(options.output_format, options.json_schema.is_some());
-
     if options.include_partial_messages
         && options.output_format != OutputFormat::StreamingMessagesJson
     {
@@ -866,29 +865,28 @@ pub async fn run_single_turn(
             "warning: --include-partial-messages only affects --output-format streaming-messages-json; ignoring it",
         );
     }
-
     let t_spawn = Instant::now();
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {e}"))?;
     let mut agent_config = AgentConfig::new_from_toml_cfg(&raw_config)
         .map_err(|e| anyhow::anyhow!("Failed to create agent config: {e}"))?;
-
-    // Only canonical tokens are stamped early; remapped menu ids need the post-session catalog resolve below
     if let Some(ref token) = options.reasoning_effort
         && let Some(effort) = parse_canonical_effort_token(token)
     {
         agent_config.reasoning_effort_override = Some(effort);
     }
-    // Stamp `-m` early so the initial system prompt uses it, not a later SetSessionModel.
     if let Some(ref model) = options.model {
         agent_config.default_model_override = Some(model.clone());
     }
-
     agent_config.resolve_runtime_fields(&xai_grok_shell::agent::config::RuntimeResolutionContext {
         raw_config: &raw_config,
         remote_settings: None,
         is_headless: true,
-        cli_subagents: None,
+        cli_subagents: if options.no_subagents {
+            Some(false)
+        } else {
+            None
+        },
         cli_web_search_model: None,
         cli_session_summary_model: None,
         memory_enabled_override: options.memory_enabled_override,
@@ -897,7 +895,6 @@ pub async fn run_single_turn(
         laziness_debug_log: None,
         storage_mode: None,
     });
-
     agent_config.mode = xai_grok_shell::agent::config::AgentMode::Headless;
     agent_config.default_yolo_mode = options.yolo;
     agent_config.default_auto_mode = xai_grok_shell::util::config::effective_auto_for_launch(
@@ -906,13 +903,10 @@ pub async fn run_single_turn(
         None,
         xai_grok_shell::util::config::PermissionMode::Ask,
     );
-
     apply_agent_flag(&options.agent, &mut agent_config);
-
     if let Some(ref json) = options.agents_json {
         agent_config.cli_agents = parse_cli_agents(json)?;
     }
-
     agent_config.cli_agent_overrides = xai_grok_shell::agent::config::CliAgentOverrides {
         tools: parse_comma_list(options.cli_tools.as_deref()),
         disallowed_tools: parse_comma_list(options.cli_disallowed_tools.as_deref()),
@@ -927,12 +921,10 @@ pub async fn run_single_turn(
             })
             .transpose()?,
     };
-
     if options.trust {
         use xai_grok_workspace::folder_trust::{grant_folder_trust, report_cli_trust_grant};
         report_cli_trust_grant(&grant_folder_trust(&cwd));
     }
-
     let cancel = CancellationToken::new();
     let memory_config = agent_config.memory_config.clone();
     let mut pending_startup = Some(PendingStartup::new());
@@ -946,7 +938,7 @@ pub async fn run_single_turn(
         );
         PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
     };
-    let spawned = match spawn_grok_shell(agent_config, &cancel, memory_config).await {
+    let spawned = match spawn_agent(agent_config, &cancel, memory_config, &options).await {
         Ok(s) => s,
         Err(e) => {
             report_startup_failure(&timer);
@@ -964,7 +956,6 @@ pub async fn run_single_turn(
         Some(serde_json::json!({"mode": "headless"})),
     );
     crate::unified_log::flush();
-
     let init_req = build_headless_init_request(
         options.rules.as_deref(),
         options.system_prompt_override.as_deref(),
@@ -983,7 +974,6 @@ pub async fn run_single_turn(
         elapsed_ms = t_spawn.elapsed().as_millis() as u64,
         "headless: spawn + initialize complete"
     );
-
     let t_auth = Instant::now();
     xai_grok_telemetry::startup::enter(crate::acp::StartupPhase::EagerAuth);
     let default_auth_method_id = crate::acp::parse_default_auth_method_id(init_resp.meta.as_ref());
@@ -1005,14 +995,12 @@ pub async fn run_single_turn(
         elapsed_ms = t_auth.elapsed().as_millis() as u64,
         "headless: authenticate complete"
     );
-    // Connect ends here; session phases stay out of the phase histogram.
     timer.emit_telemetry(
         crate::acp::AgentKind::Embedded,
         crate::acp::StartupOutcome::Ok,
         None,
         false,
     );
-
     use crate::app::session_startup::{self, MaterializedStartup, SessionStartupFlags};
     let has_resume_id = options.resume.as_deref().filter(|s| !s.is_empty());
     let resume_most_recent = options.resume.as_deref() == Some("");
@@ -1030,7 +1018,6 @@ pub async fn run_single_turn(
     .inspect_err(|_| {
         PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
     })?;
-
     let cwd_str = cwd.to_string_lossy().to_string();
     let materialized = session_startup::materialize_startup_for_cwd(
         headless_materialize_ctx(
@@ -1045,7 +1032,6 @@ pub async fn run_single_turn(
     .inspect_err(|_| {
         PendingStartup::finish_held(&mut pending_startup, crate::acp::StartupOutcome::Error);
     })?;
-
     let restore_code = match &materialized {
         MaterializedStartup::Resume {
             suppress_code_restore: true,
@@ -1099,7 +1085,6 @@ pub async fn run_single_turn(
             let load_cwd = original_cwd.as_deref().unwrap_or(cwd.as_path());
             open_session(&acp_tx, load_cwd, Some(session_id.as_str()), restore_code).await
         }
-        // Fork with `-w` never reaches here; the intent check above refuses it.
         (
             MaterializedStartup::Fork {
                 parent_session_id,
@@ -1139,7 +1124,6 @@ pub async fn run_single_turn(
         session_id = %session_id.0,
         "headless: open_session complete"
     );
-
     let track_active = std::env::var("GROK_TRACK_HEADLESS").is_ok();
     if track_active {
         let _ = xai_grok_active_sessions::register(xai_grok_active_sessions::ActiveSession {
@@ -1149,8 +1133,6 @@ pub async fn run_single_turn(
             opened_at: chrono::Utc::now(),
         });
     }
-
-    // Seed the reducer's session context BEFORE applying model/effort so a later failure carries it.
     {
         let mcp_servers = if options.output_format == OutputFormat::StreamingMessagesJson {
             mcp_init::resolve_mcp_servers_for_init(&acp_tx, &session_id, &session_cwd).await
@@ -1176,8 +1158,6 @@ pub async fn run_single_turn(
             context_window: session_models.get_context_window(),
         });
     }
-
-    // One bounded catalog read covers what the session catalog cannot resolve.
     let effort_unresolved = |token: &str| {
         if parse_canonical_effort_token(token).is_some() {
             return false;
@@ -1188,10 +1168,12 @@ pub async fn run_single_turn(
             .and_then(|m| session_models.resolve_by_name_or_id(m))
             .or_else(|| session_models.current.clone());
         match target {
-            Some(model_id) => matches!(
-                session_models.resolve_effort_for_model(&model_id, token),
-                Err(EffortTokenError::UnknownToken { .. } | EffortTokenError::NoActiveModel)
-            ),
+            Some(model_id) => {
+                matches!(
+                    session_models.resolve_cli_effort_for_model(&model_id, token),
+                    Err(EffortTokenError::UnknownToken { .. } | EffortTokenError::NoActiveModel)
+                )
+            }
             None => true,
         }
     };
@@ -1214,7 +1196,6 @@ pub async fn run_single_turn(
     } else {
         session_models
     };
-
     if let Err(e) = apply_headless_model_and_effort(
         &acp_tx,
         &session_id,
@@ -1228,7 +1209,6 @@ pub async fn run_single_turn(
         emitter.on_error(&msg, None);
         anyhow::bail!("{msg}");
     }
-
     let t_prompt = Instant::now();
     emitter.mark_prompt_started();
     let mut ttf_logged = false;
@@ -1247,7 +1227,6 @@ pub async fn run_single_turn(
                 "screenMode".to_string(),
                 serde_json::Value::String("headless".to_string()),
             );
-            // The shell echoes this id on every notification for the prompt; the acknowledgment watch keys on it
             let prompt_id = uuid::Uuid::new_v4().to_string();
             meta.insert(
                 "promptId".to_string(),
@@ -1263,22 +1242,17 @@ pub async fn run_single_turn(
         None => (None, None),
     };
     let mut prompt_result = None;
-    // Tracked regardless of wait_for_background so the exit reaper always sees running work.
     let mut pending_bg: HashSet<BackgroundWork> = HashSet::new();
     let mut background_lifecycle = BackgroundLifecycleState::default();
     let mut prompt_done_at: Option<Instant> = None;
-    // On mid-turn channel close, break (not bail) so the exit path still drains and reaps.
     let mut connection_closed = false;
-    // The shell never acknowledged the prompt; exit-path awaits on it must stay bounded.
     let mut prompt_unacknowledged = false;
-
     if let Some(mut prompt_fut) = prompt_fut {
         loop {
             if emitter.write_error.is_some() {
                 tracing::warn!("headless: stdout write failed; stopping the stream loop");
                 break;
             }
-            // Drain buffered ACP first: PromptResponse can complete while task_backgrounded is still queued.
             if options.wait_for_background && prompt_result.is_some() && pending_bg.is_empty() {
                 drain_pending_acp_messages(
                     &mut acp_rx,
@@ -1294,7 +1268,6 @@ pub async fn run_single_turn(
                     break;
                 }
             }
-
             if options.wait_for_background
                 && let Some(done_at) = prompt_done_at
                 && done_at.elapsed() >= options.background_wait_timeout
@@ -1306,7 +1279,6 @@ pub async fn run_single_turn(
                 );
                 break;
             }
-
             let timeout_deadline = if options.wait_for_background
                 && prompt_result.is_some()
                 && !pending_bg.is_empty()
@@ -1323,12 +1295,10 @@ pub async fn run_single_turn(
             } else {
                 Duration::from_secs(3600)
             };
-            // The branch is disabled once acknowledged; the far-future sleep is built but never polled
             let ack_deadline = match prompt_ack.as_ref() {
                 Some(watch) => tokio::time::Instant::from_std(watch.hard_deadline(&ack_deadlines)),
                 None => tokio::time::Instant::now() + Duration::from_secs(3600),
             };
-
             tokio::select! {
                 biased;
                 msg = acp_rx.recv() => {
@@ -1406,8 +1376,6 @@ pub async fn run_single_turn(
                 }
             }
         }
-
-        // Final drain-to-empty so the reaper sees work buffered right at exit (the timeout path skips draining).
         drain_pending_acp_messages(
             &mut acp_rx,
             &mut emitter,
@@ -1417,7 +1385,6 @@ pub async fn run_single_turn(
             &mut pending_bg,
             &mut background_lifecycle,
         );
-
         if !pending_bg.is_empty() {
             tracing::warn!(
                 pending_bg = pending_bg.len(),
@@ -1426,9 +1393,7 @@ pub async fn run_single_turn(
             reap_pending_background_tasks(&pending_bg, &session_id, &acp_tx).await;
         }
     }
-
     if prompt_unacknowledged {
-        // A shell that never took the prompt may never answer the log notification either; the fail-safe lines were written directly
         if tokio::time::timeout(
             prompt_ack::HEADLESS_ABORT_SEND_TIMEOUT,
             crate::unified_log::flush_blocking(),
@@ -1443,19 +1408,15 @@ pub async fn run_single_turn(
     } else {
         crate::unified_log::flush_blocking().await;
     }
-
     if track_active {
-        // Non-blocking flock so a slow/network ~/.grok can't hang exit.
         let _ = xai_grok_active_sessions::try_unregister(&session_id);
     }
     let outcome: Result<()> = match prompt_result {
-        // Mid-turn close skips the partial result; the shared drain below still runs.
         _ if connection_closed => Err(anyhow::anyhow!("Connection closed unexpectedly")),
         Some(Ok(resp)) => {
             let stop_reason = stop_reason_wire(resp.stop_reason);
             emitter.set_structured_output_from_meta(resp.meta.as_ref());
             emitter.set_usage_from_meta(resp.meta.as_ref());
-            // Prefer the response `_meta` ids, falling back to the typed session id rather than "".
             let sid = resp
                 .meta
                 .as_ref()
@@ -1485,10 +1446,17 @@ pub async fn run_single_turn(
                 .and_then(|v| v.as_str())
                 == Some(xai_grok_shell::session::commands::MAX_TURNS_REACHED_CATEGORY);
             if is_max_turns {
+                // Cap hit: still emit a normal JSON result with an explicit stopReason so
+                // headless callers (and the real-model suite) can score exit 0. Plain/stderr
+                // keeps the human-readable marker for session.max_turns.
                 emitter.on_max_turns();
-                emitter.on_end(&stop_reason, sid, rid);
-                Err(anyhow::anyhow!("max turns reached"))
+                eprintln!("max turns reached");
+                emitter.on_end("max_turn_requests", sid, rid);
+                Ok(())
             } else {
+                if stop_reason == "max_tokens" {
+                    eprintln!("max tokens reached");
+                }
                 emitter.on_end(&stop_reason, sid, rid);
                 Ok(())
             }
@@ -1506,11 +1474,12 @@ pub async fn run_single_turn(
             if let Some(usage) = xai_grok_shell::sampling::error::prompt_usage_from_error(&err) {
                 match serde_json::to_value(&usage) {
                     Ok(v) => emitter.usage = Some(v),
-                    // Log rather than swallow: a serialize failure would drop the frozen spend fields.
-                    Err(e) => tracing::warn!(
-                        error = %e,
-                        "headless: failed to serialize prompt-error usage; spend fields dropped"
-                    ),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "headless: failed to serialize prompt-error usage; spend fields dropped"
+                        )
+                    }
                 }
             }
             let stop_reason_override =
@@ -1519,9 +1488,8 @@ pub async fn run_single_turn(
             emitter.on_error(&msg, stop_reason_override);
             Err(anyhow::anyhow!("{msg}"))
         }
-        None => Ok(()),
+        None => finish_without_prompt_result(&mut emitter, session_id.0.as_ref()),
     };
-
     let flush_error = if options.memory_flush && outcome.is_ok() {
         run_headless_memory_flush(
             &acp_tx,
@@ -1535,9 +1503,7 @@ pub async fn run_single_turn(
     } else {
         None
     };
-
     xai_grok_shell::upload::drain_pending_uploads_at_exit().await;
-
     if let Some(err) = emitter.take_output_error() {
         return Err(anyhow::Error::new(err).context("headless: stdout write failed"));
     }
@@ -1546,7 +1512,6 @@ pub async fn run_single_turn(
     }
     outcome
 }
-
 /// Invoke `x.ai/memory/flush` and wait for the flush LLM to finish.
 async fn run_headless_memory_flush(
     acp_tx: &AcpAgentTx,
@@ -1601,20 +1566,17 @@ async fn run_headless_memory_flush(
     }
     Ok(())
 }
-
 /// Background work tracked for exit: bash/monitor tasks and background subagents, keyed by id.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum BackgroundWork {
     Task(String),
     Subagent(String),
 }
-
 #[derive(Default)]
 struct BackgroundLifecycleState {
     completed_tasks: HashSet<String>,
     subagents: HashMap<String, SubagentLifecycleState>,
 }
-
 /// Ext request that kills one unit of background work (subagent cancel or task kill).
 fn reap_request_for_work(
     work: &BackgroundWork,
@@ -1638,7 +1600,6 @@ fn reap_request_for_work(
     };
     Ok(acp::ExtRequest::new(method, params.into()))
 }
-
 /// Best-effort kill of background work still pending at exit so it never outlives the process.
 async fn reap_pending_background_tasks(
     pending_bg: &HashSet<BackgroundWork>,
@@ -1667,7 +1628,6 @@ async fn reap_pending_background_tasks(
         }
     }
 }
-
 fn track_background_lifecycle(
     event: ExtEvent,
     pending_bg: &mut HashSet<BackgroundWork>,
@@ -1751,7 +1711,6 @@ fn track_background_lifecycle(
         ExtEvent::MonitorEvent | ExtEvent::None | ExtEvent::Lifecycle(_) | ExtEvent::Stream(_) => {}
     }
 }
-
 /// Non-blocking drain-to-empty of `acp_rx`.
 /// Background work buffered around prompt completion is recorded in `pending_bg` before the empty-check decides whether to exit.
 #[allow(clippy::too_many_arguments)]
@@ -1776,7 +1735,6 @@ fn drain_pending_acp_messages(
         );
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn drain_acp_with_grace(
     acp_rx: &mut AcpClientRx,
@@ -1825,7 +1783,6 @@ async fn drain_acp_with_grace(
         }
     }
 }
-
 /// Process one inbound ACP client message; shared by `recv()` and `try_recv()`.
 #[allow(clippy::too_many_arguments)]
 fn handle_headless_acp_message(
@@ -1921,11 +1878,9 @@ fn handle_headless_acp_message(
         _ => {}
     }
 }
-
 #[cfg(test)]
 #[path = "headless/background_lifecycle_tests.rs"]
 mod background_lifecycle_tests;
-
 #[cfg(test)]
 #[path = "headless_tests.rs"]
 mod tests;

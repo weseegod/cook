@@ -141,6 +141,20 @@ impl MarkdownContent {
         self.generation += 1;
     }
 
+    /// Render text previously appended with [`push_chunk_deferred`](Self::push_chunk_deferred).
+    /// Used so live thinking can append every token but only reflow on a coarse animation tick.
+    pub fn flush_render(&mut self) {
+        self.state
+            .get_mut()
+            .renderer
+            .render(Some(get_syntect()));
+        // Incremental render may extend frozen lines; reset wrap freeze so the next wrap sees the new tail.
+        let state = self.state.get_mut();
+        state.frozen_pre_wrap_count = 0;
+        state.frozen_wrapped_count = 0;
+        self.generation += 1;
+    }
+
     /// Finish streaming: full re-render for correctness.
     pub fn finish(&mut self) {
         let state = self.state.get_mut();

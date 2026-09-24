@@ -998,7 +998,7 @@ fn integer(table: &Table, key: &str) -> Option<i64> {
     table.get(key).and_then(Item::as_integer)
 }
 
-/// The app home (`$GROK_HOME` / `$COOK_HOME` / deprecated `$THANH_HOME`, else `~/.cook`).
+/// The app home (`$COOK_HOME`, else `$GROK_HOME`, else `~/.cook`).
 /// Shared with the agent host so Settings and the filesystem surface can never disagree
 /// about which tree belongs to the agent.
 pub(crate) fn config_home() -> PathBuf {

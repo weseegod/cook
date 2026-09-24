@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}} and, using the terminal tool, write that exact line to {{WORKDIR}}/out.txt. Do not use a file-edit tool.

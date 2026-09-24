@@ -88,6 +88,40 @@ pub fn sanitize_rename_title(title: &str) -> Cow<'_, str> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidatedRenameTitle {
+    Manual(String),
+    ResetToAuto,
+}
+
+/// Applies the shared `x.ai/session/rename` title boundary.
+pub fn validate_rename_title(
+    title: &str,
+    reset_to_auto: bool,
+) -> Result<ValidatedRenameTitle, acp::Error> {
+    if reset_to_auto {
+        if !sanitize_rename_title(title).is_empty() {
+            return Err(
+                acp::Error::invalid_request().data("title must be empty when resetToAuto is set")
+            );
+        }
+        return Ok(ValidatedRenameTitle::ResetToAuto);
+    }
+    if title.len() > MAX_TITLE_BYTES {
+        return Err(acp::Error::invalid_request().data("title too large"));
+    }
+    let title = sanitize_rename_title(title).into_owned();
+    if title.is_empty() {
+        return Err(acp::Error::invalid_request().data("title must not be blank"));
+    }
+    if title.chars().count() > MAX_TITLE_SCALARS {
+        return Err(acp::Error::invalid_request().data(format!(
+            "title too long (max {MAX_TITLE_SCALARS} characters after removing control characters)"
+        )));
+    }
+    Ok(ValidatedRenameTitle::Manual(title))
+}
+
 /// Sanitize then cap. `None` when the result is blank.
 /// Overlong titles are truncated (ingest/pull defense); the ext rename path rejects instead.
 pub fn sanitize_and_cap_title(title: &str) -> Option<String> {
@@ -237,9 +271,8 @@ pub enum PersistenceMsg {
     SetRemoteAgentId(String),
     CurrentModel {
         model_id: acp::ModelId,
-        /// The active agent definition name (e.g. `"grok-build"`).
-        /// Persisted in `summary.agent_name` so session resume doesn't depend on the mutable model catalog.
-        agent_name: Option<String>,
+        /// The active agent, persisted so session resume doesn't depend on the mutable model catalog.
+        agent: PersistedAgent,
         reasoning_effort: Option<Option<ReasoningEffort>>,
     },
     PlanState(TodoState),
@@ -691,13 +724,16 @@ pub(crate) async fn read_wake_summary_state_from_dir(
         let path = session_dir.join("summary.json");
         let bytes = std::fs::read(&path)?;
         serde_json::from_slice::<Summary>(&bytes)
-            .map(|summary| WakeSummaryState {
-                attempt_id: summary.attempt_id,
-                next_trace_turn: summary.next_trace_turn,
-                current_model_id: summary.current_model_id,
-                agent_name: summary.agent_name,
-                reasoning_effort: summary.reasoning_effort,
-                summary_bytes: bytes,
+            .map(|summary| {
+                let agent_name = summary.agent_name().map(String::from);
+                WakeSummaryState {
+                    attempt_id: summary.attempt_id,
+                    next_trace_turn: summary.next_trace_turn,
+                    current_model_id: summary.current_model_id,
+                    agent_name,
+                    reasoning_effort: summary.reasoning_effort,
+                    summary_bytes: bytes,
+                }
             })
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     })
@@ -1024,6 +1060,88 @@ pub(crate) fn mint_next_session_identity(
     )
 }
 
+/// The session's selected agent, persisted so resume doesn't re-derive it from the mutable model catalog.
+#[derive(Debug, Clone)]
+pub enum PersistedAgent {
+    /// Rebuilt from the catalog, plugin, or on-disk source by name on restore.
+    Named(String),
+    /// A client-supplied definition with no other provenance to rebuild from, so its full definition is carried.
+    Inline(Box<xai_grok_agent::AgentDefinition>),
+}
+
+impl PersistedAgent {
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            PersistedAgent::Named(name) => name,
+            PersistedAgent::Inline(def) => &def.name,
+        }
+    }
+
+    pub(crate) fn inline_definition(&self) -> Option<&xai_grok_agent::AgentDefinition> {
+        match self {
+            PersistedAgent::Named(_) => None,
+            PersistedAgent::Inline(def) => Some(def),
+        }
+    }
+}
+
+impl From<&xai_grok_agent::AgentDefinition> for PersistedAgent {
+    fn from(def: &xai_grok_agent::AgentDefinition) -> Self {
+        if def.is_inline_profile() {
+            PersistedAgent::Inline(Box::new(def.clone()))
+        } else {
+            PersistedAgent::Named(def.name.clone())
+        }
+    }
+}
+
+/// Serializes as the legacy `agent_name`/`agent_profile` summary keys; a malformed or name-mismatched profile is dropped so the pair can never load as an inconsistent selection.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PersistedAgentSelection {
+    selected: Option<PersistedAgent>,
+}
+
+impl serde::Serialize for PersistedAgentSelection {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        match &self.selected {
+            None => {}
+            Some(PersistedAgent::Named(name)) => map.serialize_entry("agent_name", name)?,
+            Some(PersistedAgent::Inline(def)) => {
+                map.serialize_entry("agent_name", &def.name)?;
+                map.serialize_entry("agent_profile", &def.to_json_value())?;
+            }
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PersistedAgentSelection {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            agent_name: Option<String>,
+            #[serde(default)]
+            agent_profile: Option<serde_json::Value>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let selected = match raw.agent_name {
+            None => None,
+            Some(name) => {
+                let inline = raw
+                    .agent_profile
+                    .and_then(|value| xai_grok_agent::AgentDefinition::from_json(&value).ok())
+                    .filter(|def| def.name == name)
+                    .map(|def| PersistedAgent::Inline(Box::new(def)));
+                Some(inline.unwrap_or(PersistedAgent::Named(name)))
+            }
+        };
+        Ok(PersistedAgentSelection { selected })
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Summary {
     pub info: Info,
@@ -1123,11 +1241,9 @@ pub struct Summary {
     /// Human-readable label for the worktree directory (e.g. "nuke-v-tables").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_label: Option<String>,
-    /// The agent definition name that was active when the session was last saved.
-    /// Used during session resume to avoid re-deriving from the (mutable) model catalog.
-    /// If the model is removed or its `agent_type` changes between sessions, the persisted value still restores the correct harness.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
+    /// The agent active when the session was last saved, persisted so resume doesn't re-derive it from the mutable model catalog.
+    #[serde(flatten)]
+    pub(crate) agent: PersistedAgentSelection,
     /// Persisted so a resumed session is restored to the same profile instead of silently falling back to the config default.
     /// A fallback would break commands that worked before (a stricter profile denies filesystem/network the session relied on).
     /// `None` for sessions created before this field existed.
@@ -1165,6 +1281,32 @@ pub fn default_model_id() -> acp::ModelId {
 }
 
 impl Summary {
+    /// Re-asserting the current agent's name is a no-op: a model or reasoning-effort switch carries only
+    /// the (built) name, and persisting that built definition would double-expand an inline agent on
+    /// reload, so a same-name update must preserve the existing selection. Any other selection replaces it.
+    pub(crate) fn set_agent(&mut self, agent: PersistedAgent) {
+        let reasserts_current = matches!(&agent, PersistedAgent::Named(name)
+            if self.agent_name() == Some(name.as_str()));
+        if !reasserts_current {
+            self.agent.selected = Some(agent);
+        }
+    }
+
+    pub(crate) fn agent_name(&self) -> Option<&str> {
+        self.agent.selected.as_ref().map(PersistedAgent::name)
+    }
+
+    pub(crate) fn agent_profile(&self) -> Option<&xai_grok_agent::AgentDefinition> {
+        self.agent
+            .selected
+            .as_ref()
+            .and_then(PersistedAgent::inline_definition)
+    }
+
+    pub(crate) fn persisted_agent(&self) -> Option<&PersistedAgent> {
+        self.agent.selected.as_ref()
+    }
+
     pub(crate) fn new(info: &Info, model_id: acp::ModelId) -> std::io::Result<Self> {
         let git_metadata =
             xai_grok_workspace::session::git::resolve_persisted_session_git_metadata_sync(
@@ -1206,7 +1348,7 @@ impl Summary {
             generated_title: None,
             title_is_manual: false,
             worktree_label: None,
-            agent_name: None,
+            agent: PersistedAgentSelection::default(),
             sandbox_profile: None,
             reasoning_effort: None,
             last_turn_summary: None,
@@ -1313,6 +1455,10 @@ pub struct PersistenceHandle {
     pub tx: mpsc::UnboundedSender<PersistenceMsg>,
     noop: bool,
     disk_full_rx: watch::Receiver<bool>,
+    /// Late-bound chat-state handle for the session-title generator.
+    /// The persistence actor is built before the chat-state actor exists, so the session spawn
+    /// binds this once the chat-state actor is up and the title call can account for itself.
+    summary_chat_state: Arc<std::sync::OnceLock<xai_chat_state::ChatStateHandle>>,
 }
 
 fn actor_channel() -> (
@@ -1328,6 +1474,7 @@ fn actor_channel() -> (
         tx,
         noop: false,
         disk_full_rx,
+        summary_chat_state: Arc::new(std::sync::OnceLock::new()),
     };
     (handle, rx, weak, disk_full_tx)
 }
@@ -1376,6 +1523,7 @@ impl PersistenceHandle {
             tx,
             noop: false,
             disk_full_rx,
+            summary_chat_state: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -1385,7 +1533,19 @@ impl PersistenceHandle {
             tx,
             noop: true,
             disk_full_rx: watch::channel(false).1,
+            summary_chat_state: Arc::new(std::sync::OnceLock::new()),
         }
+    }
+
+    /// Bind the chat-state handle the session-title generator accounts its model call against.
+    /// Called once by the session spawn after the chat-state actor is up; later calls are ignored.
+    pub(crate) fn bind_summary_chat_state(&self, handle: &xai_chat_state::ChatStateHandle) {
+        let _ = self.summary_chat_state.set(handle.clone());
+    }
+
+    /// The bound chat-state handle, or `None` before the session spawn has bound it.
+    fn summary_chat_state(&self) -> Option<&xai_chat_state::ChatStateHandle> {
+        self.summary_chat_state.get()
     }
 
     pub fn is_noop(&self) -> bool {
@@ -2093,7 +2253,7 @@ impl SessionPersistence {
                 }
                 PersistenceMsg::CurrentModel {
                     model_id,
-                    agent_name,
+                    agent,
                     reasoning_effort,
                 } => {
                     if let Err(e) = self
@@ -2101,7 +2261,7 @@ impl SessionPersistence {
                         .update_current_model_and_agent(
                             &self.info,
                             &model_id,
-                            agent_name.as_deref(),
+                            Some(&agent),
                             reasoning_effort,
                         )
                         .await
@@ -2773,6 +2933,7 @@ pub(crate) async fn new(
     }
 
     let (handle, rx, summary_tx, disk_full_tx) = actor_channel();
+    let summary_chat_state = handle.summary_chat_state.clone();
 
     let info_clone = info.clone();
     let storage: Arc<dyn StorageAdapter> = Arc::new(storage);
@@ -2791,6 +2952,7 @@ pub(crate) async fn new(
                     sampling_client,
                     model: session_summary_model,
                     persistence_tx: summary_tx,
+                    chat_state: summary_chat_state,
                 },
             ),
             registry_title_sync,
@@ -2883,6 +3045,7 @@ pub(crate) async fn new_with_explicit_dir(
     }
 
     let (handle, rx, summary_tx, disk_full_tx) = actor_channel();
+    let summary_chat_state = handle.summary_chat_state.clone();
 
     let info_clone = info.clone();
     let storage: Arc<dyn StorageAdapter> = Arc::new(storage);
@@ -2900,6 +3063,7 @@ pub(crate) async fn new_with_explicit_dir(
                     sampling_client,
                     model: session_summary_model,
                     persistence_tx: summary_tx,
+                    chat_state: summary_chat_state,
                 },
             ),
             registry_title_sync: None,
@@ -3017,6 +3181,7 @@ pub(crate) async fn load_light(
     };
 
     let (handle, rx, summary_tx, disk_full_tx) = actor_channel();
+    let summary_chat_state = handle.summary_chat_state.clone();
 
     let storage: Arc<dyn StorageAdapter> = Arc::new(storage);
     let remote_sync = init_remote_sync(&persisted_info.summary, storage_mode, auth_manager)?;
@@ -3028,6 +3193,7 @@ pub(crate) async fn load_light(
                 sampling_client,
                 model: session_summary_model,
                 persistence_tx: summary_tx,
+                chat_state: summary_chat_state,
             },
         );
         if has_title {
@@ -3210,20 +3376,18 @@ pub async fn list_recent_summaries(limit: usize) -> io::Result<Vec<Summary>> {
 
 static CLEANUP_SESSIONS_ONCE: std::sync::Once = std::sync::Once::new();
 
-const DEFAULT_CLEANUP_TTL_DAYS: u32 = 30;
-
 /// The only files swept inside a live session: everything else there is a write-once artifact
 /// `updates.jsonl` still references, so its own age says nothing about whether it is needed.
 const SWEPT_BLOB_DIRS: [&str; 4] = ["images", "videos", "downloads", "terminal"];
 
-/// Once per process: removes sessions idle longer than `ttl_days` whole and prunes stale
-/// `SWEPT_BLOB_DIRS` files from the rest. `live_session_dir` is being created or attached by the
-/// caller, so it is never removed whole, but its blob dirs are pruned like any other session's.
-/// Callers `mark_session_live` first so other processes do not judge the dir idle mid-attach.
+/// Mid-attach `live_session_dir` is never deleted whole; callers `mark_session_live` first so
+/// other processes do not treat it as idle.
 #[tracing::instrument(skip_all)]
 pub(crate) fn cleanup_stale_sessions(live_session_dir: &Path) {
     CLEANUP_SESSIONS_ONCE.call_once(|| {
-        let ttl_days = resolve_cleanup_ttl_days();
+        let Some(ttl_days) = resolve_cleanup_ttl_days() else {
+            return;
+        };
         let sessions_root = grok_home().join("sessions");
 
         tracing::info!(
@@ -3284,19 +3448,37 @@ pub(crate) fn mark_session_live(session_dir: &Path) {
     }
 }
 
-/// Resolve TTL from config.toml `[storage] cleanup_ttl_days`, falling back to 30.
-fn resolve_cleanup_ttl_days() -> u32 {
-    if let Ok(layers) = crate::config::ConfigLayers::load() {
-        let effective = layers.effective_config_disk_only();
-        if let Some(storage) = effective.get("storage")
-            && let Some(ttl) = storage.get("cleanup_ttl_days")
-            && let Some(days) = ttl.as_integer()
-            && days > 0
-        {
-            return days as u32;
+/// Config load failure is `None` (no sweep), not a fallback TTL.
+fn resolve_cleanup_ttl_days() -> Option<u32> {
+    match crate::config::ConfigLayers::load() {
+        Ok(layers) => {
+            let ttl = cleanup_ttl_days_from_effective(&layers.effective_config_disk_only());
+            if ttl.is_none() {
+                tracing::info!(
+                    target: "xai_grok_shell::session::persistence",
+                    "SESSION_CLEANUP_SKIPPED: no positive [storage] cleanup_ttl_days"
+                );
+            }
+            ttl
+        }
+        Err(error) => {
+            tracing::info!(
+                target: "xai_grok_shell::session::persistence",
+                %error,
+                "SESSION_CLEANUP_SKIPPED: config load failed"
+            );
+            None
         }
     }
-    DEFAULT_CLEANUP_TTL_DAYS
+}
+
+fn cleanup_ttl_days_from_effective(effective: &toml::Value) -> Option<u32> {
+    effective
+        .get("storage")
+        .and_then(|storage| storage.get("cleanup_ttl_days"))
+        .and_then(toml::Value::as_integer)
+        .and_then(|days| u32::try_from(days).ok())
+        .filter(|&days| days > 0)
 }
 
 #[derive(Debug, Default, PartialEq)]

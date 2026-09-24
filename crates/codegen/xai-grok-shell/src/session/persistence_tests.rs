@@ -39,6 +39,7 @@ fn test_actor_inner(
             sampling_client,
             model: String::new(),
             persistence_tx: tx.downgrade(),
+            chat_state: std::sync::Arc::new(std::sync::OnceLock::new()),
         });
     if mark_summary_done {
         summary.mark_done();
@@ -620,7 +621,7 @@ async fn acknowledged_wake_start_stamps_summary_once() {
     assert_eq!(summary.attempt_id.as_deref(), Some("at1.started"));
     assert_eq!(summary.next_trace_turn, 8);
     assert_eq!(summary.current_model_id, wake_model);
-    assert_eq!(summary.agent_name.as_deref(), Some("wake-agent"));
+    assert_eq!(summary.agent_name(), Some("wake-agent"));
     assert_eq!(
         summary.reasoning_effort,
         Some(xai_grok_sampling_types::ReasoningEffort::High)

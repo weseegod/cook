@@ -44,8 +44,12 @@ Operations (use the "op" field):
     Existing lines below the anchor are preserved — only include new content.
     Prefer insert_after over replace when adding lines without removing existing ones.
 
-  "write" — Replace entire file content (no anchors needed).
+  "write" — Replace the ENTIRE file (no anchors needed). Every other line is discarded.
     { "op": "write", "content": "full file content here" }
+    Never use write to change one line or a small span: include every line that must
+    remain, or use "replace" with anchors from a prior read so surrounding lines survive.
+    A write of the form "HASH→text" (missing the LINE: prefix) is rejected — always
+    pass a full "LINE:HASH" anchor on replace, e.g. "2:sce:nlg".
 
 Batch edits: pass multiple operations in "${{ params.edit.edits }}". They are validated against the
 pre-edit snapshot and applied atomically bottom-up — if any anchor fails
@@ -55,7 +59,8 @@ Overlapping ranges are also rejected.
 Range safety:
 - Multi-line edits may return caution warnings, especially for broader rewrites.
 - Larger rewrites are allowed, but use them when you are confident about the target range.
-- For very large rewrites (most of the file), prefer a single "write" op over many replace ops.
+- For a single-line or partial edit, prefer "replace" with an exact anchor; use "write"
+  only when most of the file changes and the content includes every surviving line.
 
 Follow-up edits:
 - On success, the tool returns a snippet with fresh anchors around the edited region.
@@ -557,6 +562,29 @@ mod tests {
         xai_tool_runtime::Tool::run(&HashlineEditTool, test_ctx(resources.into_shared()), input)
             .await
             .unwrap()
+    }
+
+    /// Tool description steers single-line edits to `replace` so a whole-file `write`
+    /// cannot drop surrounding lines (real-model agents.hashline_edit used write with
+    /// only the replacement token and wiped the fixture's first/last lines).
+    #[test]
+    fn description_prefers_replace_for_single_line_edits() {
+        assert!(
+            DESCRIPTION.contains("Never use write to change one line"),
+            "write must warn against partial edits"
+        );
+        assert!(
+            DESCRIPTION.contains("prefer \"replace\" with an exact anchor"),
+            "range safety must prefer replace for single-line edits"
+        );
+        assert!(
+            DESCRIPTION.contains("Every other line is discarded"),
+            "write must state that other lines are discarded"
+        );
+        assert!(
+            DESCRIPTION.contains("missing the LINE: prefix"),
+            "description must warn partial HASH→text writes"
+        );
     }
 
     #[tokio::test]

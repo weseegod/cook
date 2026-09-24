@@ -151,6 +151,33 @@ impl LengthSalvage {
     }
 }
 
+/// Next step for a top-level `MaxTokensTruncation` that is not a budgeted workflow child.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MaxTokensAction {
+    /// Keep the turn error (not a length stop, or a budgeted child).
+    Fail,
+    /// Salvage budget remains: inject the continue reminder when armed and retry.
+    Continue { inject_reminder: bool },
+    /// Salvage off or exhausted: complete the turn as `CompletedStop::MaxTokens`.
+    CompleteTruncated,
+}
+
+/// Hand a top-level completion-budget stop to [`LengthSalvage::on_length_stop`].
+/// Budgeted workflow children stay errors (design §6.5: exhaustion is not completion).
+pub(super) fn classify_top_level_max_tokens(
+    is_max_tokens: bool,
+    budgeted_workflow_child: bool,
+    salvage: &mut LengthSalvage,
+) -> MaxTokensAction {
+    if !is_max_tokens || budgeted_workflow_child {
+        return MaxTokensAction::Fail;
+    }
+    match salvage.on_length_stop() {
+        SalvageStep::Continue { inject_reminder } => MaxTokensAction::Continue { inject_reminder },
+        SalvageStep::Exhaust | SalvageStep::None => MaxTokensAction::CompleteTruncated,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,5 +352,49 @@ mod tests {
         assert!(matches!(s.on_length_stop(), SalvageStep::None));
         assert!(s.is_truncated());
         assert!(!s.any_continues());
+    }
+
+    #[test]
+    fn top_level_max_tokens_off_budgeted_or_other_stays_fail() {
+        let mut s = LengthSalvage::new(Some(2));
+        assert_eq!(
+            classify_top_level_max_tokens(false, false, &mut s),
+            MaxTokensAction::Fail
+        );
+        assert_eq!(
+            classify_top_level_max_tokens(true, true, &mut s),
+            MaxTokensAction::Fail,
+            "budgeted workflow children keep the error (design §6.5)"
+        );
+        assert!(!s.is_truncated());
+        assert_eq!(s.continues(), 0);
+    }
+
+    #[test]
+    fn top_level_max_tokens_salvage_off_completes_truncated() {
+        let mut s = LengthSalvage::new(None);
+        assert_eq!(
+            classify_top_level_max_tokens(true, false, &mut s),
+            MaxTokensAction::CompleteTruncated
+        );
+        assert!(s.is_truncated());
+    }
+
+    #[test]
+    fn top_level_max_tokens_uses_the_salvage_budget() {
+        let mut s = LengthSalvage::new(Some(1));
+        assert_eq!(
+            classify_top_level_max_tokens(true, false, &mut s),
+            MaxTokensAction::Continue {
+                inject_reminder: true
+            }
+        );
+        assert!(s.awaiting_continuation());
+        s.response_arrived();
+        assert_eq!(
+            classify_top_level_max_tokens(true, false, &mut s),
+            MaxTokensAction::CompleteTruncated
+        );
+        assert!(s.is_truncated());
     }
 }

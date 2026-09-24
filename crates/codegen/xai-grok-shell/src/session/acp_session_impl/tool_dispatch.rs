@@ -11,6 +11,8 @@ const BASH_MODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60
 /// Phase 2: dispatch a tool call through [`WorkspaceOps::call_tool`].
 ///
 /// Agent sessions always use local workspace ops (in-process toolset).
+/// Production dispatch builds the origin itself and calls [`dispatch_observed`].
+#[cfg(test)]
 pub(super) async fn dispatch_tool(
     workspace_ops: &xai_grok_workspace::WorkspaceOps,
     prepared: &PreparedToolCall,
@@ -23,12 +25,43 @@ pub(super) async fn dispatch_tool(
         mode = "local",
         "dispatch_tool"
     );
+    let origin = crate::session::telemetry::model_origin(
+        &prepared.invocation_id,
+        session_id,
+        None,
+        prepared.model_id.as_deref(),
+        &prepared.tool_id,
+        prepared.tool_version.as_deref(),
+    );
+    dispatch_observed(
+        workspace_ops,
+        prepared,
+        session_id,
+        origin,
+        xai_grok_tools::types::source_summary::SourceSummarySlot::new(),
+    )
+    .await
+}
+
+pub(super) async fn dispatch_observed(
+    workspace_ops: &xai_grok_workspace::WorkspaceOps,
+    prepared: &PreparedToolCall,
+    session_id: &str,
+    origin: xai_grok_tools::types::tool_call_origin::ToolCallOrigin,
+    slot: xai_grok_tools::types::source_summary::SourceSummarySlot,
+) -> Result<ToolRunResult, xai_tool_runtime::ToolError> {
+    let mut ctx = xai_tool_runtime::ToolCallContext::new(
+        xai_tool_protocol::ToolCallId::new(prepared.tool_call_id.0.as_ref())
+            .unwrap_or_else(|_| xai_tool_protocol::ToolCallId::new_v7()),
+    );
+    ctx.insert(origin);
+    ctx.insert(slot);
     workspace_ops
-        .call_tool(
+        .call_tool_with_context(
             &prepared.tool_name,
-            prepared.parsed_args.clone(),
-            &prepared.tool_call_id.0,
+            prepared.execution_arguments().clone(),
             Some(session_id),
+            ctx,
         )
         .await
 }
@@ -388,9 +421,25 @@ pub(super) fn build_tool_parse_error_message(
             "\n\nNote: the arguments above contain invalid JSON — {json_err}\n\
              Please fix the syntax and retry."
         ));
+    } else if is_empty_json_object(raw_arguments) {
+        // Schema-valid `{}` still fails required/wrapper checks. Spell the retry so weak
+        // models do not keep sending an empty object after a clear description already
+        // forbade it (real-model agents.mcp_echo).
+        msg.push_str(
+            "\n\nThe arguments were an empty object `{}`. Resend the same tool call with \
+             every required field filled in — copy the example shape from the tool \
+             description. Do not retry `{}`.",
+        );
     }
 
     msg
+}
+
+fn is_empty_json_object(raw_arguments: &str) -> bool {
+    matches!(
+        serde_json::from_str::<serde_json::Value>(raw_arguments),
+        Ok(serde_json::Value::Object(ref map)) if map.is_empty()
+    )
 }
 
 #[cfg(test)]

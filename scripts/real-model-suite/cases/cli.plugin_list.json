@@ -1,0 +1,12 @@
+{
+  "id": "cli.plugin_list",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "plugin",
+      "list",
+      "--json"
+    ]
+  ]
+}

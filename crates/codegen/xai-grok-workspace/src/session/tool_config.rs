@@ -389,7 +389,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
                         let headers = build_proxy_headers(url);
                         (
                             ImageGenConfig::Enabled {
-                                api_key: token.clone(),
+                                api_key: Some(token.clone()),
                                 base_url: url.clone(),
                                 extra_headers: headers.clone(),
                                 image_gen_enabled: true,
@@ -399,7 +399,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
                                 tier_restricted: false,
                             },
                             VideoGenConfig::Enabled {
-                                api_key: token.clone(),
+                                api_key: Some(token.clone()),
                                 base_url: url.clone(),
                                 extra_headers: headers.clone(),
                                 zdr_video_output_s3: None,

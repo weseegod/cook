@@ -1,6 +1,8 @@
+use std::path::{Component, Path};
+
 use crate::sampling::{
     ApiBackend, ChatCompletionRequest, ChatRequestMessage, Client as OaiCompatClient,
-    ConversationRequest, ConversationToolChoice, HostedTool, SamplingError, ToolChoice,
+    ConversationRequest, ConversationToolChoice, HostedTool, SamplingError, TokenUsage, ToolChoice,
     ToolDefinition, ToolSpec, conversation_to_chat_messages,
 };
 use agent_client_protocol as acp;
@@ -118,6 +120,46 @@ impl CompactFailure {
 // Single definition so turn-path and compaction size detection can't drift.
 pub(crate) use xai_grok_compaction::is_context_length_error;
 
+/// Newest verified attached image paths kept in the compaction note.
+pub(crate) const MAX_COMPACTION_IMAGE_PATHS: usize = 32;
+
+/// Keep the newest [`MAX_COMPACTION_IMAGE_PATHS`] attached image paths this shell itself could have
+/// written, in the chronological order of `paths`, and count the rest (junk and over-cap alike).
+/// The note tells the model to `read_file` these paths, so a harvested block is never trusted: a path
+/// stays only if it is absolute, has no `.`/`..` components, is a direct child of `assets_dir` (all
+/// `persist_user_images` ever writes; a symlinked subdirectory would otherwise launder an outside
+/// file, since `symlink_metadata` does not check intermediate components), and `symlink_metadata`
+/// says it is a regular file (a symlink to one is dropped). Newest first, so a planted or stale entry
+/// never takes a slot from a real asset; fs calls are bounded by the lexical prefilter plus the cap.
+pub(crate) async fn retain_session_asset_files(
+    paths: Vec<String>,
+    assets_dir: &Path,
+) -> (Vec<String>, usize) {
+    let total = paths.len();
+    let mut kept = Vec::with_capacity(total.min(MAX_COMPACTION_IMAGE_PATHS));
+    for path in paths.into_iter().rev() {
+        if kept.len() == MAX_COMPACTION_IMAGE_PATHS {
+            break;
+        }
+        let candidate = Path::new(&path);
+        let inside_assets = candidate.is_absolute()
+            && candidate
+                .components()
+                .all(|component| !matches!(component, Component::ParentDir | Component::CurDir))
+            && candidate.parent() == Some(assets_dir);
+        let regular_file = inside_assets
+            && tokio::fs::symlink_metadata(candidate)
+                .await
+                .is_ok_and(|metadata| metadata.is_file());
+        if regular_file {
+            kept.push(path);
+        }
+    }
+    kept.reverse();
+    let dropped = total - kept.len();
+    (kept, dropped)
+}
+
 /// Classify an upstream `SamplingError` for the compaction retry loop.
 /// Size overflows (HTTP 413 by status, or size-worded error text) classify as [`CompactFailure::Overflow`] so the caller's input ladder engages.
 /// Re-issuing the same request cannot change the outcome: auth state, config, payload shape, and stuck-model conditions all persist.
@@ -140,6 +182,8 @@ fn classify_sampling_error(err: SamplingError) -> CompactFailure {
                 && *status != StatusCode::TOO_MANY_REQUESTS
         }
         SamplingError::MaxTokensTruncation => true,
+        // A response that looped on tool calls loops again on an identical payload.
+        SamplingError::ToolCallBudgetExceeded(_) => true,
         // Loops are stochastic at sampling temperature; a retry may differ.
         SamplingError::Http(_)
         | SamplingError::EventStreamError(_)
@@ -247,6 +291,11 @@ pub(crate) struct CompactOutput {
     pub stream_ms: Option<u64>,
     pub delta_count: u64,
     pub itl_max_ms: Option<u64>,
+    /// Provider-reported usage for this sample, when the backend reported it.
+    /// `None` means unknown spend, never zero.
+    pub usage: Option<TokenUsage>,
+    /// Reported cost in USD ticks, when the wire carried it.
+    pub cost_usd_ticks: Option<i64>,
 }
 
 impl CompactOutput {
@@ -254,6 +303,58 @@ impl CompactOutput {
         match (self.ttft_ms, self.stream_ms) {
             (None, None) => None,
             (ttft, stream) => Some(ttft.unwrap_or(0).saturating_add(stream.unwrap_or(0))),
+        }
+    }
+}
+
+/// Anthropic reports prompt input, cache buckets included, on `message_start`,
+/// and output on the terminal delta. This mirrors the Layer-2 Messages transform
+/// so both consumers agree on `prompt_tokens` semantics.
+/// An all-zero frame set is "unreported", not a free call.
+fn messages_token_usage(
+    input_tokens: u32,
+    cache_read_input_tokens: u32,
+    cache_creation_input_tokens: u32,
+    output_tokens: u32,
+) -> Option<TokenUsage> {
+    let prompt_tokens = input_tokens
+        .saturating_add(cache_read_input_tokens)
+        .saturating_add(cache_creation_input_tokens);
+    (prompt_tokens > 0 || output_tokens > 0).then(|| TokenUsage {
+        prompt_tokens,
+        completion_tokens: output_tokens,
+        total_tokens: prompt_tokens.saturating_add(output_tokens),
+        reasoning_tokens: 0,
+        cached_prompt_tokens: cache_read_input_tokens,
+        cache_creation_prompt_tokens: cache_creation_input_tokens,
+        // The caller's event carries `cache_read_input_tokens` non-optionally.
+        cached_prompt_tokens_present: true,
+    })
+}
+
+/// Fold one compaction sample's provider usage into the session ledger.
+///
+/// A completed sample that reported no usage is recorded as *unknown* spend: the
+/// ledger counts it and the session bill is marked incomplete, never zero.
+pub(crate) fn record_compaction_usage(
+    handle: &xai_chat_state::ChatStateHandle,
+    purpose: xai_chat_state::CallPurpose,
+    model: &str,
+    usage: Option<&TokenUsage>,
+    cost_usd_ticks: Option<i64>,
+    api_duration_ms: Option<u64>,
+) {
+    match usage {
+        Some(usage) => handle.record_side_call_usage(
+            purpose,
+            model.to_owned(),
+            usage.clone(),
+            api_duration_ms,
+            cost_usd_ticks,
+        ),
+        None => {
+            handle.record_usage_missing(purpose);
+            handle.mark_usage_incomplete_nowait(false, true);
         }
     }
 }
@@ -397,7 +498,9 @@ pub(crate) async fn generate_session_compact(
     if cancel.is_cancelled() {
         return Err(CompactFailure::Cancelled);
     }
-    let prepared_history = chat_history.into().prepare(compaction_tool_tokens);
+    let prepared_history = chat_history
+        .into()
+        .prepare(sampling_config.max_request_bytes, compaction_tool_tokens);
     let budget = prepared_history.image_budget;
     if budget.inline_images > 0 {
         tracing::info!(
@@ -465,6 +568,8 @@ pub(crate) async fn generate_session_compact(
             let mut stop_reason: Option<String> = None;
             let mut content = String::new();
             let mut last_progress_at = std::time::Instant::now();
+            let mut usage: Option<TokenUsage> = None;
+            let mut cost_usd_ticks: Option<i64> = None;
             loop {
                 let idle_remaining = idle_timeout.saturating_sub(last_progress_at.elapsed());
                 let chunk_result = match next_stream_step(&mut stream, idle_remaining, cancel)
@@ -491,6 +596,14 @@ pub(crate) async fn generate_session_compact(
                 }
                 match chunk_result {
                     Ok(chunk) => {
+                        // Wire usage is cumulative for the response, so last-write-wins
+                        // (same normalization the Layer-2 chat-completions transform applies).
+                        if let Some(u) = chunk.usage.clone() {
+                            cost_usd_ticks =
+                                xai_grok_sampling_types::reported_cost_ticks(u.cost_in_usd_ticks)
+                                    .or(cost_usd_ticks);
+                            usage = Some(u.into());
+                        }
                         if let Some(choice) = chunk.choices.first() {
                             let delta = &choice.delta;
                             if choice.finish_reason.is_some()
@@ -507,8 +620,8 @@ pub(crate) async fn generate_session_compact(
                                 timing.record_delta();
                                 content.push_str(delta_content);
                             }
-                            if let Some(fr) = choice.finish_reason {
-                                let sr = xai_grok_sampling_types::StopReason::from(fr);
+                            if let Some(fr) = &choice.finish_reason {
+                                let sr = xai_grok_sampling_types::StopReason::from(fr.clone());
                                 truncated =
                                     matches!(sr, xai_grok_sampling_types::StopReason::Length);
                                 stop_reason = Some(sr.as_ref().to_string());
@@ -526,6 +639,8 @@ pub(crate) async fn generate_session_compact(
                 stream_ms: timing.stream_ms(),
                 delta_count: timing.count,
                 itl_max_ms: timing.itl_max_ms(),
+                usage,
+                cost_usd_ticks,
             }
         }
         ApiBackend::Responses => {
@@ -555,6 +670,7 @@ pub(crate) async fn generate_session_compact(
             let mut stop_reason: Option<String> = None;
             let mut content = String::new();
             let mut last_progress_at = std::time::Instant::now();
+            let mut usage: Option<TokenUsage> = None;
             loop {
                 let idle_remaining = idle_timeout.saturating_sub(last_progress_at.elapsed());
                 let chunk_result = match next_stream_step(&mut stream, idle_remaining, cancel)
@@ -588,6 +704,19 @@ pub(crate) async fn generate_session_compact(
                                 | ResponseStreamEvent::ResponseQueued(_)
                         ) {
                             last_progress_at = std::time::Instant::now();
+                        }
+                        // Billing fields are the cumulative wire values; the SSE decoder
+                        // has already rewritten `total_tokens` to live context length.
+                        if let ResponseStreamEvent::ResponseCompleted(completed_event) = &chunk {
+                            usage = completed_event.response.usage.as_ref().map(|u| TokenUsage {
+                                prompt_tokens: u.input_tokens,
+                                completion_tokens: u.output_tokens,
+                                total_tokens: u.total_tokens,
+                                reasoning_tokens: u.output_tokens_details.reasoning_tokens,
+                                cached_prompt_tokens: u.input_tokens_details.cached_tokens,
+                                cache_creation_prompt_tokens: 0,
+                                cached_prompt_tokens_present: true,
+                            });
                         }
                         match &chunk {
                             ResponseStreamEvent::ResponseOutputTextDelta(text_delta_event) => {
@@ -649,6 +778,8 @@ pub(crate) async fn generate_session_compact(
                 stream_ms: timing.stream_ms(),
                 delta_count: timing.count,
                 itl_max_ms: timing.itl_max_ms(),
+                usage,
+                cost_usd_ticks: None,
             }
         }
         ApiBackend::Messages => {
@@ -679,6 +810,11 @@ pub(crate) async fn generate_session_compact(
             let mut stop_reason: Option<String> = None;
             let mut content = String::new();
             let mut last_progress_at = std::time::Instant::now();
+            let mut usage: Option<TokenUsage> = None;
+            let mut message_start_input_tokens: u32 = 0;
+            let mut message_start_cache_read_tokens: u32 = 0;
+            let mut message_start_cache_creation_tokens: u32 = 0;
+            let mut delta_output_tokens: u32 = 0;
             loop {
                 let idle_remaining = idle_timeout.saturating_sub(last_progress_at.elapsed());
                 let chunk_result = match next_stream_step(&mut stream, idle_remaining, cancel)
@@ -712,6 +848,19 @@ pub(crate) async fn generate_session_compact(
                             last_progress_at = std::time::Instant::now();
                         }
                         match event {
+                        xai_grok_sampling_types::messages::MessageStreamEvent::MessageStart { message } => {
+                            // Anthropic reports prompt input on the start frame and output on the terminal delta.
+                            message_start_input_tokens = message.usage.input_tokens;
+                            message_start_cache_read_tokens = message.usage.cache_read_input_tokens;
+                            message_start_cache_creation_tokens =
+                                message.usage.cache_creation_input_tokens;
+                            usage = messages_token_usage(
+                                message_start_input_tokens,
+                                message_start_cache_read_tokens,
+                                message_start_cache_creation_tokens,
+                                delta_output_tokens,
+                            );
+                        }
                         xai_grok_sampling_types::messages::MessageStreamEvent::ContentBlockDelta {
                             delta: xai_grok_sampling_types::messages::StreamDelta::TextDelta { text },
                             ..
@@ -719,7 +868,7 @@ pub(crate) async fn generate_session_compact(
                             timing.record_delta();
                             content.push_str(&text);
                         }
-                        xai_grok_sampling_types::messages::MessageStreamEvent::MessageDelta { delta, .. } => {
+                        xai_grok_sampling_types::messages::MessageStreamEvent::MessageDelta { delta, usage: delta_usage } => {
                             if let Some(sr) = delta.stop_reason {
                                 truncated = matches!(
                                     sr,
@@ -728,6 +877,24 @@ pub(crate) async fn generate_session_compact(
                                 );
                                 stop_reason = Some(sr.wire_str());
                             }
+                            // Terminal delta is authoritative for output; the input fields are
+                            // optional there, so message_start values stand unless it overrides them.
+                            delta_output_tokens = delta_usage.output_tokens;
+                            if let Some(input) = delta_usage.input_tokens {
+                                message_start_input_tokens = input;
+                            }
+                            if let Some(cache_read) = delta_usage.cache_read_input_tokens {
+                                message_start_cache_read_tokens = cache_read;
+                            }
+                            if let Some(cache_creation) = delta_usage.cache_creation_input_tokens {
+                                message_start_cache_creation_tokens = cache_creation;
+                            }
+                            usage = messages_token_usage(
+                                message_start_input_tokens,
+                                message_start_cache_read_tokens,
+                                message_start_cache_creation_tokens,
+                                delta_output_tokens,
+                            );
                         }
                         _ => {}
                         }
@@ -743,6 +910,8 @@ pub(crate) async fn generate_session_compact(
                 stream_ms: timing.stream_ms(),
                 delta_count: timing.count,
                 itl_max_ms: timing.itl_max_ms(),
+                usage,
+                cost_usd_ticks: None,
             }
         }
     };
@@ -783,3 +952,7 @@ mod large_body_tests;
 #[cfg(test)]
 #[path = "session_compact_reasoning_compaction_regression_tests.rs"]
 mod reasoning_compaction_regression_tests;
+
+#[cfg(test)]
+#[path = "session_compact_retain_session_asset_files_tests.rs"]
+mod retain_session_asset_files_tests;

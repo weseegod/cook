@@ -53,24 +53,34 @@ pub fn estimate_tool_specs_tokens(tools: &[ToolSpec]) -> u64 {
         .sum()
 }
 
+/// Bytes/4 estimate for one user-shaped item, split as `(text_tokens, image_tokens)` so
+/// callers can attribute the two separately. Images count at
+/// [`xai_token_estimation::IMAGE_TOKEN_ESTIMATE`] each.
+pub fn estimate_user_item_tokens(u: &xai_grok_sampling_types::UserItem) -> (u64, u64) {
+    use xai_grok_sampling_types::ContentPart;
+    let mut bytes: usize = 0;
+    let mut images: u64 = 0;
+    for p in &u.content {
+        match p {
+            ContentPart::Text { text } => bytes += text.len(),
+            ContentPart::Image { .. } => images += 1,
+        }
+    }
+    (
+        (bytes as u64) / xai_token_estimation::BYTES_PER_TOKEN,
+        xai_token_estimation::estimate_image_tokens(images),
+    )
+}
+
 /// Bytes/4 estimate for a single [`ConversationItem`].
 /// Images count at [`xai_token_estimation::IMAGE_TOKEN_ESTIMATE`] each.
 /// Shared so the per-variant arithmetic stays in one place.
 pub fn estimate_item_tokens(item: &ConversationItem) -> u64 {
-    use xai_grok_sampling_types::ContentPart;
     match item {
         ConversationItem::System(s) => xai_token_estimation::estimate_tokens(&s.content),
         ConversationItem::User(u) => {
-            let mut bytes: usize = 0;
-            let mut images: u64 = 0;
-            for p in &u.content {
-                match p {
-                    ContentPart::Text { text } => bytes += text.len(),
-                    ContentPart::Image { .. } => images += 1,
-                }
-            }
-            (bytes as u64) / xai_token_estimation::BYTES_PER_TOKEN
-                + xai_token_estimation::estimate_image_tokens(images)
+            let (text, images) = estimate_user_item_tokens(u);
+            text + images
         }
         ConversationItem::Assistant(a) => {
             let bytes = a.content.len()

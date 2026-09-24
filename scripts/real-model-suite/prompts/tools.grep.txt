@@ -1,0 +1,1 @@
+Search {{WORKDIR}} for the line that starts with MARKER- using the grep tool (not search_tool, not opening every file), and reply with that line.

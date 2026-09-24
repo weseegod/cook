@@ -184,6 +184,9 @@ pub(crate) fn test_app() -> AppView {
         show_tips: None,
         auto_update: None,
         ask_user_question_timeout_enabled: None,
+        subagent_model_inheritance: crate::settings::FeatureOverrideState::new(
+            xai_grok_shell::agent::config::Feature::SubagentModelInheritance,
+        ),
         zdr_access_enabled: false,
         usage_billing_redirect_url: None,
         access_gate_shown_logged: false,
@@ -232,6 +235,8 @@ pub(crate) fn test_app() -> AppView {
         #[cfg(feature = "local-workspace")]
         welcome_on_workspace_mode: false,
         welcome_toast: None,
+        dispatch_depth: 0,
+        pending_image_notices: Vec::new(),
         welcome_on_privacy_banner: false,
         welcome_on_upgrade_cta: false,
         welcome_changelog_cta_rect: None,
@@ -4844,6 +4849,20 @@ fn welcome_done_n_leaves_home() {
         InputOutcome::ActionThenForward(Action::LeaveHome)
     ));
     assert!(app.welcome_prompt.text().is_empty());
+}
+#[test]
+fn welcome_done_ctrl_p_leaves_home() {
+    for focused in [true, false] {
+        let mut app = test_app();
+        app.auth_state = AuthState::Done;
+        app.welcome_prompt_focused = focused;
+        let outcome = app.handle_input(&key_event(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert!(
+            matches!(outcome, InputOutcome::ActionThenForward(Action::LeaveHome)),
+            "focused={focused}: Ctrl+P must leave home to open the command palette, got {outcome:?}"
+        );
+        assert!(app.welcome_prompt.text().is_empty());
+    }
 }
 #[test]
 fn welcome_done_ctrl_w_opens_new_worktree_dialog() {

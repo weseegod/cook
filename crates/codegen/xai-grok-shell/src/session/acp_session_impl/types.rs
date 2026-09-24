@@ -137,6 +137,20 @@ pub(crate) enum ToolLoop {
     },
 }
 
+/// Non-control-flow facts collected while preparing one model-emitted tool batch.
+/// Kept separate from [`ToolLoop`] so valid siblings still execute when another call has malformed
+/// JSON or fails its input schema.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ToolExecutionReport {
+    pub(crate) tool_parsing_errors: usize,
+}
+
+impl ToolExecutionReport {
+    pub(crate) fn had_tool_parsing_error(self) -> bool {
+        self.tool_parsing_errors > 0
+    }
+}
+
 /// Why the TodoGate fired.
 /// Single variant today; kept as an enum so any new reason has to go through the same `as_str` to `TODO_GATE_*` const mapping.
 #[doc(hidden)]

@@ -1,0 +1,46 @@
+{
+  "id": "tools.serial_edit_read",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)",
+    "Edit(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.serial_edit_read.txt",
+  "expect_tools": [
+    "search_replace",
+    "read_file"
+  ],
+  "ordered_tools": [
+    "search_replace",
+    "read_file"
+  ],
+  "forbid_tools": [
+    "run_terminal_cmd"
+  ],
+  "files": [
+    {
+      "path": "note.txt",
+      "equals": "first\nDONE-EDIT\nlast\n"
+    }
+  ],
+  "text_contains": [
+    "DONE-EDIT"
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "tool_not_called",
+    "ordered_tools",
+    "file_equals",
+    "text_contains",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

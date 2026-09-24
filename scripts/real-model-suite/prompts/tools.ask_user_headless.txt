@@ -1,0 +1,1 @@
+You must call ask_user_question with one question whose option labels are “red” and “blue”, then stop.

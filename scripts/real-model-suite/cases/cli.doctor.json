@@ -1,0 +1,10 @@
+{
+  "id": "cli.doctor",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "doctor"
+    ]
+  ]
+}

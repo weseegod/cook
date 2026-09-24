@@ -1,0 +1,1 @@
+Read every file in {{WORKDIR}}/corpus and reply with the MARKER- line from the last file.

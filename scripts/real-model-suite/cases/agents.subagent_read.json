@@ -1,0 +1,30 @@
+{
+  "id": "agents.subagent_read",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-agent",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--background-wait-timeout",
+    "120"
+  ],
+  "prompt": "prompts/agents.subagent_read.txt",
+  "expect_tools": [
+    "task"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "subagent_present",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

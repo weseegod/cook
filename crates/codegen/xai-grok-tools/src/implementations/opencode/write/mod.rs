@@ -17,10 +17,16 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 
 // ─── Description ─────────────────────────────────────────────────────
 
-const DESCRIPTION: &str = r#"Create or overwrite a file.
+const DESCRIPTION: &str = r#"Create a new file.
 
-- Writing to an existing path replaces the file${%- if tools.by_kind.read %} — read it first with the ${{ tools.by_kind.read }} tool${%- endif %}.
-- Parent directories are created for you."#;
+- Parent directories are created for you.
+- This tool refuses to overwrite an existing non-empty file.
+${%- if tools.by_kind.edit %}
+- To change an existing file (replace a string or a few lines, or rewrite contents), use `${{ tools.by_kind.edit }}` with `${{ params.edit.old_string }}` / `${{ params.edit.new_string }}`.
+${%- endif %}
+${%- if tools.by_kind.read %}
+- Read an existing file first with `${{ tools.by_kind.read }}` before editing it.
+${%- endif %}"#;
 
 // ─── Input ───────────────────────────────────────────────────────────
 
@@ -41,6 +47,13 @@ pub struct WriteInput {
 pub struct WriteTool;
 
 type WriteOutput = SearchReplaceOutput;
+
+/// Durable memory files live under a `memory/` directory and are named `MEMORY.md`.
+/// Models rewrite them with `write` as part of the memory_search round-trip.
+fn is_durable_memory_md_path(path: &std::path::Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some("MEMORY.md")
+        && path.components().any(|c| c.as_os_str() == "memory")
+}
 
 impl crate::types::tool_metadata::ToolMetadata for WriteTool {
     fn kind(&self) -> ToolKind {
@@ -112,6 +125,21 @@ impl xai_tool_runtime::Tool for WriteTool {
         // Resolve the model-provided path.
         let path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.file_path);
 
+        if input.file_path.contains('\n') || input.file_path.contains('\r') {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                "file_path must be a single path without newlines. Use search_replace to edit an existing file's contents (old_string / new_string)."
+                    .into(),
+            ));
+        }
+
+        // Non-empty text writes get a POSIX trailing newline (same rule apply_patch
+        // uses). Models often copy a one-line secret without the terminator the
+        // source file had.
+        let mut content = input.content;
+        if !content.is_empty() && !content.ends_with('\n') {
+            content.push('\n');
+        }
+
         // ── Check if file exists and read old content ────────────
         let (mut existed, mut old_content) = match fs.read_file(&path).await {
             Ok(bytes) => (true, Some(String::from_utf8_lossy(&bytes).into_owned())),
@@ -120,7 +148,7 @@ impl xai_tool_runtime::Tool for WriteTool {
         let is_memory_write = match crate::types::memory_v2::write_memory_v2_file(
             &resources,
             &path,
-            input.content.as_bytes(),
+            content.as_bytes(),
         )
         .await
         {
@@ -135,6 +163,21 @@ impl xai_tool_runtime::Tool for WriteTool {
                 return Ok(SearchReplaceOutput::InvalidInput(error));
             }
         };
+
+        // Ordinary workspace writes create files; in-place edits go through search_replace.
+        // Memory-v2 paths are exempt (durable memory is updated by rewriting MEMORY.md).
+        // When memory v2 is inactive, still allow rewriting durable MEMORY.md under a memory/
+        // directory — that is the documented durable-memory write path for memory_search.
+        if !is_memory_write
+            && !is_durable_memory_md_path(&path)
+            && existed
+            && old_content.as_ref().is_some_and(|c| !c.is_empty())
+        {
+            return Ok(SearchReplaceOutput::InvalidInput(format!(
+                "Refusing to overwrite existing non-empty file `{}`. Use the search_replace tool to edit existing files (old_string / new_string). Use write only to create a new file.",
+                path.display()
+            )));
+        }
 
         // ── Create parent directories if needed ──────────────────
         if !is_memory_write
@@ -152,7 +195,7 @@ impl xai_tool_runtime::Tool for WriteTool {
 
         // ── Write the file ───────────────────────────────────────
         if !is_memory_write {
-            fs.write_file(&path, input.content.as_bytes())
+            fs.write_file(&path, content.as_bytes())
                 .await
                 .map_err(|e| {
                     xai_tool_runtime::ToolError::execution(
@@ -166,13 +209,13 @@ impl xai_tool_runtime::Tool for WriteTool {
         notification_handle.send_file_written(FileWritten {
             tool_call_id,
             absolute_path: path.clone(),
-            content: input.content.clone(),
+            content: content.clone(),
             previous_content: old_content.clone(),
             is_new_file: !existed,
         });
 
         let old_string = old_content.unwrap_or_default();
-        let new_string = input.content;
+        let new_string = content;
 
         let edits = vec![SearchReplaceEditDetail {
             old_string: old_string.clone(),
@@ -265,10 +308,62 @@ mod tests {
         assert_eq!(content, "hello\nworld\n");
     }
 
-    // ── Overwrite existing file ─────────────────────────────────
+    // ── Overwrite existing non-empty file is refused ────────────
 
     #[tokio::test]
-    async fn overwrite_existing_file() {
+    async fn refuse_newline_in_file_path() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: "first\nDONE-EDIT\nlast".to_string(),
+            content: "first\nDONE-EDIT\nlast".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        match &result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("without newlines") && msg.contains("search_replace"),
+                    "newline path must steer to search_replace: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn durable_memory_md_may_be_overwritten() {
+        let tmp = TempDir::new().unwrap();
+        let memory_dir = tmp.path().join("memory");
+        std::fs::create_dir_all(&memory_dir).unwrap();
+        let file_path = memory_dir.join("MEMORY.md");
+        std::fs::write(&file_path, "# Global Memory\n\n").unwrap();
+
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: file_path.to_string_lossy().into_owned(),
+            content: "# Global Memory\n\n- MARKER-line\n".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(result, SearchReplaceOutput::EditsApplied(_)),
+            "MEMORY.md under memory/ must remain writable"
+        );
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert!(content.contains("MARKER-line"));
+    }
+
+    #[tokio::test]
+    async fn refuse_overwrite_existing_nonempty_file() {
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("existing.txt");
         std::fs::write(&file_path, "old content\n").unwrap();
@@ -285,13 +380,38 @@ mod tests {
             .unwrap();
 
         match &result {
-            SearchReplaceOutput::EditsApplied(applied) => {
-                assert!(applied.tool_output_for_prompt.contains("successfully"));
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("search_replace") && msg.contains("Refusing"),
+                    "overwrite must steer to search_replace: {msg}"
+                );
             }
-            other => panic!("Expected EditsApplied, got {:?}", other),
+            other => panic!("Expected InvalidInput, got {:?}", other),
         }
         let content = std::fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "new content\n");
+        assert_eq!(content, "old content\n");
+    }
+
+    #[tokio::test]
+    async fn overwrite_existing_empty_file_is_allowed() {
+        let tmp = TempDir::new().unwrap();
+        let file_path = tmp.path().join("empty.txt");
+        std::fs::write(&file_path, "").unwrap();
+
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: file_path.to_string_lossy().into_owned(),
+            content: "filled\n".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "filled\n");
     }
 
     // ── Creates parent directories ──────────────────────────────
@@ -325,6 +445,29 @@ mod tests {
         assert_eq!(xai_tool_runtime::Tool::id(&tool).as_str(), "write");
         assert!(matches!(tool.kind(), ToolKind::Write));
         assert!(matches!(tool.tool_namespace(), ToolNamespace::OpenCode));
+    }
+
+    #[test]
+    fn description_prefers_edit_for_small_in_place_changes() {
+        use crate::types::tool_metadata::ToolMetadata;
+        use crate::types::template_renderer::TemplateRenderer;
+        let edit_params = std::collections::HashMap::from([
+            ("old_string".to_string(), "old_string".to_string()),
+            ("new_string".to_string(), "new_string".to_string()),
+        ]);
+        let renderer = TemplateRenderer::new(
+            std::collections::HashMap::from([(ToolKind::Edit, "search_replace".to_string())]),
+            std::collections::HashMap::from([(ToolKind::Edit, edit_params)]),
+        );
+        let rendered = renderer
+            .render(ToolMetadata::description_template(&WriteTool))
+            .unwrap();
+        assert!(
+            rendered.contains("search_replace")
+                && rendered.contains("refuses to overwrite")
+                && rendered.contains("old_string"),
+            "write description must steer edits to search_replace:\n{rendered}"
+        );
     }
 
     // ── Serde roundtrip ────────────────────────────────────────
@@ -365,13 +508,52 @@ mod tests {
         assert!(content.is_empty());
     }
 
-    // ── Overwrite preserves path in output ─────────────────────
+    // ── Trailing newline normalization ─────────────────────────
 
     #[tokio::test]
-    async fn overwrite_preserves_path_in_output() {
+    async fn nonempty_write_without_trailing_newline_gains_one() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: tmp.path().join("line.txt").to_string_lossy().into_owned(),
+            content: "MARKER-only-line".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
+        let content = std::fs::read_to_string(tmp.path().join("line.txt")).unwrap();
+        assert_eq!(content, "MARKER-only-line\n");
+    }
+
+    #[tokio::test]
+    async fn nonempty_write_keeps_existing_trailing_newline() {
+        let tmp = TempDir::new().unwrap();
+        let tool = WriteTool;
+        let resources = test_resources(tmp.path());
+
+        let input = WriteInput {
+            file_path: tmp.path().join("line.txt").to_string_lossy().into_owned(),
+            content: "already-terminated\n".to_string(),
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+
+        assert!(matches!(result, SearchReplaceOutput::EditsApplied(_)));
+        let content = std::fs::read_to_string(tmp.path().join("line.txt")).unwrap();
+        assert_eq!(content, "already-terminated\n");
+    }
+
+    // ── Create preserves path in output ────────────────────────
+
+    #[tokio::test]
+    async fn create_preserves_path_in_output() {
         let tmp = TempDir::new().unwrap();
         let file_path = tmp.path().join("output_check.txt");
-        std::fs::write(&file_path, "old\n").unwrap();
 
         let tool = WriteTool;
         let resources = test_resources(tmp.path());

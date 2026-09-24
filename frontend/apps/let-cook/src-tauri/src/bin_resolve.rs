@@ -1,7 +1,7 @@
 //! Resolve the `cook` agent binary for ACP stdio.
 //!
 //! Preference order (the desktop app updater never writes these paths):
-//! 1. `COOK_BIN` (or deprecated `THANH_BIN`) — explicit override
+//! 1. `COOK_BIN` — explicit override
 //! 2. `$COOK_HOME/bin/cook` or `~/.cook/bin/cook` — CLI install
 //! 3. Optional bundled sidecar `cook-<target-triple>` next to the app / under
 //!    `Resources/binaries` / AppImage `usr/bin` (stable bundles only)
@@ -71,15 +71,47 @@ fn first_nonempty_env(keys: &[&str]) -> Option<PathBuf> {
     })
 }
 
-/// Desktop home: `$GROK_HOME` → `$COOK_HOME` → `$THANH_HOME` (deprecated) → `~/.cook`.
+/// Desktop home: `$COOK_HOME`, else `$GROK_HOME`, else `~/.cook`.
+///
+/// An override equal to the real `~/.grok` or `~/.thanh` is ignored. `$THANH_HOME`
+/// is not consulted. Matches `xai-dirs` (this crate cannot depend on it).
 pub fn cook_home() -> PathBuf {
-    first_nonempty_env(&["GROK_HOME", "COOK_HOME", "THANH_HOME"])
-        .or_else(|| dirs::home_dir().map(|home| home.join(".cook")))
+    cook_home_from(
+        std::env::var_os("COOK_HOME").as_deref(),
+        std::env::var_os("GROK_HOME").as_deref(),
+        dirs::home_dir().as_deref(),
+    )
+}
+
+pub(crate) fn cook_home_from(
+    cook_home: Option<&std::ffi::OsStr>,
+    grok_home: Option<&std::ffi::OsStr>,
+    os_home: Option<&Path>,
+) -> PathBuf {
+    let canonical_home =
+        os_home.map(|home| dunce::canonicalize(home).unwrap_or_else(|_| home.to_path_buf()));
+    for value in [cook_home, grok_home].into_iter().flatten() {
+        if value.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(value);
+        if let Some(home) = os_home {
+            if [home, canonical_home.as_deref().unwrap_or(home)]
+                .into_iter()
+                .any(|base| path == base.join(".grok") || path == base.join(".thanh"))
+            {
+                continue;
+            }
+        }
+        return path;
+    }
+    os_home
+        .map(|home| home.join(".cook"))
         .unwrap_or_else(|| PathBuf::from(".cook"))
 }
 
 pub fn resolve_binary() -> Result<PathBuf, ResolveError> {
-    if let Some(path) = first_nonempty_env(&["COOK_BIN", "THANH_BIN"]) {
+    if let Some(path) = first_nonempty_env(&["COOK_BIN"]) {
         return canonical_file(&path).ok_or(ResolveError::InvalidOverride(path));
     }
 
@@ -173,11 +205,71 @@ pub fn resolve_and_gate() -> Result<ResolvedBinary, ResolveError> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsStr;
+
     use super::*;
 
     #[test]
     fn bundled_name_contains_target() {
         let target = target_triple();
         assert!(!target.is_empty());
+    }
+
+    #[test]
+    fn cook_home_prefers_cook_then_grok_and_rejects_legacy_dirs() {
+        let os_home = Path::new("/home/u");
+        assert_eq!(
+            cook_home_from(
+                Some(OsStr::new("/custom/cook")),
+                Some(OsStr::new("/custom/grok")),
+                Some(os_home),
+            ),
+            PathBuf::from("/custom/cook")
+        );
+        assert_eq!(
+            cook_home_from(None, Some(OsStr::new("/custom/grok")), Some(os_home)),
+            PathBuf::from("/custom/grok")
+        );
+        assert_eq!(
+            cook_home_from(
+                Some(OsStr::new("/home/u/.grok")),
+                Some(OsStr::new("/custom/grok")),
+                Some(os_home),
+            ),
+            PathBuf::from("/custom/grok")
+        );
+        assert_eq!(
+            cook_home_from(
+                Some(OsStr::new("/home/u/.thanh")),
+                Some(OsStr::new("/home/u/.grok")),
+                Some(os_home),
+            ),
+            os_home.join(".cook")
+        );
+        assert_eq!(
+            cook_home_from(None, None, Some(os_home)),
+            os_home.join(".cook")
+        );
+
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("alias")).unwrap();
+        std::fs::create_dir(temp.path().join("real")).unwrap();
+        let spelled_home = temp.path().join("alias").join("..").join("real");
+        let canonical_home = dunce::canonicalize(&spelled_home).unwrap();
+        for legacy in [".grok", ".thanh"] {
+            let legacy_path = canonical_home.join(legacy);
+            assert_eq!(
+                cook_home_from(Some(legacy_path.as_os_str()), None, Some(&spelled_home)),
+                spelled_home.join(".cook")
+            );
+        }
+        assert_eq!(
+            cook_home_from(
+                Some(OsStr::new("/custom/cook")),
+                Some(canonical_home.join(".grok").as_os_str()),
+                Some(&spelled_home),
+            ),
+            PathBuf::from("/custom/cook")
+        );
     }
 }

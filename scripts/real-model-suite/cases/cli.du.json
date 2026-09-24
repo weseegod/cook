@@ -1,0 +1,10 @@
+{
+  "id": "cli.du",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "du"
+    ]
+  ]
+}

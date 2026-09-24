@@ -275,10 +275,14 @@ pub struct MemoryFlushSettings {
 pub struct PruningSettings {
     pub enabled: Option<bool>,
     pub keep_last_n_turns: Option<usize>,
+    pub keep_last_n_tool_rounds: Option<usize>,
+    pub recent_tool_result_char_budget: Option<usize>,
     pub soft_trim_threshold: Option<usize>,
     pub soft_trim_head: Option<usize>,
     pub soft_trim_tail: Option<usize>,
     pub hard_clear_age_turns: Option<usize>,
+    /// Opt-in `read_file` generation cap in bytes; absent or zero keeps the read tool's own caps.
+    pub read_file_max_output_bytes: Option<usize>,
 }
 
 /// Index and chunking configuration (`[memory.index]`).
@@ -610,6 +614,10 @@ pub struct PruningConfig {
     pub enabled: bool,
     /// Number of recent turns whose tool results are never pruned.
     pub keep_last_n_turns: usize,
+    /// Optional step-age window within a user turn. Zero disables it.
+    pub keep_last_n_tool_rounds: usize,
+    /// Optional character budget for recent raw tool results. Zero disables it.
+    pub recent_tool_result_char_budget: usize,
     /// Character threshold above which old tool results are soft-trimmed.
     pub soft_trim_threshold: usize,
     /// Characters to keep from the start of a soft-trimmed result.
@@ -618,6 +626,13 @@ pub struct PruningConfig {
     pub soft_trim_tail: usize,
     /// Turn age after which tool results are hard-cleared (replaced with placeholder).
     pub hard_clear_age_turns: usize,
+    /// Opt-in generation cap for `read_file` output, in bytes. Zero disables it, which leaves a
+    /// session byte-identical to one that never sets the key. When set, an over-cap read keeps
+    /// the leading whole lines that fit and reuses the read tool's own continuation marker
+    /// (next offset, total line count, range shown); the global `READ_FILE_MAX_TOKENS` is not
+    /// touched. It sits beside the pruning settings because both decide how much tool output
+    /// reaches the model, but unlike pruning it rewrites nothing after the fact.
+    pub read_file_max_output_bytes: usize,
 }
 
 impl Default for PruningConfig {
@@ -625,10 +640,13 @@ impl Default for PruningConfig {
         Self {
             enabled: true,
             keep_last_n_turns: 3,
+            keep_last_n_tool_rounds: 0,
+            recent_tool_result_char_budget: 0,
             soft_trim_threshold: 4000,
             soft_trim_head: 1500,
             soft_trim_tail: 1500,
             hard_clear_age_turns: 10,
+            read_file_max_output_bytes: 0,
         }
     }
 }
@@ -1005,6 +1023,12 @@ impl MemoryConfig {
                             .map(|value| value as usize)
                     })
                     .unwrap_or(defaults.pruning.keep_last_n_turns),
+                keep_last_n_tool_rounds: pruning
+                    .keep_last_n_tool_rounds
+                    .unwrap_or(defaults.pruning.keep_last_n_tool_rounds),
+                recent_tool_result_char_budget: pruning
+                    .recent_tool_result_char_budget
+                    .unwrap_or(defaults.pruning.recent_tool_result_char_budget),
                 soft_trim_threshold: pruning
                     .soft_trim_threshold
                     .or_else(|| {
@@ -1022,6 +1046,9 @@ impl MemoryConfig {
                 hard_clear_age_turns: pruning
                     .hard_clear_age_turns
                     .unwrap_or(defaults.pruning.hard_clear_age_turns),
+                read_file_max_output_bytes: pruning
+                    .read_file_max_output_bytes
+                    .unwrap_or(defaults.pruning.read_file_max_output_bytes),
             },
             root_dir_override: None,
             flat_memory_root: false,
@@ -1053,6 +1080,48 @@ mod tests {
     #[test]
     fn memory_mode_defaults_to_legacy() {
         assert_eq!(MemoryConfig::default().mode, MemoryMode::Legacy);
+    }
+
+    /// The read generation cap is read from `[compaction.pruning]` beside the other pruning
+    /// settings and is off unless the user sets it, so a session that omits the key resolves to
+    /// the zero the shell turns into "no budget installed".
+    #[test]
+    fn read_file_cap_resolves_from_pruning_table_and_defaults_off() {
+        let omitted: toml::Value =
+            toml::from_str("[compaction.pruning]\nkeep_last_n_turns = 3").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &omitted, None)
+                .pruning
+                .read_file_max_output_bytes,
+            0
+        );
+
+        let set: toml::Value =
+            toml::from_str("[compaction.pruning]\nread_file_max_output_bytes = 2500").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &set, None)
+                .pruning
+                .read_file_max_output_bytes,
+            2500
+        );
+
+        let zero: toml::Value =
+            toml::from_str("[compaction.pruning]\nread_file_max_output_bytes = 0").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &zero, None)
+                .pruning
+                .read_file_max_output_bytes,
+            0
+        );
+
+        // The key sits in the pruning table rather than a table of its own.
+        let wrong_table: toml::Value =
+            toml::from_str("[compaction]\nread_file_max_output_bytes = 2500").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &wrong_table, None),
+            MemoryConfig::default(),
+            "a key outside the pruning table must not resolve"
+        );
     }
 
     #[test]

@@ -1,0 +1,33 @@
+{
+  "id": "tools.memory_roundtrip",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)",
+    "Edit(*)",
+    "Write(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.memory_roundtrip.txt",
+  "expect_tools": [],
+  "expect_any_tools": [
+    [
+      "memory_search",
+      "memory_get"
+    ]
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "home_memory",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

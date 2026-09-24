@@ -1,0 +1,3 @@
+Open `{{WORKDIR}}/pages.txt` with the read tool using 50-line ranges, starting at offset 1 and walking forward until the end of the file. Do not edit anything. Do not skip pages. After each read, continue with the next offset.
+
+When finished, reply with the single word DONE.

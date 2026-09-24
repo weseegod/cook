@@ -1417,8 +1417,7 @@ impl BlockContent for EditToolCallBlock {
     }
 
     fn default_display_mode(&self) -> DisplayMode {
-        // Context-free: the effective expanded default and the untrusted-summary escape live in ScrollbackState's materialize policy
-        // That policy runs in push / replace_tool_block; the pager.toml shape wins over the collapsed_edit_blocks flag
+        // Context-free. Expanded default and the untrusted-summary escape are applied in ScrollbackState push / replace_tool_block.
         DisplayMode::Collapsed
     }
 

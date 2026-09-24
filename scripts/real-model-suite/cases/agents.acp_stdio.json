@@ -1,0 +1,21 @@
+{
+  "id": "agents.acp_stdio",
+  "phase": "agents",
+  "pillar": "crates/codegen/xai-grok-shell/src/agent/mvp_agent/acp_agent.rs",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/agents.acp_stdio.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "acp_result"
+  ]
+}

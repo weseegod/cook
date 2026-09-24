@@ -4,11 +4,42 @@
 //! The chat+local `own` supervisor lives on `MvpAgent` (started in `session/new`), not `SessionActor`; crash-restart reaches it through the bridge slot seeded here.
 #![allow(clippy::items_after_test_module)]
 use super::*;
+use crate::agent::remote_config::task_model_policy::{
+    LatchedTaskModelSelection, TaskModelPolicyInputs,
+};
 use crate::remote::DEFAULT_CONTEXT_WINDOW;
 use tracing::Instrument;
 use xai_grok_telemetry::region;
 use xai_grok_telemetry::region::Parent as SpanParent;
 use xai_grok_telemetry::subagent_spawn::phase_region_under;
+struct SpawnStep {
+    span: tracing::span::EnteredSpan,
+    _timer: xai_grok_telemetry::instrumentation::InstrumentationTimer,
+}
+impl SpawnStep {
+    fn record<V: tracing::field::Value>(&self, field: &'static str, value: V) {
+        self.span.record(field, value);
+    }
+}
+/// Sync-only: the returned guard enters its span for the whole scope, so never hold a `SpawnStep` across an `.await`.
+/// Reads `is_active()` once (via [`spawn_await_step!`]) so the timer and span cannot pick opposite prefixes.
+/// An awaiting step uses [`spawn_await_step!`] instead.
+macro_rules! spawn_step {
+    ($step:literal $(, $field:ident = $value:expr)* $(,)?) => {{
+        let (timer, span) = spawn_await_step!($step $(, $field = $value)*);
+        SpawnStep {
+            _timer: timer,
+            span: span.entered(),
+        }
+    }};
+}
+/// Awaiting counterpart of [`spawn_step!`]: the step's timer and span from one literal, so the two names
+/// cannot drift. `.instrument(span)` the future, then drop the timer once it resolves.
+macro_rules! spawn_await_step {
+    ($step:literal $(, $field:ident = $value:expr)* $(,)?) => {
+        xai_grok_telemetry::startup_step_grouped!("spawn_actor", $step $(, $field = $value)*)
+    };
+}
 static SESSIONS_ACTIVE: xai_grok_telemetry::activity::ActivityGauge =
     xai_grok_telemetry::activity::ActivityGauge::residency(
         xai_grok_telemetry::activity::SESSIONS_ACTIVE_KEY,
@@ -213,6 +244,7 @@ pub(crate) async fn spawn_session_actor(
     system_prompt_label: String,
     compaction_mode: xai_chat_state::CompactionMode,
     compaction_verbatim_input: bool,
+    long_reasoning_reminder: crate::session::long_reasoning_reminder::LongReasoningReminder,
     compaction_tool_choice: crate::util::config::CompactionToolChoice,
     two_pass_enabled: bool,
     buffering_settings: Option<BufferingSettings>,
@@ -300,7 +332,8 @@ pub(crate) async fn spawn_session_actor(
         xai_grok_tools::implementations::grok_build::scheduler::types::SchedulerHandle,
     >,
     max_turns: Option<usize>,
-    forked_tool_override: Option<Vec<ToolSpec>>,
+    forked_tool_override: Option<crate::session::commands::ForkedToolSnapshot>,
+    subagent_model_inheritance: crate::agent::config::Resolved<bool>,
     is_chat_kind: bool,
     spawn_ctx: Option<xai_grok_telemetry::subagent_spawn::SpawnPhaseContext>,
     sampling_gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -313,6 +346,14 @@ pub(crate) async fn spawn_session_actor(
     }
     let wf_sid: String = session_info.id.0.to_string();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+    let mut mcp_servers = mcp_servers;
+    if !startup_hints.is_subagent {
+        crate::session::agent_mcp::apply_agent_mcp_overlay(
+            &mut mcp_servers,
+            &agent_definition,
+            tool_context.cwd.as_path(),
+        );
+    }
     tracing::info!(
         "Session '{}' created with {} MCP servers",
         session_info.id.0,
@@ -320,8 +361,7 @@ pub(crate) async fn spawn_session_actor(
     );
     let _ = support_permission;
     let owns_permission_manager = inherited_permission_handle.is_none();
-    let permission_setup_timer =
-        crate::instrumentation_timer!("session.spawn_actor.permission_setup");
+    let (permission_setup_timer, permission_setup_span) = spawn_await_step!("permission_setup");
     let (permissions, permission_events_rx, deny_read_globs) = async {
         use xai_grok_workspace::permission::resolution as permission_resolution;
         if let Some(handle) = inherited_permission_handle {
@@ -385,6 +425,14 @@ pub(crate) async fn spawn_session_actor(
                 startup_hints.permission_mode.as_deref(),
                 yolo_pin,
             );
+            // CLI `--permission-mode dontAsk` lands on agent_definition via CliAgentOverrides.
+            // Without this, headless non-yolo auto-answers would-be prompts as Cancelled.
+            if matches!(
+                agent_definition.permission_mode,
+                xai_grok_agent::config::PermissionMode::DontAsk
+            ) {
+                permission_resolution::apply_agent_dont_ask_prompt_policy(&mut permission_config);
+            }
             let deny_read_globs = permission_config
                 .as_ref()
                 .map(permission_resolution::deny_read_globs_from_config)
@@ -440,20 +488,19 @@ pub(crate) async fn spawn_session_actor(
             (permissions, permission_events_rx, deny_read_globs)
         }
     }
-        .instrument(tracing::info_span!("spawn.permission_setup"))
+        .instrument(permission_setup_span)
         .await;
     drop(permission_setup_timer);
-    let history_scan_span = tracing::info_span!(
-        "spawn.history_scan",
+    let history_scan = spawn_step!(
+        "history_scan",
         history_items = conversation.len() as i64,
         history_turns = tracing::field::Empty,
-    )
-    .entered();
+    );
     let initial_prompt_index = conversation
         .iter()
         .filter(|item| matches!(item, ConversationItem::User(_)))
         .count();
-    history_scan_span.record("history_turns", initial_prompt_index as i64);
+    history_scan.record("history_turns", initial_prompt_index as i64);
     let initial_conversation_len = conversation.len();
     let title_session_dir = crate::session::persistence::session_dir(&session_info);
     let title_refresh_watermark =
@@ -492,9 +539,9 @@ pub(crate) async fn spawn_session_actor(
         } else {
             (0, Vec::new(), Vec::new())
         };
-    drop(history_scan_span);
+    drop(history_scan);
     let primary_model_id = sampling_config.model.clone();
-    let web_search_config_span = tracing::info_span!("spawn.web_search_config_load").entered();
+    let web_search_config_step = spawn_step!("web_search_config_load");
     let web_search_domains = if disable_web_search {
         None
     } else {
@@ -529,7 +576,7 @@ pub(crate) async fn spawn_session_actor(
         );
         xai_grok_tools::implementations::WebSearchConfig::Disabled
     };
-    drop(web_search_config_span);
+    drop(web_search_config_step);
     let embed_base_url = sampling_config.base_url.clone();
     let embed_api_key = sampling_config.api_key.clone();
     let session_pruning_config: crate::config::PruningConfig = memory_config.as_ref().map_or_else(
@@ -565,7 +612,7 @@ pub(crate) async fn spawn_session_actor(
         sampling_config.max_retries,
         max_retries,
     ));
-    let chat_state_span = tracing::info_span!("spawn.chat_state_init");
+    let (chat_state_timer, chat_state_span) = spawn_await_step!("chat_state_init");
     let chat_state_guard = chat_state_span.enter();
     let chat_state_sampling_config = xai_grok_sampling_types::SamplingConfig {
         base_url: sampling_config.base_url.clone(),
@@ -577,18 +624,27 @@ pub(crate) async fn spawn_session_actor(
         max_retries: Some(resolved_max_retries),
         rate_limit_retry_threshold: sampling_config.rate_limit_retry_threshold,
         api_backend: sampling_config.api_backend.clone(),
+        chat_completions_request_format: sampling_config.chat_completions_request_format,
         extra_headers: sampling_config.extra_headers.clone(),
         conversation_group_id: sampling_config.conversation_group_id.clone(),
         query_params: sampling_config.query_params.clone(),
         env_http_headers: sampling_config.env_http_headers.clone(),
         context_window: context_window_override.unwrap_or(baseline_context_window),
+        max_request_bytes: sampling_config.max_request_bytes,
         reasoning_effort: sampling_config.reasoning_effort,
         reasoning_summary: sampling_config.reasoning_summary,
         stream_tool_calls: Some(sampling_config.stream_tool_calls),
     };
+    let step_arm_configured = session_pruning_config.keep_last_n_tool_rounds > 0
+        || session_pruning_config.recent_tool_result_char_budget > 0;
     let actor_pruning_config = xai_chat_state::PruningConfig {
         enabled: session_pruning_config.enabled,
         keep_last_n_turns: session_pruning_config.keep_last_n_turns,
+        keep_last_n_tool_rounds: session_pruning_config.keep_last_n_tool_rounds,
+        recent_tool_result_char_budget: session_pruning_config.recent_tool_result_char_budget,
+        // Pinning rides with the step-aware arm: with the knobs at their defaults (zero) the
+        // arm does not run at all, so the pin cannot change a default session.
+        pin_evidence: step_arm_configured,
         soft_trim_threshold: session_pruning_config.soft_trim_threshold,
         soft_trim_head: session_pruning_config.soft_trim_head,
         soft_trim_tail: session_pruning_config.soft_trim_tail,
@@ -606,6 +662,9 @@ pub(crate) async fn spawn_session_actor(
         tokio_util::sync::CancellationToken::new(),
     );
     drop(chat_state_guard);
+    // The persistence actor was built before this actor existed, so bind the handle now: the
+    // session-title generator accounts its model call against this ledger.
+    persistence.bind_summary_chat_state(&chat_state_handle);
     async {
         if (!initial_prompt_texts.is_empty()
             || initial_total_tokens > 0
@@ -623,6 +682,7 @@ pub(crate) async fn spawn_session_actor(
     }
     .instrument(chat_state_span)
     .await;
+    drop(chat_state_timer);
     chat_state_handle.update_credentials(credentials);
     let state = TokioMutex::new(State {
         running_task: None,
@@ -721,7 +781,7 @@ pub(crate) async fn spawn_session_actor(
         },
     );
     let cursor_harness = false;
-    let terminal_backend_span = tracing::info_span!("spawn.terminal_backend");
+    let (terminal_backend_timer, terminal_backend_span) = spawn_await_step!("terminal_backend");
     let terminal_backend_guard = terminal_backend_span.enter();
     let terminal_backend_kind = select_terminal_backend_kind(
         startup_hints.is_subagent,
@@ -791,6 +851,7 @@ pub(crate) async fn spawn_session_actor(
     } else {
         drop(terminal_backend_span);
     }
+    drop(terminal_backend_timer);
     let fs_backend: std::sync::Arc<dyn xai_grok_tools::computer::types::AsyncFileSystem> =
         if client_fs_capable && tool_context.gateway.is_some() {
             std::sync::Arc::new(xai_grok_workspace::file_system::AcpFsAdapter::new(
@@ -827,12 +888,11 @@ pub(crate) async fn spawn_session_actor(
             Some(session_info.id.0.to_string()),
         )
     });
-    let memory_init_span = tracing::info_span!(
-        "spawn.memory_init",
+    let (memory_init_timer, memory_init_span) = spawn_await_step!(
+        "memory_init",
         memory_chunks = tracing::field::Empty,
         memory_files = tracing::field::Empty,
-    )
-    .entered();
+    );
     let mut configured_memory_storage = memory_config.as_ref().map(|mc| {
         if mc.mode.is_legacy()
             && mc.flat_memory_root
@@ -883,7 +943,10 @@ pub(crate) async fn spawn_session_actor(
     let mut memory_v2_access = None;
     if let Some(storage) = memory_storage_for_session.clone() {
         if storage.mode().is_v2() {
-            match memory_control::initialize_v2_memory(&storage, memory_v2_legacy_carryover).await {
+            match memory_control::initialize_v2_memory(&storage, memory_v2_legacy_carryover)
+                .instrument(memory_init_span.clone())
+                .await
+            {
                 Ok(access) => memory_v2_access = Some(access),
                 Err(failure) => {
                     tracing::warn!(
@@ -899,7 +962,9 @@ pub(crate) async fn spawn_session_actor(
                 }
             }
         } else if let Err(error) =
-            crate::session::memory_state::initialize_memory_storage(storage.clone()).await
+            crate::session::memory_state::initialize_memory_storage(storage.clone())
+                .instrument(memory_init_span.clone())
+                .await
         {
             tracing::warn!(
                 target: xai_grok_telemetry::memory_log::TARGET,
@@ -1077,6 +1142,7 @@ pub(crate) async fn spawn_session_actor(
         None
     };
     drop(memory_init_span);
+    drop(memory_init_timer);
     let context_window_tokens = context_window_override
         .map(|c| c.get())
         .unwrap_or(sampling_config.context_window);
@@ -1088,8 +1154,9 @@ pub(crate) async fn spawn_session_actor(
             },
         ))
     });
-    let mcp_state = {
+    let (mcp_state, admitted_mcp_servers) = {
         let mut state = McpState::new_with_meta(mcp_servers.clone(), mcp_meta_config_map);
+        let admitted_mcp_servers = state.admitted_servers();
         if let Some(ref pool) = parent_mcp_pool {
             state.import_shared_clients(pool);
             tracing::info!(
@@ -1110,12 +1177,19 @@ pub(crate) async fn spawn_session_actor(
                 "Registered in-process SDK MCP servers (x.ai/mcp/sdk_call)"
             );
         }
-        Arc::new(TokioMutex::new(state))
+        (Arc::new(TokioMutex::new(state)), admitted_mcp_servers)
     };
+    let (plugin_registry_wait_timer, plugin_registry_wait_span) =
+        spawn_await_step!("plugin_registry_wait");
     let plugin_registry = prefetch
         .join_plugin_registry()
-        .instrument(tracing::info_span!("spawn.plugin_registry_wait"))
+        .instrument(plugin_registry_wait_span)
         .await;
+    drop(plugin_registry_wait_timer);
+    let (forked_tool_override, forked_selection) = forked_tool_override
+        .map(|snapshot| (snapshot.specs, snapshot.task_model_selection))
+        .unzip();
+    let task_model_selection = LatchedTaskModelSelection::default();
     let rebuild_spec = std::sync::Arc::new(crate::session::agent_rebuild::AgentRebuildSpec {
         working_directory: tool_context.cwd.as_path().to_path_buf(),
         terminal_backend: terminal_backend.clone(),
@@ -1124,6 +1198,12 @@ pub(crate) async fn spawn_session_actor(
         bridge_state_path: bridge_state_path.clone(),
         session_env: tool_context.session_env.clone(),
         models_manager: models_manager.clone(),
+        task_model_policy: TaskModelPolicyInputs {
+            inheritance: subagent_model_inheritance,
+            remote_fetch_enabled: crate::util::config::resolve_remote_fetch_enabled(),
+            forked_selection,
+        },
+        task_model_selection: task_model_selection.clone(),
         compaction_policy,
         reminder_policy,
         memory_enabled: memory_config
@@ -1172,6 +1252,7 @@ pub(crate) async fn spawn_session_actor(
         compat,
         paths_config: paths_config.clone(),
         context_window_tokens,
+        read_file_max_output_bytes: session_pruning_config.read_file_max_output_bytes,
         prompt_working_directory: prompt_display_cwd.clone(),
         lsp: tool_context.lsp.clone(),
         plugin_registry: plugin_registry.clone(),
@@ -1200,7 +1281,7 @@ pub(crate) async fn spawn_session_actor(
     });
     use xai_grok_telemetry::subagent_spawn::SubagentSpawnPhase;
     let builder_started_at = std::time::Instant::now();
-    let agent_build_timer = crate::instrumentation_timer!("session.spawn_actor.agent_build");
+    let (agent_build_timer, agent_build_step_span) = spawn_await_step!("agent_build");
     let agent_build_span = spawn_ctx
         .as_ref()
         .map(|ctx| phase_region_under(SubagentSpawnPhase::AgentBuild, &ctx.parent));
@@ -1214,7 +1295,7 @@ pub(crate) async fn spawn_session_actor(
                 .map(|s| s.announced_skill_names.clone()),
             preloaded_skills,
         )
-        .instrument(tracing::info_span!("spawn.harness_build"))
+        .instrument(agent_build_step_span)
         .await
         .map_err(|e| {
             tracing::error!(
@@ -1229,6 +1310,7 @@ pub(crate) async fn spawn_session_actor(
     let tool_setup_span = spawn_ctx
         .as_ref()
         .map(|ctx| phase_region_under(SubagentSpawnPhase::ToolSetup, &ctx.parent));
+    let (tool_setup_timer, tool_setup_step_span) = spawn_await_step!("tool_setup");
     let (harness_metrics, scheduler_handle_for_handle, toolset) = async {
         let reservations_for_bridge = task_completion_reservations.clone();
         agent
@@ -1319,8 +1401,9 @@ pub(crate) async fn spawn_session_actor(
         let toolset = agent.tool_bridge().toolset();
         (harness_metrics, scheduler_handle_for_handle, toolset)
     }
-    .instrument(tracing::info_span!("spawn.tool_setup"))
+    .instrument(tool_setup_step_span)
     .await;
+    drop(tool_setup_timer);
     if let Some(ctx) = &spawn_ctx {
         ctx.timer
             .record(SubagentSpawnPhase::AgentBuild, agent_build_elapsed);
@@ -1333,7 +1416,7 @@ pub(crate) async fn spawn_session_actor(
     }
     drop(tool_setup_span);
     crate::waterfall::mark(&wf_sid, crate::waterfall::stage::SB_AGENT_BUILT);
-    let prefix_build_span = tracing::info_span!("spawn.prefix_build").entered();
+    let prefix_build = spawn_step!("prefix_build");
     let system_prompt = agent.system_prompt().to_string();
     let mut prompt_context = agent.prompt_context().clone();
     prompt_context.normalize_for_persistence();
@@ -1391,13 +1474,10 @@ pub(crate) async fn spawn_session_actor(
             .surfaces_local_date(),
         &conversation,
     );
-    drop(prefix_build_span);
+    drop(prefix_build);
     {
-        let _persist_span = tracing::info_span!(
-            "spawn.history_persist",
-            history_items = conversation.len() as i64
-        )
-        .entered();
+        let _persist_step =
+            spawn_step!("history_persist", history_items = conversation.len() as i64);
         persist_chat_history_jsonl_sync(&session_info, &conversation);
     }
     chat_state_handle.replace_conversation(conversation);
@@ -1510,7 +1590,7 @@ pub(crate) async fn spawn_session_actor(
         .to_owned();
     let allowed_subagent_types_for_handle = agent.definition().allowed_subagent_types.clone();
     let mut hook_discovery_errors: Vec<xai_grok_hooks::error::HookError> = Vec::new();
-    let hooks_discovery_span = tracing::info_span!("spawn.hooks_discovery").entered();
+    let hooks_discovery = spawn_step!("hooks_discovery");
     let built_hook_registry: Option<Arc<xai_grok_hooks::discovery::HookRegistry>> =
         if let Some(override_reg) = hook_registry_override {
             Some(override_reg)
@@ -1542,7 +1622,7 @@ pub(crate) async fn spawn_session_actor(
                 Some(Arc::new(registry))
             }
         };
-    drop(hooks_discovery_span);
+    drop(hooks_discovery);
     let hook_registry_for_handle = built_hook_registry.clone();
     let workspace_ops_for_handle = workspace_ops.clone();
     #[allow(clippy::arc_with_non_send_sync)]
@@ -1554,7 +1634,7 @@ pub(crate) async fn spawn_session_actor(
     let (goal_update_tx, goal_update_rx) = tokio::sync::mpsc::unbounded_channel::<
         xai_grok_tools::implementations::grok_build::update_goal::UpdateGoalEnvelope,
     >();
-    let workflow_restore_span = tracing::info_span!("spawn.workflow_restore").entered();
+    let workflow_restore = spawn_step!("workflow_restore");
     crate::session::workflow::registry::warm_builtin_cache();
     let workflow_session_dir = crate::session::persistence::session_dir(&session_info);
     let resume_workflows: Vec<crate::session::resume_status::ResumeWorkflow> =
@@ -1613,7 +1693,7 @@ pub(crate) async fn spawn_session_actor(
     for state in workflow_tracker.lock().snapshot() {
         workflow_notify.emit(&state, state.elapsed_ms_floor, 0);
     }
-    drop(workflow_restore_span);
+    drop(workflow_restore);
     let workflow_manager = Arc::new(tokio::sync::Mutex::new(
         crate::session::workflow::manager::WorkflowManager::new(
             session_info.id.0.to_string(),
@@ -1637,6 +1717,7 @@ pub(crate) async fn spawn_session_actor(
             cmd_tx.clone(),
             std::collections::HashMap::new(),
             workflow_max_concurrent_agents,
+            task_model_selection,
         ),
     ));
     let (workflow_launch_tx, workflow_launch_rx) = tokio::sync::mpsc::unbounded_channel::<
@@ -1656,17 +1737,15 @@ pub(crate) async fn spawn_session_actor(
             .unwrap_or_else(|_| xai_tool_protocol::SessionId::new("unknown").expect("valid"));
         xai_computer_hub_sdk::ObservabilityBridge::new(None, sid)
     };
-    let config_load_span = tracing::info_span!("spawn.config_load").entered();
+    let config_load = spawn_step!("config_load");
     let mut effective_config = crate::config::load_effective_config()
         .ok()
         .and_then(|raw| crate::agent::config::Config::new_from_toml_cfg(&raw).ok())
         .unwrap_or_default();
     effective_config.remote_settings = remote_settings.clone();
     let catalog_models = models_manager.models();
-    let provider_context = crate::agent::config::ProviderContext::from_catalog(
-        &catalog_models,
-        &primary_model_id,
-    );
+    let provider_context =
+        crate::agent::config::ProviderContext::from_catalog(&catalog_models, &primary_model_id);
     let compaction_model_slug = effective_config.compaction.model.clone();
     let goal_classifier_max_runs = effective_config.resolve_goal_classifier_max_runs().value;
     let goal_use_current_model_only = effective_config
@@ -1757,50 +1836,17 @@ pub(crate) async fn spawn_session_actor(
             0,
         );
     }
-    drop(config_load_span);
-    let git_scan_span = tracing::info_span!("spawn.git_scan").entered();
-    let vcs_kind = {
-        let root = std::path::Path::new(&session_info.cwd);
-        match xai_grok_workspace::session::git::discover_git_root(root) {
-            xai_grok_workspace::session::git::GitDiscoveryResult::Found(git_root) => {
-                xai_grok_workspace::session::git::detect_vcs_kind(&git_root)
-            }
-            _ => xai_grok_workspace::session::git::VcsKind::None,
-        }
-    };
-    use crate::session::repo_status_prefix::{
-        RepoStatusInputs, RepoStatusPlan, RepoStatusPrefetch, discover_vcs_root,
-    };
-    let suppress_status_body =
-        !crate::util::config::resolve_repo_status_in_system_prompt(remote_settings.as_ref())
-            || startup_hints.skip_git_status;
-    let starts_fresh = initial_conversation_len == 0;
-    let repo_status_plan = if matches!(vcs_kind, xai_grok_workspace::session::git::VcsKind::None) {
-        RepoStatusPlan::NoRepo
-    } else {
-        let prefix_cwd = std::path::PathBuf::from(
-            prompt_display_cwd
-                .clone()
-                .unwrap_or_else(|| session_info.cwd.clone()),
-        );
-        if suppress_status_body {
-            RepoStatusPlan::RootOnly {
-                root: discover_vcs_root(&prefix_cwd),
-                vcs_kind,
-            }
-        } else {
-            let inputs = RepoStatusInputs::new(prefix_cwd, vcs_kind);
-            let prefetch = starts_fresh
-                .then(|| RepoStatusPrefetch::spawn(inputs.clone()))
-                .flatten();
-            RepoStatusPlan::Gather {
-                inputs,
-                prefetch: std::cell::RefCell::new(prefetch),
-            }
-        }
-    };
-    drop(git_scan_span);
-    let actor_build_span = tracing::info_span!("spawn.actor_build").entered();
+    drop(config_load);
+    let git_scan = spawn_step!("git_scan");
+    use crate::session::repo_status_prefix::discover_vcs_root;
+    let prefix_cwd = std::path::PathBuf::from(
+        prompt_display_cwd
+            .clone()
+            .unwrap_or_else(|| session_info.cwd.clone()),
+    );
+    let vcs_root = discover_vcs_root(&prefix_cwd);
+    drop(git_scan);
+    let actor_build = spawn_step!("actor_build");
     let session = Arc::new_cyclic(|weak: &std::sync::Weak<SessionActor>| SessionActor {
         status_wake: Default::default(),
         session_info: session_info.clone(),
@@ -1830,7 +1876,7 @@ pub(crate) async fn spawn_session_actor(
         deny_read_globs,
         mcp_state: mcp_state.clone(),
         mcp_strategy: std::cell::Cell::new(mcp_strategy),
-        initial_client_mcp_servers: initial_client_mcp_servers.clone(),
+        initial_client_mcp_servers: std::cell::RefCell::new(initial_client_mcp_servers.clone()),
         chat_state_handle,
         unattributed_background_usage: std::sync::atomic::AtomicBool::new(false),
         current_prompt_id: current_prompt_id.clone(),
@@ -1866,6 +1912,8 @@ pub(crate) async fn spawn_session_actor(
             prefix_released: std::sync::atomic::AtomicBool::new(false),
             cancel: Default::default(),
         },
+        long_reasoning_reminder,
+        long_reasoning_turn_state: Default::default(),
         memory: super::memory_state::SessionMemory {
             configured_mode: memory_config.as_ref().map(|mc| mc.mode),
             v2_config: memory_config
@@ -2045,9 +2093,7 @@ pub(crate) async fn spawn_session_actor(
         deferred_prefix: DeferredPrefix::new(),
         mcp_startup_waits: Default::default(),
         mcp_init_tasks: Default::default(),
-        repo_status_prefetch: crate::session::repo_status_prefix::RepoStatusPrefetchState::new(
-            repo_status_plan,
-        ),
+        vcs_root,
         extension_registry: session_extension_registry(weak.clone()),
         weak_self: weak.clone(),
         startup_tasks: Default::default(),
@@ -2057,14 +2103,13 @@ pub(crate) async fn spawn_session_actor(
         last_api_request_at: std::sync::atomic::AtomicI64::new(0),
         hook_registry: std::cell::RefCell::new(built_hook_registry),
         hook_disabled: std::cell::RefCell::new(Arc::new(
-            xai_grok_hooks::trust::DisabledHooks::load(),
+            crate::util::hooks::disabled_hooks_snapshot(),
         )),
         turn_report: Default::default(),
         turn_abort: Default::default(),
         turn_end_tx: Default::default(),
         client_hooks: std::cell::RefCell::new(client_hooks),
         hook_resolved_workspace_root: resolved_workspace_root,
-        vcs_kind,
         hook_load_errors: std::cell::RefCell::new(_hook_load_errors),
         plugin_registry: std::cell::RefCell::new(plugin_registry.clone()),
         plugin_registry_handle,
@@ -2100,7 +2145,8 @@ pub(crate) async fn spawn_session_actor(
         workspace_ops: workspace_ops.clone(),
         trace_config_template: std::cell::RefCell::new(None),
     });
-    drop(actor_build_span);
+    drop(actor_build);
+    let (actor_setup_timer, actor_setup_span) = spawn_await_step!("actor_setup");
     async {
         if owns_permission_manager {
             session.wire_permission_prompt_notification();
@@ -2201,8 +2247,9 @@ pub(crate) async fn spawn_session_actor(
                 .await;
         }
     }
-    .instrument(tracing::info_span!("spawn.actor_setup"))
+    .instrument(actor_setup_span)
     .await;
+    drop(actor_setup_timer);
     if let Some(storage) = session
         .memory
         .storage()
@@ -2443,7 +2490,7 @@ pub(crate) async fn spawn_session_actor(
         gateway_enabled,
         emit_local_background_tasks,
         client_caps,
-        mcp_servers,
+        mcp_servers: admitted_mcp_servers,
         initial_client_mcp_servers,
         display_cwd: None,
         feedback_manager: feedback_manager.clone(),
@@ -2565,6 +2612,7 @@ pub(crate) async fn spawn_session_on_thread(
     system_prompt_label: String,
     compaction_mode: xai_chat_state::CompactionMode,
     compaction_verbatim_input: bool,
+    long_reasoning_reminder: crate::session::long_reasoning_reminder::LongReasoningReminder,
     compaction_tool_choice: crate::util::config::CompactionToolChoice,
     two_pass_enabled: bool,
     buffering_settings: Option<BufferingSettings>,
@@ -2653,7 +2701,8 @@ pub(crate) async fn spawn_session_on_thread(
         xai_grok_tools::implementations::grok_build::scheduler::types::SchedulerHandle,
     >,
     max_turns: Option<usize>,
-    forked_tool_override: Option<Vec<ToolSpec>>,
+    forked_tool_override: Option<crate::session::commands::ForkedToolSnapshot>,
+    subagent_model_inheritance: crate::agent::config::Resolved<bool>,
     is_chat_kind: bool,
     spawn_ctx: Option<xai_grok_telemetry::subagent_spawn::SpawnPhaseContext>,
     sampling_gate: Option<Arc<tokio::sync::Semaphore>>,
@@ -2684,8 +2733,9 @@ pub(crate) async fn spawn_session_on_thread(
                 );
                 let updates_path = session_dir.join("updates.jsonl");
                 let initial_last_compaction = {
-                    let _timer = crate::instrumentation_timer!(
-                        "session.spawn_actor.find_compaction_checkpoint"
+                    let _timer = xai_grok_telemetry::startup_step_timer_grouped!(
+                        "spawn_actor",
+                        "find_compaction_checkpoint"
                     );
                     crate::session::helpers::replay::find_latest_compaction_checkpoint(
                             &updates_path,
@@ -2695,7 +2745,10 @@ pub(crate) async fn spawn_session_on_thread(
                         .map(|cp| cp.prompt_index_at_compaction)
                 };
                 let initial_prompt_texts = {
-                    let _timer = crate::instrumentation_timer!("session.spawn_actor.load_user_prompts");
+                    let _timer = xai_grok_telemetry::startup_step_timer_grouped!(
+                        "spawn_actor",
+                        "load_user_prompts"
+                    );
                     SessionActor::load_user_prompts_from_updates(&updates_path)
                         .unwrap_or_default()
                 };
@@ -2774,6 +2827,7 @@ pub(crate) async fn spawn_session_on_thread(
                     system_prompt_label,
                     compaction_mode,
                     compaction_verbatim_input,
+                    long_reasoning_reminder,
                     compaction_tool_choice,
                     two_pass_enabled,
                     buffering_settings,
@@ -2856,6 +2910,7 @@ pub(crate) async fn spawn_session_on_thread(
                     parent_scheduler_handle,
                     max_turns,
                     forked_tool_override,
+                    subagent_model_inheritance,
                     is_chat_kind,
                     spawn_ctx,
                     sampling_gate,

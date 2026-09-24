@@ -1,0 +1,1 @@
+Read {{WORKDIR}}/script.rhai, then call workflow with validate_only true and the file's exact contents as an inline source of type script.

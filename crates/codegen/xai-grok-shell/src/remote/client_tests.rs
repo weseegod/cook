@@ -428,6 +428,79 @@ fn parse_reads_reasoning_efforts_list() {
     let result = parse_remote_model_value(&value, "https://default.url").unwrap();
     assert!(result.reasoning_efforts.is_empty());
 }
+/// A public `/v1/models` row carries the menu under `capabilities`; labels come from the shared `effort_label` table.
+#[test]
+fn parse_reads_reasoning_efforts_from_capabilities() {
+    use xai_grok_sampling_types::{ReasoningEffort, ReasoningEffortOption};
+    let option =
+        |id: &str, value: ReasoningEffort, label: &str, default: bool| ReasoningEffortOption {
+            id: id.to_string(),
+            value,
+            label: label.to_string(),
+            description: None,
+            default,
+        };
+    let value = serde_json::json!({
+        "id": "grok-4.6",
+        "object": "model",
+        "owned_by": "xai",
+        "capabilities": {
+            "reasoning_effort": ["low", "medium", "high", "xhigh"],
+            "default_reasoning_effort": "high"
+        }
+    });
+    let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+    assert_eq!(
+        result.reasoning_efforts,
+        vec![
+            option("low", ReasoningEffort::Low, "Low", false),
+            option("medium", ReasoningEffort::Medium, "Medium", false),
+            option("high", ReasoningEffort::High, "High", true),
+            option("xhigh", ReasoningEffort::Xhigh, "X-High", false),
+        ]
+    );
+    assert!(!result.reasoning_effort_server_default);
+    let value = serde_json::json!({
+        "id": "grok-4.6",
+        "reasoning_efforts": ["low"],
+        "capabilities": { "reasoning_effort": ["high"], "default_reasoning_effort": "high" }
+    });
+    let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+    assert_eq!(
+        result.reasoning_efforts,
+        vec![option("low", ReasoningEffort::Low, "Low", false)]
+    );
+    let value = serde_json::json!({
+        "id": "grok-4.6",
+        "reasoning_efforts": [{ "value": "quantum" }],
+        "capabilities": { "reasoning_effort": ["high"], "default_reasoning_effort": "high" }
+    });
+    let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+    assert_eq!(
+        result.reasoning_efforts,
+        vec![option("high", ReasoningEffort::High, "High", true)]
+    );
+    let value = serde_json::json!({
+        "id": "grok-4.6",
+        "capabilities": { "reasoning_effort": ["low", "quantum", "high"] }
+    });
+    let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+    assert_eq!(
+        result.reasoning_efforts,
+        vec![
+            option("low", ReasoningEffort::Low, "Low", false),
+            option("high", ReasoningEffort::High, "High", false),
+        ]
+    );
+    assert!(result.reasoning_effort_server_default);
+    let value = serde_json::json!({
+        "id": "grok-4.6",
+        "capabilities": { "reasoning_effort": ["low", "high"], "default_reasoning_effort": "medium" }
+    });
+    let result = parse_remote_model_value(&value, "https://default.url").unwrap();
+    assert!(result.reasoning_efforts.iter().all(|o| !o.default));
+    assert!(result.reasoning_effort_server_default);
+}
 #[test]
 fn parse_reads_meta_fallback_fields() {
     let value = serde_json::json!({

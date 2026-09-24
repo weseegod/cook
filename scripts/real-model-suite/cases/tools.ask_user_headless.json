@@ -1,0 +1,20 @@
+{
+  "id": "tools.ask_user_headless",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 4,
+  "timeout_secs": 180,
+  "permission": "approve",
+  "allow": [],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.ask_user_headless.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

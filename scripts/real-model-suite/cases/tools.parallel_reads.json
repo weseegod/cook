@@ -1,0 +1,31 @@
+{
+  "id": "tools.parallel_reads",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.parallel_reads.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "text_contains": [
+    "{{MARKER}}-1",
+    "{{MARKER}}-2",
+    "{{MARKER}}-3"
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

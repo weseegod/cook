@@ -111,6 +111,9 @@ struct AcpEndLine<'a> {
     session_id: &'a str,
     #[serde(rename = "requestId")]
     request_id: &'a str,
+    /// Final assistant text for the turn; the suite's streaming oracle requires
+    /// the terminal line to carry the marker (spec §streaming-json).
+    text: &'a str,
 }
 
 /// `streaming-json`: native ACP session updates, one object per line.
@@ -178,6 +181,7 @@ impl Reducer for AcpReducer {
             stop_reason: end.stop_reason,
             session_id: end.session_id,
             request_id: end.request_id,
+            text: end.result_text,
         });
         if let Some(usage) = end.usage {
             attach_result_usage(&mut line, usage);

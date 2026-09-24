@@ -963,10 +963,10 @@ fn startup_hints_from_meta_prefers_session_request_over_init() {
 }
 #[test]
 fn startup_hints_from_meta_session_object_wins_whole_not_merged() {
-    let session = serde_json::json!({ "startupHints": { "skipGitStatus": true } });
+    let session = serde_json::json!({ "startupHints": { "isSubagent": true } });
     let init = serde_json::json!({ "startupHints": { "nonInteractive": true } });
     let hints = startup_hints_from_meta(session.as_object(), init.as_object());
-    assert!(hints.skip_git_status);
+    assert!(hints.is_subagent);
     assert!(!hints.non_interactive);
 }
 #[test]
@@ -1219,8 +1219,8 @@ fn make_test_handle(
         gateway_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         emit_local_background_tasks: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         client_caps: crate::session::notifications::SessionClientCaps::new(false, true),
-        mcp_servers: vec![],
-        initial_client_mcp_servers: vec![],
+        mcp_servers: Default::default(),
+        initial_client_mcp_servers: Default::default(),
         display_cwd: None,
         feedback_manager: std::sync::Arc::new(
             crate::session::feedback_manager::FeedbackManager::local_only("test"),

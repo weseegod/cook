@@ -1,8 +1,10 @@
 //! Mutation handlers for the ChatStateActor.
 
+use std::collections::HashMap;
+
 use xai_grok_sampling_types::{
     ContentPart, ConversationItem, DanglingToolCallReason, dedup_duplicate_tool_results,
-    repair_dangling_tool_calls,
+    repair_dangling_tool_calls_with, synthetic_dangling_result_text,
 };
 
 use super::ChatStateActor;
@@ -90,6 +92,14 @@ impl ChatStateActor {
         &mut self,
         reason: DanglingToolCallReason,
     ) {
+        self.ensure_conversation_integrity_answering(reason, HashMap::new());
+    }
+
+    fn ensure_conversation_integrity_answering(
+        &mut self,
+        reason: DanglingToolCallReason,
+        mut answers: HashMap<String, String>,
+    ) {
         self.rewrite_history(HistoryRewrite::IntegrityRepair, |conversation| {
             let deduped = dedup_duplicate_tool_results(conversation);
             if deduped > 0 {
@@ -98,7 +108,11 @@ impl ChatStateActor {
                     "Removed duplicate tool results in conversation"
                 );
             }
-            let repaired = repair_dangling_tool_calls(conversation, reason);
+            let repaired = repair_dangling_tool_calls_with(conversation, |id, name| {
+                answers
+                    .remove(id)
+                    .unwrap_or_else(|| synthetic_dangling_result_text(name, reason))
+            });
             if repaired > 0 || deduped > 0 {
                 tracing::info!(
                     repaired_count = repaired,
@@ -107,15 +121,26 @@ impl ChatStateActor {
             }
             repaired + deduped
         });
+        if !answers.is_empty() {
+            tracing::debug!(
+                leftover = answers.len(),
+                "answers for tool calls that already had a result were not written"
+            );
+        }
     }
 
     /// Repair dangling tool calls after a harness-initiated halt so the on-disk tail is clean.
     /// The next push repairs the same way lazily as a backstop.
-    pub(super) fn repair_dangling_after_harness_halt(&mut self, class: &'static str) {
+    pub(super) fn repair_dangling_after_harness_halt(
+        &mut self,
+        class: &'static str,
+        answers: HashMap<String, String>,
+    ) {
         self.pop_stranded_continue_reminder();
-        self.ensure_conversation_integrity_with_reason(DanglingToolCallReason::HarnessHalted {
-            class,
-        });
+        self.ensure_conversation_integrity_answering(
+            DanglingToolCallReason::HarnessHalted { class },
+            answers,
+        );
     }
 
     /// Drop a trailing continue reminder whose continuation will never sample.
@@ -443,6 +468,49 @@ impl ChatStateActor {
             api_duration_ms,
             cost_usd_ticks,
         );
+    }
+
+    /// Fold one side call (compaction) into the session ledger under its purpose.
+    /// Side calls belong to the session bill only: they are not attributable to
+    /// the open prompt's main-loop totals, and they never count as a turn.
+    pub(super) fn record_side_call_usage(
+        &mut self,
+        purpose: crate::usage::CallPurpose,
+        model_id: &str,
+        usage: &xai_grok_sampling_types::TokenUsage,
+        api_duration_ms: Option<u64>,
+        cost_usd_ticks: Option<i64>,
+    ) {
+        self.state.session_usage.record_side_call(
+            purpose,
+            model_id,
+            usage,
+            api_duration_ms,
+            cost_usd_ticks,
+        );
+    }
+
+    /// Record the estimated composition of a sent main-loop request; see
+    /// [`crate::usage::UsageLedger::record_request_components`].
+    pub(super) fn record_request_components(
+        &mut self,
+        components: &crate::request_components::RequestComponents,
+    ) {
+        self.state
+            .session_usage
+            .record_request_components(components);
+    }
+
+    /// Record a call whose provider response omitted usage; see
+    /// [`crate::usage::UsageLedger::record_usage_missing`].
+    pub(super) fn record_usage_missing(&mut self, purpose: crate::usage::CallPurpose) {
+        if purpose.is_main_loop() {
+            self.state
+                .prompt_usage
+                .get_or_insert_default()
+                .record_usage_missing(purpose);
+        }
+        self.state.session_usage.record_usage_missing(purpose);
     }
 
     pub(super) fn record_subagent_usage(

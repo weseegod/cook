@@ -53,7 +53,7 @@ impl SearchReplaceVersion {
 /// Full description (for the non-concise toolset). `${{ tools.by_kind.read }}` — client-facing name
 /// for the Read tool `${{ params.edit.old_string }}` — client-facing param name `${{
 /// params.edit.replace_all }}` — client-facing param name
-pub(crate) const DESCRIPTION_FULL: &str = r#"Replace an exact string in a file.
+pub(crate) const DESCRIPTION_FULL: &str = r#"Replace an exact string in a file. Prefer this for small in-place edits of existing files instead of rewriting the whole file.
 
 ${% if tools.by_kind.read -%}
 - `${{ tools.by_kind.read }}` prefixes each line with "LINE_NUMBER→". That prefix is not part of the file: match only what comes after the →, with its exact indentation.
@@ -984,6 +984,10 @@ mod tests {
         assert!(
             rendered.contains("read_file") && !rendered.contains("${%"),
             "read bullet must render with the resolved name:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Prefer this for small in-place edits"),
+            "search_replace must steer toward in-place edits:\n{rendered}"
         );
         let edit_params = std::collections::HashMap::from([
             ("old_string".to_string(), "old_string".to_string()),

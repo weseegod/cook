@@ -1,0 +1,11 @@
+{
+  "id": "cli.completions",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "completions",
+      "bash"
+    ]
+  ]
+}

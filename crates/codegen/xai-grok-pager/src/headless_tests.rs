@@ -648,6 +648,23 @@ fn structured_output_without_meta_errors_never_parses_text() {
 }
 
 #[test]
+fn finish_without_prompt_result_emits_end_turn_with_session_id() {
+    // Flush-only headless exits (`prompt_result == None`) must still write a
+    // terminal JSON object; empty stdout makes the suite retry without
+    // `--memory-flush` and overwrite purposeUsage to main_loop only.
+    let mut emitter = HeadlessEmitter::new(OutputFormat::Json, false);
+    super::finish_without_prompt_result(&mut emitter, "sess-flush-only").expect("terminal end");
+    let result = emitter
+        .last_terminal_json
+        .as_ref()
+        .expect("on_end must record the JSON terminal object");
+    assert_eq!(result["sessionId"].as_str(), Some("sess-flush-only"));
+    assert_eq!(result["stopReason"].as_str(), Some("end_turn"));
+    assert_eq!(result["text"].as_str(), Some(""));
+    assert!(result["sessionId"].is_string());
+}
+
+#[test]
 fn structured_output_from_meta_wins_over_text_buffer() {
     let mut emitter = HeadlessEmitter::new(OutputFormat::Json, true);
     emitter.text_buffer = "thinking out loud...".into();
@@ -680,11 +697,36 @@ fn structured_output_from_meta_wins_over_text_buffer() {
 }
 
 #[test]
+fn streaming_json_end_line_carries_marker_from_text_chunks() {
+    let mut emitter = HeadlessEmitter::new(OutputFormat::StreamingJson, false);
+    emitter.on_text_chunk("NONCE-streaming_json-end-abc123");
+    emitter.on_end("end_turn", "sess-1", "req-1");
+    let end = emitter
+        .last_terminal_json
+        .as_ref()
+        .expect("streaming end line must be recorded");
+    assert_eq!(
+        end.get("type").and_then(|t| t.as_str()),
+        Some("end"),
+        "terminal line shape: {end}"
+    );
+    assert_eq!(
+        end.get("text").and_then(|t| t.as_str()),
+        Some("NONCE-streaming_json-end-abc123"),
+        "end record must carry accumulated text_buffer: {end}"
+    );
+    assert!(
+        end.to_string().contains("NONCE-streaming_json-end-abc123"),
+        "end record must contain the marker: {end}"
+    );
+}
+
+#[test]
 fn streaming_json_structured_output_emits_from_meta() {
     let mut emitter = HeadlessEmitter::new(OutputFormat::StreamingJson, true);
     emitter.on_text_chunk(r#"{"name":"#);
     emitter.on_text_chunk(r#""bob"}"#);
-    assert!(emitter.text_buffer.is_empty());
+    assert_eq!(emitter.text_buffer, r#"{"name":"bob"}"#);
 
     emitter.set_structured_output_from_meta(
         serde_json::json!({"structuredOutput": {"name": "bob"}}).as_object(),

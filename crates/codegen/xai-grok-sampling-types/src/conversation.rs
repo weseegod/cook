@@ -285,6 +285,30 @@ pub struct AssistantItem {
     pub reasoning_effort: Option<crate::ReasoningEffort>,
 }
 
+/// Execution provenance for a tool result, carried from the tool runner into the
+/// request-copy pruner.
+///
+/// Never serialized: canonical history, the wire request, and persisted snapshots are
+/// byte-identical with and without it. It is rebuilt when a result is pushed, so a restore
+/// that loses it only widens what a pruner may omit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ToolResultProvenance {
+    /// The tool reported a failure (non-zero exit, error output, failed check).
+    pub failed: bool,
+    /// A process or task this result refers to was still live when the result was written.
+    pub still_live: bool,
+    /// The result is an edit whose follow-up evidence (a check or test) has not run yet.
+    pub unresolved_edit: bool,
+}
+
+impl ToolResultProvenance {
+    /// Whether this result carries evidence the model has not consumed, so a
+    /// request-copy pruner must keep it raw even outside its recency window.
+    pub fn is_pinned(self) -> bool {
+        self.failed || self.still_live || self.unresolved_edit
+    }
+}
+
 /// Tool result message
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResultItem {
@@ -296,6 +320,21 @@ pub struct ToolResultItem {
     /// When non-empty, the API conversion layers embed these directly in the tool result message rather than in a separate follow-up user message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ContentPart>,
+    /// Execution provenance for the request-copy pruner. Not part of the wire shape and
+    /// not persisted; see [`ToolResultProvenance`].
+    #[serde(skip)]
+    pub provenance: ToolResultProvenance,
+}
+
+impl Default for ToolResultItem {
+    fn default() -> Self {
+        Self {
+            tool_call_id: String::new(),
+            content: Arc::<str>::from(""),
+            images: Vec::new(),
+            provenance: ToolResultProvenance::default(),
+        }
+    }
 }
 
 /// A server-side tool call from the backend agentic sampler.
@@ -818,6 +857,10 @@ impl From<FinishReason> for StopReason {
             FinishReason::Length => StopReason::Length,
             FinishReason::ToolCalls | FinishReason::FunctionCall => StopReason::ToolCalls,
             FinishReason::ContentFilter => StopReason::ContentFilter,
+            // A provider-specific verdict still ends a usable generation; the stream is not
+            // corrupt, so the turn ends cleanly instead of failing on an unrecognized value.
+            // The caller logs the wire string.
+            FinishReason::Unknown(_) => StopReason::Stop,
         }
     }
 }
@@ -839,6 +882,10 @@ pub struct TokenUsage {
     /// Part of `prompt_tokens` but distinct from cache reads; 0 on backends without a cache-write signal.
     #[serde(default)]
     pub cache_creation_prompt_tokens: u32,
+    /// True when the provider response carried a cache-read number, even if it was 0. False means
+    /// the field was absent, so the cache-hit share is unknown and must not be read as zero.
+    #[serde(default)]
+    pub cached_prompt_tokens_present: bool,
 }
 
 impl TokenUsage {
@@ -866,6 +913,7 @@ impl From<Usage> for TokenUsage {
                 .map_or(0, |d| d.reasoning_tokens),
             cached_prompt_tokens,
             cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: u.prompt_tokens_details.is_some(),
         }
     }
 }
@@ -1326,6 +1374,21 @@ impl ConversationItem {
             tool_call_id: tool_call_id.into(),
             content: Arc::<str>::from(content.into()),
             images: Vec::new(),
+            provenance: ToolResultProvenance::default(),
+        })
+    }
+
+    /// Create a tool result message that carries execution provenance for the pruner.
+    pub fn tool_result_with_provenance(
+        tool_call_id: impl Into<String>,
+        content: impl Into<String>,
+        provenance: ToolResultProvenance,
+    ) -> Self {
+        Self::ToolResult(ToolResultItem {
+            tool_call_id: tool_call_id.into(),
+            content: Arc::<str>::from(content.into()),
+            images: Vec::new(),
+            provenance,
         })
     }
 
@@ -1341,6 +1404,7 @@ impl ConversationItem {
             tool_call_id: tool_call_id.into(),
             content: Arc::<str>::from(content.into()),
             images,
+            provenance: ToolResultProvenance::default(),
         })
     }
 
@@ -1421,6 +1485,9 @@ impl xai_grok_compaction::CompactionItem for ConversationItem {
             Role::User => CompactionRole::User,
             Role::Assistant => CompactionRole::Assistant,
             Role::Tool => CompactionRole::Tool,
+            // Unknown wire roles are instruction-like rather than human prompts. Keeping them in
+            // the system bucket prevents compaction from rewriting them as user intent.
+            Role::Unknown(_) => CompactionRole::System,
         }
     }
 
@@ -2028,6 +2095,17 @@ pub fn repair_dangling_tool_calls(
     conversation: &mut Vec<ConversationItem>,
     reason: DanglingToolCallReason,
 ) -> usize {
+    repair_dangling_tool_calls_with(conversation, |_, name| {
+        synthetic_dangling_result_text(name, reason)
+    })
+}
+
+/// `resolve(tool_call_id, tool_name)` is only asked for tool calls that still
+/// have no result; answered calls keep their existing result.
+pub fn repair_dangling_tool_calls_with(
+    conversation: &mut Vec<ConversationItem>,
+    mut resolve: impl FnMut(&str, &str) -> String,
+) -> usize {
     // Phase 1: forward scan to find every assistant with unanswered tool calls.
     // We record (insert_position, synthetic_items) for each repair site.
     let mut repairs: Vec<(usize, Vec<ConversationItem>)> = Vec::new();
@@ -2061,10 +2139,7 @@ pub fn repair_dangling_tool_calls(
                 .iter()
                 .filter(|(id, _)| !answered.contains(id.as_ref()))
                 .map(|(id, name)| {
-                    ConversationItem::tool_result(
-                        id.as_ref(),
-                        synthetic_dangling_result_text(name, reason),
-                    )
+                    ConversationItem::tool_result(id.as_ref(), resolve(id.as_ref(), name))
                 })
                 .collect();
 
@@ -2119,7 +2194,7 @@ pub fn has_dangling_tool_calls(conversation: &[ConversationItem]) -> bool {
     false
 }
 
-fn synthetic_dangling_result_text(name: &str, reason: DanglingToolCallReason) -> String {
+pub fn synthetic_dangling_result_text(name: &str, reason: DanglingToolCallReason) -> String {
     // Exhaustive match (no `_ =>` guard) so adding a new variant is a compile-time error at every call site that renders these messages
     match reason {
         DanglingToolCallReason::UserCancelled => {
@@ -2334,6 +2409,37 @@ mod tests {
     use super::*;
     use crate::tool_overrides::*;
     use assert_matches::assert_matches;
+
+    /// `cached_prompt_tokens_present` records whether the wire carried a cache-read number at
+    /// all, so a missing `prompt_tokens_details` cannot masquerade as a 0-token cache hit.
+    #[test]
+    fn cached_prompt_tokens_presence_follows_the_wire_field() {
+        use crate::types::PromptTokensDetails;
+        let reported = |cached_tokens: Option<PromptTokensDetails>| Usage {
+            prompt_tokens: 1_000,
+            completion_tokens: 10,
+            total_tokens: 1_010,
+            prompt_tokens_details: cached_tokens,
+            completion_tokens_details: None,
+            cost_in_usd_ticks: None,
+        };
+
+        let usage = TokenUsage::from(reported(Some(PromptTokensDetails {
+            cached_tokens: 400,
+            ..Default::default()
+        })));
+        assert!(usage.cached_prompt_tokens_present);
+        assert_eq!(usage.cached_prompt_tokens, 400);
+
+        // A reported field with zero hits is still "present".
+        assert!(TokenUsage::from(reported(Some(PromptTokensDetails::default())))
+            .cached_prompt_tokens_present);
+
+        // No details object at all: the cache-hit share is unknown, never zero.
+        let usage = TokenUsage::from(reported(None));
+        assert!(!usage.cached_prompt_tokens_present);
+        assert_eq!(usage.cached_prompt_tokens, 0);
+    }
 
     /// Keeps `forwards_prompt_cache_key()` honest against each mapping: a key that never reaches the wire looks like a 0% cache hit, not a bug.
     #[test]
@@ -3487,6 +3593,11 @@ mod tests {
         assert_eq!(
             StopReason::from(FinishReason::ContentFilter),
             StopReason::ContentFilter
+        );
+        // A provider-specific verdict is still a usable generation: end cleanly, never fail the request.
+        assert_eq!(
+            StopReason::from(FinishReason::Unknown("repetition_truncation".to_string())),
+            StopReason::Stop
         );
     }
 
@@ -4768,7 +4879,7 @@ mod tests {
             1,
             "trailing reasoning has no assistant to attach to"
         );
-        assert_eq!(msgs.first().map(|m| m.role), Some(Role::User));
+        assert_eq!(msgs.first().map(|m| m.role.clone()), Some(Role::User));
     }
 
     #[test]

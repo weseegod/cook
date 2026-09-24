@@ -681,6 +681,29 @@ mod tests {
         );
         // Sanity: rest of the template still renders.
         assert!(prompt.contains(crate::prompt::context::DEFAULT_SYSTEM_PROMPT_LABEL));
+        assert!(
+            prompt.contains("Headless sessions have no human to take over"),
+            "non-interactive prompt must keep the workspace-file follow-through rule"
+        );
+        assert!(
+            prompt.contains("confirm with memory_search before claiming it is stored"),
+            "non-interactive prompt must require tool-backed durable memory writes"
+        );
+    }
+
+    #[test]
+    fn interactive_omits_headless_workspace_file_rule() {
+        let mut p = default_placeholders();
+        jset(&mut p, "is_non_interactive", serde_json::json!(false));
+        let prompt = render_base(&default_renderer(), &p);
+        assert!(
+            !prompt.contains("Headless sessions have no human to take over"),
+            "interactive prompt must omit the headless workspace-file rule"
+        );
+        assert!(
+            !prompt.contains("confirm with memory_search before claiming it is stored"),
+            "interactive prompt must omit the headless durable-memory tool rule"
+        );
     }
 
     #[test]

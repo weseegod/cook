@@ -11,6 +11,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+use xai_tool_types::terminal_command::command_execution_key;
 
 use crate::computer::local::cgroup::{
     CgroupGuard, CgroupMemoryConfig, MemoryMonitor, PROCESS_OOM_EXIT_CODE,
@@ -64,6 +65,16 @@ fn output_file_cap_from_env() -> u64 {
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(MAX_OUTPUT_FILE_BYTES)
+}
+
+fn environment_fingerprint(env: &HashMap<String, String>) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut entries: Vec<_> = env.iter().collect();
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    entries.hash(&mut hasher);
+    hasher.finish()
 }
 /// Post-exit drain cap: an inherited pipe (`cmd &`, no redirect) would
 /// otherwise block the actor loop forever.
@@ -333,6 +344,7 @@ struct ProcessState {
     command: String,
     display_command: Option<String>,
     cwd: String,
+    env_fingerprint: u64,
     start_wall_time: std::time::SystemTime,
     end_wall_time: Option<std::time::SystemTime>,
 
@@ -608,6 +620,32 @@ struct LocalTerminalActor {
 }
 
 impl LocalTerminalActor {
+    /// Reject another instance of a command that is still running in the same
+    /// session. The actor serializes requests even when tool calls run in parallel.
+    fn active_matching_command(&self, request: &TerminalRunRequest) -> Option<&str> {
+        let command = request
+            .display_command
+            .as_deref()
+            .unwrap_or(&request.command);
+        let key = command_execution_key(command);
+        self.processes.iter().find_map(|(id, process)| {
+            let running = !process.lifecycle.has_exited();
+            let same_owner = process.owner_session_id == request.owner_session_id;
+            let same_directory = process.cwd == request.working_directory.display().to_string();
+            let same_environment = process.env_fingerprint == environment_fingerprint(&request.env);
+            let previous = process
+                .display_command
+                .as_deref()
+                .unwrap_or(&process.command);
+            (running
+                && same_owner
+                && same_directory
+                && same_environment
+                && command_execution_key(previous) == key)
+                .then_some(id.as_str())
+        })
+    }
+
     fn new(
         cmd_rx: mpsc::Receiver<TerminalCommand>,
         self_tx: mpsc::WeakSender<TerminalCommand>,
@@ -1169,6 +1207,12 @@ impl LocalTerminalActor {
         request: TerminalRunRequest,
         reply: oneshot::Sender<Result<TerminalRunResult, ComputerError>>,
     ) {
+        if let Some(task_id) = self.active_matching_command(&request) {
+            let _ = reply.send(Err(ComputerError::io(format!(
+                "command already running in this session (task {task_id}); wait for or stop it before starting another"
+            ))));
+            return;
+        }
         // Foreground callers never see this id; the reply goes back on the oneshot.
         let internal_id = uuid::Uuid::now_v7().to_string();
 
@@ -1229,6 +1273,7 @@ impl LocalTerminalActor {
             command: request.command.clone(),
             display_command: request.display_command.clone(),
             cwd: request.working_directory.display().to_string(),
+            env_fingerprint: environment_fingerprint(&request.env),
             start_wall_time: std::time::SystemTime::now(),
             end_wall_time: None,
             notification_handle: request.notification_handle.clone(),
@@ -1316,6 +1361,12 @@ impl LocalTerminalActor {
         request: TerminalRunRequest,
         reply: oneshot::Sender<Result<BackgroundHandle, ComputerError>>,
     ) {
+        if let Some(task_id) = self.active_matching_command(&request) {
+            let _ = reply.send(Err(ComputerError::io(format!(
+                "command already running in this session (task {task_id}); wait for or stop it before starting another"
+            ))));
+            return;
+        }
         // Background commands fork the current shell state but don't update it on exit.
         let SpawnResult {
             child,
@@ -1377,6 +1428,7 @@ impl LocalTerminalActor {
             command: request.command.clone(),
             display_command: request.display_command.clone(),
             cwd: request.working_directory.display().to_string(),
+            env_fingerprint: environment_fingerprint(&request.env),
             start_wall_time: std::time::SystemTime::now(),
             end_wall_time: None,
             notification_handle: request.notification_handle.clone(),
@@ -2959,15 +3011,10 @@ fn read_available(reader: &mut (impl tokio::io::AsyncRead + Unpin), out: &mut Ve
 /// bounded so the actor loop never blocks indefinitely.
 async fn graceful_kill_and_wait(process: &mut ProcessState) {
     send_sigterm_to_group(process);
-
-    if tokio::time::timeout(SIGTERM_GRACE, process.child.wait())
-        .await
-        .is_ok()
-    {
-        drain_remaining_output(process).await;
-        return;
-    }
-
+    // Keep the group leader unreaped for the grace period. A shell can exit on
+    // SIGTERM before its descendants do; reaping it first loses the safe group
+    // identity and leaves those descendants running.
+    tokio::time::sleep(SIGTERM_GRACE).await;
     send_sigkill_to_group(process);
 
     // SIGKILL almost always reaps instantly; the cap protects against D-state
@@ -3443,6 +3490,122 @@ mod tests {
             owner_session_id: None,
             description: None,
         }
+    }
+
+    #[test]
+    fn command_key_matches_equivalent_launches() {
+        let first = command_execution_key("export MODEL=spark PARALLEL=4\nSKIP_BUILD=1 ./job.sh");
+        let second =
+            command_execution_key("export PARALLEL=4 SKIP_BUILD=1 MODEL=spark\nexec ./job.sh");
+        let cleanup = command_execution_key(
+            "pkill -f old-job || true\nexport MODEL=spark PARALLEL=4 SKIP_BUILD=1\nexec ./job.sh",
+        );
+        assert_eq!(first, second);
+        assert_ne!(first, cleanup);
+        assert_ne!(
+            first,
+            command_execution_key("export MODEL=other PARALLEL=4 SKIP_BUILD=1\n./job.sh")
+        );
+        assert_ne!(
+            command_execution_key("./job.sh --one"),
+            command_execution_key("./job.sh --two")
+        );
+        assert_ne!(
+            command_execution_key("cd one; ./job.sh"),
+            command_execution_key("cd two; ./job.sh")
+        );
+        assert_ne!(
+            command_execution_key("echo 'a  b'"),
+            command_execution_key("echo 'a b'")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn duplicate_command_is_single_flight_per_session() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("long-job.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let backend = LocalTerminalBackend::new();
+        let command = script.to_string_lossy().to_string();
+        let first = backend
+            .run_background(make_request(&command))
+            .await
+            .unwrap();
+
+        let mut repeated = make_request(&format!("exec {command}"));
+        repeated.description = Some("another launch".into());
+        let mut first_with_env = make_request(&format!("export MODEL=spark25-4b\n{command}"));
+        first_with_env.owner_session_id = Some("env-session".into());
+        let env_handle = backend.run_background(first_with_env).await.unwrap();
+        let error = match backend.run_background(repeated).await {
+            Ok(_) => panic!("a second command must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("command already running"));
+
+        let mut repeated_env = make_request(&format!("MODEL=spark25-4b exec {command}"));
+        repeated_env.owner_session_id = Some("env-session".into());
+        assert!(backend.run_background(repeated_env).await.is_err());
+
+        let unrelated = backend
+            .run_background(make_request("sleep 30"))
+            .await
+            .unwrap();
+        let mut different_env = make_request(&command);
+        different_env.env.insert("RUN_MODE".into(), "other".into());
+        let different_env_task = backend.run_background(different_env).await.unwrap();
+        let mut other_session = make_request(&command);
+        other_session.owner_session_id = Some("another-session".into());
+        let independent = backend.run_background(other_session).await.unwrap();
+        assert_eq!(backend.kill_task(&first.task_id).await, KillOutcome::Killed);
+        assert_eq!(
+            backend.kill_task(&env_handle.task_id).await,
+            KillOutcome::Killed
+        );
+        assert_eq!(
+            backend.kill_task(&unrelated.task_id).await,
+            KillOutcome::Killed
+        );
+        assert_eq!(
+            backend.kill_task(&different_env_task.task_id).await,
+            KillOutcome::Killed
+        );
+        assert_eq!(
+            backend.kill_task(&independent.task_id).await,
+            KillOutcome::Killed
+        );
+        let restarted = backend
+            .run_background(make_request(&command))
+            .await
+            .unwrap();
+        assert_eq!(
+            backend.kill_task(&restarted.task_id).await,
+            KillOutcome::Killed
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn kill_background_task_reaps_term_ignoring_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("orphan-marker");
+        let command = format!(
+            "(trap '' TERM; sleep 2; echo orphan > '{}') & trap 'exit 0' TERM; wait",
+            marker.display()
+        );
+        let backend = LocalTerminalBackend::new();
+        let task = backend
+            .run_background(make_request(&command))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(backend.kill_task(&task.task_id).await, KillOutcome::Killed);
+        tokio::time::sleep(Duration::from_millis(1300)).await;
+        assert!(!marker.exists(), "a descendant survived the group kill");
     }
 
     #[tokio::test]

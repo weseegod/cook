@@ -1,0 +1,1 @@
+Read {{MARKER_FILE}} and create {{WORKDIR}}/notes.txt whose only line is that file's contents.

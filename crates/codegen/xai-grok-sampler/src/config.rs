@@ -2,17 +2,19 @@
 //! It deliberately does **not** alias `xai_grok_sampling_types::SamplingConfig`.
 //! Aliasing would pull transitive dependencies on shell-specific types (`xai-grok-tools`, etc.) into the sampler crate.
 
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use xai_grok_sampling_types::{
-    ApiBackend, CompactionAtTokens, CompactionsRemaining, ConversationGroupId,
-    DoomLoopRecoveryPolicy, ReasoningEffort, ReasoningSummary,
+    ApiBackend, ChatCompletionsRequestFormat, CompactionAtTokens, CompactionsRemaining,
+    ConversationGroupId, DoomLoopRecoveryPolicy, ReasoningEffort, ReasoningSummary,
 };
 
 use crate::attribution::SharedAttributionCallback;
 use crate::retry::{DEFAULT_MAX_RETRIES, RATE_LIMIT_RETRY_THRESHOLD};
+use crate::stream::tool_call_budget::ToolCallBudget;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -45,6 +47,9 @@ pub struct SamplerConfig {
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
     pub api_backend: ApiBackend,
+    /// Selects Chat Completions request fields; response parsing remains provider agnostic.
+    #[serde(default)]
+    pub chat_completions_request_format: ChatCompletionsRequestFormat,
     #[serde(default)]
     pub auth_scheme: AuthScheme,
     #[serde(default)]
@@ -64,6 +69,9 @@ pub struct SamplerConfig {
     /// Total context window size in tokens.
     /// The sampler does not enforce it; the session uses it for compaction decisions.
     pub context_window: u64,
+    /// Provider request-body cap, already defaulted from `api_backend` by model resolution; `None` budgets to 50 MiB.
+    #[serde(default)]
+    pub max_request_bytes: Option<NonZeroU64>,
     pub force_http1: bool,
     pub max_retries: Option<u32>,
     /// Total-attempt ceiling for rate-limited requests.
@@ -72,6 +80,10 @@ pub struct SamplerConfig {
     pub rate_limit_retry_threshold: Option<u32>,
     pub stream_tool_calls: bool,
     pub idle_timeout_secs: Option<u64>,
+    /// Ceilings on one response's tool-call traffic; `None` uses [`ToolCallBudget::default`].
+    /// Set it to tune a local model whose tool payloads are legitimately large.
+    #[serde(default)]
+    pub tool_call_budget: Option<ToolCallBudget>,
 
     // Reasoning effort
     pub reasoning_effort: Option<ReasoningEffort>,
@@ -132,6 +144,7 @@ impl Default for SamplerConfig {
             temperature: None,
             top_p: None,
             api_backend: ApiBackend::default(),
+            chat_completions_request_format: ChatCompletionsRequestFormat::default(),
             auth_scheme: AuthScheme::default(),
             request_compression: RequestCompression::default(),
             extra_headers: IndexMap::new(),
@@ -139,11 +152,13 @@ impl Default for SamplerConfig {
             query_params: IndexMap::new(),
             env_http_headers: IndexMap::new(),
             context_window: 0,
+            max_request_bytes: None,
             force_http1: false,
             max_retries: None,
             rate_limit_retry_threshold: None,
             stream_tool_calls: false,
             idle_timeout_secs: None,
+            tool_call_budget: None,
             reasoning_effort: None,
             reasoning_summary: None,
             origin_client: None,

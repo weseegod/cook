@@ -130,6 +130,10 @@ const SERIALIZATION_DISPLAY_PREFIX: &str = "serialization error: ";
 /// Sharing the const with the `#[error(...)]` template prevents drift.
 pub const MAX_TOKENS_TRUNCATION_MESSAGE: &str = "response truncated by max_tokens";
 
+/// Display prefix of [`SamplingError::ToolCallBudgetExceeded`].
+/// Shared with the variant's `#[error(...)]` template so [`SamplingError::tool_call_budget_from_rendered`] can never drift from what Display emits.
+pub const TOOL_CALL_BUDGET_DISPLAY_PREFIX: &str = "tool-call budget exceeded: ";
+
 #[derive(Debug, Error)]
 pub enum SamplingError {
     #[error("{message}")]
@@ -180,6 +184,12 @@ pub enum SamplingError {
     EmptyResponse { context: EmptyResponseContext },
     #[error("{text}", text = MAX_TOKENS_TRUNCATION_MESSAGE)]
     MaxTokensTruncation,
+    /// The response streamed tool calls past a per-response budget (argument bytes, call count, or time) without
+    /// finishing the turn. NOT retryable for the same reason as [`Self::IdleTimeout`]: a provider stuck in a
+    /// tool-call loop loops again on the replay.
+    /// Carries the observed value and the ceiling that tripped, so the user sees why the turn ended.
+    #[error("{prefix}{0}", prefix = TOOL_CALL_BUDGET_DISPLAY_PREFIX)]
+    ToolCallBudgetExceeded(String),
     /// A confident server-reported doom loop on the attempt (mid-stream or on the completed response). Carries the raw
     /// trigger labels (never generation content) and, for telemetry only, the stream chunk index the mid-stream abort fired
     /// at. `aborted_at_chunk` is `None` when the signal was only seen on the completed response.
@@ -314,6 +324,16 @@ impl SamplingError {
         )
     }
 
+    /// Rebuild from [`Self::ToolCallBudgetExceeded`]'s rendered Display, stripping the prefix for the same reason as [`Self::serialization_from_rendered`].
+    pub fn tool_call_budget_from_rendered(rendered: &str) -> Self {
+        Self::ToolCallBudgetExceeded(
+            rendered
+                .strip_prefix(TOOL_CALL_BUDGET_DISPLAY_PREFIX)
+                .unwrap_or(rendered)
+                .to_string(),
+        )
+    }
+
     pub fn is_auth_error(&self) -> bool {
         // Only 401 Unauthorized means the credentials themselves were rejected and warrant a token refresh / re-auth 403
         // Forbidden means the request was authenticated but the action is not permitted. That covers content-safety blocks,
@@ -403,6 +423,7 @@ impl SamplingError {
             | SamplingError::IdleTimeout { .. }
             | SamplingError::EmptyResponse { .. }
             | SamplingError::MaxTokensTruncation
+            | SamplingError::ToolCallBudgetExceeded(_)
             | SamplingError::DoomLoopDetected { .. } => false,
         }
     }
@@ -416,10 +437,11 @@ impl SamplingError {
             SamplingError::Serialization(_) => false,
             SamplingError::Api { status, .. } => is_retryable_api_status(*status),
             SamplingError::EventStreamError(_) => true,
-            SamplingError::StreamError { .. } => true,
+            SamplingError::StreamError { error_type, .. } => error_type != "invalid_tool_call",
             SamplingError::IdleTimeout { .. } => false,
             SamplingError::EmptyResponse { .. } => true,
             SamplingError::MaxTokensTruncation => false,
+            SamplingError::ToolCallBudgetExceeded(_) => false,
             SamplingError::DoomLoopDetected { .. } => true,
         }
     }
@@ -485,6 +507,7 @@ impl SamplingError {
             | SamplingError::IdleTimeout { .. }
             | SamplingError::EmptyResponse { .. }
             | SamplingError::MaxTokensTruncation
+            | SamplingError::ToolCallBudgetExceeded(_)
             | SamplingError::DoomLoopDetected { .. } => false,
         }
     }
@@ -508,6 +531,7 @@ impl SamplingError {
             | SamplingError::IdleTimeout { .. }
             | SamplingError::EmptyResponse { .. }
             | SamplingError::MaxTokensTruncation
+            | SamplingError::ToolCallBudgetExceeded(_)
             | SamplingError::DoomLoopDetected { .. } => false,
         }
     }

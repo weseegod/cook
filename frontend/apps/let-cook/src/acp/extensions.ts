@@ -237,16 +237,8 @@ export function listPlugins(sessionId?: string) {
   );
 }
 
-export function flushMemory() {
-  return request<Record<string, unknown>>("x.ai/memory/flush", {});
-}
-
-export function rewriteMemory() {
-  return request<Record<string, unknown>>("x.ai/memory/rewrite", {});
-}
-
-export function forgetMemory() {
-  return request<Record<string, unknown>>("x.ai/memory/forget", {});
+export function flushMemory(sessionId: string) {
+  return request<Record<string, unknown>>("x.ai/memory/flush", { session_id: sessionId });
 }
 
 /** The instruction files a workspace can carry, in the order the agent prefers them. */

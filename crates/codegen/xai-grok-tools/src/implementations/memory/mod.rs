@@ -37,4 +37,14 @@ mod tests {
             MEMORY_GET_TOOL_NAME
         );
     }
+
+    #[test]
+    fn memory_search_description_mentions_durable_roundtrip() {
+        use crate::types::tool_metadata::ToolMetadata;
+        let desc = ToolMetadata::description_template(&MemorySearchImpl);
+        assert!(
+            desc.contains("durable MEMORY.md") && desc.contains("call this tool"),
+            "memory_search must steer durable-memory workflow:\n{desc}"
+        );
+    }
 }

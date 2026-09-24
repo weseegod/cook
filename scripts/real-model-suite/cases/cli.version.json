@@ -1,0 +1,14 @@
+{
+  "id": "cli.version",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "--version"
+    ],
+    [
+      "version",
+      "--json"
+    ]
+  ]
+}

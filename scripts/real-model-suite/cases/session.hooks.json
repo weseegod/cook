@@ -1,0 +1,27 @@
+{
+  "id": "session.hooks",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-config",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/session.hooks.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "text_contains_marker",
+    "hook_once",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

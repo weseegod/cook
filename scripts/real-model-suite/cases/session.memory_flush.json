@@ -1,0 +1,26 @@
+{
+  "id": "session.memory_flush",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 900,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/session.memory_flush.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "purpose_any": [
+    "memory_flush"
+  ],
+  "checks": [
+    "no_session",
+    "usage_honest",
+    "purpose_present",
+    "home_memory"
+  ]
+}

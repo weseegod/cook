@@ -1,0 +1,11 @@
+{
+  "id": "cli.worktree_list",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "worktree",
+      "list"
+    ]
+  ]
+}

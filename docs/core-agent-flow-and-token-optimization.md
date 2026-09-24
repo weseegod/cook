@@ -1,23 +1,23 @@
 # Current core agent flow and token optimization
 
-Review date: **2026-09-21**. Code revision: `f26bad444d1e8221baf006a485abc8d3adc42678`.
+Review date: **2026-09-22**. Experiment base revision: `a8b1874dd099802bdae334733d2828a5697b05cf`.
 Scope: the core runtime shared by the TUI, headless mode, ACP, and desktop; the focus is the coding harness, context, and inference cost. The repository map is [ARCHITECTURE.md](../ARCHITECTURE.md).
 
-This is a code analysis and design proposal, **not a benchmark result or a runtime change**. It does not inspect chat history, credentials, or private configuration under `~/.cook`; therefore it cannot identify the largest token source in a real user session. Values marked as proposals are starting points for experiments, not existing configuration.
+This began as a code analysis and design proposal. Section 8.4 records one isolated local-model microbenchmark, one live agent-loop comparison, and an opt-in runtime arm. None of that is evidence of repository-wide cost savings. The follow-up implementation plan and the per-phase local-model matrix are in [core-agent-token-optimization-experiment-v2.md](core-agent-token-optimization-experiment-v2.md). The analysis did not inspect chat history, credentials, or private configuration under `~/.cook`; therefore it cannot identify the largest token source in a real user session. Values marked as proposals remain starting points for broader experiments, not product-wide defaults. The design applies to every backend this runtime can call, not to one Grok model. Context-window size stays a per-model setting.
 
 ## 1. Conclusion and priorities
 
 **The current flow is a capable coding-harness foundation, but there is not enough evidence to call it cost-optimal; the code shows several concrete opportunities to improve it.** The `model → tools → model` loop is appropriate. The best direction is to keep the current runtime and add measured context and budget policies rather than rewriting the actor architecture or introducing a coordinator for every request.
 
-Priorities:
+Priorities, with task correctness ahead of token count:
 
-1. **Measure cost by call type and request component.** Reuse the existing usage ledger and separate the main loop, compaction, goal roles, children, retries, and background helpers. Missing usage must remain visible as missing data.
-2. **Reduce output retained during a long coding turn.** Pruning currently uses `User`-item age; many tool rounds inside one prompt are not aged according to the actual evidence lifecycle.
-3. **Tighten the skill catalog budget and audit built-in schemas.** Lazy MCP discovery already exists. Skill listing already has a budget, but its default ceiling is large; catalogs should not be assumed to be small.
-4. **Evaluate two-pass compaction by cost and latency.** The runtime feature defaults to enabled even though the portable policy default is disabled. Prefire can spend inference tokens when its summary is never used.
-5. **Keep prefixes stable, select only needed context, and use goals/subagents according to task type.** The aim is to reduce rereads and rework, not only the token count of one request.
+1. **Do not change defaults until a phase matrix keeps the task correct.** The opt-in step-aware arm stays off. A cheaper or shorter prompt that drops a failure, a permission, or a real edit is not an optimization.
+2. **Keep the prefix byte-stable, and shorten tool output when it is produced.** Sliding a placeholder through the middle of history cuts raw tokens and can raise the uncached share. Append-only caps come before more mid-history rewrites. Section 8.4 records the measured split.
+3. **Pin evidence before omitting more.** Recency is not the same as “the latest failure, the live process, or the edit in progress.” Do not infer those pins from free-form prose.
+4. **Treat provider Batch API as a price discount for frozen work, not as a token reduction for the coding loop.** Use it only when section 9’s four conditions hold. DeepSeek has no Batch API; its 50% lever is off-peak pricing on the same realtime API.
+5. **Keep measuring hit versus miss, by provider.** Purpose and request-component accounting already land in the session ledger. A local cache-read column is not a hosted invoice. Catalog cuts, disabling prefire, and turning off side calls wait for a quality comparison.
 
-In this document, “optimal” means **the lowest cost per correctly completed task at an acceptable latency**, selected through model/provider benchmarks. No single compaction threshold or reasoning effort is optimal for every backend.
+In this document, “optimal” means **the lowest cost per correctly completed task at an acceptable latency**. A run that fails the task does not count as cheaper. No single compaction threshold, cache policy, or batch discount is optimal for every backend.
 
 ## 2. Structure and responsibilities
 
@@ -96,7 +96,7 @@ After projection for the backend, child, and structured-output mode, `effective_
 
 [tool_calls.rs](../crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_calls.rs) prepares and validates calls, applies approvals/hooks, locks paths related to writes, and uses `FuturesUnordered` to run calls. [tool_dispatch.rs](../crates/codegen/xai-grok-shell/src/session/acp_session_impl/tool_dispatch.rs) calls `WorkspaceOps::call_tool` through the tool runtime/Computer Hub.
 
-Concurrency already exists. Further optimization should batch independent reads, cap total batch output, and avoid conflicting operations with dependencies. A path lock derived from arguments is not a complete analysis of every side effect of a shell command.
+Concurrency already exists. Further optimization should issue independent reads in one model response and run them together, cap that response’s combined output, and avoid pairing operations that depend on each other. A path lock derived from arguments is not a complete analysis of every side effect of a shell command. This is tool concurrency inside one realtime turn. It is not the provider Batch API in section 9, which does not reduce the token count and cannot host the interactive tool loop without changing the task.
 
 ### 3.6 Request projection and provider
 
@@ -132,9 +132,15 @@ Completion records conversation/events, flushes storage, records usage, and send
 
 Single-pass compaction prepares history, a summary prompt, model/tools, and a budget, then calls [generate_session_compact](../crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs). The `compaction_verbatim_input` feature defaults to enabled in the registry: it prefers verbatim history, while fitting/retry can fall back to a shortened input. Do not assume the summarizer receives only a few lines or no tool schema. The code reserves 32,768 tokens for the compaction prompt/summary/reasoning; this is a compaction reserve, not the general output reserve for every main-loop request.
 
+The summarizer keeps the parent session id and the tool list on purpose. [session_compact.rs](../crates/codegen/xai-grok-shell/src/session/helpers/session_compact.rs) says dropping those tools would shift the prefix and force a full prefill. That is the opposite of a one-shot summary that disables prompt-cache writes. Do not turn cache writes off on this request to imitate another harness: the prefix alignment is the saving.
+
 When two-pass is enabled, pass 1 snapshots a prefix, summarizes it in the background, and stores NOTE₁ with a fingerprint, model, and boundary. When compaction is needed, pass 2 uses the note and tail if the prefix is still valid; if pass 1 is still running, it can await the task handle. A changed prefix or model invalidates the note. Fallback branches retain the single-pass path.
 
-After compaction, the runtime replaces active history with the compact result and required state, creates artifacts according to the selected mode, and rebuilds reminders for tasks/TODOs, rules, skills, MCP, and memory. A pre-compaction memory flush runs only when the policy and memory mode allow it; it is not mandatory for every compaction. Canonical history/artifacts and model-visible history serve different purposes: shortening a request does not delete source evidence.
+After compaction, the runtime replaces active history with the compact result and required state, creates artifacts according to the selected mode, and rebuilds reminders for tasks/TODOs, rules, skills, MCP, and memory. A pre-compaction memory flush runs only when the policy and memory mode allow it; it is not mandatory for every compaction. Canonical history/artifacts and model-visible history serve different purposes: shortening a request does not delete source evidence. The request-copy pruner does not persist the pruned copy. A compaction request does: `compaction_requests/{request_id}.json` under the session directory.
+
+What compaction keeps is not the pruner’s last three user turns. `keep_last_n_turns` (default 3) is request-copy pruning in [request_builder.rs](../crates/codegen/xai-chat-state/src/actor/request_builder.rs). Two-pass compaction splits at about 95% of token weight ([two_pass.rs](../crates/codegen/xai-grok-shell/src/session/two_pass.rs), `TWO_PASS_DEFAULT_SPLIT_FRACTION`) and does not sever a tool pair. [CompactionStateContext](../crates/codegen/xai-chat-state/src/compaction_utils.rs) then carries messages since the last anchor, edited paths, running tasks, MCP servers, and todos.
+
+A summary that hits its output cap is labeled `CompactionOutcome::Truncated` in [compaction.rs](../crates/codegen/xai-grok-shell/src/session/compaction.rs), and `compaction.complete` still runs. Do not score that outcome as a clean checkpoint. Rejecting it outright is not a change in this document; it would need its own quality matrix. Another harness refuses to checkpoint a length-stopped summary. That difference is recorded here so the two are not treated as the same result.
 
 ## 4. Existing budgets and token-saving mechanisms
 
@@ -144,7 +150,7 @@ After compaction, the runtime replaces active history with the compact result an
 | Tool-result age | Counts backward through `ConversationItem::User`; keeps the last 3 turns | A prompt with many tool rounds can retain output for a long time; synthetic users affect counting |
 | Soft trim | Old result over 4,000 characters → 1,500-character head + 1,500-character tail | Smaller context, but an error in the middle of a log may disappear |
 | Hard clear | Age ≥10 turns → placeholder | Retained history also has eager pruning when a new user turn arrives |
-| Read file | Cap of 25,000 **estimated** tokens and `MAX_LINES_READ = 1,000`, plus output-byte settings | One large read can materially grow context; over-cap reads can suggest narrower ranges |
+| Read file | Cap of 25,000 **estimated** tokens (`READ_FILE_MAX_TOKENS`) and `MAX_LINES_READ = 1,000` | The line cap already names the next offset, the total line count, and the range shown. The token-cap refusal (`FileTooLarge`) only says to use offset and limit; it does not compute the next offset. One large read can still grow context |
 | Bash | Default model output is 20,000 characters; full logs have a path when truncated | Head/tail truncation and offload already exist |
 | Skill catalog | Default fraction is 50% of context; fallback is a 400,000-character budget; each description + when-to-use is capped at 400 bytes | There is a budget, but the ceiling is wide; not every session uses it all |
 | Skill template | Non-Cursor XML is budgeted; Cursor compatibility is verbatim | Audit by profile rather than generalizing from one template |
@@ -232,7 +238,7 @@ Extend the existing telemetry/ledger at request assembly and sampler completion;
 
 [usage.rs](../crates/codegen/xai-chat-state/src/usage.rs) already has input/output/cache/reasoning/model-call totals, per-model ledgers, missing-cost, and incomplete semantics. Extend it only after auditing **every call site**, especially compaction/helpers that call a client directly; the existence of a ledger does not prove every side call reaches it.
 
-`record_response_token_usage` currently leaves some `usage=None` responses unmarked as incomplete. Close that gap before using the UI total as a baseline. If the cost of a failed or cancelled stream is unknown, record “unknown,” not zero.
+On this branch a successful main-loop response with `usage=None` marks both ledgers incomplete and does not invent a zero-token call. The experiment document records that closure. If the cost of a failed or cancelled stream is unknown, record “unknown,” not zero. Compare providers on hit and miss tokens, not on a single “tokens used” total: DeepSeek and MiMo price a cache hit at about 1–2% of a miss, so a shorter prompt with a larger miss share can cost more.
 
 Normalized task cost:
 
@@ -247,9 +253,15 @@ The adapter must define whether buckets overlap. Do not add reasoning twice when
 
 For profiling, prefer counts, hashes, and provenance; do not log full prompts or file content by default. Report both raw and uncached input per task, not only “tokens used.”
 
-### 6.2 P1 — budget tool output and age by step
+### 6.2 P1 — short tool output at generation time, then step age
 
-Extend `PruningConfig` with metadata such as `tool_round`, `last_referenced`, artifact handle, file content hash, and evidence type. Keep `User` turn age for compatibility, then add an upper bound on live tool-result tokens **within one turn**.
+The next code change is an append-only cap at tool-result generation, behind a flag that defaults off. Bytes already appended stay byte-identical, so the prefix a provider can cache does not move. The request-copy step-aware arm already implemented on this branch rewrites older results into placeholders as the round window slides. It stays opt-in. Section 8.4’s live comparison cut tool-result tokens per request and, on the same runs, roughly doubled the share that was not reported as a cache read. That is why generation-time caps come before more sliding rewrites. A sliding rewrite, if it remains, should fire once at a coarse boundary (about to compact), not on every sample.
+
+Name the rule this paragraph is already following. Provider context grows at the tail. The one planned cache break on the hot path is compaction. The step-aware arm is not that exception: it stays opt-in and off by default. Do not import another runtime’s lane or checkpoint deferral to enforce the rule. If a later change omits a tool result, the omission is an appended audit record, not an edit of canonical history, and it is not part of the v2 phases.
+
+A read cap keeps the head and names the next offset, the total line count, and the range shown, which is what the line cap in [read_file](../crates/codegen/xai-grok-tools/src/implementations/grok_build/read_file/mod.rs) already does. Do not add a head-and-tail shape for reads. Bash already keeps the tail and a path to the full log. Do not copy another harness’s 50KB or 2,000-line caps, and do not lower `READ_FILE_MAX_TOKENS` to match them. The token-cap refusal still does not compute a next offset; a generation cap, if one is added, reuses the existing continuation marker instead of inventing a second notice.
+
+Extend `PruningConfig` with metadata such as `tool_round`, `last_referenced`, artifact handle, file content hash, and evidence type. Keep `User` turn age for compatibility, then add an upper bound on live tool-result tokens **within one turn**. Pins for the latest failure, a live process, and the edit in progress are required before a broader omission rollout. Those pins come from tool provenance, not from a model reading the log.
 
 Starting values for a cost-conscious coding profile:
 
@@ -267,7 +279,7 @@ Avoid rewriting many prefix positions on every sample: make output short at gene
 
 ### 6.3 P1 — smaller catalogs and profile-specific toolsets
 
-Skill bodies are loaded on invocation; first tighten the **listing budget and selection**. An experiment can use a catalog budget of **1–2k tokens** or `min(absolute_cap, small_fraction × context_window)`, with search/discovery for hidden entries. Always surface a skill explicitly requested by the user; pin the active skill and preserve scope/precedence rules.
+Skill bodies are loaded on invocation; first tighten the **listing budget and selection**. An experiment can use a catalog budget of **1–2k tokens** or `min(absolute_cap, small_fraction × context_window)`, with search/discovery for hidden entries. Always surface a skill explicitly requested by the user; pin the active skill and preserve scope/precedence rules. Shrinking the catalog is not a first cut: a hidden skill the task needed is a quality failure, not a saving.
 
 For built-in tools, audit the post-projection `effective_tools` and retain the read/search/run/edit and required control groups. Specialized capabilities such as media, workflows, and integrations should appear only when the profile needs them or discovery selects them. Do not rename the public tool API casually; use existing registry metadata and the bridge. Replacing the `__` heuristic with namespace metadata is a separate step with regression tests.
 
@@ -275,7 +287,7 @@ Prefer deterministic selection from mode, declared capabilities, and explicit us
 
 ### 6.4 P1/P2 — compaction based on benefit, with structured state
 
-Keep the current overflow guard, but base the decision on the projected request:
+Keep the current overflow guard. The context window is configured per model and is not retuned here to chase a provider price tier. Base the fit check on the projected request:
 
 ```text
 input_budget = context_window − reserved_output − safety_margin
@@ -288,7 +300,9 @@ The preferred order is: remove redundant output with an artifact → remove stal
 
 Proposed summary schema: objective/constraints, repository state and changed files, active decisions, checks and results, unresolved failures, live task/process IDs, artifact references, and next steps. Keep literal evidence for important commands, paths, and errors; a summary must not turn “planned” into “completed.” Reuse `CompactionStateContext` and segments, extending the schema at the appropriate layer.
 
-Benchmark two-pass on and off with the same task/model, measuring total cost and p95 compaction stall. For a cost-first profile, try **disabling speculative prefire** while retaining single-pass fallback; do not change the product-wide default before data. The existing experiment flag is `[features] two_pass_compaction = false`, but record the effective resolved value because policy layers can override it.
+File lists in that schema come from tool provenance and are merged with the lists already stored on the previous summary. The model is not asked to remember paths. `CompactionStateContext` already carries edited paths, running tasks, MCP servers, and todos; a read-file list is the gap, not a new phase. Do not disable the compaction prefix alignment in section 3.8. A length-capped summary is not a clean checkpoint for the quality gate, and this section does not change the code that still completes one.
+
+Benchmark two-pass on and off with the same task/model, measuring task success first, then total cost and p95 compaction stall. Do not disable speculative prefire, or `compaction_verbatim_input`, only to spend fewer tokens. Both default on in the feature registry. Turn one off only after an A/B shows the same tasks still complete. The existing experiment flag is `[features] two_pass_compaction = false`, but record the effective resolved value because policy layers can override it.
 
 Prefire is worthwhile only when saved future input cost exceeds compaction cost, cache rebuild cost, and expected reread cost, using the backend’s actual cache prices. Add a cooldown after discarded passes, a minimum token-growth condition, and a prediction that the task will continue long enough. A cheaper summary model is a separate experiment; check recall and format and preserve reasoning/provider replay contracts.
 
@@ -312,9 +326,9 @@ Polling a live job is an exception: use actual process/session state, notificati
 
 | Phase | Change locations | Deliverable / completion condition |
 |---|---|---|
-| P0: baseline | `chat-state/usage.rs`, `shell/.../sampler_turn.rs`, sampler metrics, side-call helpers | One-task report with call purpose, actual/estimated usage, missing flags, and no child double-counting |
-| P1a: output | `tools/.../bash`, `read_file`, truncate helpers, `shell/.../tool_calls.rs` | Compact output with full-output handles; errors and requested ranges preserve fidelity |
-| P1b: context | `chat-state/types.rs`, `actor/request_builder.rs`, mutations, request-history validation | Step-aware pruning with budgets, pins, and provenance; replay/cancel/resume remain correct |
+| P0: baseline | `chat-state/usage.rs`, `shell/.../sampler_turn.rs`, side-call helpers | Done on this branch for purpose and request-component rows. Remaining work is hit versus miss, per provider, not a second ledger |
+| P1a: output | `tools/.../bash`, `read_file`, truncate helpers, `shell/.../tool_calls.rs` | Append-only cap, default off, with a handle back to the full output. Active-round evidence stays intact |
+| P1b: context | `chat-state/types.rs`, `actor/request_builder.rs`, mutations, request-history validation | Opt-in step-aware arm exists. Next change is provenance pins, not a lower default. Sliding rewrites stay off the hot path |
 | P1c: catalog | Skill tracker/listing, agent user template, registry/bridge, sampler tool projection | Small budgeted catalog with discovery; profile-specific built-ins; tool IDs/permissions preserved |
 | P2a: compaction | `shell/session/compaction.rs`, `two_pass.rs`, common compaction, helpers | Measure consumed/discarded prefire; structured summary; fit includes output reserve |
 | P2b: orchestration | `goal.rs`, goal roles, subagent resolution, prompt-suggestion gates | Task budgets cover side calls; delegation/verification is evidence-driven |
@@ -322,7 +336,7 @@ Polling a live job is an exception: use actual process/session state, notificati
 
 Names such as `cost-conscious coding`, `tool_round`, `call purpose`, and `input_budget` are **proposals**, not claims that public config/API already exists. Do not edit the generated root `Cargo.toml`; core changes belong in shell/chat-state/tools, and desktop remains a leaf ACP client.
 
-Recommended order: P0 → output and step-aware pruning → catalog → compaction policy → goal/model routing. Run each change as its own A/B experiment before combining arms, so regressions remain attributable.
+Recommended order: keep current defaults → evidence pins → append-only output caps → hit/miss reporting → catalog only if named skills still surface → compaction policy only if task success holds → goal and side-call gates. The provider Batch API is not a row in this table; section 9 limits it to frozen evaluation on models that actually discount it. Run each change as its own phase. One phase, one matrix, and a commit only when that matrix’s quality cells pass. The matrix and the phase list are in the v2 experiment document. Do not combine arms before the matrix attributes the result.
 
 ## 8. Benchmark and decision criteria
 
@@ -369,18 +383,122 @@ cargo test -p xai-grok-shell --lib compaction
 cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types
 ```
 
-These are validation plans, **not commands run while writing this document**. Unit tests verify invariants; they do not prove token savings or coding quality, which require a separate benchmark.
+This command block was the validation plan at the original review. Section 8.4 distinguishes the checks and microbenchmark executed by the follow-up experiment. Unit tests verify invariants; they do not prove token savings or coding quality, which require a separate benchmark.
 
-## 9. Directions not to prioritize first
+### 8.4 Executed experiment: step-aware result retention
+
+The full implementation notes, reproduction commands, troubleshooting, limitations, rollback instructions, and follow-up plan are in [core-agent-token-optimization-experiment.md](core-agent-token-optimization-experiment.md).
+
+This branch implements an **opt-in** P1b arm without changing the legacy default. Two new `[compaction.pruning]` settings are zero/disabled by default:
+
+```toml
+[compaction.pruning]
+keep_last_n_tool_rounds = 6
+recent_tool_result_char_budget = 64000
+```
+
+When either setting is enabled, request-copy pruning counts assistant tool-call rounds inside the current user turn. It always retains the active round. Prior results remain raw only while they satisfy every enabled round/character limit; omitted content becomes an explicit placeholder while the tool result and call ID remain in place. Canonical persisted history is unchanged. The existing context-fullness gate still decides whether request pruning runs.
+
+The supporting P0 correction makes a successful main-loop response with missing provider usage mark both prompt and session usage incomplete. It preserves the prior model-reported context total and does not invent a zero-token model call. This closes the specific missing-usage gap identified in section 6.1 before interpreting experiment totals.
+
+#### Local model microbenchmark
+
+Date: **2026-09-21**. Model: local `Ternary-Bonsai-2-27B-PQ2_0.gguf` through llama.cpp's OpenAI-compatible endpoint (server alias `bonsai2`). Harness: [benchmark_step_pruning.sh](../scripts/benchmark_step_pruning.sh). Parameters: temperature 0, reasoning disabled, 160 output-token cap, three independent repetitions per arm.
+
+The synthetic fixture models one user prompt with eight tool rounds. Rounds 1–6 contain stale successful-build noise; rounds 7–8 contain the active failure, patch, and passing focused test. The optimized arm replaces rounds 1–6 with the same placeholder emitted by the runtime policy. The acceptance check asks the model to identify the test, expected/actual state, and whether the patch addresses the newest failure.
+
+| Result | Baseline | Step-aware arm |
+|---|---:|---:|
+| Repetitions with correct evidence/verdict | 3/3 | 3/3 |
+| Reported prompt tokens per run | 8,840 | 230 |
+| Reported completion tokens per run | 78 | 78 |
+| Reported total tokens per run | 8,918 | 308 |
+| Median wall time (range) | 2 s (2–3) | 2 s (2–3) |
+
+For this fixture, reported prompt input fell by **97.4%** while the answer stayed byte-identical across arms and repetitions. This is deliberately a stress microbenchmark for the confirmed single-user-turn retention problem. It does not measure end-to-end task success, cache economics, reread frequency, compaction, children, or cost per accepted repository task, so it does not justify enabling the settings globally.
+
+#### Live agent-loop comparison
+
+The experiment document’s section 18 ran the real agent loop on one synthetic read-file task, three paired repetitions, local model, `CONTEXT_WINDOW=40000`. The step-aware arm fired in all three of its runs. Mean tool-result tokens per request fell from 8,492 to about 5,501. Mean billed input fell from 287,666 to 233,386, and mean cache reads fell from 252,497 to 161,407. On this harness billed input includes cache reads, so the uncached remainder rose from about 35,000 to about 72,000. All six runs returned both required markers. The step-aware arm’s own billed input ranged from 154,928 to 290,339. Wall time was not better. These are local-server token columns, not a DeepSeek, MiMo, or xAI invoice. The 30–50 task suite in section 8.1 remains the rollout gate. The immediate gate is the three-model phase matrix in the v2 experiment document.
+
+#### Three-model PR versus main (2026-09-24)
+
+Date: **2026-09-24**. Direct A/B of the same real-task harness ([benchmark_step_pruning_live.sh](../scripts/benchmark_step_pruning_live.sh), `RUNS=1`, `CONTEXT_WINDOW=40000`) against two binaries on one machine, one model on `:8080` at a time:
+
+| Side | Binary | Commit |
+|---|---|---|
+| PR (`experiment/core-agent-token-optimization`) | `target/debug/xai-grok-pager` | `9f095fc5` |
+| main | `Projects/cook-main/target/debug/xai-grok-pager-main` | `2e11f136` |
+
+The harness script itself lives only on the PR branch; it was run with `COOK_BIN` pointed at each binary. `MODEL_WIRE` now takes the server `--alias` (`spark25` / `bonsai2` / `mimo26`) instead of hardcoding `model = "spark25"`, so the same script drives all three local launchers. Evidence: `/tmp/real-task-pr-vs-main/`.
+
+**Fidelity (both markers required):**
+
+| Model | PR baseline | PR step-aware | main baseline | main step-aware |
+|---|---|---|---|---|
+| spark25-4b | fail `both-markers-lost` (1333 s) | pass (190 s) | pass (303 s) | fail `one-marker`, agent exit non-zero (`Error: max turns reached`, `stopReason=cancelled`, 368 s) |
+| bonsai2-27b | pass (200 s) | pass (252 s) | pass (182 s) | pass (185 s) |
+| mimo26-9b | pass (1045 s) | pass (13 s, **prune_events=0**) | pass (1793 s) | pass (1686 s) |
+
+Script exit was 0 for all six model×side cells (the harness completed). Fidelity: PR 4/6 arms, main 5/6. Neither side is clean 6/6.
+
+**What each side can measure:**
+
+| Signal | PR | main |
+|---|---|---|
+| Agent loop + marker fidelity | yes | yes |
+| `purposeUsage` / `requestComponents` | filled | always `-` (accounting not on main) |
+| Step-aware arm engaged | spark 9 events / bonsai 5 / mimo **0** | always 0 (`keep_last_n_tool_rounds` ignored; `#[serde(default)]` drops unknown keys) |
+| Tool-result tokens (example) | spark baseline 95,952 → step-aware 43,089 | not reported |
+
+**Read for the decision.** The harness succeeds end-to-end on both binaries when scored only as “did the agent finish with both markers plus did the script exit 0.” It succeeds as a *measurement* instrument only on the PR: main cannot print purpose/component shares or prune counts, so a main run cannot answer whether pruning saved tokens. The mimo PR step-aware cell (`prune_events=0`, 2 loop calls, 13 s) measured nothing about the arm and must not be read as a saving. The spark PR baseline lost both markers; the spark main step-aware arm hit `--max-turns 24`. These are one synthetic read-file task, `RUNS=1`, three local models — direction and harness portability, not a rate and not a rollout gate. The 30–50 task suite in section 8.1 remains the gate.
+
+## 9. Batch API and per-provider price
+
+Batch API (xAI `/v1/batches`, and the same shape at OpenAI and Anthropic) changes the **price per token**. It does not reduce the token count, and it does not make the model more accurate. A coding turn may use it only when all four conditions hold:
+
+1. That provider’s price table discounts **that model**. A batch product with a 0% discount is not a saving.
+2. The call does not gate the next tool step, does not write the workspace, and reads a snapshot that is already frozen. A repo that moves while the job waits is a wrong edit, not a slow one.
+3. The prompt is the same prompt the realtime path would send. Batch is not a reason to drop tools, reasoning, or evidence.
+4. The user does not need a stream, a permission prompt, or a way to interrupt.
+
+The interactive loop fails conditions 2 and 4. The next tool round depends on the previous result, so each round would be a new batch. Compaction, the goal verifier, and the permission classifier also fail condition 2 when their result feeds the next coding step. Recap, `/btw`, turn summary, and title refresh already share the parent prompt-cache key; moving them to batch can drop a hot prefix for a discount that is smaller than the miss they would create.
+
+Current experimental exception: `/goal_batch` explicitly accepts this latency and submits one Batch API job per **main-agent** model round. It does not change `/goal` or normal turns; planner/verifier and subagents may still use realtime. See `docs/byok-models.md` for its narrower compatibility requirements and limitations. The remainder of this section is the original optimization guidance, not a prohibition on that opt-in experiment.
+
+The switch is not a price table in the binary. It is `supports_batch_api` on that model’s `[model."<id>"]` row in `~/.cook/config.toml`, the same kind of field as `supports_reasoning_effort`. Omitted or `false` means never. `true` means the user allows Batch API for calls that already meet the four conditions. The coding loop ignores it. Phase 5 of the v2 experiment document is the implementation.
+
+Prices checked on **2026-09-22**. They will change; the rule does not.
+
+| Provider | Batch discount | What to do in this runtime |
+|---|---|---|
+| Xiaomi MiMo `mimo-v2.6-pro` and `mimo-v2.6-flash` | 50% on cache hit, cache miss, and output. Pro overseas realtime is $0.435 miss / $0.0036 hit / $0.87 output per 1M; batch is half of each. MiMo’s own note: evaluation, labeling, and batch regression that do not need a realtime answer. Cache hit is about 0.8% of miss | Batch only a frozen eval harness, and only when the prompt matches realtime. Never the coding loop |
+| DeepSeek `deepseek-flash` and `deepseek-v4-pro` | No Batch API on the official price page. Off-peak realtime is half of peak (peak UTC weekdays 01:00–04:00 and 06:00–10:00, excluding Chinese public holidays). Flash cache hit is $0.003 off-peak and $0.006 peak, against a miss of $0.15 and $0.30: hit is 2% of miss | Do not add a batch client. Do not delay a task until off-peak. Keep the prefix stable; that is the DeepSeek discount |
+| xAI | 20% only on `grok-4.3` and the three `grok-4.20-0309` variants. `grok-4.7` and `grok-4.6` have no batch discount. The queue is typically up to 24 hours | Not a path for the coding models. Frozen eval only, and only for a model the price table actually discounts |
+| Anthropic and OpenAI, when that backend is selected | Typically about 50% with an asynchronous window | Same four conditions. Do not assume every backend has a discount |
+
+A cache-hot MiMo prefix at $0.0036 per 1M is already far cheaper than a cache miss at $0.435. Halving the hit to $0.0018 does not pay for breaking the prefix. The same arithmetic is stronger on DeepSeek. Report cost as hit tokens times the hit rate plus miss tokens times the miss rate, using that provider’s table. Do not multiply a llama.cpp total by a Grok price and call it a MiMo result.
+
+## 10. Directions not to prioritize first
 
 Do not replace the actor runtime with another framework merely to reduce tokens: process layout does not shorten prompts. Do not increase the context window as the default cost solution; long history can still increase cumulative input. Do not enable multi-agent orchestration or an LLM router for every task. Do not run an LLM summarizer after every tool call; first use structured truncation and artifact retrieval.
 
-Do not lower output/reasoning caps arbitrarily: continuation, retries, and rework can increase. Do not remove required AGENTS/rules/constraints to hit a token number. Do not compact repeatedly at a very low threshold without accounting for cache rebuild and information loss. Do not merge every tool into a vague “mega-tool” only to reduce the tool-name count.
+Do not lower output/reasoning caps arbitrarily: continuation, retries, and rework can increase. Do not remove required AGENTS/rules/constraints to hit a token number. Do not compact repeatedly at a very low threshold without accounting for cache rebuild and information loss. Do not merge every tool into a vague “mega-tool” only to reduce the tool-name count. Do not put the ordinary coding loop on a provider Batch API; `/goal_batch` is the explicit high-latency exception above. Do not retune the per-model context window from this document. Section 11 lists the further refusals that came from comparing this flow with the Pi coding agent.
 
-## 10. External references and limits of the conclusion
+## 11. External references and limits of the conclusion
 
 The principles of sufficient context, just-in-time retrieval, and structured notes align with [Effective context engineering for AI agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents). This is design guidance, not a Cook benchmark.
 
+A source-checked comparison with the Pi coding agent (`earendil-works/pi` at `1a584a7a56eb5e7b4ff8ccbd46430f1533282eed`) is in [core-agent-vs-pi-coding-agent.md](core-agent-vs-pi-coding-agent.md). Take the named append-only rule, the read continuation marker, and file lists merged from tool provenance. Do not take the rest:
+
+- Do not cut the catalog to four tools, and do not drop MCP, subagents, or goals to save tokens.
+- Do not set the compaction request to skip prompt-cache writes. Section 3.8 keeps the parent session id and the tool list so the summarizer prefix stays aligned.
+- Do not add a cache-warm call that resends the last request with a one-token completion before a TTL. This runtime has no per-model TTL, and hit versus miss is not reported yet.
+- Do not fill a missing usage or a missing cache field with zero.
+- Do not turn two-pass prefire off because another harness compacts only at `contextWindow − reserveTokens`. That threshold is not a background pass.
+- Do not reject a length-capped summary in this plan. Record it as not a clean checkpoint. A change needs its own matrix.
+- Do not port a lane runtime, and do not add a `context_edit` store in the v2 phases. An omission, if one is persisted later, is an append. It does not rewrite canonical history.
+
 Keeping tool outputs short and clear and evaluating with real tasks are discussed in [Writing effective tools for AI agents](https://www.anthropic.com/engineering/writing-tools-for-agents). Lazy tool discovery is illustrated in [Introducing advanced tool use](https://www.anthropic.com/engineering/advanced-tool-use); Cook already has MCP discovery, so the proposal focuses on catalog budget and remaining built-ins. Vendor-reported savings are not projections for Cook.
 
-Verified here: request/tool/response paths in source, important defaults and overrides, existing limits, request-pruning/cache mappings, and change seams. Not verified here: a user session’s rendered prompt, actual cache hits, billing allocation for side calls, quality after policy changes, or achieved savings. **The immediate engineering decision should be to add a baseline and then optimize output/context in long turns; changing defaults should wait for the benchmark arms above.**
+Verified here: request/tool/response paths in source, important defaults and overrides, existing limits, request-pruning/cache mappings, and change seams. Not verified here: a user session’s rendered prompt, hosted cache-hit rates, billing allocation beyond the local ledger, or quality after a default change. **The immediate decision is to keep current defaults, pin evidence, and shorten tool output at generation time. Each of those phases is accepted only when its matrix in the v2 experiment document passes, including on the local models named there.**

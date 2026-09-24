@@ -1,0 +1,11 @@
+{
+  "id": "cli.memory_help",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "memory",
+      "--help"
+    ]
+  ]
+}

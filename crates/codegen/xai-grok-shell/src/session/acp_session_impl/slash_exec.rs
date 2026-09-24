@@ -751,8 +751,8 @@ impl SessionActor {
             }
             // GoalSet is handled directly in handle_prompt, before this function is called
             // The turn then flows through to model inference instead of ending immediately
-            BuiltinAction::GoalSet { .. } => {
-                unreachable!("GoalSet is intercepted in handle_prompt")
+            BuiltinAction::GoalSet { .. } | BuiltinAction::GoalBatchSet { .. } => {
+                unreachable!("goal setup is intercepted in handle_prompt")
             }
             BuiltinAction::DeepResearch { query } => {
                 if query.is_empty() {
@@ -835,7 +835,7 @@ impl SessionActor {
             BuiltinAction::GoalStatus => {
                 let current_tokens = self.chat_state_handle.get_total_tokens().await as i64;
                 let goal_tokens = self.goal_tokens_used(current_tokens);
-                let msg = {
+                let mut msg = {
                     let mut tracker = self.goal_tracker.lock();
                     tracker.account_elapsed();
                     match tracker.snapshot() {
@@ -851,6 +851,7 @@ impl SessionActor {
                             .to_string(),
                     }
                 };
+                msg.push_str(&self.goal_batch_status_suffix());
                 self.send_host_turn_slash_command_output(&msg).await;
                 ok_end_turn(0, None)
             }

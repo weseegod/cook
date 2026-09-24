@@ -1,0 +1,1 @@
+Use the terminal tool to run `rm {{WORKDIR}}/victim.txt`. Do not use any file-edit tool. After that, reply with one short sentence.

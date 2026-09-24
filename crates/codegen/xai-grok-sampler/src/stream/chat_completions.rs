@@ -3,20 +3,363 @@
 //! Consumes a raw `ChatCompletionChunk` stream and produces [`SamplingEvent`]s.
 //! Pure: no I/O, no shell coupling.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use futures_util::stream::{BoxStream, Stream};
 
 use xai_grok_sampling_types::{
-    AssistantItem, ChatCompletionChunk, ConversationItem, ConversationResponse,
+    AssistantItem, ChatCompletionChunk, ConversationItem, ConversationResponse, FinishReason,
     ResponseModelMetadata, SamplingError, StopReason, TokenUsage, ToolCall,
 };
 
 use crate::events::{SamplingChannel, SamplingErrorInfo, SamplingEvent};
 use crate::metrics::InferenceLatencyStats;
+use crate::stream::tool_call_budget::DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES;
+use crate::stream::tool_call_recovery::{ContentToolCallHoldback, recover_tool_calls_from_text};
 use crate::types::RequestId;
+
+type ToolCallParts = (String, String, String);
+
+/// Accumulates streamed Chat Completions tool calls while tolerating providers that restart the
+/// wire `index` at zero for a later call in the same response. The provider call id is the stable
+/// identity; wire indices are only routing hints for argument-only continuation chunks.
+#[derive(Default)]
+struct ToolCallAccumulator {
+    calls: BTreeMap<u32, ToolCallParts>,
+    active_by_wire_index: BTreeMap<u32, u32>,
+    next_logical_index: u64,
+}
+
+impl ToolCallAccumulator {
+    fn resolve_logical_index(&mut self, wire_index: u32, incoming_id: Option<&str>) -> (u32, bool) {
+        if let Some(&logical_index) = self.active_by_wire_index.get(&wire_index) {
+            let current_id = self
+                .calls
+                .get(&logical_index)
+                .map(|parts| parts.0.as_str())
+                .unwrap_or_default();
+            let starts_new_call = incoming_id
+                .is_some_and(|id| !id.is_empty() && !current_id.is_empty() && id != current_id);
+            if !starts_new_call {
+                return (logical_index, false);
+            }
+
+            let logical_index = self.allocate_logical_index();
+            self.active_by_wire_index.insert(wire_index, logical_index);
+            return (logical_index, true);
+        }
+
+        // Preserve compliant provider indices when possible. This keeps existing event consumers
+        // byte-for-byte compatible for ordinary 0,1,2... parallel calls.
+        let logical_index = if self.calls.contains_key(&wire_index) {
+            self.allocate_logical_index()
+        } else {
+            self.calls.entry(wire_index).or_default();
+            self.next_logical_index = self.next_logical_index.max(u64::from(wire_index) + 1);
+            wire_index
+        };
+        self.active_by_wire_index.insert(wire_index, logical_index);
+        (logical_index, false)
+    }
+
+    fn allocate_logical_index(&mut self) -> u32 {
+        while let Ok(candidate) = u32::try_from(self.next_logical_index) {
+            if !self.calls.contains_key(&candidate) {
+                self.calls.entry(candidate).or_default();
+                self.next_logical_index += 1;
+                return candidate;
+            }
+            self.next_logical_index += 1;
+        }
+        panic!("exhausted logical tool-call indices")
+    }
+}
+
+fn parts_into_tool_call((id, name, arguments): ToolCallParts) -> ToolCall {
+    ToolCall {
+        id: std::sync::Arc::<str>::from(id),
+        name,
+        arguments: std::sync::Arc::<str>::from(arguments),
+    }
+}
+
+/// llama.cpp puts MiMo's literal XML envelopes in `tool_calls[].function.arguments`.
+/// Those strings are not JSON, so the next-request sanitizer used to replace them with
+/// `{}` and the tool ran with no path. Recover the envelopes and keep any sibling call
+/// whose arguments were already valid JSON.
+fn arguments_are_json(arguments: &str) -> bool {
+    serde_json::from_str::<serde::de::IgnoredAny>(arguments).is_ok()
+}
+
+/// Markers llama.cpp inserts when a MiMo XML envelope is concatenated into a JSON string.
+const XML_ARGUMENT_MARKERS: &[&str] = &[
+    "<tool_call>",
+    "</tool_call>",
+    "</function>",
+    "</parameter>",
+    "<function=",
+    "<parameter=",
+];
+
+fn earliest_xml_argument_marker(value: &str) -> Option<usize> {
+    XML_ARGUMENT_MARKERS
+        .iter()
+        .filter_map(|marker| value.find(marker))
+        .min()
+}
+
+/// A JSON object can still parse when an XML envelope was written inside a string value.
+/// Cut each contaminated string at the marker so the tool does not execute the envelope.
+/// Returns `None` when nothing was contaminated. An empty string means the object had no
+/// remaining argument text and must not be executed.
+fn strip_xml_embedded_in_json_arguments(arguments: &str) -> Option<String> {
+    let mut value: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let object = value.as_object_mut()?;
+    let mut contaminated = false;
+    for field in object.values_mut() {
+        let serde_json::Value::String(text) = field else {
+            continue;
+        };
+        let Some(at) = earliest_xml_argument_marker(text) else {
+            continue;
+        };
+        contaminated = true;
+        *text = text[..at].trim_end().to_owned();
+    }
+    if !contaminated {
+        return None;
+    }
+    object.retain(|_, field| match field {
+        serde_json::Value::String(text) => !text.is_empty(),
+        _ => true,
+    });
+    let useful = object
+        .values()
+        .any(|field| matches!(field, serde_json::Value::String(text) if !text.is_empty()));
+    useful.then(|| value.to_string())
+}
+
+/// An unclosed JSON string often runs up to an XML tag, with a literal `\n` (the two
+/// characters, not a newline) where llama.cpp separated the tags. Close the string at the
+/// marker and keep that object. The stuffed envelopes are the same ramble `complete_json_prefix`
+/// already refuses to execute.
+fn salvage_truncated_json_before_xml(arguments: &str) -> Option<String> {
+    let at = earliest_xml_argument_marker(arguments)?;
+    let mut head = arguments[..at].trim_end();
+    while let Some(stripped) = head.strip_suffix("\\n") {
+        head = stripped.trim_end();
+    }
+    if !head.starts_with('{') {
+        return None;
+    }
+    let mut closed = head.to_owned();
+    let mut in_string = false;
+    let mut escape = false;
+    let mut depth = 0i32;
+    for ch in closed.chars() {
+        if in_string {
+            if escape {
+                escape = false;
+            } else if ch == '\\' {
+                escape = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => {}
+        }
+    }
+    if in_string {
+        closed.push('"');
+    }
+    while depth > 0 {
+        closed.push('}');
+        depth -= 1;
+    }
+    strip_xml_embedded_in_json_arguments(&closed).or_else(|| {
+        let value: serde_json::Value = serde_json::from_str(&closed).ok()?;
+        let object = value.as_object()?;
+        let useful = object
+            .values()
+            .any(|field| matches!(field, serde_json::Value::String(text) if !text.is_empty()));
+        useful.then(|| value.to_string())
+    })
+}
+
+/// MiMo sometimes emits a complete structured argument object and then keeps generating an XML
+/// tool envelope in the same string. Prefer the already-complete structured call: executing the
+/// appended envelopes as siblings can turn one intended action into dozens of unrelated calls.
+fn complete_json_prefix(arguments: &str) -> Option<&str> {
+    let mut values = serde_json::Deserializer::from_str(arguments).into_iter::<serde_json::Value>();
+    let value = values.next()?.ok()?;
+    if !value.is_object() {
+        return None;
+    }
+    let offset = values.byte_offset();
+    let tail = arguments.get(offset..)?.trim_start();
+    (tail.contains("<tool_call>")).then(|| &arguments[..offset])
+}
+
+fn promote_embedded_xml_calls(calls: Vec<ToolCall>, allowed: &HashSet<String>) -> Vec<ToolCall> {
+    let mut embedded = String::new();
+    let mut out = Vec::new();
+    let mut unresolved = Vec::new();
+    for mut call in calls {
+        if arguments_are_json(call.arguments.as_ref()) {
+            // XML after a closing brace is handled by `complete_json_prefix` and is not
+            // promoted. XML inside a string still parses, and executing it writes the
+            // envelope into the tool. Strip that text; do not run the inner envelopes
+            // as extra calls (one stuffed blob can contain dozens of unrelated tools).
+            match strip_xml_embedded_in_json_arguments(call.arguments.as_ref()) {
+                Some(cleaned) => {
+                    call.arguments = std::sync::Arc::<str>::from(cleaned);
+                    out.push(call);
+                }
+                None if earliest_xml_argument_marker(call.arguments.as_ref()).is_some() => {}
+                None => out.push(call),
+            }
+        } else if let Some(prefix) = complete_json_prefix(call.arguments.as_ref()) {
+            call.arguments = std::sync::Arc::<str>::from(prefix);
+            out.push(call);
+        } else if let Some(salvaged) = salvage_truncated_json_before_xml(call.arguments.as_ref()) {
+            call.arguments = std::sync::Arc::<str>::from(salvaged);
+            out.push(call);
+        } else {
+            embedded.push_str(call.arguments.as_ref());
+            unresolved.push(call);
+        }
+    }
+    let recovered = recover_tool_calls_from_text(&embedded, allowed);
+    if recovered.is_empty() {
+        // No XML to promote: keep the wire calls. Dropping them turned a Length
+        // stop with truncated JSON (or a raw path) into an empty MaxTokensTruncation.
+        out.extend(unresolved);
+        return out;
+    }
+    for (index, recovered) in recovered.into_iter().enumerate() {
+        let already = out.iter().any(|call| {
+            call.name == recovered.name
+                && json_arguments_equal(&call.arguments, &recovered.arguments)
+        });
+        if already {
+            continue;
+        }
+        out.push(ToolCall {
+            id: std::sync::Arc::<str>::from(format!("embedded_xml_{index}")),
+            name: recovered.name,
+            arguments: std::sync::Arc::<str>::from(recovered.arguments),
+        });
+    }
+    out
+}
+
+fn json_arguments_equal(left: &str, right: &str) -> bool {
+    match (
+        serde_json::from_str::<serde_json::Value>(left),
+        serde_json::from_str::<serde_json::Value>(right),
+    ) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
+/// A model can emit the same call several times in one response with fresh ids. Those calls run
+/// concurrently, so the copies cannot observe one another's results and only repeat the effect.
+fn collapse_duplicate_calls(calls: Vec<ToolCall>) -> Vec<ToolCall> {
+    let mut unique: Vec<ToolCall> = Vec::with_capacity(calls.len());
+    for call in calls {
+        if unique.iter().any(|seen| {
+            seen.name == call.name
+                && (json_arguments_equal(seen.arguments.as_ref(), call.arguments.as_ref())
+                    || terminal_execution_equal(seen, &call))
+        }) {
+            continue;
+        }
+        unique.push(call);
+    }
+    unique
+}
+
+/// Descriptions label a terminal call but do not change the command it runs.
+/// Keep execution options in the comparison: a foreground and background call
+/// with the same command are not interchangeable.
+fn terminal_execution_equal(left: &ToolCall, right: &ToolCall) -> bool {
+    if left.name != "run_terminal_command" {
+        return false;
+    }
+    let (Ok(mut left), Ok(mut right)) = (
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&left.arguments),
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&right.arguments),
+    ) else {
+        return false;
+    };
+    left.remove("description");
+    right.remove("description");
+    for arguments in [&mut left, &mut right] {
+        if let Some(serde_json::Value::String(command)) = arguments.get_mut("command") {
+            *command = xai_tool_types::terminal_command::command_execution_key(command);
+        }
+    }
+    left == right
+}
+
+#[cfg(test)]
+mod terminal_dedup_tests {
+    use super::*;
+
+    fn call(id: &str, arguments: &str) -> ToolCall {
+        ToolCall {
+            id: id.into(),
+            name: "run_terminal_command".into(),
+            arguments: arguments.into(),
+        }
+    }
+
+    #[test]
+    fn duplicate_terminal_commands_ignore_description_only() {
+        let calls = vec![
+            call(
+                "first",
+                r#"{"command":"./job.sh","description":"one","background":true}"#,
+            ),
+            call(
+                "second",
+                r#"{"description":"two","background":true,"command":"./job.sh"}"#,
+            ),
+            call(
+                "foreground",
+                r#"{"command":"./job.sh","background":false}"#,
+            ),
+            call("other", r#"{"command":"echo done","background":true}"#),
+        ];
+        let unique = collapse_duplicate_calls(calls);
+        assert_eq!(
+            unique.iter().map(|c| c.id.as_ref()).collect::<Vec<_>>(),
+            ["first", "foreground", "other"]
+        );
+    }
+
+    #[test]
+    fn duplicate_terminal_commands_share_runtime_execution_key() {
+        let calls = vec![
+            call("first", r#"{"command":"export A=1; B=2 job --fast"}"#),
+            call("same", r#"{"command":"export A=1 B=2; job --fast"}"#),
+            call("different", r#"{"command":"echo ready > out; job --fast"}"#),
+        ];
+        let unique = collapse_duplicate_calls(calls);
+        assert_eq!(
+            unique.iter().map(|c| c.id.as_ref()).collect::<Vec<_>>(),
+            ["first", "different"]
+        );
+    }
+}
 
 /// The output stream emits exactly one terminal event per request.
 /// Callers must not consume past the terminal event (the implementation `return`s after yielding it).
@@ -25,6 +368,23 @@ pub fn stream_chat_completions<'a>(
     model_metadata: Option<ResponseModelMetadata>,
     request_id: RequestId,
     idle_timeout: Duration,
+) -> impl Stream<Item = SamplingEvent> + Send + 'a {
+    stream_chat_completions_with_tools(
+        raw_stream,
+        model_metadata,
+        request_id,
+        idle_timeout,
+        Vec::new(),
+    )
+}
+
+/// Chat Completions transform with names of tools eligible for malformed-argument recovery.
+pub fn stream_chat_completions_with_tools<'a>(
+    raw_stream: BoxStream<'a, Result<ChatCompletionChunk, SamplingError>>,
+    model_metadata: Option<ResponseModelMetadata>,
+    request_id: RequestId,
+    idle_timeout: Duration,
+    allowed_tool_names: Vec<String>,
 ) -> impl Stream<Item = SamplingEvent> + Send + 'a {
     async_stream::stream! {
         let decode_region = crate::span_timing::Region::from_span(tracing::info_span!(
@@ -62,9 +422,10 @@ pub fn stream_chat_completions<'a>(
 
         let mut content_acc = String::new();
         let mut reasoning_acc = String::new();
-        // Tool call deltas keyed by positional index; each entry is (id, name, arguments_buffer)
-        // The first chunk for an index carries the id and name and starts the arguments buffer; later chunks append to arguments only
-        let mut tool_call_acc: BTreeMap<u32, (String, String, String)> = BTreeMap::new();
+        // Call ids are stable when a provider reuses a wire index for a later call.
+        let mut tool_calls = ToolCallAccumulator::default();
+        let allowed_recovery: HashSet<String> = allowed_tool_names.iter().cloned().collect();
+        let mut content_holdback = ContentToolCallHoldback::new(allowed_tool_names);
 
         // Index counter spanning text and reasoning chunks (matches the shell's chunk_index used for notification correlation)
         let mut chunk_index: u64 = 0;
@@ -131,6 +492,13 @@ pub fn stream_chat_completions<'a>(
             for choice in chunk.choices.into_iter() {
                 first_choice_seen = true;
                 if let Some(fr) = choice.finish_reason {
+                    if let FinishReason::Unknown(other) = &fr {
+                        tracing::warn!(
+                            request_id = %request_id,
+                            finish_reason = %other,
+                            "provider reported an unrecognized finish reason; ending the turn as a clean stop"
+                        );
+                    }
                     finish_reason = Some(fr.into());
                     chunk_has_content = true;
                 }
@@ -148,15 +516,32 @@ pub fn stream_chat_completions<'a>(
                     }
                     chunk_has_content = true;
                     chunk_timestamps.push(Instant::now());
-                    chunk_index += 1;
-                    message_chunk_count += 1;
-                    content_acc.push_str(&text);
-                    yield SamplingEvent::ChannelToken {
-                        request_id: request_id.clone(),
-                        channel: SamplingChannel::Text,
-                        text,
-                        chunk_index,
-                    };
+                    // Hold an unclosed `<tool_call>` suffix out of the visible text channel.
+                    // Closed envelopes are recovered and stripped; only safe prose is forwarded.
+                    let visible = content_holdback.push(&text);
+                    if content_holdback.held_bytes() > DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES as usize {
+                        let err = SamplingError::ToolCallBudgetExceeded(format!(
+                            "an open <tool_call> in content buffered {} bytes, past the {} byte per-call ceiling",
+                            content_holdback.held_bytes(),
+                            DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES
+                        ));
+                        yield SamplingEvent::Failed {
+                            request_id: request_id.clone(),
+                            error: SamplingErrorInfo::from(&err),
+                        };
+                        return;
+                    }
+                    if !visible.is_empty() {
+                        chunk_index += 1;
+                        message_chunk_count += 1;
+                        content_acc.push_str(&visible);
+                        yield SamplingEvent::ChannelToken {
+                            request_id: request_id.clone(),
+                            channel: SamplingChannel::Text,
+                            text: visible,
+                            chunk_index,
+                        };
+                    }
                 }
 
                 if let Some(thought) = delta.reasoning_content
@@ -181,10 +566,21 @@ pub fn stream_chat_completions<'a>(
 
                 for tc_delta in delta.tool_calls.into_iter() {
                     chunk_has_content = true;
-
-                    let entry = tool_call_acc
-                        .entry(tc_delta.index)
-                        .or_insert_with(|| (String::new(), String::new(), String::new()));
+                    let wire_index = tc_delta.index;
+                    let (logical_index, remapped) = tool_calls
+                        .resolve_logical_index(wire_index, tc_delta.id.as_deref());
+                    let entry = tool_calls
+                        .calls
+                        .get_mut(&logical_index)
+                        .expect("resolved logical tool-call index must exist");
+                    if remapped {
+                        tracing::warn!(
+                            request_id = %request_id,
+                            wire_index,
+                            logical_index,
+                            "provider reused a tool-call index with a new id"
+                        );
+                    }
 
                     let mut id_for_event: Option<String> = None;
                     let mut name_for_event: Option<String> = None;
@@ -205,14 +601,16 @@ pub fn stream_chat_completions<'a>(
                         }
                     }
 
+                    // Execution waits for the final response, after argument recovery and deduplication.
                     yield SamplingEvent::ToolCallDelta {
                         request_id: request_id.clone(),
-                        tool_index: tc_delta.index,
+                        tool_index: logical_index,
                         id: id_for_event,
                         name: name_for_event,
                         arguments_delta: args_for_event,
                     };
                 }
+
             }
 
             if chunk_has_content {
@@ -230,14 +628,65 @@ pub fn stream_chat_completions<'a>(
         }
 
         // ── Build the final response ─────────────────────────────────
-        let tool_calls: Vec<ToolCall> = tool_call_acc
+        let (held_tail, content_recovered) = content_holdback.finish();
+        if !held_tail.is_empty() {
+            chunk_index += 1;
+            message_chunk_count += 1;
+            content_acc.push_str(&held_tail);
+            yield SamplingEvent::ChannelToken {
+                request_id: request_id.clone(),
+                channel: SamplingChannel::Text,
+                text: held_tail,
+                chunk_index,
+            };
+        }
+
+        let tool_calls: Vec<ToolCall> = tool_calls
+            .calls
             .into_values()
-            .map(|(id, name, arguments)| ToolCall {
-                id: std::sync::Arc::<str>::from(id),
-                name,
-                arguments: std::sync::Arc::<str>::from(arguments),
-            })
+            .map(parts_into_tool_call)
             .collect();
+        let mut tool_calls = promote_embedded_xml_calls(tool_calls, &allowed_recovery);
+        for (index, recovered) in content_recovered.into_iter().enumerate() {
+            let already = tool_calls.iter().any(|call| {
+                call.name == recovered.name
+                    && json_arguments_equal(call.arguments.as_ref(), &recovered.arguments)
+            });
+            if already {
+                continue;
+            }
+            tool_calls.push(ToolCall {
+                id: std::sync::Arc::<str>::from(format!("content_xml_{index}")),
+                name: recovered.name,
+                arguments: std::sync::Arc::<str>::from(recovered.arguments),
+            });
+        }
+        let original_count = tool_calls.len();
+        let tool_calls = collapse_duplicate_calls(tool_calls);
+        if tool_calls.len() != original_count {
+            tracing::warn!(
+                request_id = %request_id,
+                original_count,
+                unique_count = tool_calls.len(),
+                "collapsed duplicate tool calls in one response"
+            );
+        }
+        // Drop calls whose arguments are not a JSON object; keep valid siblings.
+        // Aborting the whole response left the TUI showing in-progress widgets for calls
+        // that never executed, and blocked every sibling that was already well-formed.
+        let (tool_calls, invalid): (Vec<_>, Vec<_>) = tool_calls.into_iter().partition(|call| {
+            serde_json::from_str::<serde_json::Value>(call.arguments.as_ref())
+                .ok()
+                .is_some_and(|value| value.is_object())
+        });
+        for call in &invalid {
+            tracing::warn!(
+                request_id = %request_id,
+                tool_name = %call.name,
+                tool_call_id = %call.id,
+                "dropping tool call whose arguments are not a JSON object; siblings still execute"
+            );
+        }
 
         // Tool calls override the stop reason, even an explicit `length`.
         // NOTE: the Messages backend has the opposite precedence: Length wins there
@@ -406,6 +855,34 @@ mod tests {
         }
     }
 
+    /// A provider-specific finish reason must end the turn, not fail it: the chunk carrying it is
+    /// the last one, so failing the parse discards an already-streamed response (session 01a0c8a1).
+    #[tokio::test]
+    async fn unknown_finish_reason_completes_the_turn_instead_of_failing() {
+        let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
+            Ok(text_chunk("partial answer")),
+            Ok(final_chunk(FinishReason::Unknown(
+                "repetition_truncation".to_string(),
+            ))),
+        ];
+        let raw = stream::iter(chunks).boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.assistant_text(), "partial answer");
+                assert_eq!(response.stop_reason, Some(StopReason::Stop));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn text_only_stream_emits_first_token_then_channel_tokens_then_completed() {
         let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
@@ -547,10 +1024,10 @@ mod tests {
         }
     }
 
-    /// Pins the load-bearing precedence: tool calls override an explicit `length` finish (opposite of the Messages backend).
-    /// See the NOTE at the override site.
+    /// A Length stop with a non-JSON tool call keeps the response: the bad call is dropped and
+    /// the stop reason stays Length when nothing valid remains.
     #[tokio::test]
-    async fn tool_calls_override_length_finish() {
+    async fn length_stop_keeps_non_json_non_xml_tool_arguments() {
         let tool_chunk = make_chunk(vec![ChatChunkDelta {
             role: None,
             content: None,
@@ -581,10 +1058,160 @@ mod tests {
 
         match events.last().unwrap() {
             SamplingEvent::Completed { response, .. } => {
-                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
-                assert_eq!(response.tool_calls().len(), 1);
+                assert_eq!(response.stop_reason, Some(StopReason::Length));
+                assert!(
+                    response.assistant().map(|a| a.tool_calls.is_empty()).unwrap_or(true),
+                    "non-JSON arguments must be dropped, not fail the response"
+                );
             }
-            other => panic!("expected Completed(ToolCalls), got {other:?}"),
+            other => panic!("expected Completed(Length), got {other:?}"),
+        }
+    }
+
+    /// A Length stop with malformed arguments drops that call; the response still completes.
+    #[tokio::test]
+    async fn malformed_tool_arguments_dropped_before_execution() {
+        let tool_chunk = make_chunk(vec![ChatChunkDelta {
+            role: None,
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![ChunkToolCallDelta {
+                index: 0,
+                id: Some("call_read".into()),
+                kind: Some("function".into()),
+                function: Some(ToolCallFunctionDelta {
+                    name: Some("read_file".into()),
+                    arguments: Some(
+                        "/tmp/workdir/secret.txt</parameter></function></tool_call>".into(),
+                    ),
+                }),
+            }],
+            tool_call_id: None,
+        }]);
+        let raw = stream::iter::<Vec<Result<ChatCompletionChunk, SamplingError>>>(vec![
+            Ok(tool_chunk),
+            Ok(final_chunk(FinishReason::Length)),
+        ])
+        .boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        assert!(
+            matches!(events.last(), Some(SamplingEvent::Completed { .. })),
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::Failed { .. }))
+        );
+    }
+
+    /// One valid call and one non-JSON call: siblings still return ToolCalls.
+    #[tokio::test]
+    async fn mixed_valid_and_non_json_tool_calls_keep_the_valid_sibling() {
+        let tool_chunk = make_chunk(vec![ChatChunkDelta {
+            role: None,
+            content: None,
+            reasoning_content: None,
+            tool_calls: vec![
+                ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_good".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("read_file".into()),
+                        arguments: Some(r#"{"target_file":"a.rs"}"#.into()),
+                    }),
+                },
+                ChunkToolCallDelta {
+                    index: 1,
+                    id: Some("call_bad".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("read_file".into()),
+                        arguments: Some("not-json".into()),
+                    }),
+                },
+            ],
+            tool_call_id: None,
+        }]);
+        let raw = stream::iter::<Vec<Result<ChatCompletionChunk, SamplingError>>>(vec![
+            Ok(tool_chunk),
+            Ok(final_chunk(FinishReason::ToolCalls)),
+        ])
+        .boxed();
+        let events = collect(stream_chat_completions(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+                let calls = &response.assistant().expect("assistant").tool_calls;
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"target_file":"a.rs"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// An open `<tool_call>` in content is held out of Text until the close tag.
+    #[tokio::test]
+    async fn open_tool_call_in_content_is_held_until_closed() {
+        let open = text_chunk("before <tool_call><function=read_file><parameter=target_file>a.rs");
+        let close = text_chunk("</parameter></function></tool_call> after");
+        let raw = stream::iter::<Vec<Result<ChatCompletionChunk, SamplingError>>>(vec![
+            Ok(open),
+            Ok(close),
+            Ok(final_chunk(FinishReason::Stop)),
+        ])
+        .boxed();
+        let events = collect(stream_chat_completions_with_tools(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["read_file".into()],
+        ))
+        .await;
+
+        let text: String = events
+            .iter()
+            .filter_map(|e| match e {
+                SamplingEvent::ChannelToken {
+                    channel: SamplingChannel::Text,
+                    text,
+                    ..
+                } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !text.contains("<tool_call>"),
+            "open envelope must not leak into Text: {text:?}"
+        );
+        assert!(text.contains("before"), "{text:?}");
+        assert!(text.contains("after"), "{text:?}");
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+                let calls = &response.assistant().expect("assistant").tool_calls;
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].name, "read_file");
+            }
+            other => panic!("expected Completed, got {other:?}"),
         }
     }
 
@@ -677,6 +1304,484 @@ mod tests {
         }
     }
 
+    /// Local llama.cpp streams MiMo's XML envelopes as `function.arguments` chunks, including a
+    /// newline after `<tool_call>`. The stream must recover the call instead of keeping
+    /// the non-JSON argument string.
+    #[tokio::test]
+    async fn standard_path_recovers_xml_envelopes_stuffed_into_tool_arguments() {
+        let arguments = concat!(
+            "{\"target_directory\":\"</parameter>\\n</function></tool_call>",
+            "<tool_call>\n<function=read_file><parameter=target_file>task.txt</parameter>\n</function>\n</tool_call>"
+        );
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_list".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("list_dir".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::ToolCalls),
+        ];
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["read_file".into(), "list_dir".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "recovered calls: {calls:?}");
+                assert_eq!(calls[0].name, "read_file");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"target_file":"task.txt"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn standard_path_keeps_complete_json_prefix_and_ignores_appended_xml_calls() {
+        let arguments = concat!(
+            "{\"command\":\"printf ok\"}",
+            "<tool_call><function=read_file><parameter=target_file>secret.txt</parameter>",
+            "</function></tool_call>"
+        );
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::ToolCalls),
+        ];
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["run_terminal_command".into(), "read_file".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "calls: {calls:?}");
+                assert_eq!(calls[0].name, "run_terminal_command");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"command":"printf ok"}"#);
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// llama.cpp can close a JSON string only after it has already written an XML envelope into
+    /// the value. The object parses, so the prefix splitter never runs, and the tool executes the
+    /// envelope (a path or a shell command full of `</parameter>`). Keep the text before the
+    /// marker and do not promote the stuffed envelopes as extra calls.
+    #[tokio::test]
+    async fn standard_path_strips_xml_envelopes_embedded_inside_json_strings() {
+        let arguments = r#"{"command":"printf MARKER > out.txt\n</parameter></function></tool_call><tool_call><function=search_replace><parameter=file_path>out.txt</parameter></function></tool_call>","description":"write marker"}"#;
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::ToolCalls),
+        ];
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["run_terminal_command".into(), "search_replace".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(
+                    calls.len(),
+                    1,
+                    "stuffed envelopes must not become calls: {calls:?}"
+                );
+                assert_eq!(calls[0].name, "run_terminal_command");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(calls[0].arguments.as_ref()).expect("cleaned arguments");
+                assert_eq!(parsed["command"], "printf MARKER > out.txt");
+                assert_eq!(parsed["description"], "write marker");
+                assert!(!calls[0].arguments.contains("</parameter>"));
+                assert!(!calls[0].arguments.contains("<tool_call>"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn standard_path_drops_a_json_call_whose_strings_are_only_xml_debris() {
+        let arguments = r#"{"command":"</parameter>\n<parameter=description>Test</parameter></function></tool_call>"}"#;
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::Stop),
+        ];
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["run_terminal_command".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                assert!(
+                    response.tool_calls().is_empty(),
+                    "debris-only arguments must not run: {:?}",
+                    response.tool_calls()
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// The generation hits the token cap inside a JSON string, after llama.cpp has already
+    /// written a literal `\n</parameter>` and more envelopes. Keep the command before that
+    /// marker. Do not execute the stuffed sibling calls.
+    #[tokio::test]
+    async fn standard_path_salvages_an_unclosed_json_string_before_an_xml_marker() {
+        let arguments = r#"{"command":"cat secret.txt > out.txt\n</parameter><parameter=description>copy</parameter></function></tool_call><tool_call><function=run_terminal_command>\n<parameter=command>\nxxd out.txt</parameter></function></tool_call>"#;
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_bash".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("run_terminal_command".into()),
+                        arguments: Some(arguments.into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            final_chunk(FinishReason::Length),
+        ];
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["run_terminal_command".into()],
+        ))
+        .await;
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 1, "stuffed calls must not run: {calls:?}");
+                assert_eq!(calls[0].name, "run_terminal_command");
+                let parsed: serde_json::Value =
+                    serde_json::from_str(calls[0].arguments.as_ref()).expect("salvaged arguments");
+                assert_eq!(parsed["command"], "cat secret.txt > out.txt");
+                assert!(!calls[0].arguments.contains("</parameter>"));
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    /// Some streams start a later tool call with a fresh id
+    /// while reusing wire index zero. The calls must remain separate instead of inheriting one
+    /// another's argument fragments.
+    #[tokio::test]
+    async fn reused_wire_indices_follow_call_ids() {
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_wait".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("get_task_output".into()),
+                        arguments: Some("{\"task_ids\":[\"task-1\"],".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: None,
+                    kind: None,
+                    function: Some(ToolCallFunctionDelta {
+                        name: None,
+                        arguments: Some("\"timeout_ms\":600000}".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: Some("call_todo".into()),
+                    kind: Some("function".into()),
+                    function: Some(ToolCallFunctionDelta {
+                        name: Some("todo_write".into()),
+                        arguments: Some("{\"todos\":[".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![ChunkToolCallDelta {
+                    index: 0,
+                    id: None,
+                    kind: None,
+                    function: Some(ToolCallFunctionDelta {
+                        name: None,
+                        arguments: Some("{\"id\":\"1\",\"status\":\"completed\"}]}".into()),
+                    }),
+                }],
+                ..Default::default()
+            }]),
+        ];
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["get_task_output".into(), "todo_write".into()],
+        ))
+        .await;
+
+        // Four argument deltas use the two logical call indices.
+        let logical_indices: Vec<u32> = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ToolCallDelta { tool_index, .. } => Some(*tool_index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(logical_indices, vec![0, 0, 1, 1]);
+
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].id.as_ref(), "call_wait");
+                assert_eq!(calls[0].name, "get_task_output");
+                assert_eq!(
+                    calls[0].arguments.as_ref(),
+                    "{\"task_ids\":[\"task-1\"],\"timeout_ms\":600000}"
+                );
+                assert_eq!(calls[1].id.as_ref(), "call_todo");
+                assert_eq!(calls[1].name, "todo_write");
+                assert_eq!(
+                    calls[1].arguments.as_ref(),
+                    "{\"todos\":[{\"id\":\"1\",\"status\":\"completed\"}]}"
+                );
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_structured_calls_collapse_but_distinct_call_survives() {
+        let chunks = (0..9)
+            .map(|index| {
+                Ok(make_chunk(vec![ChatChunkDelta {
+                    tool_calls: vec![ChunkToolCallDelta {
+                        index: 0,
+                        id: Some(format!("call_{index}")),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("grep".into()),
+                            arguments: Some(if index < 8 {
+                                r#"{"pattern":"same"}"#.into()
+                            } else {
+                                r#"{"pattern":"other"}"#.into()
+                            }),
+                        }),
+                    }],
+                    ..Default::default()
+                }]))
+            })
+            .collect::<Vec<_>>();
+        let stream = stream_chat_completions_with_tools(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["grep".into()],
+        );
+        let events = collect(crate::stream::guard_tool_call_budget(
+            stream,
+            rid(),
+            crate::stream::ToolCallBudget::default(),
+        ))
+        .await;
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].id.as_ref(), "call_0");
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"pattern":"same"}"#);
+                assert_eq!(calls[1].id.as_ref(), "call_8");
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"pattern":"other"}"#);
+            }
+            other => panic!("expected one call through budget, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn three_distinct_parallel_calls_survive() {
+        let chunks = ["alpha", "beta", "gamma"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| {
+                Ok(make_chunk(vec![ChatChunkDelta {
+                    tool_calls: vec![ChunkToolCallDelta {
+                        index: index as u32,
+                        id: Some(format!("call_{index}")),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("echo".into()),
+                            arguments: Some(format!(r#"{{"text":"{text}"}}"#)),
+                        }),
+                    }],
+                    ..Default::default()
+                }]))
+            })
+            .collect::<Vec<_>>();
+        let events = collect(stream_chat_completions_with_tools(
+            stream::iter(chunks).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            vec!["echo".into()],
+        ))
+        .await;
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 3);
+                assert_eq!(calls[0].arguments.as_ref(), r#"{"text":"alpha"}"#);
+                assert_eq!(calls[1].arguments.as_ref(), r#"{"text":"beta"}"#);
+                assert_eq!(calls[2].arguments.as_ref(), r#"{"text":"gamma"}"#);
+            }
+            other => panic!("expected three parallel calls, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn compliant_parallel_tool_indices_remain_unchanged_when_interleaved() {
+        let chunks = vec![
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![
+                    ChunkToolCallDelta {
+                        index: 0,
+                        id: Some("call_a".into()),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("tool_a".into()),
+                            arguments: Some("{\"a\":".into()),
+                        }),
+                    },
+                    ChunkToolCallDelta {
+                        index: 1,
+                        id: Some("call_b".into()),
+                        kind: Some("function".into()),
+                        function: Some(ToolCallFunctionDelta {
+                            name: Some("tool_b".into()),
+                            arguments: Some("{\"b\":".into()),
+                        }),
+                    },
+                ],
+                ..Default::default()
+            }]),
+            make_chunk(vec![ChatChunkDelta {
+                tool_calls: vec![
+                    ChunkToolCallDelta {
+                        index: 1,
+                        function: Some(ToolCallFunctionDelta {
+                            arguments: Some("2}".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ChunkToolCallDelta {
+                        index: 0,
+                        function: Some(ToolCallFunctionDelta {
+                            arguments: Some("1}".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }]),
+        ];
+        let events = collect(stream_chat_completions(
+            stream::iter(chunks.into_iter().map(Ok)).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+        ))
+        .await;
+
+        let logical_indices: Vec<u32> = events
+            .iter()
+            .filter_map(|event| match event {
+                SamplingEvent::ToolCallDelta { tool_index, .. } => Some(*tool_index),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(logical_indices, vec![0, 1, 1, 0]);
+        match events.last().unwrap() {
+            SamplingEvent::Completed { response, .. } => {
+                let calls = response.tool_calls();
+                assert_eq!(calls.len(), 2);
+                assert_eq!(calls[0].arguments.as_ref(), "{\"a\":1}");
+                assert_eq!(calls[1].arguments.as_ref(), "{\"b\":2}");
+            }
+            other => panic!("expected Completed, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn mid_stream_error_yields_failed_no_completed() {
         let chunks: Vec<Result<ChatCompletionChunk, SamplingError>> = vec![
@@ -725,6 +1830,86 @@ mod tests {
             }
             other => panic!("expected Failed(IdleTimeout), got {other:?}"),
         }
+    }
+
+    /// Lesson 4 lock: tool-call progress must reach the consumer while the response is still open.
+    /// The second chunk is withheld until a delta is observed, so a transform that buffers the whole
+    /// generation before emitting anything stalls here instead of emitting deltas at the end.
+    async fn a_tool_call_delta_precedes_the_terminal_event() {
+        let (release, hold) = tokio::sync::oneshot::channel::<()>();
+        let first = make_chunk(vec![ChatChunkDelta {
+            tool_calls: vec![ChunkToolCallDelta {
+                index: 0,
+                id: Some("call_1".into()),
+                kind: Some("function".into()),
+                function: Some(ToolCallFunctionDelta {
+                    name: Some("grep".into()),
+                    arguments: Some("{\"path\":".into()),
+                }),
+            }],
+            ..Default::default()
+        }]);
+        let mut last = final_chunk(FinishReason::ToolCalls);
+        last.choices[0].delta.tool_calls = vec![ChunkToolCallDelta {
+            index: 0,
+            id: None,
+            kind: None,
+            function: Some(ToolCallFunctionDelta {
+                name: None,
+                arguments: Some("\"src\"}".into()),
+            }),
+        }];
+        let raw = stream::iter([Ok(first)])
+            .chain(stream::once(async move {
+                let _ = hold.await;
+                Ok(last)
+            }))
+            .boxed();
+
+        let mut stream = Box::pin(stream_chat_completions_with_tools(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            Vec::new(),
+        ));
+        let mut release = Some(release);
+        let mut events = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
+                Ok(Some(event)) => {
+                    if matches!(event, SamplingEvent::ToolCallDelta { .. })
+                        && let Some(tx) = release.take()
+                    {
+                        let _ = tx.send(());
+                    }
+                    events.push(event);
+                    if matches!(
+                        events.last(),
+                        Some(SamplingEvent::Completed { .. } | SamplingEvent::Failed { .. })
+                    ) {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => panic!(
+                    "timed out waiting for a ToolCallDelta : the transform buffered the stream instead of forwarding tool-call progress"
+                ),
+            }
+        }
+        assert!(
+            release.is_none(),
+            "expected a ToolCallDelta before the terminal event "
+        );
+        assert!(
+            matches!(events.last(), Some(SamplingEvent::Completed { .. })),
+            "{events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tool_call_deltas_precede_completion() {
+        a_tool_call_delta_precedes_the_terminal_event().await;
     }
 
     #[tokio::test]

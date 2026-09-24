@@ -70,6 +70,138 @@ fn detect_anchor_prefix_in_content(content: &str) -> Option<usize> {
     None
 }
 
+/// Parse a single-line write whose content is one `ANCHOR→text` (or `ANCHOR->text`)
+/// paste from hashline_read into a replace op. Multi-line content never converts.
+fn single_line_anchor_write_as_replace(content: &str) -> Option<HashlineOp> {
+    parse_arrow_write(content, |before| {
+        if before.len() <= 25 && before.contains(':') && !before.contains(' ') {
+            Some(before.to_owned())
+        } else {
+            None
+        }
+    })
+}
+
+/// Parse a single-line `SOMETHING→text` write. `resolve` maps the left-hand side
+/// to a full `LINE:HASH` anchor (or `None` when it cannot).
+fn parse_arrow_write(content: &str, resolve: impl FnOnce(&str) -> Option<String>) -> Option<HashlineOp> {
+    let trimmed = content.trim_end_matches('\n');
+    if trimmed.contains('\n') {
+        return None;
+    }
+    let s = trimmed.trim_start();
+    let (before, after) = s.split_once('\u{2192}').or_else(|| s.split_once("->"))?;
+    let anchor = resolve(before.trim())?;
+    Some(HashlineOp::Replace {
+        anchor,
+        end_anchor: None,
+        content: after.to_owned(),
+    })
+}
+
+fn partial_arrow_write_error(
+    write: &str,
+    before: &str,
+    after: &str,
+    content: &str,
+    scheme: &dyn AnchorScheme,
+) -> HashlineEditError {
+    let lines = split_lines(content);
+    let anchors = scheme.generate_anchors(&lines);
+    let candidates: Vec<String> = anchors
+        .iter()
+        .filter(|a| {
+            let suffix = anchor_suffix(a);
+            before == a.local
+                || a.context.as_deref() == Some(before)
+                || suffix.ends_with(&format!(":{before}"))
+                || suffix == before
+        })
+        .map(|a| a.render())
+        .collect();
+    let listing: String = anchors
+        .iter()
+        .zip(lines.iter())
+        .map(|(a, line)| format!("{}\u{2192}{line}", a.render()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let example = match candidates.len() {
+        1 => format!(
+            "{{ \"op\": \"replace\", \"anchor\": \"{}\", \"content\": \"{after}\" }}",
+            candidates[0]
+        ),
+        0 => "{ \"op\": \"replace\", \"anchor\": \"LINE:HASH\", \"content\": \"...\" }".to_owned(),
+        _ => "use the full LINE:HASH of the line you intend to edit (see context), \
+             e.g. { \"op\": \"replace\", \"anchor\": \"2:sce:nlg\", \"content\": \"...\" }"
+            .to_owned(),
+    };
+    let cand_lines: Vec<usize> = anchors
+        .iter()
+        .zip(lines.iter())
+        .enumerate()
+        .filter(|(_, (a, _))| {
+            let suffix = anchor_suffix(a);
+            before == a.local
+                || a.context.as_deref() == Some(before)
+                || suffix.ends_with(&format!(":{before}"))
+                || suffix == before
+        })
+        .map(|(i, _)| i + 1)
+        .collect();
+    HashlineEditError {
+        error: HashlineEditErrorKind::InvalidInput,
+        message: format!(
+            "write content {write:?} uses partial anchor {before:?} without a line number. \
+             Use op \"replace\" with a full LINE:HASH (or LINE:HASH:HASH) anchor from \
+             hashline_read so surrounding lines survive — for example: {example}. \
+             Matching lines: {cand_lines:?}. \
+             An unmatched single-line write would discard every other line."
+        ),
+        requested_anchor: Some(before.to_owned()),
+        current: None,
+        context: Some(listing),
+        context_start_line: Some(1),
+        shifted_to: None,
+        shifted_anchor: None,
+        ambiguous_candidates: cand_lines,
+    }
+}
+
+/// Hashline_read-style listing of every line for error context.
+fn full_anchor_listing(content: &str, scheme: &dyn AnchorScheme) -> String {
+    let lines = split_lines(content);
+    let anchors = scheme.generate_anchors(&lines);
+    anchors
+        .iter()
+        .zip(lines.iter())
+        .map(|(a, line)| format!("{}\u{2192}{line}", a.render()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn single_line_write_rejected_error(content: &str, write: &str, scheme: &dyn AnchorScheme) -> HashlineEditError {
+    let listing = full_anchor_listing(content, scheme);
+    let example_line = content.lines().nth(1).unwrap_or("LINE_CONTENT");
+    HashlineEditError {
+        error: HashlineEditErrorKind::InvalidInput,
+        message: format!(
+            "write content {write:?} is a single line and would discard every other line of \
+             this multi-line file. For a one-line edit use op \"replace\" with an exact \
+             LINE:HASH anchor from hashline_read so surrounding lines survive. Example: \
+             {{ \"op\": \"replace\", \"anchor\": \"LINE:HASH\", \"content\": {write:?} }} \
+             targeting the line {example_line:?}. Use write only with the full multi-line \
+             file content. Fresh anchors:\n{listing}"
+        ),
+        requested_anchor: None,
+        current: None,
+        context: Some(listing),
+        context_start_line: Some(1),
+        shifted_to: None,
+        shifted_anchor: None,
+        ambiguous_candidates: vec![],
+    }
+}
+
 fn anchor_content_error(op_label: &str, content: &str, line_num: usize) -> HashlineEditError {
     let offending_line = content.lines().nth(line_num - 1).unwrap_or("").to_owned();
 
@@ -163,12 +295,64 @@ pub(crate) fn apply_edits(
             content: new_content,
         }) = ops.first()
     {
+        // A single-line `ANCHOR→content` write is a one-line edit pasted from
+        // hashline_read — apply it as replace instead of rejecting or wiping.
+        // Full LINE:HASH only; do not guess truncated arrows or placeholder lines.
+        if let Some(converted) = single_line_anchor_write_as_replace(new_content) {
+            return apply_edits(content, std::slice::from_ref(&converted), file_path, scheme);
+        }
+        // Truncated arrow (`nlg→…`, `sce:nlg→…`): error with the full anchor list
+        // so the next turn can emit an exact replace — do not auto-resolve.
+        if !new_content.contains('\n') {
+            let trimmed = new_content.trim();
+            if let Some((before, after)) = trimmed
+                .split_once('\u{2192}')
+                .or_else(|| trimmed.split_once("->"))
+            {
+                let before = before.trim();
+                let after = after.to_owned();
+                if !before.is_empty()
+                    && !before.contains(' ')
+                    && before.len() <= 25
+                    && (!before.contains(':')
+                        || !before.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                {
+                    return ApplyResult {
+                        output: HashlineEditOutput::Error(partial_arrow_write_error(
+                            new_content,
+                            before,
+                            &after,
+                            content,
+                            scheme,
+                        )),
+                        new_content: None,
+                        edit_details: vec![],
+                    };
+                }
+            }
+        }
         if let Some(line_num) = detect_anchor_prefix_in_content(new_content) {
             return ApplyResult {
                 output: HashlineEditOutput::Error(anchor_content_error(
                     "write",
                     new_content,
                     line_num,
+                )),
+                new_content: None,
+                edit_details: vec![],
+            };
+        }
+        // Single-line write over a multi-line file would discard surrounding lines —
+        // reject with fresh anchors. No placeholder guessing.
+        if !new_content.contains('\n')
+            && content.lines().filter(|l| !l.trim().is_empty()).count() >= 2
+            && content.trim() != new_content.trim()
+        {
+            return ApplyResult {
+                output: HashlineEditOutput::Error(single_line_write_rejected_error(
+                    content,
+                    new_content,
+                    scheme,
                 )),
                 new_content: None,
                 edit_details: vec![],
@@ -2260,5 +2444,156 @@ mod tests {
             }
             other => panic!("Expected error, got: {other:?}"),
         }
+    }
+
+    /// Single-line `ANCHOR→content` write (hashline_read paste) applies as replace
+    /// and keeps surrounding lines (real-model agents.hashline_edit).
+    #[test]
+    fn single_line_anchored_write_converts_to_replace() {
+        let anchors = anchors_for(SAMPLE);
+        let target = nth(&anchors, 2);
+        let pasted = format!("{target}\u{2192}replaced line");
+        let ops = vec![HashlineOp::Write {
+            content: pasted,
+        }];
+        let result = apply_edits(SAMPLE, &ops, &test_path(), &*test_scheme());
+        let HashlineEditOutput::EditsApplied(applied) = &result.output else {
+            panic!("expected success, got: {:?}", result.output);
+        };
+        assert_eq!(applied.applied, 1);
+        let new_content = result.new_content.expect("new content");
+        assert!(new_content.contains("replaced line"), "got: {new_content}");
+        assert!(new_content.contains("fn main()"), "wiped first line: {new_content}");
+        assert!(
+            new_content.contains("println!"),
+            "wiped later lines: {new_content}"
+        );
+        assert!(!new_content.contains(&target), "anchor must not remain: {new_content}");
+    }
+
+    #[test]
+    fn partial_single_line_write_rejected_over_multiline_file() {
+        // No placeholder line — must not wipe; error lists anchors.
+        let ops = vec![HashlineOp::Write {
+            content: "DONE-EDIT".to_owned(),
+        }];
+        match apply_edits("first\nsecond\nlast\n", &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(e.message.contains("replace"), "msg: {}", e.message);
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn single_line_write_over_placeholder_is_rejected() {
+        // No truncated-arrow / placeholder guessing — must error with anchors.
+        let ops = vec![HashlineOp::Write {
+            content: "DONE-EDIT".to_owned(),
+        }];
+        match apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(e.message.contains("replace"), "msg: {}", e.message);
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn partial_arrow_write_errors_without_guessing() {
+        let file = "first\nREPLACE_ME\nlast\n";
+        let anchors = anchors_for(file);
+        let full = nth(&anchors, 1);
+        let local = full.split(':').nth(1).expect("local").to_owned();
+        let ops = vec![HashlineOp::Write {
+            content: format!("{local}\u{2192}DONE-EDIT"),
+        }];
+        match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(e.message.contains("replace"), "msg: {}", e.message);
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ambiguous_partial_arrow_write_errors_with_anchor_list() {
+        // Same context hash on every line — cannot uniquely resolve.
+        let file = "first\nREPLACE_ME\nlast\n";
+        let ops = vec![HashlineOp::Write {
+            content: "nlg\u{2192}DONE-EDIT".to_owned(),
+        }];
+        match apply_edits(file, &ops, &test_path(), &*test_scheme()).output {
+            HashlineEditOutput::Error(e) => {
+                assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
+                assert!(
+                    e.message.contains("LINE:HASH") || e.message.contains("replace"),
+                    "msg: {}",
+                    e.message
+                );
+                assert!(
+                    e.context.as_ref().is_some_and(|c| c.contains('\u{2192}')),
+                    "context should list anchors"
+                );
+            }
+            other => panic!("Expected error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn full_multiline_write_still_allowed() {
+        let ops = vec![HashlineOp::Write {
+            content: "first\nDONE-EDIT\nlast\n".to_owned(),
+        }];
+        let result = apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme());
+        let HashlineEditOutput::EditsApplied(_) = result.output else {
+            panic!("expected success, got: {:?}", result.output);
+        };
+        assert_eq!(result.new_content.as_deref(), Some("first\nDONE-EDIT\nlast\n"));
+    }
+
+    #[test]
+    fn single_line_anchor_write_helper_parses_arrow_forms() {
+        let HashlineOp::Replace {
+            anchor,
+            end_anchor,
+            content,
+        } = single_line_anchor_write_as_replace("1:ab:cd\u{2192}DONE-EDIT").expect("arrow")
+        else {
+            panic!("expected replace");
+        };
+        assert_eq!(anchor, "1:ab:cd");
+        assert_eq!(end_anchor, None);
+        assert_eq!(content, "DONE-EDIT");
+
+        let Some(HashlineOp::Replace {
+            anchor,
+            content,
+            ..
+        }) = single_line_anchor_write_as_replace("22:abc:rst->code here")
+        else {
+            panic!("expected replace for ascii arrow");
+        };
+        assert_eq!(anchor, "22:abc:rst");
+        assert_eq!(content, "code here");
+
+        assert!(single_line_anchor_write_as_replace("line1\nline2").is_none());
+        assert!(single_line_anchor_write_as_replace("normal one-liner").is_none());
+        assert!(single_line_anchor_write_as_replace("has space:here\u{2192}x").is_none());
     }
 }

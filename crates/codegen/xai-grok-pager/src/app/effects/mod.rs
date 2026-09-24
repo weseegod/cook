@@ -2312,6 +2312,22 @@ pub(crate) fn execute(
                     }
                 });
         }
+        Effect::PersistFeatureOverride { feature, saved } => {
+            tasks
+                .spawn(async move {
+                    let result = xai_grok_shell::util::config::set_feature_override(
+                            feature,
+                            saved,
+                        )
+                        .await
+                        .map(|()| saved)
+                        .map_err(|e| e.to_string());
+                    TaskResult::FeatureOverridePersisted {
+                        feature,
+                        result,
+                    }
+                });
+        }
         Effect::Authenticate {
             request_seq,
             method_id,
@@ -4340,14 +4356,17 @@ pub(crate) fn execute(
             let tx = acp_tx.clone();
             tasks
                 .spawn(async move {
+                    use xai_grok_shell::extensions::memory::{
+                        MEMORY_REWRITE_METHOD, MemoryRewriteRequest,
+                    };
                     let request = acp::ExtRequest::new(
-                        "x.ai/memory/rewrite",
+                        MEMORY_REWRITE_METHOD,
                         serde_json::value::to_raw_value(
-                                &serde_json::json!({
-                        "sessionId": session_id.0.to_string(),
-                        "rawText": raw_text,
-                        "contextSummary": context_summary,
-                    }),
+                                &MemoryRewriteRequest {
+                                    session_id: session_id.0.to_string(),
+                                    raw_text: raw_text.clone(),
+                                    context_summary,
+                                },
                             )
                             .expect("serialize memory/rewrite params")
                             .into(),
@@ -4427,18 +4446,21 @@ pub(crate) fn execute(
                                 &images.0,
                                 &cwd,
                             );
-                            let image_notice = btw_image_notice(
+                            let mut question = question;
+                            if let Some(notice) = btw_image_notice(
                                 encoded.omitted,
                                 attached,
-                            );
-                            let mut question = question;
-                            if let Some(notice) = image_notice.as_deref() {
+                            ) {
                                 append_btw_notice(
                                     &mut question,
                                     encoded.blocks.as_mut(),
-                                    notice,
+                                    &notice,
                                 );
                             }
+                            let image_notice = btw_cap_omission_notice(
+                                encoded.omitted_by_cap,
+                                attached,
+                            );
                             let params = build_btw_params(
                                 &session_id,
                                 &question,
@@ -4446,7 +4468,7 @@ pub(crate) fn execute(
                             );
                             let raw = serde_json::value::to_raw_value(&params)
                                 .expect("serialize btw params");
-                            (raw, image_notice)
+                            (raw, image_notice, encoded.skipped_display_numbers)
                         })
                         .await
                         .unwrap_or_else(|e| {
@@ -4463,9 +4485,9 @@ pub(crate) fn execute(
                             );
                             let raw = serde_json::value::to_raw_value(&params)
                                 .expect("serialize btw params");
-                            (raw, notice)
+                            (raw, notice, Vec::new())
                         });
-                    let (raw, image_notice) = prepared;
+                    let (raw, image_notice, skipped_image_numbers) = prepared;
                     let request = acp::ExtRequest::new("x.ai/btw", raw.into());
                     match acp_send(request, &tx).await {
                         Ok(resp) => {
@@ -4484,6 +4506,7 @@ pub(crate) fn execute(
                                 result: Ok(answer),
                                 minimal_request_id,
                                 image_notice,
+                                skipped_image_numbers,
                             }
                         }
                         Err(e) => {
@@ -4492,6 +4515,7 @@ pub(crate) fn execute(
                                 result: Err(format_acp_error(&e, is_api_key_auth)),
                                 minimal_request_id,
                                 image_notice,
+                                skipped_image_numbers,
                             }
                         }
                     }
@@ -5586,6 +5610,23 @@ fn btw_image_notice(omitted: usize, attached: usize) -> Option<String> {
         } else {
             format!(
             "{omitted} attached image(s) were not included (over the 50MB side-question limit or could not be loaded)."
+        )
+        },
+    )
+}
+/// Notice for the attachments the aggregate cap dropped. No trailing period: the flush may join it
+/// with the per-number read-failure notice.
+fn btw_cap_omission_notice(omitted_by_cap: usize, attached: usize) -> Option<String> {
+    if omitted_by_cap == 0 {
+        return None;
+    }
+    Some(
+        if omitted_by_cap == attached {
+            "Attached images were not included (over the 50MB side-question limit)"
+                .to_string()
+        } else {
+            format!(
+            "{omitted_by_cap} attached image(s) were not included (over the 50MB side-question limit)"
         )
         },
     )

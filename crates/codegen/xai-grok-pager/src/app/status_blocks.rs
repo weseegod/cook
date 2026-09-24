@@ -288,6 +288,9 @@ mod tests {
             cost_usd_ticks: ticks,
             cost_is_partial: false,
             cost_missing_calls: 0,
+            usage_missing_calls: 0,
+            uncached_input_tokens: None,
+            cache_field_present: false,
         }
     }
 

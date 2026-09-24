@@ -1,0 +1,39 @@
+{
+  "id": "safeguard.pin_failure",
+  "phase": "safeguard",
+  "pillar": "crates/codegen/xai-chat-state/src/actor/request_builder.rs",
+  "needs_model": true,
+  "max_turns": 12,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "context_window": 8192,
+  "fixture": {
+    "file_bytes": 2400
+  },
+  "pruning": {
+    "keep_last_n_tool_rounds": 2,
+    "recent_tool_result_char_budget": 4000
+  },
+  "prompt": "prompts/safeguard.pin_failure.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [],
+  "marker_suffix": "-FAILURE",
+  "min_tool_success": 4,
+  "text_contains": [
+    "response_without_usage_preserves_context_and_marks_ledgers_incomplete"
+  ],
+  "checks": [
+    "tool_called",
+    "text_contains_marker",
+    "text_contains",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

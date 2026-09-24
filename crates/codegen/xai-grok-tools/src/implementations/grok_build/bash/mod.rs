@@ -236,6 +236,9 @@ pub struct BashToolInput {
     pub timeout: Option<u64>,
 
     /// One sentence explanation as to why this command needs to be run and how it contributes to the goal.
+    /// Omitted when a truncated tool call kept `command` and lost this field. The runtime already
+    /// falls back to the command text for an empty label.
+    #[serde(default)]
     #[schemars(
         description = "One sentence explanation as to why this command needs to be run and how it contributes to the goal."
     )]
@@ -797,6 +800,15 @@ struct SelfMatchingPkill {
     pattern: String,
 }
 
+/// True when `command` invokes the `sleep` utility as a word (including `/bin/sleep`).
+/// Used to require `is_background` so delayed work returns a waitable task id.
+fn command_contains_sleep_utility(command: &str) -> bool {
+    command.split_whitespace().any(|tok| {
+        let base = tok.rsplit(['/', '\\']).next().unwrap_or(tok);
+        base == "sleep"
+    })
+}
+
 /// Detect a `pkill -f <pat>` / `pgrep -f <pat>` whose literal pattern substring-matches the rest of the command (i.e. outside the pkill
 /// invocation itself). `pgrep` is only flagged when the excised rest also contains a `kill` token -- a bare `pgrep -f X && echo found` does not
 /// kill anything and must not be rejected. Returns `Some(_)` if a self-matching invocation is found.
@@ -1353,6 +1365,8 @@ Usage notes:
   - Timeout enforcement: ${%- if auto_background_on_timeout %}when the timeout fires on an explicit `${{ params.execute.is_background }}: true` command, the wrapper${%- else %}when the timeout fires, the wrapper${%- endif %}${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately (no graceful-termination grace period).${%- else %} kills the child process group (SIGTERM, escalated to SIGKILL after a ~1s grace period). Descendants that did not detach via `setsid` / `nohup` will also be killed.${%- endif %} `${{ params.execute.timeout }}: 0` in `${%- if params is defined and params.execute is defined and params.execute.is_background %}${{ params.execute.is_background }}${%- else %}background${%- endif %}: true` mode disables the wrapper timeout entirely${%- if tools.by_kind.kill_task_action %}; the child's lifetime is owned by the model via ${{ tools.by_kind.kill_task_action }}${%- endif %}.
   - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
   - You can use the ${{ params.execute.is_background }} parameter to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if system_reminders_enabled %} You are notified on completion, so do not poll or sleep-wait for it.${%- elif tools.by_kind.background_task_action %} Check on it later with the ${{ tools.by_kind.background_task_action }} tool.${%- endif %}${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
+  - A command runs in the background only when ${{ params.execute.is_background }} is true. Omitting that flag runs the command in the foreground until it exits.${%- if tools.by_kind.background_task_action %} After starting a background command, wait with ${{ tools.by_kind.background_task_action }} (or get_terminal_command_output / get_task_output); do not poll an output file with a read tool while waiting.${%- endif %}
+  - When copying a file's exact contents into another file, preserve trailing newlines (e.g. `printf '%s\n' "$line"` or `cp`). `printf '%s'` without a newline drops the final line terminator.
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
@@ -1797,6 +1811,26 @@ impl xai_tool_runtime::Tool for BashTool {
             ));
         }
 
+        // Delayed work (`sleep …`) must be backgrounded so the model can wait on a task id.
+        // Foreground sleep finishes before any wait tool runs and models then poll files with read.
+        if !input.is_background && background_enabled && command_contains_sleep_utility(&input.command)
+        {
+            let bg_param_name = {
+                let res = resources.lock().await;
+                res.get::<TemplateRenderer>()
+                    .and_then(|r| r.param_for_kind(ToolKind::Execute, "is_background"))
+                    .unwrap_or("is_background")
+                    .to_string()
+            };
+            return Err(xai_tool_runtime::ToolError::invalid_arguments(format!(
+                "This command includes `sleep`, so run it in the background: set {bg_param_name}=true \
+                 (JSON field `{bg_param_name}`). Then wait with wait_tasks or get_terminal_command_output \
+                 / get_task_output using the returned task id. Copy file contents with `cat` or `cp` so \
+                 trailing newlines are preserved — do not use `printf '%s'` without a newline. Do not poll \
+                 an output file with a read tool."
+            )));
+        }
+
         // --- Prefix ---
         let command = Self::get_prefixed_command(&params.cmd_prefix, &input.command);
 
@@ -2089,6 +2123,14 @@ impl xai_tool_runtime::Tool for BashTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn command_without_description_still_parses() {
+        let input: BashToolInput =
+            serde_json::from_str(r#"{"command":"cat secret.txt > out.txt"}"#).unwrap();
+        assert_eq!(input.command, "cat secret.txt > out.txt");
+        assert!(input.description.is_empty());
+    }
+
     #[test]
     fn bash_timeout_schema_defaults_to_120s() {
         let schema = serde_json::to_value(schemars::schema_for!(BashToolInput)).unwrap();
@@ -2912,7 +2954,7 @@ mod tests {
         let result = xai_tool_runtime::Tool::run(
             &tool,
             test_ctx(resources.into_shared()),
-            make_input("sleep 999"),
+            make_input("yes"),
         )
         .await
         .unwrap();
@@ -3133,6 +3175,31 @@ mod tests {
         assert!(
             !err.contains(" =true"),
             "rejection must never render a blank param: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn foreground_sleep_requires_is_background() {
+        let resources = make_resources(MockTerminal::success("", 0));
+        let tool = BashTool;
+        let result = xai_tool_runtime::Tool::run(
+            &tool,
+            test_ctx(resources.into_shared()),
+            make_input("sleep 2 && echo done"),
+        )
+        .await;
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("is_background") && err.contains("sleep"),
+            "foreground sleep must require is_background: {err}"
+        );
+        assert!(
+            err.contains("wait_tasks") || err.contains("get_terminal_command_output"),
+            "error must name wait tools: {err}"
+        );
+        assert!(
+            err.contains("trailing newlines") || err.contains("printf"),
+            "error must warn about trailing newlines: {err}"
         );
     }
 
@@ -4410,6 +4477,24 @@ mod tests {
 
     // ─── self_matching_pkill_pattern unit tests ───
 
+    mod sleep_utility_detection_tests {
+        use super::super::command_contains_sleep_utility;
+
+        #[test]
+        fn detects_plain_and_pathed_sleep() {
+            assert!(command_contains_sleep_utility("sleep 2 && echo done"));
+            assert!(command_contains_sleep_utility("/bin/sleep 1; cat a > b"));
+            assert!(command_contains_sleep_utility("SLEEP=2; sleep \"$SLEEP\""));
+        }
+
+        #[test]
+        fn ignores_sleep_as_substring_or_absent() {
+            assert!(!command_contains_sleep_utility("echo sleeper"));
+            assert!(!command_contains_sleep_utility("cat secret.txt > out.txt"));
+            assert!(!command_contains_sleep_utility("sleeping_beauty"));
+        }
+    }
+
     mod self_matching_pkill_tests {
         use super::super::self_matching_pkill_pattern;
 
@@ -4948,6 +5033,29 @@ mod tests {
             let unix = render(BashTool::default_description_template_enabled(), true);
             let pwsh = render(BashTool::default_description_template_enabled(), false);
             assert_ne!(unix, pwsh);
+        }
+
+        #[test]
+        fn enabled_template_mentions_preserving_trailing_newlines() {
+            let unix = render(BashTool::default_description_template_enabled(), true);
+            assert!(
+                unix.contains("preserve trailing newlines"),
+                "bash description must warn about dropping final newlines:\n{unix}"
+            );
+        }
+
+        #[test]
+        fn enabled_template_requires_is_background_for_background_work() {
+            let unix = render(BashTool::default_description_template_enabled(), true);
+            assert!(
+                unix.contains("runs in the background only when")
+                    && unix.contains("is_background"),
+                "bash description must require is_background for background work:\n{unix}"
+            );
+            assert!(
+                unix.contains("do not poll an output file"),
+                "bash description must steer waiting away from read-polling:\n{unix}"
+            );
         }
 
         #[test]

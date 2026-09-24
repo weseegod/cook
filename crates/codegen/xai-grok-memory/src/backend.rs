@@ -552,6 +552,13 @@ impl MemoryBackend for MemoryBackendImpl {
     fn default_search_min_score(&self) -> f64 {
         self.search_config.min_score as f64
     }
+
+    fn durable_memory_files(&self) -> Vec<PathBuf> {
+        vec![
+            self.storage.global_memory_file(),
+            self.storage.workspace_memory_file(),
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -1482,6 +1489,120 @@ mod tests {
         assert!(
             has_workspace,
             "workspace MEMORY.md chunks must appear in search results"
+        );
+    }
+
+    /// Regression for suite `tools.memory_roundtrip`: a short global MEMORY.md that still
+    /// carries the Preferences scaffold comment but has a user list line must be reindexed
+    /// and returned by `memory_search` / `MemoryBackend::search`.
+    #[tokio::test]
+    async fn search_finds_marker_in_edited_global_memory_with_scaffold_comment() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let global = tmp.path().join("memory");
+        let workspace = global.join("test_ws");
+        let storage = MemoryStorage::with_paths(global, workspace);
+        storage.ensure_initialized().unwrap();
+        let db_path = storage.workspace_dir().join("index.sqlite");
+
+        let marker = "MARKER-tools.memory_roundtrip-a2424991";
+        let memory_md = storage.global_memory_file();
+        let mut content = std::fs::read_to_string(&memory_md).unwrap();
+        content.push_str(&format!(
+            "\n## Important Lines\n\n- {marker}\n"
+        ));
+        std::fs::write(&memory_md, &content).unwrap();
+        assert!(
+            content.trim().len() < 500,
+            "edited MEMORY.md must stay under the scaffold length cap"
+        );
+        assert!(
+            content.contains("Add any cross-project preferences here"),
+            "edited MEMORY.md must still carry the scaffold marker"
+        );
+
+        {
+            let mut idx = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                4,
+            )
+            .unwrap();
+            let path = dunce::canonicalize(&memory_md).unwrap_or(memory_md.clone());
+            idx.reindex_file(&path, "global").unwrap();
+        }
+
+        let backend = MemoryBackendImpl::new(db_path, storage);
+        let results = backend.search(marker, 10, 0.0).await.unwrap();
+        assert!(
+            results.iter().any(|r| r.snippet.contains(marker)),
+            "memory_search must return the durable marker written into MEMORY.md; got {:?}",
+            results
+                .iter()
+                .map(|r| (r.source.as_str(), r.score, r.snippet.as_str()))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Empty `memory_search` (suite `tools.memory_roundtrip` first step) must advertise
+    /// durable `MEMORY.md` paths so the model can write without rediscovering the path.
+    #[tokio::test]
+    async fn empty_search_message_advertises_durable_memory_files() {
+        let tmp = TempDir::new().unwrap();
+        init_sqlite_vec();
+        let global = tmp.path().join("memory");
+        let workspace = global.join("test_ws");
+        let storage = MemoryStorage::with_paths(global, workspace);
+        storage.ensure_initialized().unwrap();
+        let db_path = storage.workspace_dir().join("index.sqlite");
+        {
+            let _idx = MemoryIndex::open_or_create(
+                &db_path,
+                storage.clone(),
+                MemoryIndexConfig::default(),
+                4,
+            )
+            .unwrap();
+        }
+
+        let backend = MemoryBackendImpl::new(db_path, storage.clone());
+        let results = backend
+            .search("definitely-absent-suite-marker-zzz", 10, 0.0)
+            .await
+            .unwrap();
+        assert!(
+            results.is_empty(),
+            "this fixture must take the empty-result path; got {results:?}"
+        );
+
+        let files = backend.durable_memory_files();
+        assert_eq!(
+            files,
+            vec![
+                storage.global_memory_file(),
+                storage.workspace_memory_file()
+            ],
+            "durable_memory_files must list both MEMORY.md locations"
+        );
+
+        let msg =
+            xai_grok_tools::types::memory_backend::format_empty_search_message(&files);
+        assert!(
+            msg.starts_with("No memory results found for query."),
+            "stable first line required: {msg}"
+        );
+        assert!(
+            msg.contains("Durable memory files (edit these to remember):"),
+            "missing durable-file header: {msg}"
+        );
+        assert!(
+            msg.contains(&storage.global_memory_file().display().to_string()),
+            "missing global MEMORY.md path: {msg}"
+        );
+        assert!(
+            msg.contains(&storage.workspace_memory_file().display().to_string()),
+            "missing workspace MEMORY.md path: {msg}"
         );
     }
 }

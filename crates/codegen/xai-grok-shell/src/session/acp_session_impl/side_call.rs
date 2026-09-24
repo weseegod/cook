@@ -63,6 +63,24 @@ pub(crate) fn log_prompt_cache_usage(
     );
 }
 
+/// Logs one auxiliary call's prompt-cache buckets and folds its provider-reported usage into the
+/// session ledger under `purpose`.
+///
+/// The purpose string doubles as the existing tracing label, so the log line is unchanged.
+pub(crate) fn record_auxiliary_call(
+    handle: &xai_chat_state::ChatStateHandle,
+    purpose: xai_chat_state::CallPurpose,
+    model: &str,
+    backend: crate::sampling::ApiBackend,
+    response: &xai_grok_sampling_types::ConversationResponse,
+) {
+    log_prompt_cache_usage(purpose.as_str(), backend, response);
+    // These sites have no start timestamp in scope, so no duration is claimed.
+    crate::session::side_call_usage::record_side_call_response(
+        handle, purpose, model, response, None,
+    );
+}
+
 /// What differs between the two calls that reuse the parent's prompt cache.
 /// The shared parts live in [`SessionActor::parent_cached_request`].
 pub(crate) struct AuxCall {

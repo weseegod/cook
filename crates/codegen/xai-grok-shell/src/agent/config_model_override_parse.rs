@@ -408,7 +408,11 @@ fn unknown_field_warnings(model_key: &str, unknown: Vec<String>) -> Vec<ConfigWa
                 model_key,
                 Some(field.as_str()),
                 ConfigWarningKind::UnknownField,
-                "unknown field".to_owned(),
+                if field == "chat_completions_adapter" {
+                    "chat_completions_adapter was removed; delete this setting".to_owned()
+                } else {
+                    "unknown field".to_owned()
+                },
             )
         })
         .collect()
@@ -734,6 +738,9 @@ mod tests {
             temperature: Some(0.5),
             top_p: Some(0.9),
             api_backend: Some(ApiBackend::Messages),
+            chat_completions_request_format: Some(
+                crate::sampling::ChatCompletionsRequestFormat::DeepSeekThinking,
+            ),
             extra_headers: [("x-team".to_owned(), "codegen".to_owned())]
                 .into_iter()
                 .collect(),
@@ -744,6 +751,7 @@ mod tests {
                 .into_iter()
                 .collect(),
             context_window: Some(200_000),
+            max_request_bytes: None,
             auto_compact_threshold_percent: Some(80),
             system_prompt_label: Some("label".into()),
             use_concise: Some(true),
@@ -756,6 +764,7 @@ mod tests {
             supported_in_api: Some(true),
             reasoning_effort: Some(ReasoningEffort::High),
             supports_reasoning_effort: Some(true),
+            supports_batch_api: Some(false),
             reasoning_efforts: vec![ReasoningEffortOption {
                 id: "deep".to_string(),
                 value: ReasoningEffort::High,

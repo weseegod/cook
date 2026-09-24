@@ -2794,6 +2794,36 @@ fn permission_mode_hint_apply_matrix() {
     assert_eq!(ask.as_ref().unwrap().prompt_policy, PromptPolicy::Allow);
 }
 
+/// Agent/CLI `dontAsk` must project to `PromptPolicy::Deny` at spawn (same as `DefaultPermissionMode::DontAsk.effects()`).
+/// Without it, headless non-yolo auto-answers would-be prompts as Cancelled instead of PolicyDeny.
+#[test]
+fn agent_dont_ask_applies_prompt_policy_deny() {
+    let mut config: Option<PermissionConfig> = None;
+    assert!(apply_agent_dont_ask_prompt_policy(&mut config));
+    assert_eq!(
+        config.as_ref().unwrap().prompt_policy,
+        PromptPolicy::Deny,
+        "CLI --permission-mode dontAsk must deny prompts"
+    );
+    assert!(!config.as_ref().unwrap().default_mode_configured);
+
+    // Idempotent when already Deny.
+    assert!(!apply_agent_dont_ask_prompt_policy(&mut config));
+
+    // An explicit settings defaultMode still outranks the agent mode.
+    let mut configured = Some(PermissionConfig {
+        rules: vec![],
+        prompt_policy: PromptPolicy::Ask,
+        default_mode_configured: true,
+    });
+    assert!(!apply_agent_dont_ask_prompt_policy(&mut configured));
+    assert_eq!(
+        configured.as_ref().unwrap().prompt_policy,
+        PromptPolicy::Ask,
+        "configured defaultMode must outrank agent dontAsk"
+    );
+}
+
 /// An explicit user-tier `defaultMode` stamps `default_mode_configured` even when it projects to `Ask`, so the alwaysAllow hint cannot override it.
 /// The rule-less case must survive the empty-config drop. Sync `block_on` so `ENV_LOCK` is not held across `.await`.
 #[test]

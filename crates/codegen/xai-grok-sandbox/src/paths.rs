@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 // ── Grok state directory ────────────────────────────────────────────────────
 
-/// Grok state directory (`$GROK_HOME` or `~/.grok`).
+/// Grok state directory (`$COOK_HOME` / `$GROK_HOME`, else `~/.cook`).
 pub(crate) fn grok_home() -> PathBuf {
     xai_grok_config::grok_home()
 }
@@ -85,7 +85,7 @@ pub(crate) fn essential_writable_paths_strict(workspace: &Path) -> Vec<PathBuf> 
     paths
 }
 
-/// Writable directory paths for the read-only profile (minimal: just ~/.grok + temp).
+/// Writable directory paths for the read-only profile (minimal: just the grok home + temp).
 /// Device files are handled separately via `allow_file` in `to_capability_set_with_config`.
 pub(crate) fn essential_writable_paths_minimal() -> Vec<PathBuf> {
     let mut paths = vec![grok_home()];

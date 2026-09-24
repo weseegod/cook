@@ -257,7 +257,7 @@ The agent persists all session updates automatically. Clients can reconnect and 
 
 ---
 
-## The cook sessions Subcommand
+## The `cook sessions` Subcommand
 
 List or search sessions from the command line. `cook sessions` requires a subcommand:
 
@@ -276,7 +276,7 @@ cook sessions search "rate limit"
 
 ---
 
-## The cook usage Subcommand
+## The `cook usage` Subcommand
 
 Print persisted token and cost usage for a session. Use this instead of reading session files:
 
@@ -304,6 +304,31 @@ Worktree sessions are managed internally through the `x.ai/git/worktree/*` exten
 
 Resume a session in a fresh worktree with `cook -w -r <session-id>`.
 
+### Manage Grove redirections
+
+A Grove worktree can redirect ignored artifact directories such as `target` and `node_modules` to storage outside the projected tree. The redirect commands take the mount path as their first argument.
+
+```bash
+cook worktree redirect list /path/to/worktree
+cook worktree redirect list /path/to/worktree --json
+cook worktree redirect add /path/to/worktree target bind
+cook worktree redirect del /path/to/worktree target
+cook worktree redirect fixup /path/to/worktree
+cook worktree redirect unmount /path/to/worktree target
+```
+
+`list` prints `repo_path`, `type`, `mechanism`, `target`, `source`, and `state`. Run `unmount` without a repo-relative path to take down every redirect on the mount. Use `fixup --force` to replace Grove-owned residue. Use `fixup --strict` to refuse a populated plain directory.
+
+
+```bash
+cook clone https://example.com/org/repo.git --redirect-ignored
+cook clone https://example.com/org/repo.git \
+  --redirect-ignored --redirect-dir build --redirect-dir '**/node_modules'
+cook clone https://example.com/org/repo.git --no-redirects
+```
+
+`GROVE_REDIRECTS=0` remains a runtime kill switch. Cook does not save the kill switch as the clone's redirect choice.
+
 ### Checking Disk Usage
 
 `cook du` (alias: `cook disk-usage`) reports how much disk space Cook's home (`~/.cook`) uses. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
@@ -324,6 +349,8 @@ Worktrees
 To reclaim space, run `cook worktree gc --max-age 7d --dry-run`, then the same command without `--dry-run`. Without `--max-age`, gc expires nothing, and it keeps a worktree whose work it cannot find elsewhere, naming each one.
 Untracked rows are not in the registry, so gc never visits them. Remove one with `cook worktree rm --dry-run <path>`, then without `--dry-run`.
 ```
+
+After the Cook home table, `cook du` may print **Redirections**, **Orphaned redirections**, and **Unattributed redirect directories**. Those bytes live in Grove escape jails, outside the Cook home total. An empty scan prints nothing. Reclaim a live jail with `cook worktree clean-artifacts`. Purge live jails plus proven orphans with `cook du --clean --yes`. Delete only proven orphans with `cook du --clean-orphaned --yes`.
 
 `AGE` is the value `cook worktree gc` measures: time since the worktree was last accessed, or since it was created when that is more recent. Session and agent activity update it; a shell or editor left open in the directory does not. An untracked worktree has no registry entry, so its age comes from the newest file underneath it.
 
@@ -372,7 +399,7 @@ The smaller state files -- `summary.json`, `plan.json`, and `signals.json` -- ar
 - `num_messages` and `num_chat_messages` -- update and chat-message counts
 - `current_model_id` -- the model in use
 - `parent_session_id` -- the source session for a fork or restore
-- `agent_name` -- the agent definition active when the session was last saved
+- `agent_name` -- named agents persist this only; an inline `--agent-profile` session also persists `agent_profile` JSON
 - `last_turn_summary` -- an ultra-short summary of the most recent turn
 - `last_recap` -- a bounded preview of the latest session recap
 

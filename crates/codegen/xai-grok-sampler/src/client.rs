@@ -28,11 +28,11 @@ use xai_grok_sampling_types::error::{
     parse_error_code, try_parse_stream_error, user_facing_api_error_message,
 };
 use xai_grok_sampling_types::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ConversationRequest,
-    ConversationResponse, CreateResponseWrapper, DEFAULT_EXACT_REPETITION_MIN_TOKENS,
-    DOOM_LOOP_CHECK_HEADER, EXACT_REPETITION_CHECK_HEADER, MessagesRequestWrapper,
-    ResponseModelMetadata, Result, SamplingError, SentCredential, build_messages_request,
-    is_check_event, messages, rs,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatThinking,
+    ChatThinkingType, ConversationRequest, ConversationResponse, CreateResponseWrapper,
+    DEFAULT_EXACT_REPETITION_MIN_TOKENS, DOOM_LOOP_CHECK_HEADER, EXACT_REPETITION_CHECK_HEADER,
+    MessagesRequestWrapper, ResponseModelMetadata, Result, SamplingError, SentCredential,
+    build_messages_request, is_check_event, messages, rs,
 };
 
 use crate::config::{AuthScheme, OriginClientInfo, RequestCompression, SamplerConfig};
@@ -41,6 +41,7 @@ use crate::request_compression::{compress_body, should_compress};
 use crate::span_timing::{ERROR, STATUS_CODE, SUCCESS, StreamSpanTiming};
 use crate::stream_classify::{chat_chunk_class, message_event_class, responses_event_class};
 use xai_grok_auth::bearer_suffix;
+use xai_grok_sampling_types::ChatCompletionsRequestFormat;
 
 pub use xai_grok_sampling_types::ApiBackend;
 
@@ -344,6 +345,7 @@ struct ClientDefaults {
     temperature: Option<f32>,
     top_p: Option<f32>,
     api_backend: ApiBackend,
+    chat_completions_request_format: ChatCompletionsRequestFormat,
     auth_scheme: AuthScheme,
     request_compression: RequestCompression,
     stream_tool_calls: bool,
@@ -658,6 +660,7 @@ impl SamplingClient {
             temperature: config.temperature,
             top_p: config.top_p,
             api_backend: config.api_backend,
+            chat_completions_request_format: config.chat_completions_request_format,
             auth_scheme: config.auth_scheme,
             request_compression: config.request_compression,
             stream_tool_calls: config.stream_tool_calls,
@@ -683,6 +686,10 @@ impl SamplingClient {
 
     pub fn api_backend(&self) -> ApiBackend {
         self.defaults.api_backend.clone()
+    }
+
+    pub fn chat_completions_request_format(&self) -> ChatCompletionsRequestFormat {
+        self.defaults.chat_completions_request_format
     }
 
     /// Give the bearer resolver its pre-send hook before [`Self::post`] reads it.
@@ -866,7 +873,7 @@ impl SamplingClient {
             request.model = Some(self.defaults.model.clone());
         }
 
-        if request.max_tokens.is_none() {
+        if request.max_tokens.is_none() && request.max_completion_tokens.is_none() {
             request.max_tokens = self.defaults.max_completion_tokens;
         }
 
@@ -876,6 +883,28 @@ impl SamplingClient {
 
         if request.top_p.is_none() {
             request.top_p = self.defaults.top_p;
+        }
+
+        if self.defaults.chat_completions_request_format
+            == ChatCompletionsRequestFormat::DeepSeekThinking
+        {
+            request.max_completion_tokens =
+                request.max_completion_tokens.or(request.max_tokens.take());
+            request.max_tokens = None;
+            request.thinking = Some(ChatThinking {
+                kind: if request.reasoning_effort.is_some() {
+                    ChatThinkingType::Enabled
+                } else {
+                    ChatThinkingType::Disabled
+                },
+            });
+            for message in &mut request.messages {
+                if message.role == xai_grok_sampling_types::Role::Assistant
+                    && message.reasoning_content.is_none()
+                {
+                    message.reasoning_content = Some(String::new());
+                }
+            }
         }
 
         Ok(request)
@@ -2228,9 +2257,16 @@ impl SamplingClient {
         let length_policy = request.length_policy;
         let result = match self.api_backend() {
             ApiBackend::ChatCompletions => {
+                let allowed_tool_names =
+                    request.tools.iter().map(|tool| tool.name.clone()).collect();
                 let (raw, meta) = self.conversation_stream(request).await?;
-                let events =
-                    crate::stream::stream_chat_completions(raw, meta, request_id, idle_timeout);
+                let events = crate::stream::stream_chat_completions_with_tools(
+                    raw,
+                    meta,
+                    request_id,
+                    idle_timeout,
+                    allowed_tool_names,
+                );
                 crate::stream::collect_response(events).await
             }
             ApiBackend::Responses => {
@@ -2406,6 +2442,99 @@ mod tests {
     }
 
     #[test]
+    fn deepseek_thinking_request_replays_reasoning_and_uses_completion_limit() {
+        let client = SamplingClient::new(SamplerConfig {
+            chat_completions_request_format: ChatCompletionsRequestFormat::DeepSeekThinking,
+            max_completion_tokens: Some(4096),
+            ..minimal_config()
+        })
+        .unwrap();
+        let mut assistant_call = ChatRequestMessage::assistant("", "mimo-v2.6-flash", None);
+        assistant_call.tool_calls.push(
+            xai_grok_sampling_types::ToolCallRequest::function(
+                "read_file",
+                r#"{"path":"target.txt"}"#,
+            )
+            .with_id("call_1"),
+        );
+        let mut request = ChatCompletionRequest::new(
+            "mimo-v2.6-flash",
+            vec![
+                ChatRequestMessage::user("Read this file"),
+                assistant_call,
+                ChatRequestMessage::tool("call_1", "contents"),
+                ChatRequestMessage::assistant(
+                    "File read",
+                    "mimo-v2.6-flash",
+                    Some("The file contains a marker".into()),
+                ),
+            ],
+        );
+        request.reasoning_effort = Some(xai_grok_sampling_types::ReasoningEffort::High);
+        let payload = client.apply_defaults(request).unwrap();
+        let body = serde_json::to_value(&StreamingChatRequest {
+            inner: &payload,
+            stream: true,
+            stream_options: StreamOptions {
+                include_usage: true,
+            },
+        })
+        .unwrap();
+
+        assert_eq!(body["messages"][1]["reasoning_content"], "");
+        assert_eq!(
+            body["messages"][3]["reasoning_content"],
+            "The file contains a marker"
+        );
+        assert_eq!(body["max_completion_tokens"], 4096);
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["stream"], true);
+    }
+
+    #[test]
+    fn standard_chat_request_keeps_existing_shape() {
+        let client = SamplingClient::new(SamplerConfig {
+            max_completion_tokens: Some(4096),
+            ..minimal_config()
+        })
+        .unwrap();
+        let request = ChatCompletionRequest::new(
+            "deepseek-flash",
+            vec![ChatRequestMessage::assistant(
+                "done",
+                "deepseek-flash",
+                None,
+            )],
+        );
+        let payload = client.apply_defaults(request).unwrap();
+        let body = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(body["max_tokens"], 4096);
+        assert!(body.get("thinking").is_none());
+        assert!(body["messages"][0].get("reasoning_content").is_none());
+    }
+
+    #[test]
+    fn explicit_completion_limit_survives_mimo_request_defaults() {
+        let client = SamplingClient::new(SamplerConfig {
+            chat_completions_request_format: ChatCompletionsRequestFormat::DeepSeekThinking,
+            max_completion_tokens: Some(4096),
+            ..minimal_config()
+        })
+        .unwrap();
+        let mut request =
+            ChatCompletionRequest::new("mimo-v2.6-flash", vec![ChatRequestMessage::user("Hello")]);
+        request.max_completion_tokens = Some(128);
+        let payload = client.apply_defaults(request).unwrap();
+        let body = serde_json::to_value(&payload).unwrap();
+        assert_eq!(body["max_completion_tokens"], 128);
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
     fn codex_endpoint_drops_unsupported_max_output_tokens() {
         let client = SamplingClient::new(SamplerConfig {
             base_url: xai_grok_sampling_types::CHATGPT_CODEX_BASE_URL.to_string(),
@@ -2442,6 +2571,7 @@ mod tests {
             messages: vec![ChatRequestMessage::user("hello")],
             temperature: Some(0.7),
             max_tokens: None,
+            max_completion_tokens: None,
             top_p: None,
             frequency_penalty: None,
             presence_penalty: None,
@@ -2451,6 +2581,7 @@ mod tests {
             search_parameters: None,
             response_format: None,
             reasoning_effort: None,
+            thinking: None,
             x_grok_conv_id: None,
             x_grok_req_id: None,
             x_grok_session_id: None,

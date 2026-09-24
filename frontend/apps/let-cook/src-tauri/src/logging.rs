@@ -3,7 +3,6 @@
 //! Native logs are always appended to `$COOK_HOME/logs/desktop.log` (or the default
 //! `~/.cook/logs/desktop.log`). Verbose ACP tracing is opt-in with
 //! `COOK_DESKTOP_TRACE=1`; agent stderr is captured and sanitized into the same log.
-//! Deprecated aliases: `THANH_HOME`, `THANH_DESKTOP_*`.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -25,7 +24,7 @@ pub fn init() {
         return;
     }
 
-    let trace = env_truthy("COOK_DESKTOP_TRACE") || env_truthy("THANH_DESKTOP_TRACE");
+    let trace = env_truthy("COOK_DESKTOP_TRACE");
     let path = log_path();
     let file = match OpenOptions::new().create(true).append(true).open(&path) {
         Ok(file) => file,
@@ -50,9 +49,7 @@ pub fn init() {
 }
 
 pub fn log_path() -> PathBuf {
-    if let Some(path) = std::env::var_os("COOK_DESKTOP_LOG_FILE")
-        .or_else(|| std::env::var_os("THANH_DESKTOP_LOG_FILE"))
-    {
+    if let Some(path) = std::env::var_os("COOK_DESKTOP_LOG_FILE") {
         return PathBuf::from(path);
     }
     cook_home().join("logs").join("desktop.log")

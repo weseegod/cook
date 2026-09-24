@@ -9,6 +9,7 @@
 use crate::implementations::read_file::{
     handle_pdf, is_pdf_file, raw_text_to_file_content, run_document_extraction,
 };
+use crate::types::compat::INSTRUCTION_FILENAMES;
 use crate::types::context::TruncationConfig;
 use crate::types::output::{FileContent, ReadFileOutput};
 use crate::types::requirements::{Expr, ToolRequirement};
@@ -22,6 +23,9 @@ use crate::types::skill_discovery_tracker::SkillManager;
 use crate::types::template_renderer::TemplateRenderer;
 use crate::types::tool::{ToolKind, ToolNamespace};
 use std::sync::LazyLock;
+mod observation;
+#[cfg(test)]
+mod observation_tests;
 mod versions;
 use crate::types::schema::GrokIntegerSchema;
 /// Configuration for the ReadFile tool, stored as `Params<ReadFileParams>` in Resources.
@@ -33,7 +37,8 @@ pub struct ReadFileParams {
     /// Byte budget for the formatted text window. When the window exceeds it, only the leading whole
     /// lines that fit are returned (at least one) plus a continuation marker naming the next offset.
     /// `None` keeps the token cap ([`READ_FILE_MAX_TOKENS`]) as the only size limit. Skill markdown
-    /// returned whole (under the token cap) is exempt; windowed reads are budgeted.
+    /// and project-instruction files returned whole (under the token cap) are exempt; windowed reads
+    /// are budgeted.
     #[serde(default)]
     pub max_output_bytes: Option<usize>,
 }
@@ -115,7 +120,7 @@ pub(crate) const DESCRIPTION_FULL: &str = r#"Read a file.
 
 Usage:
 - The ${{ params.read.target_file }} parameter can be a relative path in the workspace or an absolute path
-- By default, it reads up to {max_lines_read} lines starting from the beginning of the file
+- By default, it reads up to {max_lines_read} lines starting from the beginning of the file${%- if whole_read.skill_markdown and whole_read.instruction_files %} (SKILL.md and AGENTS.md/CLAUDE.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- elif whole_read.skill_markdown %} (SKILL.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- elif whole_read.instruction_files %} (AGENTS.md/CLAUDE.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- endif %}
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
 - This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
@@ -125,7 +130,9 @@ fn schema_default_offset() -> Option<i64> {
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadFileInput {
-    #[serde(rename = "target_file")]
+    // MiMo sometimes sends the common `file_path` field even though our advertised schema uses
+    // `target_file`. Accept it at the input boundary; keep one canonical field on the wire.
+    #[serde(rename = "target_file", alias = "file_path")]
     #[schemars(
         description = "The path of the file to read. You can use either a relative path in the workspace or an absolute path. If an absolute path is provided, it will be preserved as is."
     )]
@@ -183,6 +190,42 @@ fn lines_within_byte_budget(content: &str, budget: usize) -> usize {
     }
     kept.max(1)
 }
+/// Shared read-continuation notice: next offset, total line count, and the shown range.
+fn continuation_marker(
+    truncated_bytes: usize,
+    total_lines: usize,
+    start_line: usize,
+    end_line: usize,
+    next_offset: usize,
+    offset_param: &str,
+) -> String {
+    format!(
+        "\n... [{truncated_bytes} characters truncated; file has {total_lines} total lines; \
+         showing lines {start_line}-{end_line}; rerun with {offset_param}={next_offset}] ..."
+    )
+}
+
+/// Append the shared continuation marker to the formatted fields only (never `raw_output`).
+fn push_continuation_marker(extracted: &mut ExtractedContent, marker: &str) {
+    extracted.content.push_str(marker);
+    extracted.content_concise.push_str(marker);
+}
+
+/// Split a trailing continuation marker off a formatted window. Used by callers that reformat
+/// `content` (hashline) so the notice survives.
+pub(crate) fn split_trailing_continuation_marker(content: &str) -> (&str, Option<&str>) {
+    let body = content.trim_end_matches('\n');
+    let (head, last) = match body.rsplit_once('\n') {
+        Some(pair) => pair,
+        None => ("", body),
+    };
+    if last.starts_with("... [") && last.ends_with("] ...") {
+        (head, Some(last))
+    } else {
+        (content, None)
+    }
+}
+
 /// Cut the window to whole lines within `budget` and tell the model where to resume. Re-extracts so
 /// `raw_output` and `extracted_images` match the returned lines; the marker is appended to the
 /// formatted text only.
@@ -204,12 +247,15 @@ fn apply_byte_budget(
     let end_line = start_line + kept - 1;
     let next_offset = start_line + kept;
     let truncated_bytes = full_len.saturating_sub(bounded.content.len());
-    let marker = format!(
-        "\n... [{truncated_bytes} characters truncated; file has {total_lines} total lines; \
-         showing lines {start_line}-{end_line}; rerun with {offset_param}={next_offset}] ..."
+    let marker = continuation_marker(
+        truncated_bytes,
+        total_lines,
+        start_line,
+        end_line,
+        next_offset,
+        offset_param,
     );
-    bounded.content.push_str(&marker);
-    bounded.content_concise.push_str(&marker);
+    push_continuation_marker(&mut bounded, &marker);
     bounded
 }
 /// Harness-compatible negative offset resolution (1-indexed start line). Negatives use the reference `split('\n')` field count plus a phantom
@@ -262,6 +308,14 @@ fn is_skill_markdown(path: &std::path::Path) -> bool {
         }
     }
     stack.into_iter().any(|c| c == "skills")
+}
+/// Read whole under the cap: a windowed read hides the rules after the window with no signal to the model.
+fn is_instruction_markdown(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        INSTRUCTION_FILENAMES
+            .iter()
+            .any(|candidate| name == *candidate)
+    })
 }
 /// Result of extracting file content lines with both default and concise formats
 pub struct ExtractedContent {
@@ -387,8 +441,9 @@ pub(crate) async fn run_read_file(
     resources: SharedResources,
     streamable_out: Option<&mut bool>,
     invoking_param_names: &crate::types::resources::InvokingToolParamNames,
+    slot: Option<&crate::types::source_summary::SourceSummarySlot>,
 ) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
-    let (cwd, display_cwd, fs, hints_enabled);
+    let (cwd, display_cwd, fs, hints_enabled, max_lines, whole_read_policy);
     {
         let res = resources.lock().await;
         cwd = match cwd_override {
@@ -398,47 +453,51 @@ pub(crate) async fn run_read_file(
         display_cwd = res.get::<DisplayCwd>().map(|d| d.0.clone());
         fs = res.require::<FileSystem>()?.0.clone();
         hints_enabled = res.get::<PathNotFoundHints>().is_some_and(|h| h.0);
+        let truncation = res.get::<TruncationCfg>().map(|t| &t.0);
+        max_lines = truncation.map_or(MAX_LINES_READ, TruncationConfig::max_lines_read);
+        whole_read_policy = truncation.map(|t| t.whole_read).unwrap_or_default();
     }
     let joined_path = resolve_model_path(&cwd, display_cwd.as_deref(), &input.path);
-    let is_skill_markdown = is_skill_markdown(&joined_path);
-    let policy_path = joined_path.clone();
-    let (path, _unicode_note) = match crate::util::fs::try_canonicalize(&joined_path).await {
-        Ok(p) => (p, None),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            match crate::util::try_resolve_unicode_filename(&joined_path).await {
-                Some(m) => (m.resolved_path, Some(m.note)),
-                None => (joined_path, None),
-            }
-        }
-        Err(_) => (joined_path, None),
-    };
-    if let Err(error) =
-        crate::types::memory_v2::validate_memory_v2_read(&resources, &policy_path).await
-    {
-        return Ok(ReadFileOutput::FileReadError(error));
-    }
+    let is_whole_read = (whole_read_policy.skill_markdown && is_skill_markdown(&joined_path))
+        || (whole_read_policy.instruction_files && is_instruction_markdown(&joined_path));
+    let mut observed = observation::ReadObservation::start(slot);
+    observed
+        .classify_before_io(&resources, &joined_path, max_lines)
+        .await;
+    let (path, _unicode_note) = crate::util::read_policy::resolve_read_path(&joined_path).await;
     let version = ReadFileVersion::from_contract(contract_version);
     let is_legacy = version.is_legacy();
     let skip_gitignore = is_legacy && versions::legacy_0_4_10::allows_gitignored_reads();
-    if !skip_gitignore {
-        let res = resources.lock().await;
-        let respect_gitignore = res.get::<RespectGitignore>().is_some_and(|r| r.0);
-        if respect_gitignore
-            && let Some(filter) = res.get::<GitignoreFilter>()
-            && filter.is_ignored(&path)
-        {
-            let display_dcwd = display_cwd_or_cwd(&cwd, display_cwd.as_deref());
-            return Ok(ReadFileOutput::FileReadError(format!(
-                "Error: {} is ignored by .gitignore and cannot be read.",
-                display_dcwd.join(&input.path).display()
-            )));
+    let display_path = display_cwd_or_cwd(&cwd, display_cwd.as_deref()).join(&input.path);
+    match crate::util::read_policy::inspect_read_paths(
+        &resources,
+        &joined_path,
+        &path,
+        (!skip_gitignore).then_some(display_path.as_path()),
+    )
+    .await
+    {
+        Ok(facts) => observed.note_memory(facts.in_memory),
+        Err(crate::util::read_policy::ReadPathDenial::Ignored) => {
+            observed.note_ignored();
+            return Ok(ReadFileOutput::FileReadError(
+                crate::util::read_policy::ignored_message(&display_path),
+            ));
+        }
+        Err(crate::util::read_policy::ReadPathDenial::Other(error)) => {
+            observed.note_untyped_failure();
+            return Ok(ReadFileOutput::FileReadError(error));
         }
     }
     let mut file_bytes = match fs.read_file(&path).await {
-        Ok(bytes) => bytes,
+        Ok(bytes) => {
+            observed.note_source_bytes(bytes.len());
+            bytes
+        }
         Err(e) => {
             tracing::debug!(?e, "Failed to read file");
             if is_legacy {
+                observed.note_untyped_failure();
                 return Ok(ReadFileOutput::FileReadError(
                     versions::legacy_0_4_10::render_read_error(&path),
                 ));
@@ -447,6 +506,7 @@ pub(crate) async fn run_read_file(
             let display_path = display_dcwd.join(&input.path);
             return Ok(match e.io_error_kind() {
                 Some(std::io::ErrorKind::NotFound) => {
+                    observed.note_not_found();
                     let skill_suggestion = {
                         let res = resources.lock().await;
                         res.get::<SkillManager>()
@@ -473,23 +533,34 @@ pub(crate) async fn run_read_file(
                     }
                     ReadFileOutput::FileNotFound(msg)
                 }
-                Some(std::io::ErrorKind::IsADirectory) => ReadFileOutput::IsADirectory(format!(
-                    "Error: {} is a directory, not a file.",
-                    display_path.display()
-                )),
-                Some(std::io::ErrorKind::PermissionDenied) => ReadFileOutput::PermissionDenied(
-                    format!("Permission denied: {}", display_path.display()),
-                ),
-                _ => ReadFileOutput::FileReadError(format!(
-                    "Failed to read file: {}, {e}",
-                    display_path.display()
-                )),
+                Some(std::io::ErrorKind::IsADirectory) => {
+                    observed.note_directory();
+                    ReadFileOutput::IsADirectory(format!(
+                        "Error: {} is a directory, not a file.",
+                        display_path.display()
+                    ))
+                }
+                Some(std::io::ErrorKind::PermissionDenied) => {
+                    observed.note_denied();
+                    ReadFileOutput::PermissionDenied(format!(
+                        "Permission denied: {}",
+                        display_path.display()
+                    ))
+                }
+                _ => {
+                    observed.note_io();
+                    ReadFileOutput::FileReadError(format!(
+                        "Failed to read file: {}, {e}",
+                        display_path.display()
+                    ))
+                }
             });
         }
     };
     if let Err(error) =
-        crate::types::memory_v2::record_memory_v2_read(&resources, &policy_path, &file_bytes).await
+        crate::types::memory_v2::record_memory_v2_read(&resources, &joined_path, &file_bytes).await
     {
+        observed.note_untyped_failure();
         return Ok(ReadFileOutput::FileReadError(error));
     }
     if let Ok(metadata) = bytes_to_metadata(&file_bytes)
@@ -500,15 +571,18 @@ pub(crate) async fn run_read_file(
             &file_bytes,
             &metadata.mime_type,
         ) {
-            return Ok(crate::implementations::read_file::image::image_read_output(
+            let output = crate::implementations::read_file::image::image_read_output(
                 file_bytes,
                 metadata.mime_type,
             )
-            .await);
+            .await;
+            observed.note_typed_output(&output);
+            return Ok(output);
         }
         if let Some(svg_text) = crate::implementations::read_file::extract_svg_text(&file_bytes) {
             file_bytes = svg_text.into_bytes();
         } else {
+            observed.note_untyped_failure();
             return Ok(
                 ReadFileOutput::ImageSizeError(
                     "Could not embed image in conversation: SVG or incomplete PNG preview cannot be sent as an image"
@@ -536,10 +610,13 @@ pub(crate) async fn run_read_file(
             )
             .await;
         }
+        observed.note_typed_output(&output);
         return Ok(output);
     }
     if extension == "pptx" {
-        return handle_pptx(file_bytes, &path).await;
+        let output = handle_pptx(file_bytes, &path).await?;
+        observed.note_typed_output(&output);
+        return Ok(output);
     }
     if crate::util::binary::is_binary(&extension, &file_bytes) {
         tracing::info!(
@@ -549,6 +626,7 @@ pub(crate) async fn run_read_file(
                 .binary_search(&extension.as_str()).is_ok() { "extension" } else { "content_inspection" },
             "binary file rejected by read_file"
         );
+        observed.note_binary();
         return Ok(ReadFileOutput::FileReadError(format!(
             "Cannot read binary file: {}",
             path.display()
@@ -557,6 +635,7 @@ pub(crate) async fn run_read_file(
     let file_content = String::from_utf8_lossy(&file_bytes).into_owned();
     if file_content.is_empty() {
         let stored_offset = stored_read_offset(input.offset);
+        observed.note_empty_file(input.offset, input.limit);
         return Ok(ReadFileOutput::FileContent(FileContent {
             content: String::new(),
             content_concise: None,
@@ -569,30 +648,43 @@ pub(crate) async fn run_read_file(
         }));
     }
     let total_lines = file_content.matches('\n').count() + 1;
-    let max_lines = {
-        let res = resources.lock().await;
-        res.get::<TruncationCfg>()
-            .map(|t| t.0.max_lines_read())
-            .unwrap_or_else(|| TruncationConfig::default().max_lines_read())
+    let whole_candidate =
+        is_whole_read.then(|| extract_file_content_lines(&file_content, None, None, total_lines));
+    let whole_read = match whole_candidate {
+        Some(full) if exceeds_read_cap(&full.content) => {
+            observed.note_token_fallback();
+            None
+        }
+        candidate => candidate,
     };
-    let skill_full = is_skill_markdown
-        .then(|| extract_file_content_lines(&file_content, None, None, total_lines))
-        .filter(|full| !exceeds_read_cap(&full.content));
-    let windowed = skill_full.is_none();
-    let (mut extracted, stored_offset, stored_limit) = match skill_full {
-        Some(full) => (full, None, None),
-        None => (
-            extract_file_content_lines(
+    let windowed = whole_read.is_none();
+    let (mut extracted, stored_offset, stored_limit) = match whole_read {
+        Some(full) => {
+            observed.note_whole_read(is_skill_markdown(&joined_path));
+            (full, None, None)
+        }
+        None => {
+            let start_line = resolve_read_start_line(&file_content, input.offset);
+            let remaining = total_lines.saturating_sub(start_line.saturating_sub(1));
+            let requested_limit = input.limit.unwrap_or(usize::MAX);
+            let effective_limit = requested_limit.min(max_lines);
+            let extracted = extract_file_content_lines(
                 &file_content,
                 input.offset,
-                Some(input.limit.unwrap_or(usize::MAX).min(max_lines)),
+                Some(effective_limit),
                 total_lines,
-            ),
-            stored_read_offset(input.offset),
-            input.limit,
-        ),
+            );
+            observed.note_window(
+                input.offset.is_some() || input.limit.is_some(),
+                input.limit,
+                remaining,
+                max_lines,
+            );
+            (extracted, stored_read_offset(input.offset), input.limit)
+        }
     };
     if windowed && let Some(budget) = max_output_bytes(&resources).await {
+        observed.note_byte_budget(budget, extracted.content.len());
         extracted = apply_byte_budget(
             extracted,
             budget,
@@ -601,6 +693,39 @@ pub(crate) async fn run_read_file(
             total_lines,
             invoking_param_names.resolve("offset"),
         );
+    }
+    if windowed
+        && split_trailing_continuation_marker(&extracted.content)
+            .1
+            .is_none()
+    {
+        let requested_limit = input.limit.unwrap_or(usize::MAX);
+        let start_line = resolve_read_start_line(&file_content, input.offset);
+        let kept = extracted.raw_output.lines().count();
+        let end_line = start_line.saturating_add(kept.saturating_sub(1));
+        let next_offset = end_line.saturating_add(1);
+        // Only MAX_LINES_READ (not a smaller caller limit) is allowed to leave a resume hint.
+        let cap_clipped = requested_limit > max_lines && kept >= max_lines;
+        if cap_clipped && kept > 0 {
+            let remainder = extract_file_content_lines(
+                &file_content,
+                Some(next_offset as i64),
+                None,
+                total_lines,
+            );
+            // A trailing-newline phantom field is not a resumable line.
+            if !remainder.raw_output.is_empty() {
+                let marker = continuation_marker(
+                    remainder.raw_output.len(),
+                    total_lines,
+                    start_line,
+                    end_line,
+                    next_offset,
+                    invoking_param_names.resolve("offset"),
+                );
+                push_continuation_marker(&mut extracted, &marker);
+            }
+        }
     }
     if exceeds_read_cap(&extracted.content) {
         let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
@@ -649,6 +774,7 @@ pub(crate) async fn run_read_file(
                  or use the '{grep_name}' to search for specific content.{single_line_hint}"
             )
         };
+        observed.reject_tokens();
         return Ok(ReadFileOutput::FileTooLarge(msg));
     }
     if let Some(flag) = streamable_out {
@@ -657,6 +783,7 @@ pub(crate) async fn run_read_file(
     let mut content = extracted.content;
     let mut content_concise = Some(extracted.content_concise);
     let extracted_images = extracted.extracted_images;
+    let lines_before_rules = observation::line_count(&content);
     crate::implementations::cursor_rules_on_read::append_cursor_rules_for_read(
         cursor_rules_on_read_enabled(&resources).await,
         resources.clone(),
@@ -666,6 +793,11 @@ pub(crate) async fn run_read_file(
         &mut content_concise,
     )
     .await;
+    let rule_lines = observation::line_count(&content).saturating_sub(lines_before_rules);
+    observed.finish_success(
+        observation::line_count(&extracted.raw_output).saturating_add(rule_lines),
+        content.len(),
+    );
     Ok(ReadFileOutput::FileContent(FileContent {
         content,
         content_concise,
@@ -803,6 +935,7 @@ impl ReadFileTool {
         let bv = crate::types::tool_metadata::behavior_version(ctx);
         let mut streamable_text = false;
         let invoking = crate::types::tool_metadata::invoking_param_names(ctx);
+        let slot = ctx.get::<crate::types::source_summary::SourceSummarySlot>();
         let output = run_read_file(
             input,
             cwd_override.clone(),
@@ -810,6 +943,7 @@ impl ReadFileTool {
             resources.clone(),
             Some(&mut streamable_text),
             &invoking,
+            slot.as_deref(),
         )
         .await?;
         Ok((output, streamable_text))
@@ -823,8 +957,9 @@ mod tests {
     use crate::implementations::read_file::compress_image_for_conversation;
     use crate::implementations::skills::types::SkillInfo;
     use crate::notification::types::ToolNotificationHandle;
+    use crate::types::context::WholeReadPolicy;
     use crate::types::resources::{NotificationHandle, Resources};
-    use crate::types::tool_metadata::test_ctx;
+    use crate::types::tool_metadata::{test_ctx, test_ctx_with_call_id};
     use std::sync::Arc;
     use tempfile::TempDir;
     /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
@@ -989,6 +1124,234 @@ mod tests {
         };
         assert!(fc.content.contains("line000200"));
         assert!(!fc.content.contains("truncated"));
+    }
+    /// Cell `cap_off_identical`: a session that never sets the config key installs no
+    /// `Params<ReadFileParams>`, so the byte-budget branch's guard is unmet and the read of a file
+    /// far over any would-be budget is the tool's ordinary full-window read — byte-identical to a
+    /// read whose budget cannot bind.
+    #[tokio::test]
+    async fn cap_off_identical() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
+        let input = || ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        // Flag unset: exactly the Resources a session that never sets the key builds.
+        let unset = test_resources(tmp.path()).into_shared();
+        assert!(
+            max_output_bytes(&unset).await.is_none(),
+            "no ReadFileParams means the budget branch cannot be entered"
+        );
+        let ReadFileOutput::FileContent(flag_off) =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(unset), input())
+                .await
+                .unwrap()
+        else {
+            panic!("expected FileContent");
+        };
+        // Budget that cannot bind: the branch runs and must leave the window alone.
+        let roomy = budget_resources(tmp.path(), usize::MAX).into_shared();
+        assert_eq!(max_output_bytes(&roomy).await, Some(usize::MAX));
+        let ReadFileOutput::FileContent(flag_roomy) =
+            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(roomy), input())
+                .await
+                .unwrap()
+        else {
+            panic!("expected FileContent");
+        };
+        eprintln!("--- CAP OFF (flag unset) ---\n{}", flag_off.content);
+        eprintln!(
+            "--- CAP ROOMY (budget cannot bind) ---\n{}",
+            flag_roomy.content
+        );
+        assert_eq!(
+            flag_off.content, flag_roomy.content,
+            "unset flag must be byte-identical to a non-binding budget"
+        );
+        assert_eq!(flag_off.raw_output, flag_roomy.raw_output);
+        // The unset arm is the whole file, uncapped, with no marker of any style.
+        let fixture = budget_fixture();
+        assert_eq!(flag_off.raw_output.lines().count(), 200);
+        for line in fixture.lines() {
+            assert!(flag_off.content.contains(line), "missing {line}");
+        }
+        assert!(
+            !flag_off.content.contains("truncated"),
+            "{}",
+            flag_off.content
+        );
+        assert!(!flag_off.content.contains("..."));
+        assert_eq!(flag_off.total_lines, 200);
+        eprintln!("--- CAP OFF CHECK: 200/200 lines, no marker, byte-identical: OK ---");
+        // The global caps are the only size limits in the unset case.
+        assert_eq!(READ_FILE_MAX_TOKENS, 25_000);
+        assert_eq!(MAX_LINES_READ, 1_000);
+    }
+    /// Cell `cap_names_next_offset`: with the flag set, an over-cap read keeps the first whole
+    /// lines that fit, answers the same single tool call, and reuses the read tool's own
+    /// continuation marker — next offset, total line count, shown range — with no second style.
+    #[tokio::test]
+    async fn cap_names_next_offset() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
+        let shared = budget_resources(tmp.path(), 500).into_shared();
+        // The full formatted window this file produces, measured through the shipped path with a
+        // budget that cannot bind, so the expected truncated-byte count is not hard-coded.
+        let ReadFileOutput::FileContent(roomy) = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            test_ctx(budget_resources(tmp.path(), usize::MAX).into_shared()),
+            ReadFileInput {
+                path: "big.txt".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            },
+        )
+        .await
+        .unwrap() else {
+            panic!("expected FileContent");
+        };
+        let ctx = test_ctx_with_call_id(shared, "call_cap_names_next_offset");
+        let call_id = ctx.call_id.clone();
+        let out = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            ctx.clone(),
+            ReadFileInput {
+                path: "big.txt".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            ctx.call_id, call_id,
+            "cap must not rewrite the tool call id"
+        );
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected one FileContent result for the call");
+        };
+        let (body, marker) = fc
+            .content
+            .rsplit_once('\n')
+            .expect("marker on its own line");
+        let kept = body.lines().count();
+        assert!(kept > 0 && kept < 200, "kept {kept}");
+        assert!(body.starts_with("1→line000001\n"), "body: {body:?}");
+        assert!(marker.starts_with("... ["), "marker: {marker:?}");
+        assert_eq!(
+            marker,
+            format!(
+                "... [{} characters truncated; file has 200 total lines; showing lines 1-{kept}; \
+                 rerun with offset={}] ...",
+                roomy.content.len() - body.len(),
+                kept + 1
+            ),
+            "marker must name the next offset, total lines and shown range"
+        );
+        // One truncation style only, and the global caps are untouched.
+        assert_eq!(fc.content.matches("... [").count(), 1);
+        assert_eq!(fc.raw_output.lines().count(), kept);
+        assert_eq!(fc.total_lines, 200);
+        assert_eq!(READ_FILE_MAX_TOKENS, 25_000);
+        assert_eq!(MAX_LINES_READ, 1_000);
+    }
+    fn line_cap_resources(cwd: &std::path::Path, max_lines_read: usize) -> Resources {
+        let mut resources = test_resources(cwd);
+        resources.insert(TruncationCfg(TruncationConfig {
+            max_lines_read: Some(max_lines_read),
+            ..TruncationConfig::default()
+        }));
+        resources
+    }
+    /// `MAX_LINES_READ` clip keeps the head and reuses the byte-budget continuation marker.
+    #[tokio::test]
+    async fn line_cap_names_next_offset() {
+        let tmp = TempDir::new().unwrap();
+        let content: String = (1..=20)
+            .map(|i| format!("line{i:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
+        let shared = line_cap_resources(tmp.path(), 5).into_shared();
+        let out = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            test_ctx(shared),
+            ReadFileInput {
+                path: "big.txt".to_string(),
+                offset: None,
+                limit: None,
+                pages: None,
+                format: None,
+            },
+        )
+        .await
+        .unwrap();
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected FileContent, got {out:?}");
+        };
+        let (body, marker) = fc
+            .content
+            .rsplit_once('\n')
+            .expect("marker on its own line");
+        assert_eq!(body.lines().count(), 5);
+        assert!(body.starts_with("1→line0001\n"), "body: {body:?}");
+        assert!(marker.starts_with("... ["), "marker: {marker:?}");
+        assert!(
+            marker.contains("file has 20 total lines")
+                && marker.contains("showing lines 1-5")
+                && marker.contains("rerun with offset=6"),
+            "marker: {marker:?}"
+        );
+        assert_eq!(fc.content.matches("... [").count(), 1);
+        assert_eq!(fc.total_lines, 20);
+    }
+    /// A caller-chosen smaller limit that was fully returned needs no resume hint.
+    #[tokio::test]
+    async fn line_cap_omits_marker_when_limit_is_honored() {
+        let tmp = TempDir::new().unwrap();
+        let content: String = (1..=20)
+            .map(|i| format!("line{i:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
+        let shared = line_cap_resources(tmp.path(), 5).into_shared();
+        let out = xai_tool_runtime::Tool::run(
+            &ReadFileTool,
+            test_ctx(shared),
+            ReadFileInput {
+                path: "big.txt".to_string(),
+                offset: None,
+                limit: Some(3),
+                pages: None,
+                format: None,
+            },
+        )
+        .await
+        .unwrap();
+        let ReadFileOutput::FileContent(fc) = out else {
+            panic!("expected FileContent, got {out:?}");
+        };
+        assert_eq!(fc.content.lines().count(), 3);
+        assert!(!fc.content.contains("... ["), "{}", fc.content);
+    }
+    #[test]
+    fn split_trailing_continuation_marker_round_trips() {
+        let marker = continuation_marker(12, 20, 1, 5, 6, "offset");
+        let content = format!("1→a\n2→b{marker}");
+        let (body, split) = split_trailing_continuation_marker(&content);
+        assert_eq!(body, "1→a\n2→b");
+        assert_eq!(split, Some(marker.trim_start_matches('\n')));
+        let (unchanged, none) = split_trailing_continuation_marker("1→a\n2→b");
+        assert_eq!(unchanged, "1→a\n2→b");
+        assert_eq!(none, None);
     }
     /// Set up Resources with real filesystem for tests.
     fn test_resources(cwd: &std::path::Path) -> Resources {
@@ -1417,6 +1780,54 @@ mod tests {
                 assert!(
                     msg.contains("Grep"),
                     "Error should reference renamed grep tool: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected FileTooLarge, got {:?}", other),
+        }
+    }
+    /// Characterization: the whole-file token refusal names offset/limit keys but
+    /// does not compute a concrete next offset or a shown-range continuation marker.
+    #[tokio::test]
+    async fn token_limit_error_without_range_does_not_name_next_offset() {
+        let tmp = TempDir::new().unwrap();
+        let line = "x".repeat(200);
+        let big_content = std::iter::repeat_n(line.as_str(), 1100)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path().join("big.txt"), &big_content).unwrap();
+        let tool = ReadFileTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(TemplateRenderer::new(
+            [(ToolKind::Search, "Grep".to_string())].into(),
+            Default::default(),
+        ));
+        let input = ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileTooLarge(msg) => {
+                assert!(msg.contains("exceeds maximum allowed tokens"));
+                assert!(
+                    msg.contains("offset"),
+                    "refusal should name the offset key: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("showing lines"),
+                    "whole-file refusal must not invent a shown range: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("rerun with offset="),
+                    "whole-file refusal must not compute a next offset: {}",
                     msg
                 );
             }
@@ -2335,6 +2746,116 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             other => panic!("Expected FileContent, got {:?}", other),
         }
     }
+    #[tokio::test]
+    async fn nested_agents_md_ignores_model_offset_and_limit() {
+        let tmp = TempDir::new().unwrap();
+        let sub_dir = tmp.path().join("sub");
+        std::fs::create_dir_all(&sub_dir).unwrap();
+        let content = (1..=1200)
+            .map(|n| format!("line{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(sub_dir.join("AGENTS.md"), &content).unwrap();
+        let tool = ReadFileTool;
+        let resources = test_resources(tmp.path());
+        let input = ReadFileInput {
+            path: "sub/AGENTS.md".to_string(),
+            offset: Some(3),
+            limit: Some(1),
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileContent(fc) => {
+                assert!(
+                    fc.content.starts_with("1→line1\nline2"),
+                    "not whole from line 1: {}",
+                    fc.content
+                );
+                assert!(
+                    fc.content.ends_with("line1200"),
+                    "cut before line 1200: {}",
+                    fc.content
+                );
+                assert_eq!((None, None), (fc.offset, fc.limit));
+            }
+            other => panic!("Expected FileContent, got {other:?}"),
+        }
+    }
+    #[tokio::test]
+    async fn whole_read_policy_gates_each_exemption() {
+        let tmp = TempDir::new().unwrap();
+        let five_lines = "line1\nline2\nline3\nline4\nline5";
+        for rel_path in [".grok/skills/s/SKILL.md", "sub/AGENTS.md"] {
+            let file = tmp.path().join(rel_path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, five_lines).unwrap();
+        }
+        let skill_only = WholeReadPolicy {
+            skill_markdown: true,
+            instruction_files: false,
+        };
+        let instruction_only = WholeReadPolicy {
+            skill_markdown: false,
+            instruction_files: true,
+        };
+        let whole = (None, None, "1→line1\nline2\nline3\nline4\nline5");
+        let windowed = (Some(3), Some(1), "3→line3");
+        for (policy, rel_path, expected) in [
+            (skill_only, ".grok/skills/s/SKILL.md", whole),
+            (skill_only, "sub/AGENTS.md", windowed),
+            (instruction_only, ".grok/skills/s/SKILL.md", windowed),
+            (instruction_only, "sub/AGENTS.md", whole),
+        ] {
+            let mut resources = test_resources(tmp.path());
+            resources.insert(TruncationCfg(TruncationConfig {
+                whole_read: policy,
+                ..TruncationConfig::default()
+            }));
+            let input = ReadFileInput {
+                path: rel_path.to_string(),
+                offset: Some(3),
+                limit: Some(1),
+                pages: None,
+                format: None,
+            };
+            let result = xai_tool_runtime::Tool::run(
+                &ReadFileTool,
+                test_ctx(resources.into_shared()),
+                input,
+            )
+            .await
+            .unwrap();
+            let ReadFileOutput::FileContent(fc) = result else {
+                panic!("expected FileContent for {rel_path} under {policy:?}, got {result:?}");
+            };
+            assert_eq!(
+                expected,
+                (fc.offset, fc.limit, fc.content.as_str()),
+                "{rel_path} under {policy:?}"
+            );
+        }
+    }
+    #[test]
+    fn is_instruction_markdown_matches_exact_names_only() {
+        for (path, expected) in [
+            ("AGENTS.md", true),
+            ("sub/.claude/CLAUDE.md", true),
+            ("/abs/CLAUDE.local.md", true),
+            ("agents.md", false),
+            ("AGENTS.md.bak", false),
+            ("docs/agents-guide.md", false),
+        ] {
+            assert_eq!(
+                expected,
+                is_instruction_markdown(std::path::Path::new(path)),
+                "{path}"
+            );
+        }
+    }
     #[test]
     fn parse_single_page() {
         assert_eq!(parse_page_range("3", 10).unwrap(), vec![2]);
@@ -2968,6 +3489,26 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let str_neg: ReadFileInput =
             serde_json::from_str(r#"{"target_file":"x","offset":"-3"}"#).unwrap();
         assert_eq!(str_neg.offset, Some(-3));
+    }
+    #[test]
+    fn read_file_input_accepts_file_path_alias_without_changing_its_schema() {
+        let input: ReadFileInput =
+            serde_json::from_str(r#"{"file_path":"src/main.rs","offset":90,"limit":50}"#).unwrap();
+        assert_eq!(input.path, "src/main.rs");
+        assert_eq!(input.offset, Some(90));
+        assert_eq!(input.limit, Some(50));
+        let serialized = serde_json::to_value(&input).unwrap();
+        assert_eq!(serialized["target_file"], "src/main.rs");
+        assert!(serialized.get("file_path").is_none());
+
+        let schema = schemars::schema_for!(ReadFileInput);
+        let schema = serde_json::to_value(schema).unwrap();
+        assert_eq!(schema["required"], serde_json::json!(["target_file"]));
+        assert!(schema["properties"].get("file_path").is_none());
+        assert!(
+            serde_json::from_str::<ReadFileInput>(r#"{"target_file":"a.rs","file_path":"b.rs"}"#)
+                .is_err()
+        );
     }
     #[test]
     fn stored_read_offset_drops_negatives() {

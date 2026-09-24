@@ -528,6 +528,16 @@ impl SessionActor {
         };
 
         let elapsed_ms = started.elapsed().as_millis() as u64;
+        // The classifier spends provider tokens and is not a turn, so it folds under its own purpose.
+        // `elapsed_ms` wraps the generation-poll loop, not only the HTTP call, so it is the call's
+        // observed wall time rather than a pure transport duration.
+        crate::session::side_call_usage::record_side_call_response(
+            &self.chat_state_handle,
+            xai_chat_state::CallPurpose::Laziness,
+            &model_id,
+            &response,
+            Some(elapsed_ms),
+        );
         let raw_text = response.assistant_text();
         let parsed = match parse_classifier_output(&raw_text) {
             Ok(p) => p,

@@ -43,6 +43,22 @@ fn create_goal_activates_and_starts_timer() {
 }
 
 #[test]
+fn batch_marker_survives_snapshot_and_requires_explicit_resume() {
+    let mut snapshot = make_base_orchestration();
+    snapshot.batch = Some(GoalBatchSpec {
+        model_id: "openai/test".into(),
+        base_url: Some("https://api.openai.com/v1".into()),
+    });
+    let serialized = serde_json::to_string(&snapshot).unwrap();
+    let restored: GoalOrchestration = serde_json::from_str(&serialized).unwrap();
+    let tracker = GoalTracker::from_snapshot(PathBuf::from("/tmp/test-goal-batch"), restored);
+    assert_eq!(tracker.status(), Some(GoalStatus::UserPaused));
+    let batch = tracker.snapshot().unwrap().batch.as_ref().unwrap();
+    assert_eq!(batch.model_id, "openai/test");
+    assert_eq!(batch.base_url.as_deref(), Some("https://api.openai.com/v1"));
+}
+
+#[test]
 fn lifecycle_transitions_record_history_events() {
     use crate::session::goal_orchestrator::build_goal_updated;
 

@@ -71,23 +71,17 @@ fn handle_set_api_key(args: &acp::ExtRequest) -> ExtResult {
     let params: serde_json::Value = parse_params(args)?;
     let key = params.get("key").and_then(|v| v.as_str());
     let grok_home = crate::util::grok_home::grok_home();
-    if let Some(k) = key {
-        if k.is_empty() {
-            xai_grok_login::clear_api_key(&grok_home)
-                .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
-            // SAFETY: ext_method is single-threaded per agent
-            unsafe { std::env::remove_var("XAI_API_KEY") };
-        } else {
+    match key {
+        Some(k) if !k.is_empty() => {
             xai_grok_login::store_api_key(&grok_home, k)
                 .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
-            // SAFETY: ext_method is single-threaded per agent
-            unsafe { std::env::set_var("XAI_API_KEY", k) };
+            xai_grok_login::auth_method::set_runtime_xai_api_key(k);
         }
-    } else {
-        xai_grok_login::clear_api_key(&grok_home)
-            .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
-        // SAFETY: ext_method is single-threaded per agent
-        unsafe { std::env::remove_var("XAI_API_KEY") };
+        _ => {
+            xai_grok_login::clear_api_key(&grok_home)
+                .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
+            xai_grok_login::auth_method::clear_runtime_xai_api_key();
+        }
     }
     ExtMethodResult::success(serde_json::json!({ "ok": true }))
         .to_ext_response()

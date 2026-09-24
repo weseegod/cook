@@ -1,8 +1,10 @@
+use std::num::NonZeroU64;
+
 use indexmap::IndexMap;
 
 use super::config::{ConfigModelOverride, EnvKeys};
 use super::config_model_override_parse::{ConfigWarning, ConfigWarningKind};
-use crate::sampling::ApiBackend;
+use crate::sampling::{ApiBackend, ChatCompletionsRequestFormat};
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
@@ -12,6 +14,7 @@ pub struct ModelProviderConfig {
     pub env_key: Option<EnvKeys>,
     pub api_key: Option<String>,
     pub api_backend: Option<ApiBackend>,
+    pub chat_completions_request_format: Option<ChatCompletionsRequestFormat>,
     pub extra_headers: IndexMap<String, String>,
     /// Query parameters folded into every request URL; inherited by models.
     pub query_params: IndexMap<String, String>,
@@ -20,6 +23,8 @@ pub struct ModelProviderConfig {
     pub auth_provider: Option<String>,
     pub auth: Option<xai_grok_config_types::AuthProviderConfig>,
     pub context_window: Option<u64>,
+    /// Request-body cap of this endpoint; inherited by models that set none of their own.
+    pub max_request_bytes: Option<NonZeroU64>,
 }
 
 pub(crate) fn model_provider_auth_name(provider_id: &str) -> String {
@@ -94,7 +99,11 @@ pub(crate) fn parse_model_providers(
                         id,
                         Some(key.as_str()),
                         ConfigWarningKind::UnknownField,
-                        "unrecognized key; field ignored".to_owned(),
+                        if key == "chat_completions_adapter" {
+                            "chat_completions_adapter was removed; delete this setting".to_owned()
+                        } else {
+                            "unrecognized key; field ignored".to_owned()
+                        },
                     ));
                 }
                 if let Some(auth) = &provider.auth {
@@ -178,12 +187,14 @@ impl ConfigModelOverride {
             env_key,
             api_key,
             api_backend,
+            chat_completions_request_format,
             extra_headers,
             query_params,
             env_http_headers,
             auth_provider,
             auth,
             context_window,
+            max_request_bytes,
         } = provider;
 
         let mut merged = self.clone();
@@ -191,7 +202,15 @@ impl ConfigModelOverride {
         merged.base_url = merged.base_url.or_else(|| base_url.clone());
         merged.api_base_url = merged.api_base_url.or_else(|| api_base_url.clone());
         merged.api_backend = merged.api_backend.or_else(|| api_backend.clone());
+        merged.chat_completions_request_format =
+            merged.chat_completions_request_format.or_else(|| {
+                chat_completions_request_format.or_else(|| {
+                    (provider_id == "xiaomi")
+                        .then_some(ChatCompletionsRequestFormat::DeepSeekThinking)
+                })
+            });
         merged.context_window = merged.context_window.or(*context_window);
+        merged.max_request_bytes = merged.max_request_bytes.or(*max_request_bytes);
         // Inherited wholesale only when the model sets none of its own.
         if merged.extra_headers.is_empty() {
             merged.extra_headers = extra_headers.clone();
@@ -228,7 +247,96 @@ impl ConfigModelOverride {
 
 #[cfg(test)]
 mod tests {
-    use crate::agent::config::{Config, resolve_credentials, resolve_model_list};
+    use std::num::NonZeroU64;
+
+    use super::{ConfigWarningKind, parse_model_providers};
+
+    use crate::agent::config::{
+        Config, resolve_credentials, resolve_model_list, sampling_config_for_model,
+    };
+    use crate::sampling::ChatCompletionsRequestFormat;
+
+    #[test]
+    fn xiaomi_provider_selects_request_format_without_changing_standard_providers() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.xiaomi]
+            base_url = "https://xiaomi.example/v1"
+            [model.xiaomi-model]
+            model = "mimo"
+            model_provider = "xiaomi"
+            context_window = 100000
+
+            [model_providers.deepseek]
+            base_url = "https://deepseek.example/v1"
+            [model.deepseek-model]
+            model = "deepseek"
+            model_provider = "deepseek"
+            context_window = 100000
+
+            [model.xiaomi-standard-override]
+            model = "mimo"
+            model_provider = "xiaomi"
+            context_window = 100000
+            chat_completions_request_format = "standard"
+
+            [model_providers.mimo-relay]
+            base_url = "https://relay.example/v1"
+            chat_completions_request_format = "deepseek_thinking"
+            [model.relay-model]
+            model = "mimo"
+            model_provider = "mimo-relay"
+            context_window = 100000
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None);
+        assert_eq!(
+            resolved["xiaomi-model"]
+                .info
+                .chat_completions_request_format,
+            ChatCompletionsRequestFormat::DeepSeekThinking
+        );
+        assert_eq!(
+            resolved["deepseek-model"]
+                .info
+                .chat_completions_request_format,
+            ChatCompletionsRequestFormat::Standard
+        );
+        assert_eq!(
+            resolved["xiaomi-standard-override"]
+                .info
+                .chat_completions_request_format,
+            ChatCompletionsRequestFormat::Standard
+        );
+        assert_eq!(
+            resolved["relay-model"].info.chat_completions_request_format,
+            ChatCompletionsRequestFormat::DeepSeekThinking
+        );
+    }
+
+    #[test]
+    fn removed_adapter_setting_warns_in_provider_config() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.xiaomi]
+            base_url = "https://api.xiaomimimo.com/v1"
+            chat_completions_adapter = "xiaomi_mimo"
+            "#,
+        )
+        .unwrap();
+        let (providers, warnings) = parse_model_providers(&raw_config);
+        assert!(providers.contains_key("xiaomi"));
+        assert!(warnings.iter().any(|warning| {
+            warning.kind == ConfigWarningKind::UnknownField
+                && warning
+                    .reason
+                    .contains("chat_completions_adapter was removed")
+        }));
+    }
+
     #[test]
     fn model_inherits_provider_connection_defaults() {
         let raw_config: toml::Value = toml::from_str(
@@ -290,6 +398,53 @@ mod tests {
         let model = resolved.get("override-url").expect("model should exist");
         assert_eq!(model.info.base_url, "https://model-specific.example/v1");
         assert_eq!(model.info.context_window.get(), 200000);
+    }
+
+    #[test]
+    fn model_inherits_provider_max_request_bytes() {
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.messages-gateway]
+            base_url = "https://gateway.example/v1"
+            api_backend = "messages"
+            max_request_bytes = 20000000
+
+            [model.inherits]
+            model = "claude-sonnet"
+            model_provider = "messages-gateway"
+
+            [model.overrides]
+            model = "claude-opus"
+            model_provider = "messages-gateway"
+            max_request_bytes = 10000000
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None);
+        let max_request_bytes = |key: &str| {
+            let model = resolved.get(key).expect("model should exist");
+            sampling_config_for_model(
+                model,
+                resolve_credentials(model, None),
+                None,
+                None,
+                None,
+                None,
+            )
+            .max_request_bytes
+        };
+        assert_eq!(
+            NonZeroU64::new(20_000_000),
+            max_request_bytes("inherits"),
+            "the provider cap reaches a model that sets none and beats the messages default"
+        );
+        assert_eq!(
+            NonZeroU64::new(10_000_000),
+            max_request_bytes("overrides"),
+            "the model's own cap overrides the provider's"
+        );
     }
 
     #[test]

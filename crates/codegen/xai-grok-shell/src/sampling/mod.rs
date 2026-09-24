@@ -1,6 +1,10 @@
 pub mod conversation;
 pub mod error;
+pub mod eval_batch;
+pub mod goal_batch;
 pub mod types;
+
+pub use self::eval_batch::{EvalBatchConditions, eval_batch_request};
 
 // `Client` is the legacy alias used throughout the shell; it points at the sampler crate's `SamplingClient`
 // The two have identical method sets, so call sites compile unchanged
@@ -17,9 +21,9 @@ pub use async_openai::types::responses as rs;
 // These re-exports keep `crate::sampling::{SamplerHandle, SamplerConfig, ...}` paths working for callers not yet ported to `xai_grok_sampler::*`
 // There is no shell-side `sampling::client::Config` composite anymore; `MvpAgent` holds session-snapshot state in a `RefCell<SamplerConfig>`
 pub use xai_grok_sampler::{
-    ConversationGroupId, InferenceLatencyStats, OriginClientInfo, RequestId, SamplerActor,
-    SamplerConfig, SamplerHandle, SamplingChannel, SamplingClient, SamplingErrorInfo,
-    SamplingErrorKind, SamplingEvent,
+    ChatCompletionsRequestFormat, ConversationGroupId, InferenceLatencyStats, OriginClientInfo,
+    RequestId, SamplerActor, SamplerConfig, SamplerHandle, SamplingChannel, SamplingClient,
+    SamplingErrorInfo, SamplingErrorKind, SamplingEvent,
 };
 
 const CONVERSATION_GROUP_NAMESPACE: &str = "xai:grok-build:conversation-group:";

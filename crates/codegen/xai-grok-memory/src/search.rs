@@ -1126,6 +1126,13 @@ mod tests {
             "heading with a following bullet has real content"
         );
         assert!(
+            !is_content_free(
+                "<!-- Add any cross-project preferences here -->\n\n- MARKER-tools.memory_roundtrip-a2424991",
+                "global"
+            ),
+            "leftover scaffold comment plus a user list line must remain searchable"
+        );
+        assert!(
             !is_content_free("Use C# for this", "global"),
             "a `#` mid-line is real content, not a heading"
         );

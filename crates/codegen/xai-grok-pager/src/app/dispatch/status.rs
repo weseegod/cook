@@ -291,6 +291,12 @@ pub(super) fn set_coding_data_sharing(
     }]
 }
 
+/// The toast for a setting that could not be written to `config.toml`.
+pub(super) fn toast_persist_failure(app: &mut AppView, key: &str, error: &str) {
+    let scrubbed = scrub_error_for_toast(error);
+    app.show_toast(&format!("\u{2717} Could not save {key}: {scrubbed}"));
+}
+
 /// Scrub an untrusted error string for toast display.
 /// Substitutes a generic placeholder when the input exceeds 120 chars or contains control / bidi-override characters.
 /// That prevents escape-sequence injection and visual spoofing.

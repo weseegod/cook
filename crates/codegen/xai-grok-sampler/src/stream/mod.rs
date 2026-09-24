@@ -8,9 +8,12 @@ pub mod chat_completions;
 pub mod collect;
 pub mod messages;
 pub mod responses;
+pub mod tool_call_budget;
+mod tool_call_recovery;
 pub mod vendor_trailer;
 
-pub use chat_completions::stream_chat_completions;
+pub use chat_completions::{stream_chat_completions, stream_chat_completions_with_tools};
 pub use collect::collect_response;
 pub use messages::stream_messages;
 pub use responses::stream_responses;
+pub use tool_call_budget::{ToolCallBudget, guard_tool_call_budget};

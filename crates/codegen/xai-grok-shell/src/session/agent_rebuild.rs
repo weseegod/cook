@@ -28,6 +28,10 @@
 //! The subagent channels are wrapped in a `ChannelBackend` behind `SubagentBackendResource`.
 //! On rebuild, we must reuse the **same** senders so the existing coordinator keeps receiving requests.
 //! A fresh channel would orphan the running coordinator.
+use crate::agent::remote_config::task_model_policy::{
+    LatchedTaskModelSelection, TaskModelPolicyInputs, latch_task_model_presentation,
+    presentation_applied_event, rejection_sink,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -94,6 +98,8 @@ pub(crate) struct AgentRebuildSpec {
     pub bridge_state_path: PathBuf,
     pub session_env: Arc<HashMap<String, String>>,
     pub models_manager: crate::agent::remote_config::ModelsManager,
+    pub task_model_policy: TaskModelPolicyInputs,
+    pub task_model_selection: LatchedTaskModelSelection,
     pub compaction_policy: CompactionPolicy,
     pub reminder_policy: ReminderPolicy,
     pub memory_enabled: bool,
@@ -130,6 +136,9 @@ pub(crate) struct AgentRebuildSpec {
     /// `[paths]` config, threaded into rules discovery via the builder.
     pub paths_config: xai_grok_agent::prompt::paths::PathsConfig,
     pub context_window_tokens: u64,
+    /// `[compaction.pruning] read_file_max_output_bytes`: opt-in `read_file` generation cap in
+    /// bytes. Zero leaves the read tool's own caps as its only size limits.
+    pub read_file_max_output_bytes: usize,
     pub prompt_working_directory: Option<String>,
     pub lsp: Option<Arc<dyn LspBackend>>,
     pub plugin_registry: Option<Arc<xai_grok_agent::plugins::PluginRegistry>>,
@@ -207,6 +216,8 @@ impl AgentRebuildSpec {
             bridge_state_path,
             session_env,
             models_manager,
+            task_model_policy,
+            task_model_selection,
             compaction_policy,
             reminder_policy,
             memory_enabled,
@@ -237,6 +248,7 @@ impl AgentRebuildSpec {
             compat,
             paths_config,
             context_window_tokens,
+            read_file_max_output_bytes,
             prompt_working_directory,
             lsp,
             plugin_registry,
@@ -291,6 +303,7 @@ impl AgentRebuildSpec {
             env.insert("GROK_SESSION_ID".to_string(), session_id_str.clone());
             Arc::new(env)
         };
+        let presentation = latch_task_model_presentation(models_manager, task_model_policy).await;
         let mut builder = AgentBuilder::new(
             working_directory.clone(),
             terminal_backend.clone(),
@@ -315,17 +328,12 @@ impl AgentRebuildSpec {
         .with_write_file_enabled(*write_file_enabled)
         .with_active_agent_messages_enabled(active_agent_messages_enabled)
         .with_fs(fs_backend.clone())
+        .with_mcp_file_input_preparation()
         .with_subagents_enabled(*subagents_enabled)
-        .with_child_nested_subagents_allowed(1 < *subagents_max_depth)
         .with_subagent_toggle(subagent_toggle.clone())
         .with_background_workflows_enabled(*background_workflows_enabled)
-        .with_task_model_slugs(
-            models_manager
-                .available()
-                .keys()
-                .map(|model_id| model_id.0.to_string())
-                .collect::<Vec<_>>(),
-        )
+        .with_task_model_slugs(presentation.model_slugs.clone())
+        .with_task_model_selection(presentation.selection)
         .with_ask_user_question_enabled(*ask_user_question_enabled)
         .with_persona_summaries(persona_summaries.clone())
         .with_prompt_audience(*prompt_audience)
@@ -338,9 +346,10 @@ impl AgentRebuildSpec {
             working_directory,
         ))
         .with_context_window(*context_window_tokens)
-        .with_mcp_max_output_bytes(
-            crate::util::config::resolve_max_mcp_output_bytes_for_cwd(working_directory),
-        );
+        .with_mcp_max_output_bytes(crate::util::config::resolve_max_mcp_output_bytes_for_cwd(
+            working_directory,
+        ))
+        .with_read_file_max_output_bytes(*read_file_max_output_bytes);
         if let Some(owner_session_id) = owner_session_id.clone() {
             builder = builder.with_owner_session_id(owner_session_id);
         }
@@ -380,6 +389,12 @@ impl AgentRebuildSpec {
         let agent = builder.build().await?;
         crate::waterfall::mark(session_id_str, crate::waterfall::stage::SB_BUILDER_DONE);
         let agent_build_elapsed = build_phase_start.elapsed();
+        task_model_selection.set(presentation.selection);
+        xai_grok_telemetry::session_ctx::log_event(presentation_applied_event(
+            &presentation,
+            task_model_policy,
+            *prompt_audience,
+        ));
         let model_validator = models_manager.clone();
         agent
             .tool_bridge()
@@ -390,6 +405,7 @@ impl AgentRebuildSpec {
                             model_validator.task_model_error(requested)
                         }),
                     );
+                resources.insert(rejection_sink(session_id_str.clone()));
                 if let Some(event_tx) = subagent_event_tx.clone() {
                     use xai_grok_tools::implementations::grok_build::task::backend::{
                         ChannelBackend, SubagentBackendResource,
@@ -479,6 +495,15 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         bridge_state_path: std::env::temp_dir().join("test_tool_state.json"),
         session_env: Arc::new(HashMap::new()),
         models_manager: crate::agent::remote_config::ModelsManager::default(),
+        task_model_policy: TaskModelPolicyInputs {
+            inheritance: crate::agent::config::Resolved::new(
+                false,
+                crate::agent::config::ConfigSource::Default,
+            ),
+            remote_fetch_enabled: false,
+            forked_selection: None,
+        },
+        task_model_selection: LatchedTaskModelSelection::default(),
         compaction_policy: CompactionPolicy::default(),
         reminder_policy: ReminderPolicy::default(),
         memory_enabled: false,
@@ -509,6 +534,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         compat: CompatConfig::default(),
         paths_config: Default::default(),
         context_window_tokens: 256_000,
+        read_file_max_output_bytes: 0,
         prompt_working_directory: None,
         lsp: None,
         plugin_registry: None,

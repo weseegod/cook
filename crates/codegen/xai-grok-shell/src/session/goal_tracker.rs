@@ -355,6 +355,12 @@ pub(crate) fn skeptic_scratch_dir(verifier_id: &str, idx: u32) -> PathBuf {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GoalBatchSpec {
+    pub model_id: String,
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GoalOrchestration {
     pub goal_id: String,
     pub objective: String,
@@ -363,6 +369,10 @@ pub struct GoalOrchestration {
     pub token_budget: Option<i64>,
     pub elapsed_ms: u64,
     pub created_at: String,
+    /// Explicit main-agent Batch API mode. Persisted so a resumed goal cannot
+    /// silently switch back to realtime when its in-memory proxy is gone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<GoalBatchSpec>,
     pub current_subagent_id: Option<String>,
     pub current_subagent_role: Option<String>,
     #[serde(default)]
@@ -560,6 +570,8 @@ impl GoalOrchestration {
 #[derive(Debug)]
 pub struct GoalTracker {
     orchestration: Option<GoalOrchestration>,
+    /// Ephemeral transport for explicit `/goal_batch`; never serialized.
+    pub(crate) batch_proxy: Option<crate::sampling::goal_batch::GoalBatchProxy>,
     session_dir: PathBuf,
     active_since: Option<Instant>,
     planner_run: Option<GoalPlannerRunState>,
@@ -575,6 +587,7 @@ impl GoalTracker {
     pub fn new(session_dir: PathBuf) -> Self {
         Self {
             orchestration: None,
+            batch_proxy: None,
             session_dir,
             active_since: None,
             planner_run: None,
@@ -638,6 +651,7 @@ impl GoalTracker {
         };
         Self {
             orchestration: Some(snapshot),
+            batch_proxy: None,
             session_dir,
             active_since,
             planner_run: None,
@@ -804,6 +818,7 @@ impl GoalTracker {
             self.rescue_classifier_details();
             self.remove_scratch_root();
         }
+        self.batch_proxy = None;
         // Private per-goal scratch: the implementer dir is created up front (the goal model writes throwaway artifacts here from its first round)
         // Each `skeptic-<idx>` dir is created lazily when that skeptic spawns
         // Best-effort: a creation failure degrades to the model's own fallback, never blocks goal setup
@@ -828,6 +843,7 @@ impl GoalTracker {
             token_budget,
             elapsed_ms: 0,
             created_at,
+            batch: None,
             current_subagent_id: None,
             current_subagent_role: None,
             total_worker_rounds: 0,
@@ -1084,6 +1100,7 @@ impl GoalTracker {
     pub fn clear(&mut self) {
         self.rescue_classifier_details();
         self.remove_scratch_root();
+        self.batch_proxy = None;
         self.orchestration = None;
         self.active_since = None;
     }
@@ -1274,6 +1291,7 @@ pub(crate) fn make_base_orchestration() -> GoalOrchestration {
         token_budget: None,
         elapsed_ms: 0,
         created_at: "2026-01-01T00:00:00Z".into(),
+        batch: None,
         current_subagent_id: None,
         current_subagent_role: None,
         total_worker_rounds: 0,

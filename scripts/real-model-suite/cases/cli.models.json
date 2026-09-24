@@ -1,0 +1,10 @@
+{
+  "id": "cli.models",
+  "phase": "cli",
+  "needs_model": false,
+  "commands": [
+    [
+      "models"
+    ]
+  ]
+}

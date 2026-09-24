@@ -3092,7 +3092,7 @@ async fn current_api_key_async_drives_refresh_chain() {
         call_count: call_count.clone(),
         delay: StdDuration::from_millis(0),
     }));
-    let provider = super::SharedAuthKeyProvider(mgr.clone());
+    let provider = crate::side_call_bearer::SharedAuthKeyProvider(mgr.clone());
     assert_eq!(provider.current_api_key().as_deref(), Some("expired-oidc"));
     let key = provider.current_api_key_async().await;
     assert_eq!(key.as_deref(), Some("fresh-token"));
@@ -3778,7 +3778,7 @@ async fn shared_api_key_provider_resolves_live_bearer() {
         ..GrokAuth::test_default()
     };
     mgr.hot_swap(auth);
-    let provider = shared_api_key_provider(mgr.clone());
+    let provider = crate::shared_api_key_provider(mgr.clone());
     assert_eq!(
         provider.current_api_key(),
         Some("shared-provider-token".to_string()),
@@ -3809,7 +3809,7 @@ async fn shared_api_key_provider_static_fallthrough() {
     use xai_grok_test_support::EnvGuard;
     let dir = tempfile::tempdir().unwrap();
     let mgr = Arc::new(AuthManager::new(dir.path(), GrokComConfig::default()));
-    let provider = shared_api_key_provider(mgr.clone());
+    let provider = crate::shared_api_key_provider(mgr.clone());
     {
         let _legacy = EnvGuard::unset("GROK_CODE_XAI_API_KEY");
         let _key = EnvGuard::set("XAI_API_KEY", "env-only-key");
@@ -3856,7 +3856,9 @@ async fn shared_api_key_provider_kill_switch_blocks_static() {
         },
     ));
     assert_eq!(
-        shared_api_key_provider(mgr).current_api_key_async().await,
+        crate::shared_api_key_provider(mgr)
+            .current_api_key_async()
+            .await,
         None
     );
 }
@@ -3874,7 +3876,9 @@ async fn shared_api_key_provider_oidc_preferred_blocks_static() {
         },
     ));
     assert_eq!(
-        shared_api_key_provider(mgr).current_api_key_async().await,
+        crate::shared_api_key_provider(mgr)
+            .current_api_key_async()
+            .await,
         None
     );
 }
@@ -3900,7 +3904,7 @@ async fn shared_api_key_provider_api_key_preferred_skips_session() {
         ..GrokAuth::test_default()
     });
     assert_eq!(
-        shared_api_key_provider(mgr)
+        crate::shared_api_key_provider(mgr)
             .current_api_key_async()
             .await
             .as_deref(),
@@ -3923,7 +3927,7 @@ async fn shared_api_key_provider_sync_falls_through_when_session_expired() {
         expires_at: Some(Utc::now() - Duration::hours(1)),
         ..GrokAuth::test_default()
     });
-    let provider = shared_api_key_provider(mgr);
+    let provider = crate::shared_api_key_provider(mgr);
     assert_eq!(
         provider.current_api_key().as_deref(),
         Some("static-after-expiry"),
@@ -3951,7 +3955,7 @@ async fn shared_api_key_provider_sync_buffered_session_beats_static() {
         expires_at: Some(Utc::now() + Duration::minutes(2)),
         ..GrokAuth::test_default()
     });
-    let provider = super::SharedAuthKeyProvider(mgr);
+    let provider = crate::side_call_bearer::SharedAuthKeyProvider(mgr);
     assert_eq!(provider.current_api_key().as_deref(), Some("buffered-oidc"));
 }
 /// Auth.json create, rewrite (including same-length, caught by the inode in the memo stamp), and logout must all invalidate the disk static-key memo.
@@ -3964,7 +3968,7 @@ async fn shared_api_key_provider_disk_memo_follows_rewrites() {
     let _auth_path = EnvGuard::unset("GROK_AUTH_PATH");
     let dir = tempfile::tempdir().unwrap();
     let mgr = Arc::new(AuthManager::new(dir.path(), GrokComConfig::default()));
-    let provider = shared_api_key_provider(mgr);
+    let provider = crate::shared_api_key_provider(mgr);
     assert_eq!(provider.current_api_key_async().await, None);
     for key in ["first-key", "fresh-key", "second-key-rotated"] {
         crate::store_api_key(dir.path(), key).unwrap();
@@ -3982,7 +3986,7 @@ async fn process_key_precedence() {
     let _auth_path = EnvGuard::unset("GROK_AUTH_PATH");
     let dir = tempfile::tempdir().unwrap();
     let mgr = Arc::new(AuthManager::new(dir.path(), GrokComConfig::default()));
-    let provider = shared_api_key_provider(mgr.clone());
+    let provider = crate::shared_api_key_provider(mgr.clone());
     assert_eq!(provider.current_api_key_async().await, None);
     crate::store_api_key(dir.path(), "disk").unwrap();
     assert_eq!(
@@ -4016,7 +4020,7 @@ async fn process_key_precedence() {
     ));
     blocked.set_process_static_api_key(Some("ignored".into()));
     assert_eq!(
-        shared_api_key_provider(blocked)
+        crate::shared_api_key_provider(blocked)
             .current_api_key_async()
             .await,
         None

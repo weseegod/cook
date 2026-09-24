@@ -172,3 +172,71 @@ fn no_poll_tool_inlines_output() {
         "must inline the subagent's output text: {result}"
     );
 }
+
+/// Mid-turn workflow completion must be drainable without waiting for the next user turn;
+/// agents.workflow_live otherwise polls until max_turns and headless exits 1.
+#[tokio::test(flavor = "current_thread")]
+async fn workflow_completion_drains_into_reminder_without_new_user_turn() {
+    use super::support::create_test_actor;
+    use xai_workflow::WorkflowOutcome;
+
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = tokio::sync::mpsc::unbounded_channel();
+            let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+
+            let tracker = actor.workflow_tracker().await;
+            {
+                let mut tracker = tracker.lock();
+                tracker.start_run(
+                    "wf_mid".into(),
+                    "suite-live".into(),
+                    "Read secret.txt".into(),
+                    vec![],
+                    Some(2),
+                    None,
+                );
+                tracker
+                    .apply_outcome(
+                        "wf_mid",
+                        &WorkflowOutcome::Completed {
+                            result: serde_json::json!({
+                                "success": true,
+                                "output": "MARKER-agents.workflow_live-test\n"
+                            }),
+                        },
+                    )
+                    .expect("outcome");
+            }
+
+            actor
+                .drain_between_turn_workflow_completions(false)
+                .await;
+
+            let conversation = actor.chat_state_handle.get_conversation().await;
+            let texts: Vec<String> = conversation.iter().map(|i| i.text_content()).collect();
+            let joined = texts.join("\n");
+            assert!(
+                joined.contains("suite-live") && joined.contains("While you were idle"),
+                "expected workflow completion reminder in conversation, got: {joined}"
+            );
+            assert!(
+                joined.contains("MARKER-agents.workflow_live-test"),
+                "reminder must carry result_summary so the model can reply without polling: {joined}"
+            );
+
+            // Second drain is a no-op: already reported.
+            actor
+                .drain_between_turn_workflow_completions(false)
+                .await;
+            let conversation = actor.chat_state_handle.get_conversation().await;
+            let count = conversation
+                .iter()
+                .filter(|i| i.text_content().contains("suite-live"))
+                .count();
+            assert_eq!(count, 1, "completion reminder must not duplicate: {count}");
+        })
+        .await;
+}

@@ -192,6 +192,9 @@ impl PromptUsage {
             cost_usd_ticks: _,  // cost without usage cannot occur
             cost_is_partial: _,
             cost_missing_calls: _,
+            usage_missing_calls: _,
+            uncached_input_tokens: _, // remainder, not a billed-token count
+            cache_field_present: _,   // honesty flag, not "billed something"
         } = self.totals;
         model_calls == 0
             && input_tokens == 0
@@ -238,6 +241,18 @@ pub struct PromptUsageModel {
     /// Internal accounting for `cost_is_partial` only; never on the public ACP wire.
     #[serde(default, skip_serializing)]
     pub cost_missing_calls: u64,
+    /// How many completed calls reported no usage at all, so their tokens are unknown.
+    /// Internal accounting: the public signal is `usageIsIncomplete`.
+    #[serde(default, skip_serializing)]
+    pub usage_missing_calls: u64,
+    /// Uncached input remainder over the calls here, present only when every call reported a
+    /// cache-read number; absent otherwise, never zero for an unreported field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncached_input_tokens: Option<u64>,
+    /// Whether the cache-read field was reported for every call here. False means the cache-hit
+    /// share is unknown, not zero.
+    #[serde(default)]
+    pub cache_field_present: bool,
 }
 
 /// One model call's token usage: the four Messages API `message.usage` fields plus `reasoning_tokens`.
@@ -271,7 +286,14 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
             api_duration_ms,
             cost_usd_ticks,
             cost_missing_calls,
+            usage_missing_calls,
+            uncached_input_tokens,
+            cache_field_present_calls,
+            cache_field_absent_calls,
         } = *t;
+        // The remainder is only reported when every call in the row reported the cache field,
+        // matching `usage_file.rs`; an unreported field never becomes a zero remainder.
+        let cache_field_present = cache_field_present_calls > 0 && cache_field_absent_calls == 0;
         Self {
             input_tokens,
             output_tokens,
@@ -284,6 +306,11 @@ impl From<&xai_chat_state::UsageTotals> for PromptUsageModel {
             cost_usd_ticks,
             cost_is_partial: t.cost_is_partial(),
             cost_missing_calls,
+            usage_missing_calls,
+            uncached_input_tokens: cache_field_present
+                .then_some(uncached_input_tokens)
+                .flatten(),
+            cache_field_present,
         }
     }
 }
@@ -343,7 +370,10 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
         api_duration_ms: _, // dropped: not part of the frozen headless shape
         cost_usd_ticks,
         cost_is_partial,
-        cost_missing_calls: _, // internal partiality count; the flag suffices
+        cost_missing_calls: _,  // internal partiality count; the flag suffices
+        usage_missing_calls: _, // internal: `usage_is_incomplete` is the public signal
+        uncached_input_tokens: reported_remainder,
+        cache_field_present,
     } = usage.totals;
     result.insert(
         "usage".into(),
@@ -357,6 +387,14 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
             "total_tokens": total_tokens,
         }),
     );
+    // The persisted-report fields: the remainder is absent unless every call reported the cache
+    // field, so an unreported field never becomes a zero here either.
+    if let Some(remainder) = reported_remainder {
+        if cache_field_present {
+            result.insert("uncached_input_tokens".into(), serde_json::json!(remainder));
+            result.insert("cache_field_present".into(), serde_json::json!(true));
+        }
+    }
     result.insert("num_turns".into(), usage.num_turns.into());
     if usage.usage_is_incomplete {
         result.insert("usage_is_incomplete".into(), true.into());
@@ -389,6 +427,9 @@ pub(crate) fn project_result_usage(result: &mut serde_json::Value, usage: &Promp
                 cost_usd_ticks,
                 cost_is_partial,
                 cost_missing_calls: _,
+                usage_missing_calls: _,
+                uncached_input_tokens: _, // dropped: reduced per-model schema
+                cache_field_present: _,   // dropped: reduced per-model schema
             } = *m;
             let mut entry = serde_json::json!({
                 "inputTokens": uncached_input_tokens(input_tokens, cached_read_tokens)

@@ -1,0 +1,36 @@
+{
+  "id": "tools.bash",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)",
+    "Bash(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/tools.bash.txt",
+  "expect_tools": [
+    "run_terminal_cmd"
+  ],
+  "forbid_tools": [
+    "search_replace"
+  ],
+  "files": [
+    {
+      "path": "out.txt",
+      "equals": "{{MARKER}}\n"
+    }
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "tool_not_called",
+    "file_equals",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

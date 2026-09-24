@@ -1,0 +1,47 @@
+{
+  "id": "tools.kill_and_wait",
+  "phase": "tools",
+  "pillar": "crates/codegen/xai-grok-tools",
+  "needs_model": true,
+  "max_turns": 8,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)",
+    "Bash(*)"
+  ],
+  "deny": [],
+  "extra_args": [
+    "--background-wait-timeout",
+    "60"
+  ],
+  "prompt": "prompts/tools.kill_and_wait.txt",
+  "expect_tools": [
+    "run_terminal_cmd"
+  ],
+  "expect_any_tools": [
+    [
+      "wait_tasks",
+      "get_terminal_command_output",
+      "get_task_output",
+      "get_command_or_subagent_output"
+    ]
+  ],
+  "forbid_tools": [
+    "monitor"
+  ],
+  "files": [
+    {
+      "path": "out.txt",
+      "equals": "{{MARKER}}\n"
+    }
+  ],
+  "checks": [
+    "no_session",
+    "tool_called",
+    "tool_not_called",
+    "file_equals",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

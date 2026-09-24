@@ -1,0 +1,1 @@
+Ask the lsp tool for diagnostics on {{WORKDIR}}/lib.rs. If no server is configured, say so in one sentence.

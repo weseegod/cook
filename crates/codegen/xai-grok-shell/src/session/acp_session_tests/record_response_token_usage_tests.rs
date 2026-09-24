@@ -4,6 +4,15 @@ use xai_grok_sampling_types::{
     BackendToolCallItem, BackendToolKind, ConversationItem, ConversationResponse, TokenUsage, rs,
 };
 
+/// A distinguishable request composition, so a test can assert the breakdown landed.
+fn components() -> xai_chat_state::RequestComponents {
+    xai_chat_state::RequestComponents {
+        system_tokens: 900,
+        tool_result_tokens: 4_000,
+        ..Default::default()
+    }
+}
+
 fn response_with_usage(total_tokens: u32) -> ConversationResponse {
     ConversationResponse {
         items: vec![ConversationItem::assistant("ok")],
@@ -16,6 +25,7 @@ fn response_with_usage(total_tokens: u32) -> ConversationResponse {
             reasoning_tokens: 0,
             cached_prompt_tokens: 0,
             cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: (0) != 0,
         }),
         cost_usd_ticks: None,
         message_chunks_emitted: 1,
@@ -84,6 +94,7 @@ async fn response_reasoning_does_not_inflate_model_reported_context() {
                     reasoning_tokens: 39_999,
                     cached_prompt_tokens: 0,
                     cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: (0) != 0,
                 }),
                 stop_reason: None,
                 cost_usd_ticks: None,
@@ -95,7 +106,7 @@ async fn response_reasoning_does_not_inflate_model_reported_context() {
                 stop_sequence: None,
             };
 
-            actor.record_response_token_usage(&response, None);
+            actor.record_response_token_usage(&response, None, &components());
             let usage_reported = response.usage.is_some();
             actor
                 .record_response_items(response.items, usage_reported)
@@ -170,7 +181,7 @@ async fn response_without_usage_keeps_model_output_as_estimated_growth() {
                 stop_sequence: None,
             };
 
-            actor.record_response_token_usage(&response, None);
+            actor.record_response_token_usage(&response, None, &components());
             let usage_reported = response.usage.is_some();
             actor
                 .record_response_items(response.items, usage_reported)
@@ -212,7 +223,7 @@ async fn updates_chat_state_total_tokens_from_response_usage() {
             let _sync = actor.chat_state_handle.get_total_tokens().await;
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 0);
 
-            actor.record_response_token_usage(&response_with_usage(150_000), None);
+            actor.record_response_token_usage(&response_with_usage(150_000), None, &components());
 
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 150_000);
             let prompt = actor
@@ -239,7 +250,7 @@ async fn updates_chat_state_total_tokens_from_response_usage() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn preserves_total_tokens_when_response_has_no_usage() {
+async fn response_without_usage_preserves_context_and_marks_ledgers_incomplete() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -249,9 +260,30 @@ async fn preserves_total_tokens_when_response_has_no_usage() {
             let actor = create_test_actor(99_999, 256_000, 85, gateway_tx, persistence_tx).await;
             let _sync = actor.chat_state_handle.get_total_tokens().await;
 
-            actor.record_response_token_usage(&response_without_usage(), None);
+            actor.record_response_token_usage(&response_without_usage(), None, &components());
 
             assert_eq!(actor.chat_state_handle.get_total_tokens().await, 99_999);
+            let prompt = actor
+                .chat_state_handle
+                .try_get_prompt_usage()
+                .await
+                .expect("chat-state alive")
+                .expect("missing usage opens the prompt ledger");
+            assert!(prompt.incomplete);
+            assert_eq!(prompt.totals.model_calls, 0);
+
+            let session = actor
+                .chat_state_handle
+                .try_get_session_usage()
+                .await
+                .expect("chat-state alive");
+            assert!(session.incomplete);
+            assert_eq!(session.totals.model_calls, 0);
+            // The request's composition is known whatever the response reports, so an
+            // unknown-cost call still shows what was sent.
+            assert_eq!(session.request_components.tool_result_tokens, 4_000);
+            assert_eq!(session.request_components.system_tokens, 900);
+            assert_eq!(session.requests_measured, 1);
         })
         .await;
 }
@@ -286,7 +318,7 @@ async fn build_session_info_used_reflects_recorded_response() {
                 .push_user_message_and_ack(ConversationItem::user("hello hello hello hello"))
                 .await;
 
-            actor.record_response_token_usage(&response_with_usage(120_000), None);
+            actor.record_response_token_usage(&response_with_usage(120_000), None, &components());
 
             let info = actor.build_session_info().await;
             assert_eq!(info.context.used, 120_000);
@@ -380,7 +412,7 @@ async fn stashes_per_turn_usage_in_chat_state() {
             );
 
             // The fixture splits total 200_000 into prompt 199_950 and completion 50
-            actor.record_response_token_usage(&response_with_usage(200_000), None);
+            actor.record_response_token_usage(&response_with_usage(200_000), None, &components());
 
             let stashed = actor
                 .chat_state_handle
@@ -390,6 +422,88 @@ async fn stashes_per_turn_usage_in_chat_state() {
             assert_eq!(stashed.prompt_tokens, 199_950);
             assert_eq!(stashed.completion_tokens, 50);
             assert_eq!(stashed.total_tokens, 200_000);
+        })
+        .await;
+}
+
+/// A compaction sample is spend the session bill must show, but it is not a turn.
+/// A sample that reported no usage is visible as unknown, never folded as zero.
+#[tokio::test(flavor = "current_thread")]
+async fn compaction_usage_folds_as_a_side_call_and_missing_usage_stays_visible() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
+
+            // One main-loop round so the turn count and the side call are distinguishable.
+            actor.record_response_token_usage(&response_with_usage(1_000), None, &components());
+
+            crate::session::helpers::session_compact::record_compaction_usage(
+                &actor.chat_state_handle,
+                xai_chat_state::CallPurpose::CompactPass1,
+                "test-model",
+                Some(&TokenUsage {
+                    prompt_tokens: 30_000,
+                    completion_tokens: 500,
+                    total_tokens: 30_500,
+                    reasoning_tokens: 120,
+                    cached_prompt_tokens: 20_000,
+                    cache_creation_prompt_tokens: 0,
+            cached_prompt_tokens_present: (20_000) != 0,
+                }),
+                Some(11),
+                Some(1_234),
+            );
+            // A second compaction that reported nothing: unknown spend, not zero.
+            crate::session::helpers::session_compact::record_compaction_usage(
+                &actor.chat_state_handle,
+                xai_chat_state::CallPurpose::CompactPass2,
+                "test-model",
+                None,
+                None,
+                None,
+            );
+
+            let session = actor
+                .chat_state_handle
+                .try_get_session_usage()
+                .await
+                .expect("session ledger");
+
+            // The session bill reconciles: main loop plus compaction.
+            assert_eq!(session.totals.input_tokens, 950 + 30_000);
+            assert_eq!(session.totals.output_tokens, 50 + 500);
+            assert_eq!(session.main_loop_model_calls, 1);
+            assert_eq!(session.side_call_model_calls, 1);
+            assert_eq!(session.totals.model_calls, 2);
+            assert_eq!(session.totals.usage_missing_calls, 1);
+            assert!(
+                session.incomplete,
+                "an unreported compaction makes the session bill incomplete"
+            );
+
+            let pass1 = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::CompactPass1)
+                .expect("pass 1 folded under its purpose");
+            assert_eq!(pass1.input_tokens, 30_000);
+            assert_eq!(pass1.api_duration_ms, 1_234);
+            assert_eq!(pass1.cost_usd_ticks, Some(11));
+            let pass2 = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::CompactPass2)
+                .expect("missing usage still creates the purpose row");
+            assert_eq!(pass2.model_calls, 0);
+            assert_eq!(pass2.usage_missing_calls, 1);
+            let main = session
+                .by_purpose
+                .get(&xai_chat_state::CallPurpose::MainLoop)
+                .expect("main loop row");
+            assert_eq!(main.model_calls, 1);
+            assert_eq!(main.usage_missing_calls, 0);
         })
         .await;
 }

@@ -1,0 +1,25 @@
+{
+  "id": "session.max_turns",
+  "phase": "session",
+  "pillar": "crates/codegen/xai-grok-shell",
+  "needs_model": true,
+  "max_turns": 1,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)",
+    "Edit(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/session.max_turns.txt",
+  "expect_tools": [],
+  "forbid_tools": [],
+  "checks": [
+    "no_session",
+    "file_unchanged",
+    "max_turns",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

@@ -14,7 +14,7 @@ use crate::session::helpers::compaction_context::CompactionInputs;
 use crate::session::helpers::compaction_context::to_system_reminder;
 use crate::session::helpers::session_compact::{
     COMPACT_FAILED_PREFIX, CompactOutput, CompactionOutcome, build_compaction_prompt,
-    generate_session_compact, is_context_length_error,
+    generate_session_compact, is_context_length_error, retain_session_asset_files,
 };
 use crate::session::persistence::PersistenceMsg;
 use crate::session::two_pass::{
@@ -23,6 +23,7 @@ use crate::session::two_pass::{
 };
 use agent_client_protocol as acp;
 use std::sync::Arc;
+use xai_chat_state::compaction_image_context::CompactionImageContext;
 use xai_chat_state::compaction_utils::{
     CompactedHistoryInput, CompactionAttempt, build_compacted_history, is_degenerate_summary,
     prepare_conversation_for_verbatim_summarization, sanitize_compacted_history,
@@ -134,7 +135,13 @@ impl SessionActor {
     /// The prompt is already embedded, so this bypasses the single-pass sampler and calls `generate_session_compact` directly.
     /// Agent `RefCell` borrows are only taken for synchronous snapshots (never held across `.await`).
     /// A long-lived borrow would race with turn/compact/cancel and panic on double-borrow.
-    async fn two_pass_sample(&self, history: Vec<ConversationItem>) -> Option<CompactOutput> {
+    /// `purpose` labels the sample in the session ledger so prefire spend is not
+    /// folded as if it were the summary the successor sees.
+    async fn two_pass_sample(
+        &self,
+        history: Vec<ConversationItem>,
+        purpose: xai_chat_state::CallPurpose,
+    ) -> Option<CompactOutput> {
         let (client, sampling_config) = match self.prepare_compaction_sampling(false).await {
             Ok(pair) => pair,
             Err(e) => {
@@ -180,7 +187,17 @@ impl SessionActor {
         )
         .await
         {
-            Ok(out) => Some(out),
+            Ok(out) => {
+                crate::session::helpers::session_compact::record_compaction_usage(
+                    &self.chat_state_handle,
+                    purpose,
+                    &sampling_config.model,
+                    out.usage.as_ref(),
+                    out.cost_usd_ticks,
+                    out.model_wait_ms(),
+                );
+                Some(out)
+            }
             Err(e) => {
                 tracing::warn!(error = ?e, "two_pass: summarization sample failed");
                 None
@@ -282,7 +299,9 @@ impl SessionActor {
         let prompt = build_compaction_prompt(None, false);
         let pass1_history = build_two_pass_pass1_history(&prefix_prepared, &prompt);
         let started = std::time::Instant::now();
-        let out = self.two_pass_sample(pass1_history).await;
+        let out = self
+            .two_pass_sample(pass1_history, xai_chat_state::CallPurpose::CompactPass1)
+            .await;
         let pass1_latency_ms = started.elapsed().as_millis() as u64;
         let attempted = |outcome: PrefireOutcome, note1_chars: Option<usize>| PrefirePass1Run {
             outcome,
@@ -378,7 +397,9 @@ impl SessionActor {
         let pass2_history =
             build_two_pass_pass2_history(prefix, &prepared_tail, &cache.note1, &prompt);
         let started = std::time::Instant::now();
-        let mut out = self.two_pass_sample(pass2_history).await?;
+        let mut out = self
+            .two_pass_sample(pass2_history, xai_chat_state::CallPurpose::CompactPass2)
+            .await?;
         if is_degenerate_summary(&out.content) {
             tracing::Span::current().record("compaction_prefire_stale", true);
             tracing::info!(
@@ -418,10 +439,15 @@ fn lossy_input_budget(context_window: u64, tool_tokens: u64) -> u64 {
     (context_window.saturating_mul(7) / 10).saturating_sub(tool_tokens)
 }
 /// Verbatim-fitted budget: leave room for the summary prompt plus tool-definition prefix.
+///
+/// The fixed 32k reserve and full tool schema must never zero the budget on a
+/// window smaller than them (suite `session.compaction` uses 8192). Cap the
+/// reserve and count only tools that still leave room for conversation.
 fn fitted_input_budget(context_window: u64, tool_tokens: u64) -> u64 {
-    context_window
-        .saturating_sub(SUMMARY_BUDGET_RESERVE_TOKENS)
-        .saturating_sub(tool_tokens)
+    let reserve = SUMMARY_BUDGET_RESERVE_TOKENS.min(context_window / 2);
+    let room = context_window.saturating_sub(reserve);
+    let tools = tool_tokens.min(room / 2);
+    room.saturating_sub(tools)
 }
 /// Input ladder: verbatim, then verbatim fitted, then lossy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, strum::AsRefStr, strum::IntoStaticStr)]
@@ -436,7 +462,11 @@ async fn apply_turn_image_budget_and_prune(
     chat_state: &xai_chat_state::ChatStateHandle,
     items: Vec<ConversationItem>,
 ) -> Vec<ConversationItem> {
-    let items = xai_chat_state::image_budget::apply_image_budget(items).items;
+    let max_request_bytes = chat_state
+        .get_sampling_config()
+        .await
+        .and_then(|config| config.max_request_bytes);
+    let items = xai_chat_state::image_budget::apply_image_budget(items, max_request_bytes).items;
     chat_state.apply_turn_request_pruning(items).await
 }
 /// Start fitted when the (already image-budgeted and pruned) estimate cannot leave room for tools + summary.
@@ -1091,12 +1121,23 @@ impl SessionActor {
             .into_iter()
             .filter(|td| !backend_search_active || td.function.name != "web_search")
             .collect();
-        let compaction_tool_tokens =
+        // Tool schemas that alone exceed the window make every compact attempt
+        // overflow (budget 0 + tools re-sent). Drop them from the compact request.
+        let mut compaction_tool_tokens =
             xai_chat_state::estimate_tool_definitions_tokens(&effective_tool_defs);
-        let compaction_tools: Vec<xai_grok_sampling_types::ToolSpec> = effective_tool_defs
+        let mut compaction_tools: Vec<xai_grok_sampling_types::ToolSpec> = effective_tool_defs
             .into_iter()
             .map(xai_grok_sampling_types::ToolSpec::from)
             .collect();
+        if compaction_tool_tokens >= context_window {
+            tracing::warn!(
+                tool_tokens = compaction_tool_tokens,
+                context_window,
+                "compaction: tool schema exceeds context window; omitting tools from compact request"
+            );
+            compaction_tools.clear();
+            compaction_tool_tokens = 0;
+        }
         let compaction_hosted_tools: Vec<xai_grok_sampling_types::HostedTool> =
             self.hosted_tools_for_turn();
         if lossy_input {
@@ -1151,6 +1192,7 @@ impl SessionActor {
             wall_clock_budget_secs,
             self.compaction.tool_choice,
             cancel.clone(),
+            self.chat_state_handle.clone(),
         );
         let observer =
             crate::session::helpers::full_replace_compaction::ShellFullReplaceObserver::new(
@@ -1372,7 +1414,7 @@ impl SessionActor {
         let generate_session_compact = compact_output.content.clone();
         let user_message_prefix = self.build_user_message_prefix().await;
         let conversation = self.chat_state_handle.get_conversation().await;
-        let (discovered_agents_md, all_skills_for_compaction, _agent_edited_paths, state_context) =
+        let (discovered_agents_md, all_skills_for_compaction, _edited_paths, mut state_context) =
             if use_short_prompt {
                 let empty_edited: std::collections::BTreeSet<String> = Default::default();
                 let ctx = CompactionStateContext::build(
@@ -1584,6 +1626,38 @@ impl SessionActor {
                 };
                 (agents_md, skills, edited_paths, ctx)
             };
+        if self.is_cursor_harness() {
+            state_context.images = CompactionImageContext::default();
+        }
+        let harvested_paths = std::mem::take(&mut state_context.images.attached_paths);
+        let (kept, dropped_paths) = if harvested_paths.is_empty() {
+            (Vec::new(), 0)
+        } else {
+            match crate::session::persistence::ensure_owner_only_session_dir(&self.session_info) {
+                Ok(session_dir) => {
+                    retain_session_asset_files(
+                        harvested_paths,
+                        &crate::session::image_describe::session_assets_dir(&session_dir),
+                    )
+                    .await
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        ?error,
+                        "compaction: session dir unavailable; attached image paths dropped"
+                    );
+                    (Vec::new(), harvested_paths.len())
+                }
+            }
+        };
+        state_context.images.attached_paths = kept;
+        if dropped_paths > 0 {
+            tracing::debug!(
+                session_id = %self.session_info.id.0,
+                dropped_paths,
+                "compaction: dropped attached image paths that are not session asset files"
+            );
+        }
         use crate::session::helpers::compaction_context::SubagentToolNames;
         let subagent_tool_names: Option<SubagentToolNames> =
             if use_short_prompt || state_context.running_subagents.is_empty() {
@@ -1821,6 +1895,16 @@ impl SessionActor {
         let agents_md_reminder = self.agent.borrow().agents_md_user_reminder();
         let compaction_context = state_context.for_compaction();
         let compaction_state_context: &CompactionStateContext = &compaction_context;
+        tracing::debug!(
+            session_id = %self.session_info.id.0,
+            has_last_user_query = compaction_state_context.last_user_query.is_some(),
+            last_turn_image_parts = compaction_state_context.images.last_turn_image_parts.len(),
+            has_last_turn_image_files = compaction_state_context
+                .images
+                .last_turn_image_files
+                .is_some(),
+            "compaction: last-turn image context"
+        );
         let transcript_hint = self.transcript_hint();
         let summary_count = self
             .compaction
@@ -1928,27 +2012,23 @@ impl SessionActor {
             .replace_conversation_for_compaction(compacted_history);
         self.reseed_active_goal_after_compaction().await;
         let new_len = self.chat_state_handle.get_conversation_len().await;
-        if self.startup_hints.inherited_prefix_len.is_some() {
-            let post_replace_tokens = self.chat_state_handle.get_total_tokens().await;
-            if xai_token_estimation::exceeds_threshold(
+        // Always re-check after replace: a summary that stays over threshold must sticky-suppress
+        // AUTO, not clear suppress and re-loop (fresh workdirs have `inherited_prefix_len == None`).
+        let post_replace_tokens = self.chat_state_handle.get_estimated_total_tokens().await;
+        if xai_token_estimation::exceeds_threshold(
+            post_replace_tokens,
+            context_window,
+            self.compaction.threshold_percent.get(),
+        ) {
+            self.compaction
+                .auto_compact_suppressed
+                .store(SUPPRESS_STICKY, std::sync::atomic::Ordering::Relaxed);
+            tracing::warn!(
+                session_id = %self.session_info.id.0,
                 post_replace_tokens,
                 context_window,
-                self.compaction.threshold_percent.get(),
-            ) {
-                self.compaction
-                    .auto_compact_suppressed
-                    .store(SUPPRESS_STICKY, std::sync::atomic::Ordering::Relaxed);
-                tracing::warn!(
-                    session_id = %self.session_info.id.0,
-                    post_replace_tokens,
-                    context_window,
-                    "compaction: released history still over threshold; suppressing AUTO to avoid a re-loop"
-                );
-            } else {
-                self.compaction
-                    .auto_compact_suppressed
-                    .store(SUPPRESS_NONE, std::sync::atomic::Ordering::Relaxed);
-            }
+                "compaction: history still over threshold after replace; suppressing AUTO to avoid a re-loop"
+            );
         } else {
             self.compaction
                 .auto_compact_suppressed
@@ -1979,6 +2059,15 @@ impl SessionActor {
             .on_skill_discovery_compaction()
             .await;
         self.rearm_failed_server_announcements().await;
+        if self
+            .tool_bridge_handle()
+            .toolset()
+            .tool_name_for_kind(xai_grok_tools::types::tool::ToolKind::UseTool)
+            .is_some()
+            && let Some(hint) = self.rendered_mcp_hint().await
+        {
+            self.push_system_reminder_with_tag(&hint, self.reminder_wrapper_tag());
+        }
         self.plan_mode.lock().reset_after_compaction();
         self.persist_plan_mode_state();
         self.dispatch_hook(
@@ -2081,8 +2170,28 @@ impl SessionActor {
         if self.compaction.is_suppressed() {
             return false;
         }
-        self.estimate_exceeds_error_context_window(err).await
+        if self.estimate_exceeds_error_context_window(err).await {
+            return true;
+        }
+        // MaxTokensTruncation carries no model_metadata; if the local estimate is already
+        // past the configured window, compact-and-resubmit instead of terminal exit 1.
+        matches!(
+            err.kind,
+            xai_grok_sampler::SamplingErrorKind::MaxTokensTruncation
+        ) && self.estimate_exceeds_configured_window().await
     }
+
+    async fn estimate_exceeds_configured_window(&self) -> bool {
+        let Some(cfg) = self.chat_state_handle.get_sampling_config().await else {
+            return false;
+        };
+        let cw = cfg.context_window.get();
+        if cw == 0 {
+            return false;
+        }
+        self.chat_state_handle.get_estimated_total_tokens().await > cw
+    }
+
     /// The request's token estimate exceeds the failed response's reported context window.
     /// This probable-overflow signal is shared by compact-and-resubmit and the mid-salvage truncated-complete arm.
     /// The latter must see overflows even while compaction is suppressed.
