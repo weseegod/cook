@@ -311,7 +311,7 @@ Per-user preferences under `[dashboard]` in `~/.cook/config.toml`:
 [dashboard]
 enabled = true
 grouping = "state"   # or "directory"
-pinned   = ["top:<session_id>", "sub:<parent_session_id>:<child_session_id>"]
+pinned   = ["top:<session_id>"]
 reorder  = ["top:<session_id>"]
 ```
 

@@ -126,7 +126,7 @@ pub(crate) fn map_sampling_err_to_acp(err: SamplingError) -> acp::Error {
                     format!(
                         "{message}\n\nYou have an API key set (XAI_API_KEY). \
                          Your cached OAuth session is being used instead. \
-                         To use your API key, run `cook logout` or type /logout in the TUI."
+                         To use your API key, run `grok logout` or type /logout in the TUI."
                     )
                 } else {
                     message
@@ -479,7 +479,7 @@ mod tests {
                 reasoning_tokens: 0,
                 cached_prompt_tokens: 0,
                 cache_creation_prompt_tokens: 0,
-                cached_prompt_tokens_present: (0) != 0,
+                cached_prompt_tokens_present: false,
             },
             None,
             Some(10),
@@ -823,8 +823,8 @@ mod tests {
             let data = acp_err.data.unwrap();
             let msg = data.as_str().unwrap();
             assert!(
-                msg.contains("cook logout"),
-                "should suggest cook logout when API key is available: {msg}"
+                msg.contains("grok logout"),
+                "should suggest grok logout when API key is available: {msg}"
             );
             assert!(
                 msg.contains("/logout"),
@@ -849,7 +849,7 @@ mod tests {
             let data = acp_err.data.unwrap();
             let msg = data.as_str().unwrap();
             assert!(
-                !msg.contains("cook logout"),
+                !msg.contains("grok logout"),
                 "should NOT suggest logout when no API key is available: {msg}"
             );
         });
@@ -871,7 +871,7 @@ mod tests {
             let data = acp_err.data.unwrap();
             let msg = data.as_str().unwrap();
             assert!(
-                !msg.contains("cook logout"),
+                !msg.contains("grok logout"),
                 "should NOT suggest logout for non-subscription 403: {msg}"
             );
         });

@@ -316,13 +316,6 @@ fn finish_turn_clears_state() {
     );
 }
 #[test]
-fn user_message_replay() {
-    let mut sb = ScrollbackState::new();
-    let mut tracker = AcpUpdateTracker::new();
-    tracker.handle_update(user_message("What is Rust?"), &meta(), &mut sb);
-    assert_eq!(sb.len(), 1);
-}
-#[test]
 fn empty_chunks_ignored() {
     let mut sb = ScrollbackState::new();
     let mut tracker = AcpUpdateTracker::new();
@@ -4539,6 +4532,24 @@ fn meta_with_prompt_id(prompt_id: &str) -> NotificationMeta {
     let mut m = meta();
     m.prompt_id = Some(prompt_id.to_string());
     m
+}
+#[test]
+fn hidden_user_message_keeps_the_pending_echo_skip() {
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.expect_user_echo();
+    let mut hide_meta = acp::Meta::new();
+    hide_meta.insert("hideFromScrollback".into(), serde_json::json!(true));
+    assert!(!tracker.handle_update(
+        user_message_with_chunk_meta(
+            "<timestamp>Wed</timestamp>\n<system_notification>done</system_notification>",
+            hide_meta,
+        ),
+        &meta(),
+        &mut sb,
+    ));
+    assert!(!tracker.handle_update(user_message("Reply with SECOND"), &meta(), &mut sb));
+    assert!(!tracker.expects_user_echo());
 }
 /// Scrollback hide is type-driven.
 /// Chunk meta `hideFromScrollback` or notification `promptId` routes to [`PromptOrigin::hide_user_echo_from_scrollback`].

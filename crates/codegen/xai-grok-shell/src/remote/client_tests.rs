@@ -177,29 +177,11 @@ async fn start_bundle_server(
 fn test_auth() -> GrokAuth {
     GrokAuth {
         key: "token".to_string(),
-        auth_mode: xai_grok_login::AuthMode::Oidc,
-        create_time: chrono::Utc::now(),
         user_id: "user-1".to_string(),
         email: Some("test@example.com".to_string()),
-        first_name: None,
-        last_name: None,
-        profile_image_asset_id: None,
-        principal_type: None,
-        principal_id: None,
-        team_id: None,
-        team_name: None,
-        team_role: None,
-        organization_id: None,
-        organization_name: None,
-        organization_role: None,
-        user_blocked_reason: None,
-        team_blocked_reasons: vec![],
         coding_data_retention_opt_out: false,
-        has_grok_code_access: None,
-        refresh_token: None,
         expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
-        oidc_issuer: None,
-        oidc_client_id: None,
+        ..GrokAuth::default()
     }
 }
 fn test_auth_manager() -> Arc<xai_grok_login::AuthManager> {

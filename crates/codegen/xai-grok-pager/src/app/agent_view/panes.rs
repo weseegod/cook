@@ -1,4 +1,4 @@
-//! Secondary pane input: scrollback keys and search, todo/tool-usage panes, background tasks, subagent catalog, and the pane-aware scroll router.
+//! Secondary pane input: scrollback keys and search, todo/tool-usage panes, background tasks, and the pane-aware scroll router.
 use super::{ActivePane, AgentPane, AgentView, overlay_action_to_outcome, resolve_action};
 use crate::actions::{ActionId, ActionRegistry, When};
 use crate::app::actions::Action;
@@ -1096,45 +1096,6 @@ impl AgentView {
             InputOutcome::Unchanged
         }
     }
-    /// Subagent-pane-focused key handling.
-    pub(super) fn handle_catalog_key(
-        &mut self,
-        key: &KeyEvent,
-        _registry: &ActionRegistry,
-    ) -> InputOutcome {
-        use crate::views::overlay::{handle_overlay_key, handle_overlay_nav_key};
-        let has_input = self.catalog.list_state.input_mode().is_some();
-        let action = handle_overlay_key(&mut self.catalog.overlay, key).or_else(|| {
-            if !has_input {
-                handle_overlay_nav_key(&mut self.catalog.overlay, key)
-            } else {
-                None
-            }
-        });
-        if let Some(action) = action {
-            self.catalog.on_state_change();
-            if !self.catalog.overlay.visible || !self.catalog.overlay.focused {
-                self.set_active_pane(AgentPane::Scrollback, false);
-            }
-            return overlay_action_to_outcome(action);
-        }
-        if key.code == crossterm::event::KeyCode::Enter
-            && key.modifiers == crossterm::event::KeyModifiers::NONE
-        {
-            if let Some((kind, name)) = self.catalog.selected_entry() {
-                return InputOutcome::Action(Action::ViewCatalogEntry {
-                    kind: kind.to_owned(),
-                    name: name.to_owned(),
-                });
-            }
-            return InputOutcome::Unchanged;
-        }
-        if self.catalog.handle_key(key) {
-            InputOutcome::Changed
-        } else {
-            InputOutcome::Unchanged
-        }
-    }
     /// Handle a normalized scroll event at a screen position.
     /// Hit-tests against pane areas to decide what to scroll:
     /// Scrollback area: scroll the scrollback (uses accelerated line count)
@@ -1301,9 +1262,6 @@ impl AgentView {
             }
             ActivePane::Tasks => {
                 self.tasks.handle_scroll(lines, col, row);
-            }
-            ActivePane::Catalog => {
-                self.catalog.handle_scroll(lines, col, row);
             }
             ActivePane::Dock => match self.dock_section_at(self.pane_areas.dock, row) {
                 Some(crate::views::dock::Section::Queued) | None => {

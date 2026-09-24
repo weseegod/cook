@@ -155,7 +155,7 @@ fn plural(count: usize, noun: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MemoryFlushDisposition {
-    /// Every completed turn is captured and indexed.
+    /// Every finished or stopped turn is captured and indexed.
     Flushed,
     /// Capture failed but will be retried in the background.
     RetryRequired,

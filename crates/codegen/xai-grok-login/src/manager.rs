@@ -854,6 +854,25 @@ impl AuthManager {
     pub(crate) async fn enrich_auth_inline(&self, auth: &mut GrokAuth) {
         enrichment::enrich_inline(self, auth).await;
     }
+    /// Answers only for the account the caller named (an absent email never matches) and fetches only for a Team principal: a User principal gets `null` from `/user` on every call.
+    pub async fn hydrate_can_administer_team(
+        &self,
+        email: Option<&str>,
+        team_id: Option<&str>,
+    ) -> Option<bool> {
+        let auth = self.current()?;
+        if email.is_none() || auth.email.as_deref() != email || auth.team_id.as_deref() != team_id {
+            return None;
+        }
+        if auth.can_administer_team.is_some()
+            || !auth.is_xai_auth()
+            || !auth.is_team_principal()
+            || !ActiveAuthBackend::default().is_xai_authority()
+        {
+            return auth.can_administer_team;
+        }
+        enrichment::hydrate_can_administer_team(self, &auth).await
+    }
     /// Path to the `auth.json` this manager reads/writes (respects `GROK_AUTH_PATH` / constructor home).
     /// Prefer this over `grok_home()/auth.json` so temp-home tests and custom stores stay isolated.
     pub fn auth_json_path(&self) -> &Path {

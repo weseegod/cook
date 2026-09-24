@@ -13,8 +13,9 @@ use tokio::io::AsyncWriteExt;
 use crate::cleanup_downloads::cleanup_old_downloads;
 use crate::version::{
     UpdateConfig, fetch_latest_version, get_installed_grok_version, get_latest_version,
-    is_version_cache_fresh, try_fetch_stable_pointer, write_version_cache,
+    is_stable_channel, is_version_cache_fresh, try_fetch_stable_pointer, write_version_cache,
 };
+use crate::winget::{UPGRADE_COMMAND, WINGET};
 use xai_grok_shell::util::config;
 use xai_grok_shell::util::grok_home::{grok_application, grok_home};
 pub use xai_grok_telemetry::events::CliUpdateTrigger;
@@ -51,6 +52,7 @@ fn reinstall_hint(installer: &str, channel: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
         "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/cook --pattern 'cook-*' --output cook && chmod +x cook".to_string(),
+        WINGET => format!("Update with WinGet:\n  {UPGRADE_COMMAND}"),
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd(channel)),
     }
 }
@@ -139,7 +141,6 @@ pub fn classify_install_error(err: &anyhow::Error) -> CliUpdateErrorKind {
         Some(InstallPhaseError::Activate(_)) => CliUpdateErrorKind::Activate,
         // npm / gh-release failures carry no phase marker.
         None => CliUpdateErrorKind::Other,
-
     }
 }
 
@@ -163,10 +164,7 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
     }
 
     if let Some(error) = status.error.as_deref() {
-        println!(
-            "cook - v{} [{}]",
-            status.current_version, status.channel
-        );
+        println!("cook - v{} [{}]", status.current_version, status.channel);
         println!("Update check failed: {error}");
         return Ok(());
     }
@@ -181,6 +179,15 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
             );
         } else {
             println!("A new version of cook is available.");
+        }
+        if status.installer.as_deref() == Some(WINGET) {
+            let target = match status.latest_version.as_deref() {
+                Some(latest) if has_version_cap(&config::VersionPolicy::resolve()) => {
+                    crate::winget::Target::Exact(latest)
+                }
+                _ => crate::winget::Target::Newest,
+            };
+            println!("{}", crate::winget::update_available_note(target));
         }
         return Ok(());
     }
@@ -202,7 +209,12 @@ pub async fn check_update_status(update_config: &UpdateConfig) -> UpdateStatus {
     let current_version = get_installed_grok_version();
     let current_config = config::load_config().await;
     let auto_update = current_config.cli.auto_update;
-    let channel = update_config.channel.clone();
+    // The WinGet package ships only stable releases, whatever channel is configured.
+    let channel = if installer.as_deref() == Some(WINGET) {
+        "stable".to_owned()
+    } else {
+        update_config.channel.clone()
+    };
 
     let Some(ref inst) = installer else {
         return UpdateStatus {
@@ -312,6 +324,25 @@ fn plan_for(policy: &config::VersionPolicy, latest: String) -> UpdatePlan {
     }
 }
 
+/// `winget upgrade` jumps to the newest stable release, past an org version cap, so capped orgs get the exact target.
+fn has_version_cap(policy: &config::VersionPolicy) -> bool {
+    policy.maximum.is_some() || policy.required_maximum.is_some()
+}
+
+fn skipped_update_notice(latest: &str, current: &str) -> String {
+    format!(
+        "The latest release ({latest}) is not an allowed update; \
+         keeping the current version ({current})."
+    )
+}
+
+fn unavailable_update_error(latest: &str, target: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "The required minimum version ({target}) is newer than the latest \
+         available release ({latest}). Contact your administrator."
+    )
+}
+
 async fn fetch_update_plan(
     installer: &str,
     update_config: &UpdateConfig,
@@ -328,6 +359,9 @@ async fn fetch_update_plan(
 /// Gates on the installer (via `installer_allows_downgrade`) so npm is never downgraded; the decision depends on the installer, never the caller.
 pub async fn auto_update_target(update_config: &UpdateConfig) -> Option<(&'static str, String)> {
     let installer = get_installer().await?;
+    if installer == WINGET {
+        return None;
+    }
     let current = get_installed_grok_version();
     let policy = config::VersionPolicy::resolve();
     let UpdatePlan::Install { target, .. } = fetch_update_plan(installer, update_config, &policy)
@@ -380,6 +414,9 @@ pub async fn ensure_latest_on_disk(update_config: &UpdateConfig) -> Result<Ensur
     let Some(installer) = get_installer().await else {
         return Ok(outcome);
     };
+    if installer == WINGET {
+        return Ok(outcome);
+    }
     heal_managed_install(installer).await;
     let allow_downgrade = installer_allows_downgrade(installer);
     let policy = config::VersionPolicy::resolve();
@@ -440,14 +477,22 @@ fn disk_version_for_installer(installer: &str) -> Option<String> {
     }
 }
 
+fn parse_grok_installer(value: &str) -> Option<&'static str> {
+    match value.to_ascii_lowercase().as_str() {
+        "npm" => Some("npm"),
+        "internal" => Some("internal"),
+        "gh-release" | "gh" => Some("gh-release"),
+        _ => None,
+    }
+}
+
 fn env_installer() -> Option<&'static str> {
     if let Ok(v) = std::env::var("GROK_INSTALLER") {
-        return match v.to_ascii_lowercase().as_str() {
-            "npm" => Some("npm"),
-            "internal" => Some("internal"),
-            "gh-release" | "gh" => Some("gh-release"),
-            _ => None,
-        };
+        let installer = parse_grok_installer(&v);
+        if installer.is_none() {
+            tracing::debug!(value = %v, "unrecognized GROK_INSTALLER disables env installer hints");
+        }
+        return installer;
     }
     if std::env::var_os("GROK_MANAGED_BY_NPM").is_some() {
         return Some("npm");
@@ -462,6 +507,17 @@ fn env_installer() -> Option<&'static str> {
 }
 
 pub async fn get_installer() -> Option<&'static str> {
+    // Only an explicit override outranks the WinGet location; npm hints and stale config do not.
+    if let Some(explicit) = std::env::var("GROK_INSTALLER")
+        .ok()
+        .as_deref()
+        .and_then(parse_grok_installer)
+    {
+        return Some(explicit);
+    }
+    if running_exe_matches(crate::winget::is_winget_package_path) {
+        return Some(WINGET);
+    }
     if let Some(i) = env_installer() {
         return Some(i);
     }
@@ -472,17 +528,21 @@ pub async fn get_installer() -> Option<&'static str> {
         Some(_) => Some("internal"),
         // A wiped config must not reclassify an npm install as internal:
         // that re-enables downgrades and updates npm never sees.
-        None if path_resolves_to_npm_entry() => Some("npm"),
+        None if running_exe_matches(is_under_node_modules) => Some("npm"),
         None => Some("internal"),
     }
 }
 
-/// The npm entry links to a binary inside the package, so the running
-/// executable's real path names the installer.
-fn path_resolves_to_npm_entry() -> bool {
-    std::env::current_exe()
-        .and_then(|exe| dunce::canonicalize(&exe))
-        .is_ok_and(|exe| is_under_node_modules(&exe))
+/// True when the running executable's raw or canonical path satisfies `is_match`. Package-manager entry points (the
+/// npm bin, WinGet's `Links\grok.exe`) link into the package, so the canonical path names the installer.
+fn running_exe_matches(is_match: fn(&std::path::Path) -> bool) -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => is_match(&exe) || dunce::canonicalize(&exe).is_ok_and(|real| is_match(&real)),
+        Err(e) => {
+            tracing::debug!(error = %e, "current_exe unavailable; installer path checks skipped");
+            false
+        }
+    }
 }
 
 fn is_under_node_modules(exe: &std::path::Path) -> bool {
@@ -568,6 +628,9 @@ pub async fn check_update_background(update_config: &UpdateConfig) -> Background
     let Some(installer) = get_installer().await else {
         return BackgroundUpdateCheck::none();
     };
+    if installer == WINGET {
+        return BackgroundUpdateCheck::none();
+    }
 
     heal_managed_install(installer).await;
 
@@ -674,6 +737,7 @@ pub async fn run_update_if_available(
     let auto_update = current_config.cli.auto_update.unwrap_or(true);
 
     if current_config.cli.auto_update.is_none()
+        && inst != WINGET
         && let Err(e) = config::update_config(|st| {
             if st.cli.auto_update.is_none() {
                 st.cli.auto_update = Some(true);
@@ -689,20 +753,43 @@ pub async fn run_update_if_available(
     // Don't write version.json here
     // Only cache after confirming no update is needed or after a successful install
     // Otherwise a failed background download would suppress retries for the TTL window
-    let latest_version = match fetch_update_plan(inst, update_config, &policy).await {
-        Ok(UpdatePlan::Install { target, .. }) => target,
-        Ok(UpdatePlan::Skip { .. } | UpdatePlan::Unavailable { .. }) | Err(_) => return Ok(false),
+    let (latest_release, latest_version) =
+        match fetch_update_plan(inst, update_config, &policy).await {
+            Ok(UpdatePlan::Install { latest, target }) => (latest, target),
+            Ok(UpdatePlan::Skip { .. } | UpdatePlan::Unavailable { .. }) | Err(_) => {
+                return Ok(false);
+            }
+        };
+    // The WinGet package ships only stable releases, whatever channel is configured.
+    let channel = if inst == WINGET {
+        "stable"
+    } else {
+        update_config.channel.as_str()
     };
     if !needs_update(
         &current_version,
         &latest_version,
-        &update_config.channel,
+        channel,
         installer_allows_downgrade(inst),
     )
     .unwrap_or(false)
     {
         let stable_ptr = try_fetch_stable_pointer().await;
         write_version_cache(&latest_version, stable_ptr.as_deref()).await;
+        return Ok(false);
+    }
+    if inst == WINGET {
+        eprintln!(
+            "A new version of Grok Build is available: {current_version} -> {latest_version}"
+        );
+        let target = if has_version_cap(&policy) {
+            crate::winget::Target::Exact(&latest_version)
+        } else {
+            crate::winget::Target::Newest
+        };
+        eprintln!("{}", crate::winget::update_available_note(target));
+        // A WinGet plan reads the stable pointer, so `latest_release` is the uncapped stable version.
+        write_version_cache(&latest_version, Some(latest_release.as_str())).await;
         return Ok(false);
     }
 
@@ -897,6 +984,7 @@ pub async fn run_install_script(
         )
         .map(|()| None),
         "gh-release" => install_gh_release(target).await.map(|()| None),
+        WINGET => Err(anyhow::anyhow!("this install is managed by WinGet")),
         _ => install_internal(target, update_config).await.map(Some),
     };
     // Measured before the success-only cache sweep, so the sweep cannot inflate success durations
@@ -2480,6 +2568,10 @@ pub async fn apply_channel_switch(channel_switch: Option<&str>, update_config: &
     if let Some(ch) = channel_switch
         && update_config.channel != ch
     {
+        if get_installer().await == Some(WINGET) {
+            eprint!("{}", crate::winget::ignored_channel_note(ch));
+            return;
+        }
         let _ = config::update_config(|st| {
             st.cli.channel = Some(ch.to_string());
         })
@@ -2504,8 +2596,56 @@ pub async fn run_update(
     update_config: &mut UpdateConfig,
     trigger: CliUpdateTrigger,
 ) -> Result<Option<String>> {
+    let installer = get_installer().await;
+    let policy = config::VersionPolicy::resolve();
+    if let Some(version) = pinned_version
+        && let Err(e) = crate::version_policy::check_install_target(&policy, version)
+    {
+        anyhow::bail!("{e}");
+    }
+    if installer == Some(WINGET) {
+        let capped = match pinned_version {
+            // No allowed target means no command: `winget upgrade` would jump past the cap
+            None if has_version_cap(&policy) => {
+                match fetch_update_plan(WINGET, update_config, &policy).await? {
+                    UpdatePlan::Install { target, .. } => {
+                        let current = get_installed_grok_version();
+                        // Like `--check`, never move down, unless the running version is above the hard cap
+                        let above_hard_cap = policy.required_maximum.as_ref().is_some_and(|hi| {
+                            semver::Version::parse(&current).is_ok_and(|v| v > *hi)
+                        });
+                        if !force
+                            && needs_update(&current, &target, "stable", above_hard_cap)
+                                == Some(false)
+                        {
+                            eprintln!("Already up to date ({current}).");
+                            return Ok(None);
+                        }
+                        Some(target)
+                    }
+                    UpdatePlan::Skip { latest } => {
+                        let current = get_installed_grok_version();
+                        eprintln!("{}", skipped_update_notice(&latest, &current));
+                        return Ok(None);
+                    }
+                    UpdatePlan::Unavailable { latest, target } => {
+                        return Err(unavailable_update_error(&latest, &target));
+                    }
+                }
+            }
+            _ => None,
+        };
+        let target = match (pinned_version.or(capped.as_deref()), force) {
+            (Some(version), _) => crate::winget::Target::Exact(version),
+            (None, true) => crate::winget::Target::Reinstall,
+            (None, false) => crate::winget::Target::Newest,
+        };
+        let channel = channel_switch.unwrap_or(update_config.channel.as_str());
+        eprint!("{}", crate::winget::hand_off_message(target, channel));
+        return Ok(None);
+    }
     apply_channel_switch(channel_switch, update_config).await;
-    let installer = match get_installer().await {
+    let installer = match installer {
         Some(i) => i,
         None => {
             eprintln!("Auto-update is not available for manual installations.");
@@ -2524,13 +2664,9 @@ pub async fn run_update(
     heal_managed_install(installer).await;
 
     let current_version = get_installed_grok_version();
-    let policy = config::VersionPolicy::resolve();
 
     // When --version is given, skip the latest-version check and install directly
     if let Some(version) = pinned_version {
-        if let Err(e) = crate::version_policy::check_install_target(&policy, version) {
-            anyhow::bail!("{e}");
-        }
         eprintln!(
             "Installing Grok {} (current: {})...",
             version, current_version
@@ -2565,18 +2701,12 @@ pub async fn run_update(
             // Cache so an explicit `cook update` doesn't re-prompt every run.
             let stable_ptr = try_fetch_stable_pointer().await;
             write_version_cache(&latest, stable_ptr.as_deref()).await;
-            eprintln!(
-                "The latest release ({latest}) is not an allowed update; \
-                 keeping the current version ({current_version})."
-            );
+            eprintln!("{}", skipped_update_notice(&latest, &current_version));
             refresh_deployment_config().await;
             return Ok(None);
         }
         UpdatePlan::Unavailable { latest, target } => {
-            anyhow::bail!(
-                "The required minimum version ({target}) is newer than the latest \
-                 available release ({latest}). Contact your administrator."
-            );
+            return Err(unavailable_update_error(&latest, &target));
         }
         UpdatePlan::Install { latest, target } => (latest, target),
     };

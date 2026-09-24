@@ -469,7 +469,7 @@ pub enum SessionCommand {
     ReloadHooks,
     /// Re-discover skills from disk and update the session's skill baseline.
     RefreshSkillBaseline,
-    /// Capture every completed turn now for `x.ai/memory/flush`.
+    /// Capture every finished or stopped turn now for `x.ai/memory/flush`.
     FlushMemory {
         respond_to: oneshot::Sender<crate::extensions::memory::MemoryFlushResponse>,
     },

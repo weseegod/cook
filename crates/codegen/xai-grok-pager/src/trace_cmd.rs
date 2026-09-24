@@ -452,7 +452,7 @@ async fn run_upload(
         UploadGate::NoCredentials => {
             if !json {
                 eprintln!(
-                    "No upload credentials for this account (run `cook login` or set a deployment \
+                    "No upload credentials for this account (run `grok login` or set a deployment \
                      key); exporting locally."
                 );
             }

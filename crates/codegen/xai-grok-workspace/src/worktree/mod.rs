@@ -4004,7 +4004,10 @@ mod tests {
         let _inject = create_root::lock_grove_parent_inject();
 
         let temp = tempfile::TempDir::new().unwrap();
-        let repo = temp.path().join("repo");
+        // tempfile `.../.tmp*/repo` slugs to shared ~/.grok/worktrees/tmp-repo; shards
+        // then race `git worktree add` on label `strategy-wt-N`.
+        let unique = uuid::Uuid::new_v4().simple().to_string();
+        let repo = temp.path().join(format!("src-{unique}"));
         std::fs::create_dir(&repo).unwrap();
         init_git_repo(&repo);
         std::fs::write(repo.join("tracked.txt"), "x").unwrap();
@@ -4012,11 +4015,11 @@ mod tests {
 
         let req = CreateWorktreeFromWorktreeRequest {
             source_worktree_path: repo.to_string_lossy().into_owned(),
-            new_session_id: format!("strategy-{}", std::process::id()),
+            new_session_id: format!("strategy-{unique}"),
             copy_mode: WorktreeCopyMode::Dirty,
             git_ref: None,
             worktree_type: Some(WorktreeType::Linked),
-            label: Some("strategy-wt".into()),
+            label: Some(format!("strategy-wt-{unique}")),
             grove_worktree: Some(true),
             grove_gate_source: Some("request".into()),
             cancellation_token: None,

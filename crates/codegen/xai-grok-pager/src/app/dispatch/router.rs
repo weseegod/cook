@@ -1056,9 +1056,6 @@ fn dispatch_inner(action: Action, app: &mut AppView) -> Vec<Effect> {
         Action::CancelScheduledTask(task_id) => dispatch_cancel_scheduled_task(app, task_id),
         Action::DemoteToBackground => dispatch_demote_to_background(app),
         Action::RequestBundleStatus => vec![Effect::FetchBundleStatus],
-        Action::ViewCatalogEntry { kind, name } => {
-            vec![Effect::FetchCatalogEntry { kind, name }]
-        }
         Action::CycleMode => dispatch_cycle_mode(app),
         Action::ShareSession => dispatch_share_session(app),
         Action::ShowSessionInfo => dispatch_show_session_info(app),

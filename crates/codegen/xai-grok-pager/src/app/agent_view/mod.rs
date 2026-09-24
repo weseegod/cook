@@ -131,7 +131,6 @@ use crate::views::plan_approval_view::{PlanApprovalViewState, PlanComment};
 use crate::views::prompt_widget::{PromptWidget, StashedPrompt};
 use crate::views::question_view::QuestionViewState;
 use crate::views::queue_pane::QueuePane;
-use crate::views::subagent_catalog_pane::SubagentCatalogPane;
 use crate::views::tasks_pane::TasksPane;
 use crate::views::todo_pane::TodoPane;
 use ratatui::buffer::Buffer;
@@ -744,7 +743,6 @@ pub struct AgentView {
     pub tip_typing_dismissed: bool,
     pub todo: TodoPane,
     pub tasks: TasksPane,
-    pub catalog: SubagentCatalogPane,
     pub queue: QueuePane,
     /// Per-agent mirror of the server-authoritative shared prompt queue
     /// (`AppView::shared_prompt_queues[sid]`), kept in sync by `handle_queue_changed` and the immediate-send path. The queue pane renders the union of this and the local `pending_prompts`; the edit handlers read it to route remove/reorder by origin. Empty unless a plain prompt was queued server-side while a turn was running.
@@ -1062,7 +1060,6 @@ pub struct AgentView {
     pub hit_todo_close: HitArea,
     pub hit_bg_close: HitArea,
     pub hit_subagent_close: HitArea,
-    pub hit_catalog_close: HitArea,
     pub hit_bg_status: HitArea,
     pub hit_goal_status: HitArea,
     pub hit_goal_close: HitArea,
@@ -3436,10 +3433,6 @@ mod prompt_input_mode_tests {
     use crate::app::actions::Action;
     use crate::theme::Theme;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    #[test]
-    fn default_is_normal() {
-        assert_eq!(PromptInputMode::default(), PromptInputMode::Normal);
-    }
     #[test]
     fn accent_color_returns_expected_for_each_variant() {
         let theme = Theme::current();

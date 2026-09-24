@@ -627,6 +627,9 @@ impl Presenter {
                 if force {
                     let _ = terminal.clear();
                     crate::terminal::overlay::reset_owner();
+                    for agent in app.agents.values_mut() {
+                        agent.forget_transmitted_inline_media();
+                    }
                 }
                 app.draw(terminal);
             },
@@ -1289,7 +1292,14 @@ pub(crate) async fn run(
         crate::slash::commands::usage::detect_external_auth_provider(&app.auth_methods);
     if let Some(meta) = connection.auth_meta.as_ref() {
         match serde_json::from_value::<xai_grok_login::AuthMeta>(meta.clone()) {
-            Ok(auth_meta) => app.apply_auth_meta(&auth_meta),
+            Ok(auth_meta) => {
+                app.apply_auth_meta(&auth_meta);
+                if app.needs_team_capability_hydration() {
+                    post_render_effects.push(Effect::HydrateTeamCapability {
+                        identity: app.auth_identity(),
+                    });
+                }
+            }
             Err(e) => tracing::warn!("failed to deserialize auth_meta: {e}"),
         }
     } else {

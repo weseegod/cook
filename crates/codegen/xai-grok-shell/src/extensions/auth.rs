@@ -22,8 +22,38 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
         "x.ai/auth/logout" => handle_logout(agent, args).await,
         "x.ai/auth/info" => handle_info(agent),
         "x.ai/auth/check_subscription" => handle_check_subscription(agent).await,
+        "x.ai/auth/hydrate_team_capability" => handle_hydrate_team_capability(agent, args).await,
         _ => Err(acp::Error::method_not_found()),
     }
+}
+
+/// `pub` with both serde directions so the pager builds the request from the type the agent parses.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HydrateTeamCapabilityRequest {
+    pub email: Option<String>,
+    pub team_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HydrateTeamCapabilityResponse {
+    /// Required but nullable: the handler always emits it, so an absent or misspelled key is a broken peer, not an unknown answer.
+    #[serde(deserialize_with = "Option::deserialize")]
+    pub can_administer_team: Option<bool>,
+}
+
+/// Backfills `canAdministerTeam` for a cached credential that predates it: startup only enriches a missing user id and the token fast path skips `/user`.
+/// The ACP layer clones the agent's `Rc` into this request's task, so a dropped connection does not cancel the GET; nobody reads the answer, but the shared cache still fills.
+async fn handle_hydrate_team_capability(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
+    let params: HydrateTeamCapabilityRequest = parse_params(args)?;
+    let can_administer_team = agent
+        .auth_manager
+        .hydrate_can_administer_team(params.email.as_deref(), params.team_id.as_deref())
+        .await;
+    to_raw_response(&HydrateTeamCapabilityResponse {
+        can_administer_team,
+    })
 }
 
 /// Stop an in-flight interactive login (device poll or loopback wait).

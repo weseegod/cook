@@ -91,11 +91,20 @@ pub(super) fn ensure_dashboard_state(app: &mut AppView) {
     state.set_recap_visible(app.session_recap_available);
     state.set_voice_visible(app.voice_mode_enabled);
     state.set_restricted_commands(&app.tier_restricted_commands);
+    let billing = app.usage_visible;
     let usage_cmd = false; // BYOK fork: no grok.com usage/limits UI
     state
         .dispatch
         .slash_controller
+        .set_billing_surface_visible(billing);
+    state
+        .dispatch
+        .slash_controller
         .set_usage_command_visible(usage_cmd);
+    state
+        .peek_reply
+        .slash_controller
+        .set_billing_surface_visible(billing);
     state
         .peek_reply
         .slash_controller
@@ -221,12 +230,6 @@ fn dashboard_alive_fn<'a>(
 ) -> impl Fn(&crate::views::dashboard::DashboardRowId) -> bool + 'a {
     move |id| match id {
         crate::views::dashboard::DashboardRowId::TopLevel(a) => agents.contains_key(a),
-        crate::views::dashboard::DashboardRowId::Subagent {
-            parent,
-            child_session_id,
-        } => agents
-            .get(parent)
-            .is_some_and(|a| a.subagent_sessions.contains_key(child_session_id)),
         crate::views::dashboard::DashboardRowId::Workspace { session_id } => {
             workspace.is_some_and(|workspace| {
                 workspace.members.iter().any(|member| {
@@ -278,29 +281,19 @@ pub(super) fn dispatch_exit_dashboard(app: &mut AppView) -> Vec<Effect> {
     vec![]
 }
 /// Restore session-overlay chrome (`attached_agent` and the row cursor).
-/// Keeps a live subagent takeover; otherwise clears it and selects TopLevel.
+/// A live subagent takeover stays open. A stale one is cleared. The cursor is the top-level row.
 fn rearm_session_overlay(app: &mut AppView, id: AgentId) {
     use crate::views::dashboard::DashboardRowId;
-    let live_child = app.agents.get(&id).and_then(|a| {
+    let has_live_child = app.agents.get(&id).is_some_and(|a| {
         a.active_subagent
             .as_ref()
-            .filter(|c| a.subagent_sessions.contains_key(*c))
-            .cloned()
+            .is_some_and(|child| a.subagent_sessions.contains_key(child))
     });
-    let row = match live_child {
-        Some(child_session_id) => DashboardRowId::Subagent {
-            parent: id,
-            child_session_id,
-        },
-        None => {
-            if let Some(agent) = app.agents.get_mut(&id) {
-                agent.close_subagent_fullscreen();
-            }
-            DashboardRowId::TopLevel(id)
-        }
-    };
+    if !has_live_child && let Some(agent) = app.agents.get_mut(&id) {
+        agent.close_subagent_fullscreen();
+    }
     if let Some(d) = app.dashboard.as_mut() {
-        d.focus_row(row);
+        d.focus_row(DashboardRowId::TopLevel(id));
         d.attached_agent = Some(id);
     }
 }
@@ -406,7 +399,7 @@ pub(super) fn dispatch_dashboard_pick_session(app: &mut AppView, index: usize) -
         return vec![];
     };
     let cwd_hint = (!entry.cwd.is_empty()).then(|| std::path::PathBuf::from(entry.cwd));
-    if crate::app::is_daemon_session_row(&entry.source) {
+    if crate::app::is_daemon_or_remote_control_row(&entry.source) {
         return dispatch_dashboard_load_session(app, entry.id, cwd_hint);
     }
     dispatch_dashboard_load_local_build(app, entry.id, cwd_hint)
@@ -438,35 +431,6 @@ pub(super) fn dispatch_dashboard_attach(
             switch_to_agent(app, agent_id, SwitchCause::Picker);
             log_dashboard_attached(&DashboardRowId::TopLevel(agent_id));
             surface_yolo_launch_block_notice(app, agent_id);
-        }
-        DashboardRowId::Subagent {
-            parent,
-            child_session_id,
-        } => {
-            let alive = app
-                .agents
-                .get(&parent)
-                .is_some_and(|a| a.subagent_sessions.contains_key(&child_session_id));
-            if !alive {
-                if let Some(d) = app.dashboard.as_mut() {
-                    d.set_error_toast("Subagent no longer running");
-                }
-                return vec![];
-            }
-            if let Some(agent) = app.agents.get_mut(&parent) {
-                agent.open_subagent_fullscreen(child_session_id.clone());
-            }
-            let row_id = DashboardRowId::Subagent {
-                parent,
-                child_session_id,
-            };
-            if let Some(d) = app.dashboard.as_mut() {
-                d.focus_row(row_id.clone());
-                d.attached_agent = Some(parent);
-            }
-            app.active_view = ActiveView::Agent(parent);
-            log_dashboard_attached(&row_id);
-            surface_yolo_launch_block_notice(app, parent);
         }
         DashboardRowId::Roster { session_id } => {
             let (session_cwd, conversation_entry) = app
@@ -615,9 +579,7 @@ pub(super) fn dispatch_dashboard_toggle_worktree(app: &mut AppView) -> Vec<Effec
     }
     vec![]
 }
-/// Toggle auto-approve (YOLO mode) on the selected dashboard row's owning agent.
-/// Subagents inherit their parent's mode, so a subagent selection routes to the parent.
-/// This keeps the drain / persist / toast logic in a single code path instead of duplicating it.
+/// Toggle auto-approve (YOLO mode) on the selected dashboard row's agent.
 pub(super) fn dispatch_dashboard_toggle_auto_approve(app: &mut AppView) -> Vec<Effect> {
     use crate::views::dashboard::DashboardRowId;
     let Some(d) = app.dashboard.as_ref() else {
@@ -631,7 +593,6 @@ pub(super) fn dispatch_dashboard_toggle_auto_approve(app: &mut AppView) -> Vec<E
     };
     let agent_id = match selected {
         DashboardRowId::TopLevel(id) => *id,
-        DashboardRowId::Subagent { parent, .. } => *parent,
         DashboardRowId::Roster { .. } | DashboardRowId::Workspace { .. } => return vec![],
     };
     if !app.agents.contains_key(&agent_id) {
@@ -1023,7 +984,7 @@ pub(super) fn dispatch_dashboard_overlay_cycle(app: &mut AppView, delta: i32) ->
             .0
             .into_iter()
             .filter_map(|row| match row.id {
-                DashboardRowId::TopLevel(id) if !row.is_more_placeholder => Some(id),
+                DashboardRowId::TopLevel(id) => Some(id),
                 _ => None,
             })
             .collect()
@@ -1213,7 +1174,8 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
             if let Some(d) = app.dashboard.as_mut() {
                 d.dispatch.set_text("");
                 d.set_error_toast(&format!(
-                    "/{token} isn't available on your current plan."
+                    "/{token} requires SuperGrok: upgrade at {}",
+                    super::billing::UPSELL_URL_UPGRADE
                 ));
             }
             return vec![];
@@ -1247,7 +1209,7 @@ pub(super) fn dispatch_dashboard_dispatch_slash(app: &mut AppView, text: String)
             session_id: None,
             bundle_state: &app.bundle_state,
             screen_mode: app.screen_mode,
-            billing_surface_visible: true,
+            billing_surface_visible: app.usage_visible,
             usage_command_visible: false, // BYOK fork: no grok.com usage/limits UI
             pager_state: crate::settings::PagerLocalSnapshot {
                 multiline_mode: dashboard_multiline,
@@ -1432,7 +1394,7 @@ pub(super) fn apply_pending_dispatch_config(
 }
 /// Cycle the peeked agent's live mode using the agent prompt's gated rotation, the peek-panel counterpart to `DashboardCycleMode`.
 /// The peek then behaves exactly like Shift+Tab inside that agent's chat view; the bottom-border badge reflects the new mode on the next frame.
-/// Only top-level agents have a mode to cycle; subagents are parent-driven.
+/// Only top-level agents have a mode to cycle.
 pub(super) fn dispatch_dashboard_peek_cycle_mode(app: &mut AppView) -> Vec<Effect> {
     use crate::views::dashboard::DashboardRowId;
     let Some(row) = app
@@ -1444,12 +1406,6 @@ pub(super) fn dispatch_dashboard_peek_cycle_mode(app: &mut AppView) -> Vec<Effec
     };
     let agent_id = match row {
         DashboardRowId::TopLevel(id) => id,
-        DashboardRowId::Subagent { .. } => {
-            if let Some(d) = app.dashboard.as_mut() {
-                d.set_error_toast("Can't change a subagent's mode");
-            }
-            return vec![];
-        }
         DashboardRowId::Roster { .. } | DashboardRowId::Workspace { .. } => return vec![],
     };
     if !app.agents.contains_key(&agent_id) {
@@ -1467,7 +1423,6 @@ pub(super) fn dispatch_dashboard_peek_cycle_mode(app: &mut AppView) -> Vec<Effec
 }
 /// An idle agent sends it immediately (a turn starts); a mid-turn agent keeps it queued so it drains after the current turn finishes.
 /// This is the same queue and drain pipeline the agent view's own prompt input uses, so the two surfaces behave identically.
-/// Subagent rows can't be replied to (they're driven by their parent), so they surface a toast and leave the peek open.
 pub(super) fn dispatch_dashboard_peek_reply(
     app: &mut AppView,
     row: crate::views::dashboard::DashboardRowId,
@@ -1485,7 +1440,7 @@ pub(super) fn dispatch_dashboard_peek_reply(
     }
     let DashboardRowId::TopLevel(agent_id) = row else {
         if let Some(d) = app.dashboard.as_mut() {
-            d.set_error_toast("Can't reply to a subagent");
+            d.set_error_toast("Load the session before replying");
         }
         return vec![];
     };
@@ -1552,7 +1507,7 @@ struct LayoutTarget {
 }
 /// Why a pin or reorder gesture on the selected row cannot proceed.
 enum LayoutRefusal {
-    /// Subagent and roster rows have no store member and no layout of their own.
+    /// Roster rows have no store member and no layout of their own.
     NotWorkspaceRow,
     /// No committed member and no live agent behind the row.
     NotFound,
@@ -1586,7 +1541,7 @@ fn workspace_layout_target(
         DashboardRowId::Workspace { session_id } => {
             xai_grok_dashboard_store::SessionId::new(session_id.clone()).ok()
         }
-        DashboardRowId::Subagent { .. } | DashboardRowId::Roster { .. } => {
+        DashboardRowId::Roster { .. } => {
             return Err(LayoutRefusal::NotWorkspaceRow);
         }
     };
@@ -1652,12 +1607,7 @@ pub(super) fn dispatch_dashboard_begin_rename(app: &mut AppView) {
         return;
     };
     let crate::views::dashboard::DashboardRowId::TopLevel(agent_id) = &sel else {
-        let message = if sel.is_subagent() {
-            "Subagent rows can't be renamed"
-        } else {
-            "Load the session before renaming"
-        };
-        d.set_error_toast(message);
+        d.set_error_toast("Load the session before renaming");
         return;
     };
     let prefill = app
@@ -1799,7 +1749,6 @@ pub(super) fn dashboard_neighbor_row(
 /// Delete only ever runs on an idle row, so it is never queued alongside a `CancelTurn`.
 pub(super) fn dispatch_dashboard_stop(app: &mut AppView) -> Vec<Effect> {
     use crate::views::dashboard::DashboardRowId;
-    use std::time::Instant;
     let Some(sel) = app.dashboard.as_ref().and_then(|d| d.selected.clone()) else {
         return vec![];
     };
@@ -1843,34 +1792,6 @@ pub(super) fn dispatch_dashboard_stop(app: &mut AppView) -> Vec<Effect> {
                 };
             }
             arm_or_delete(app, sel)
-        }
-        DashboardRowId::Subagent {
-            parent,
-            child_session_id,
-        } => {
-            let Some(agent) = app.agents.get_mut(parent) else {
-                return vec![];
-            };
-            let Some(info) = agent.subagent_sessions.get_mut(child_session_id) else {
-                return vec![];
-            };
-            let subagent_id = info.subagent_id.to_string();
-            let attempt_id = info
-                .attempt
-                .lifecycle
-                .current_attempt_id()
-                .map(str::to_owned);
-            info.attempt.pending_kill = true;
-            info.attempt.kill_requested_at = Some(Instant::now());
-            let session_id = agent.session.session_id.clone();
-            session_id
-                .map(|sid| Effect::KillSubagent {
-                    session_id: sid,
-                    subagent_id,
-                    attempt_id,
-                })
-                .into_iter()
-                .collect()
         }
         DashboardRowId::Roster { session_id } => {
             let entry = app
@@ -2103,10 +2024,6 @@ fn delete_dashboard_row(
                 after: crate::app::actions::AfterSessionDelete::Dashboard,
             }]
         }
-        DashboardRowId::Subagent { .. } => {
-            app.show_toast("Subagent rows can't be deleted from the dashboard");
-            vec![]
-        }
         DashboardRowId::Roster { session_id } => {
             let Some(entry) = app
                 .leader_roster
@@ -2181,10 +2098,6 @@ fn archive_dashboard_row(
             (session_id, loaded_ids)
         }
         DashboardRowId::Workspace { session_id } => (session_id.clone(), Vec::new()),
-        DashboardRowId::Subagent { .. } => {
-            app.show_toast("Subagent rows can't be archived from the dashboard");
-            return vec![];
-        }
         DashboardRowId::Roster { .. } => return vec![],
     };
     let neighbor = dashboard_neighbor_row(app, &row).filter(
@@ -2408,7 +2321,6 @@ pub(super) fn dispatch_dashboard_permission_select(
 ) -> Vec<Effect> {
     let target_id = match &row {
         crate::views::dashboard::DashboardRowId::TopLevel(id) => *id,
-        crate::views::dashboard::DashboardRowId::Subagent { parent, .. } => *parent,
         crate::views::dashboard::DashboardRowId::Roster { .. }
         | crate::views::dashboard::DashboardRowId::Workspace { .. } => return vec![],
     };
@@ -2459,7 +2371,6 @@ pub(super) fn dispatch_dashboard_permission_followup(
 ) -> Vec<Effect> {
     let target_id = match &row {
         crate::views::dashboard::DashboardRowId::TopLevel(id) => *id,
-        crate::views::dashboard::DashboardRowId::Subagent { parent, .. } => *parent,
         crate::views::dashboard::DashboardRowId::Roster { .. }
         | crate::views::dashboard::DashboardRowId::Workspace { .. } => return vec![],
     };
@@ -2523,7 +2434,6 @@ pub(super) fn dispatch_dashboard_question_answer(
 ) -> Vec<Effect> {
     let target_id = match &row {
         crate::views::dashboard::DashboardRowId::TopLevel(id) => *id,
-        crate::views::dashboard::DashboardRowId::Subagent { parent, .. } => *parent,
         crate::views::dashboard::DashboardRowId::Roster { .. }
         | crate::views::dashboard::DashboardRowId::Workspace { .. } => return vec![],
     };
