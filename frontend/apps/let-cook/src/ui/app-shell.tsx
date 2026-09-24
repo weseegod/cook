@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { acpClient } from "../acp/client";
 import { normalizeError } from "../acp/errors";
@@ -27,6 +27,7 @@ import { Welcome } from "./welcome/welcome";
 
 const DISMISSED_KEY = "cook.connectProviderDismissed";
 const NOTICE_TIMEOUT_MS = 3_000;
+const MIN_CHAT_WIDTH_WITH_TOOLS = 600;
 const SETTINGS_TABS = new Set<SettingsTab>(["general", "models", "connectors", "context", "skills", "hooks", "about"]);
 
 function isSettingsTab(value: string): value is SettingsTab {
@@ -58,7 +59,9 @@ export function AppShell() {
   const connection = useSessionStore((state) => state.connection);
   const notice = useSessionStore((state) => state.notice);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarAutoCollapsed, setSidebarAutoCollapsed] = useState(false);
   const [utilityPanelOpen, setUtilityPanelOpen] = useState(false);
+  const sidebarWidth = useRef(272);
   const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [settingsCloseRequest, setSettingsCloseRequest] = useState(0);
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -67,6 +70,33 @@ export function AppShell() {
   const activityPanelNonce = useActivityStore((state) => state.panelNonce);
   const toolsPanelNonce = useToolsPanelStore((state) => state.nonce);
   const artifactEpoch = useArtifactStore((state) => state.openEpoch);
+
+  // Keep the chat usable when the resizable sidebar and tools panel compete for a small window.
+  // Remember the sidebar's measured width so hiding it cannot make this check oscillate.
+  useLayoutEffect(() => {
+    if (!cwd || !sidebarOpen || !utilityPanelOpen) {
+      setSidebarAutoCollapsed(false);
+      return;
+    }
+    const sidebar = document.querySelector<HTMLElement>(".sidebar");
+    const tools = document.querySelector<HTMLElement>(".utility-panel");
+    if (!tools) return;
+    const update = () => {
+      if (sidebar) sidebarWidth.current = sidebar.getBoundingClientRect().width;
+      setSidebarAutoCollapsed(
+        window.innerWidth - sidebarWidth.current - tools.getBoundingClientRect().width < MIN_CHAT_WIDTH_WITH_TOOLS,
+      );
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    if (sidebar) observer.observe(sidebar);
+    observer.observe(tools);
+    window.addEventListener("resize", update);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, [cwd, sidebarOpen, utilityPanelOpen, sidebarAutoCollapsed]);
 
   useEffect(() => {
     if (!notice) return;
@@ -214,11 +244,18 @@ export function AppShell() {
 
   return (
     <div className="app-frame">
-      {sidebarOpen && cwd && <SessionSidebar onOpenSettings={() => openSettings("general")} onOpenSearch={() => setPaletteOpen(true)} />}
+      {sidebarOpen && !sidebarAutoCollapsed && cwd && <SessionSidebar onOpenSettings={() => openSettings("general")} onOpenSearch={() => setPaletteOpen(true)} />}
       <main className="main-column">
         <AgentHeader
-          sidebarOpen={sidebarOpen}
-          onToggleSidebar={() => setSidebarOpen((open) => !open)}
+          sidebarOpen={sidebarOpen && !sidebarAutoCollapsed}
+          onToggleSidebar={() => {
+            if (utilityPanelOpen && (!sidebarOpen || sidebarAutoCollapsed)) {
+              setUtilityPanelOpen(false);
+              setSidebarOpen(true);
+            } else {
+              setSidebarOpen((open) => !open);
+            }
+          }}
           utilityPanelOpen={utilityPanelOpen}
           onOpenTools={() => setUtilityPanelOpen(true)}
         />
