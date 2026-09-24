@@ -18,6 +18,8 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cook_bin="${COOK_BIN:-$repo_root/target/debug/xai-grok-pager}"
 base_url="${BONSAI_BASE_URL:-http://localhost:8080/v1}"
 model_key="${MODEL_KEY:-local/spark25}"
+# Wire id the llama server advertises (`--alias`). MODEL_WIRE overrides; otherwise strip a `local/` prefix.
+model_wire="${MODEL_WIRE:-${MODEL_KEY#local/}}"
 runs="${RUNS:-1}"
 
 # Pruning runs only when the last model call's total exceeds half the window, and auto-compaction
@@ -91,7 +93,7 @@ write_home() {
 permission_mode = "always-approve"
 
 [model."$model_key"]
-model = "spark25"
+model = "$model_wire"
 model_provider = "local"
 name = "Step pruning benchmark model"
 input = ["text"]

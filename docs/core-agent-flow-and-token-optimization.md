@@ -421,6 +421,38 @@ For this fixture, reported prompt input fell by **97.4%** while the answer staye
 
 The experiment document’s section 18 ran the real agent loop on one synthetic read-file task, three paired repetitions, local model, `CONTEXT_WINDOW=40000`. The step-aware arm fired in all three of its runs. Mean tool-result tokens per request fell from 8,492 to about 5,501. Mean billed input fell from 287,666 to 233,386, and mean cache reads fell from 252,497 to 161,407. On this harness billed input includes cache reads, so the uncached remainder rose from about 35,000 to about 72,000. All six runs returned both required markers. The step-aware arm’s own billed input ranged from 154,928 to 290,339. Wall time was not better. These are local-server token columns, not a DeepSeek, MiMo, or xAI invoice. The 30–50 task suite in section 8.1 remains the rollout gate. The immediate gate is the three-model phase matrix in the v2 experiment document.
 
+#### Three-model PR versus main (2026-09-24)
+
+Date: **2026-09-24**. Direct A/B of the same real-task harness ([benchmark_step_pruning_live.sh](../scripts/benchmark_step_pruning_live.sh), `RUNS=1`, `CONTEXT_WINDOW=40000`) against two binaries on one machine, one model on `:8080` at a time:
+
+| Side | Binary | Commit |
+|---|---|---|
+| PR (`experiment/core-agent-token-optimization`) | `target/debug/xai-grok-pager` | `9f095fc5` |
+| main | `Projects/cook-main/target/debug/xai-grok-pager-main` | `2e11f136` |
+
+The harness script itself lives only on the PR branch; it was run with `COOK_BIN` pointed at each binary. `MODEL_WIRE` now takes the server `--alias` (`spark25` / `bonsai2` / `mimo26`) instead of hardcoding `model = "spark25"`, so the same script drives all three local launchers. Evidence: `/tmp/real-task-pr-vs-main/`.
+
+**Fidelity (both markers required):**
+
+| Model | PR baseline | PR step-aware | main baseline | main step-aware |
+|---|---|---|---|---|
+| spark25-4b | fail `both-markers-lost` (1333 s) | pass (190 s) | pass (303 s) | fail `one-marker`, agent exit non-zero (`Error: max turns reached`, `stopReason=cancelled`, 368 s) |
+| bonsai2-27b | pass (200 s) | pass (252 s) | pass (182 s) | pass (185 s) |
+| mimo26-9b | pass (1045 s) | pass (13 s, **prune_events=0**) | pass (1793 s) | pass (1686 s) |
+
+Script exit was 0 for all six model×side cells (the harness completed). Fidelity: PR 4/6 arms, main 5/6. Neither side is clean 6/6.
+
+**What each side can measure:**
+
+| Signal | PR | main |
+|---|---|---|
+| Agent loop + marker fidelity | yes | yes |
+| `purposeUsage` / `requestComponents` | filled | always `-` (accounting not on main) |
+| Step-aware arm engaged | spark 9 events / bonsai 5 / mimo **0** | always 0 (`keep_last_n_tool_rounds` ignored; `#[serde(default)]` drops unknown keys) |
+| Tool-result tokens (example) | spark baseline 95,952 → step-aware 43,089 | not reported |
+
+**Read for the decision.** The harness succeeds end-to-end on both binaries when scored only as “did the agent finish with both markers plus did the script exit 0.” It succeeds as a *measurement* instrument only on the PR: main cannot print purpose/component shares or prune counts, so a main run cannot answer whether pruning saved tokens. The mimo PR step-aware cell (`prune_events=0`, 2 loop calls, 13 s) measured nothing about the arm and must not be read as a saving. The spark PR baseline lost both markers; the spark main step-aware arm hit `--max-turns 24`. These are one synthetic read-file task, `RUNS=1`, three local models — direction and harness portability, not a rate and not a rollout gate. The 30–50 task suite in section 8.1 remains the gate.
+
 ## 9. Batch API and per-provider price
 
 Batch API (xAI `/v1/batches`, and the same shape at OpenAI and Anthropic) changes the **price per token**. It does not reduce the token count, and it does not make the model more accurate. A coding turn may use it only when all four conditions hold:
