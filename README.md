@@ -41,13 +41,13 @@ A tag `v*` starts the self-hosted GitHub Actions pipeline
 Install the CLI only on macOS or Linux:
 
 ```sh
-curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash
+curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash
 ```
 
 Install Let Cook Desktop only on macOS or Linux:
 
 ```sh
-curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash
+curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash
 ```
 
 On Windows, download the CLI and desktop installer separately from

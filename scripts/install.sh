@@ -3,9 +3,9 @@
 # Landing / download host:
 #   curl -fsSL https://download.letcook.dev/install.sh | bash
 # Install only the CLI on macOS/Linux:
-#   curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash
+#   curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash
 # Install only Let Cook Desktop on macOS/Linux:
-#   curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash
+#   curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash
 # Later same-origin from the site:
 #   curl -fsSL https://letcook.dev/install.sh | bash
 set -euo pipefail
@@ -21,8 +21,8 @@ STABLE_URL="${COOK_STABLE_URL:-${INSTALL_ORIGIN}/stable}"
 os="${COOK_INSTALL_UNAME:-$(uname -s)}"
 arch="${COOK_INSTALL_ARCH:-$(uname -m)}"
 dry_run="${COOK_INSTALL_DRY_RUN:-0}"
-skip_desktop="${COOK_INSTALL_CLI_ONLY:-0}"
-skip_cli="${COOK_INSTALL_DESKTOP_ONLY:-0}"
+skip_desktop="${CLI_ONLY:-${COOK_INSTALL_CLI_ONLY:-0}}"
+skip_cli="${DESKTOP_ONLY:-${COOK_INSTALL_DESKTOP_ONLY:-0}}"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "error: python3 is required" >&2

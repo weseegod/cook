@@ -53,37 +53,37 @@
     <main id="main">
       <section class="hero">
         <div class="wrap">
-          <p class="badge">Fast &middot; Open source &middot; written in Rust</p>
-          <h1>A coding agent for your terminal and desktop.</h1>
+          <p class="badge">Fast &middot; Open source &middot; CLI & Desktop</p>
+          <h1>A fast coding agent built to get things done.</h1>
           <p class="lede">
-            Use the Cook CLI in your terminal or <strong>Let Cook</strong> on Windows, macOS, or
-            Ubuntu. Flexible BYOK: use your own API key, or connect through OAuth with Grok,
-            ChatGPT, Claude, and more.
+            Run the Cook CLI in your terminal, or use <strong>Let Cook</strong> on Windows, macOS,
+            or Linux. Bring your own API key, or connect through OAuth with Grok, ChatGPT, Claude,
+            and more.
           </p>
 
           <div class="install-options" data-curl-cta>
-            <p class="install-label">Cook CLI · macOS and Linux</p>
-            <div class="cmd">
-              <code>curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash</code>
+            <div class="cmd install-command">
+              <span class="install-kind">CLI</span>
+              <code>curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash</code>
               <button
                 class="copy-btn"
                 type="button"
                 data-copy
-                data-copy-label="Cook CLI install command"
-                data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash"
+                data-copy-label="CLI install command"
+                data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash"
               >
                 Copy
               </button>
             </div>
-            <p class="install-label">Let Cook desktop · macOS and Linux</p>
-            <div class="cmd">
-              <code>curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash</code>
+            <div class="cmd install-command">
+              <span class="install-kind">Desktop</span>
+              <code>curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash</code>
               <button
                 class="copy-btn"
                 type="button"
                 data-copy
-                data-copy-label="Let Cook desktop install command"
-                data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash"
+                data-copy-label="Desktop install command"
+                data-copy-text="curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash"
               >
                 Copy
               </button>
@@ -100,7 +100,7 @@
 
           <p class="fine">
             Windows users can download the CLI and desktop app below.
-            <a href="#install">See all downloads</a>
+            {" "}<a href="#install">See all downloads</a>
           </p>
         </div>
       </section>

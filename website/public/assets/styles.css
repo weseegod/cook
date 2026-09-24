@@ -210,18 +210,9 @@ h1 {
 /* install commands */
 
 .install-options {
+  display: grid;
+  gap: 10px;
   margin-top: 28px;
-}
-
-.install-label {
-  margin-top: 18px;
-  color: var(--muted);
-  font-size: 0.9rem;
-  font-weight: 620;
-}
-
-.install-label:first-child {
-  margin-top: 0;
 }
 
 .cmd {
@@ -235,6 +226,32 @@ h1 {
   background: var(--code-bg);
 }
 
+.install-command {
+  min-height: 62px;
+  gap: 12px;
+  margin-top: 0;
+  padding: 9px 10px;
+  border-color: #2a3b55;
+  background: linear-gradient(110deg, #101827, #090e18 62%);
+}
+
+.install-kind {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 76px;
+  align-self: stretch;
+  padding: 0 12px;
+  border: 1px solid rgba(249, 115, 22, 0.25);
+  border-radius: 8px;
+  background: rgba(249, 115, 22, 0.1);
+  color: #ffad70;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+}
+
 .cmd code {
   flex: 1;
   min-width: 0;
@@ -243,6 +260,10 @@ h1 {
   font-size: 0.88rem;
   color: #dbe6f6;
   scrollbar-width: none;
+}
+
+.install-command code {
+  font-size: 0.8rem;
 }
 
 .cmd code::-webkit-scrollbar {
@@ -465,23 +486,38 @@ h3 {
     padding: 48px 0;
   }
 
-  .cmd {
+  .cmd:not(.install-command) {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
     padding: 14px;
   }
 
-  .install-label {
-    margin-top: 22px;
+  .install-command {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
   }
 
-  .cmd code {
-    font-size: 0.8rem;
+  .install-kind {
+    min-width: 58px;
+    padding: 0 8px;
+    font-size: 0.72rem;
+  }
+
+  .install-command code {
+    font-size: 0.72rem;
   }
 
   .copy-btn {
     width: 100%;
+  }
+
+  .install-command .copy-btn {
+    width: auto;
+    padding: 7px 10px;
+    font-size: 0.78rem;
   }
 
   .footer-inner {

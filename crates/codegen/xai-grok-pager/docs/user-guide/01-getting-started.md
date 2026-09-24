@@ -15,13 +15,13 @@ connect it to an editor through the Agent Client Protocol (ACP).
 Install the CLI on macOS or Linux:
 
 ```bash
-curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_CLI_ONLY=1 bash
+curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash
 ```
 
 Install only Let Cook Desktop on macOS or Linux:
 
 ```bash
-curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash
+curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash
 ```
 
 On Windows, download the Let Cook installer and Cook CLI separately from the

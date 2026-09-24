@@ -10,7 +10,7 @@ use, see [Getting Started](01-getting-started.md).
 On macOS or Linux, install Let Cook without the CLI by running:
 
 ```bash
-curl -fsSL https://download.letcook.dev/install.sh | COOK_INSTALL_DESKTOP_ONLY=1 bash
+curl -fsSL https://download.letcook.dev/install.sh | DESKTOP_ONLY=1 bash
 ```
 
 The command supports macOS and Linux x86_64. Windows users can download the
