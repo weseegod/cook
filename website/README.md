@@ -18,20 +18,20 @@ npm run preview
 
 Astro writes the static site to `dist/`.
 
-## Cloudflare Pages
+## Cloudflare Workers
 
-Create a Pages project connected to the Cook repository and set:
+The site deploys as a static-asset Worker (`cook`) via Workers Builds connected to this repository:
 
 - **Root directory:** `website`
 - **Build command:** `npm run build`
-- **Build output directory:** `dist`
+- **Deploy command:** `npx wrangler deploy`
 - **Production branch:** `main`
 
-The `wrangler.toml` file records the Pages project name and output directory for deployments made with Wrangler. Attach `letcook.dev` to the Pages project in Cloudflare's domain settings. Keep `download.letcook.dev` pointed at the release bucket; the landing page uses it for the installer and app downloads.
+`wrangler.toml` names the Worker `cook` and serves Astro's `dist/` through `[assets]`. Attach `letcook.dev` as a custom domain on the Worker. Keep `download.letcook.dev` pointed at the release bucket; the landing page uses it for the installer and app downloads.
 
 The site does not need an adapter, server function, or database. Astro builds the home page and every docs route before deployment.
 
-Use Node.js 22.12.0 or newer. `.node-version` pins Node 22.22.1 for local development and Cloudflare Pages builds.
+Use Node.js 22.12.0 or newer. `.node-version` pins Node 22.22.1 for local development and Cloudflare Workers Builds.
 
 ## Docs source
 

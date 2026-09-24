@@ -1,2 +1,5 @@
-name = "cook-website"
-pages_build_output_dir = "./dist"
+name = "cook"
+compatibility_date = "2026-09-24"
+
+[assets]
+directory = "./dist"
