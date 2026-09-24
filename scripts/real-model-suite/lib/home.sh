@@ -3,6 +3,7 @@ set -euo pipefail
 
 write_home_config() {
   local home=$1 permission=$2 cap=$3 window=$4
+  local pruning_extra="${5:-}"
   mkdir -p "$home"
   # Preserve MCP registration across the empty-text 8192 rewrite; agents.mcp_echo
   # re-adds the server before the first invoke only.
@@ -35,6 +36,9 @@ write_home_config() {
     printf '\n[features]\nweb_fetch = true\n'
     # Public fetch case serves 127.0.0.1; SSRF still blocks private/metadata.
     printf '\n[toolset.web_fetch]\nallow_local = true\n'
+    if [[ -n "$pruning_extra" ]]; then
+      printf '\n%s\n' "$pruning_extra"
+    fi
     if [[ -n "$existing_mcp" ]]; then
       printf '\n%s\n' "$existing_mcp"
     fi

@@ -28,6 +28,7 @@ def files_for(case: str, marker: str, file_bytes: int) -> dict[str, str]:
         "session.memory_flush", "session.hooks", "session.streaming_json", "agents.subagent_read",
         "agents.no_subagents_flag", "agents.mcp_echo", "agents.acp_stdio",
         "agents.opencode_read", "tools.unknown_and_sibling",
+        "safeguard.identical_reread", "safeguard.dangerous_rm",
     }
     out: dict[str, str] = {}
     if case in simple_secret:
@@ -56,6 +57,31 @@ def files_for(case: str, marker: str, file_bytes: int) -> dict[str, str]:
             special = f"{marker}-FIRST" if i == 1 else (f"{marker}-LAST" if i == 12 else f"file-{i:02d}")
             body = special + "\n" + filler
             out[f"corpus/{i:02d}.txt"] = body[:file_bytes - 1] + "\n"
+    if case == "safeguard.large_read":
+        lines = []
+        for i in range(1, 1201):
+            if i == 8:
+                lines.append(marker + "-HEAD")
+            elif i == 1100:
+                lines.append(marker + "-TAIL")
+            else:
+                lines.append(f"line-{i:04d}")
+        out["big.txt"] = "\n".join(lines) + "\n"
+    if case == "safeguard.offset_walk":
+        out["pages.txt"] = "".join(f"page-{i:04d}\n" for i in range(1, 401))
+    if case == "safeguard.bash_bound":
+        filler = "x" * 80
+        out["huge.txt"] = (marker + "\n") + (filler + "\n") * 400
+    if case == "safeguard.dangerous_rm":
+        out["victim.txt"] = "do-not-delete\n"
+    if case == "safeguard.pin_failure":
+        filler = "abcdefghij" * ((max(file_bytes, 800) // 10) + 1)
+        for i in range(1, 5):
+            if i == 1:
+                body = f"{marker}-FAILURE\nFAIL_TEST=response_without_usage_preserves_context_and_marks_ledgers_incomplete\n" + filler
+            else:
+                body = f"file-{i:02d}\n" + filler
+            out[f"corpus/{i:02d}.txt"] = body[: max(file_bytes, 800) - 1] + "\n"
     if case == "agents.workflow_validate":
         out["script.rhai"] = 'let meta = #{ name: "suite-validate", description: "validate only" };\nlet answer = "ok";\n'
     if case == "agents.workflow_live":

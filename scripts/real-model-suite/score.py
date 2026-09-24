@@ -80,20 +80,37 @@ def argument_objects(root: Path, tool: str) -> list[dict[str, Any]]:
                 if not isinstance(node, dict):
                     continue
                 fn = node.get("function") if isinstance(node.get("function"), dict) else node
-                name = fn.get("name") or node.get("tool_name") or node.get("toolName")
-                if name != tool:
+                name = (
+                    fn.get("name")
+                    or node.get("tool_name")
+                    or node.get("toolName")
+                    or node.get("title")
+                )
+                if canonical_tool(name) != tool:
                     continue
-                args = fn.get("arguments", node.get("arguments", node.get("input")))
+                args = fn.get(
+                    "arguments",
+                    node.get("arguments", node.get("input", node.get("rawInput"))),
+                )
                 if isinstance(args, str):
-                    try: args = json.loads(args)
-                    except json.JSONDecodeError: continue
-                if isinstance(args, dict): found.append(args)
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        continue
+                if isinstance(args, dict):
+                    found.append(args)
     return found
 
 
 ARG_KEYS = {
-    "read_file": "target_file", "grep": "pattern", "list_dir": "target_directory",
-    "search_replace": "file_path", "run_terminal_cmd": "command", "web_fetch": "url",
+    # read_file advertises `target_file` and accepts the `file_path` / `path` aliases
+    # the local models emit (see ReadFileInput serde aliases).
+    "read_file": ("target_file", "file_path", "path"),
+    "grep": ("pattern",),
+    "list_dir": ("target_directory", "path"),
+    "search_replace": ("file_path", "target_file", "path"),
+    "run_terminal_cmd": ("command",),
+    "web_fetch": ("url",),
 }
 
 TOOL_ALIASES = {
@@ -128,8 +145,9 @@ def check_tool_called(case: dict[str, Any], root: Path) -> None:
         if "<tool_call>" in wire and (not args or any(not x for x in args)):
             raise Failure(f"tool_called: empty {name} arguments with XML envelope")
         key = ARG_KEYS.get(name)
-        if key and args and not any(a.get(key) not in (None, "", []) for a in args):
-            raise Failure(f"tool_called: {name} missing non-empty {key}")
+        keys = key if isinstance(key, (tuple, list)) else ((key,) if key else ())
+        if keys and args and not any(a.get(k) not in (None, "", []) for a in args for k in keys):
+            raise Failure(f"tool_called: {name} missing non-empty {keys[0]}")
 
 
 def check_tool_not_called(case: dict[str, Any], root: Path) -> None:
@@ -363,8 +381,21 @@ def check_todo_record(case: dict[str, Any], root: Path) -> None:
 
 def check_home_memory(case: dict[str, Any], root: Path) -> None:
     memory = root / "home" / "memory"
-    if not memory.exists() or not any(marker(root) in p.read_text(encoding="utf-8", errors="replace") for p in memory.rglob("*") if p.is_file()):
+    if not memory.exists():
         raise Failure("home_memory: marker absent")
+    needle = marker(root).encode()
+    for p in memory.rglob("*"):
+        if not p.is_file():
+            continue
+        data = p.read_bytes()
+        if needle in data:
+            return
+        try:
+            if marker(root) in data.decode("utf-8", errors="replace"):
+                return
+        except Exception:
+            pass
+    raise Failure("home_memory: marker absent")
 
 
 def check_scheduler_clean(case: dict[str, Any], root: Path) -> None:
@@ -489,6 +520,123 @@ def check_acp_result(case: dict[str, Any], root: Path) -> None:
         raise Failure("acp_result: no session/prompt response")
 
 
+def tool_result_texts(root: Path) -> list[tuple[str, str]]:
+    """(tool_name, rendered_result_text) pairs from durable history."""
+    out: list[tuple[str, str]] = []
+    names_by_id: dict[str, str] = {}
+    wanted = {"read_file", "run_terminal_cmd", "bash", "run_terminal_command"}
+    for filename in ("chat_history.jsonl", "updates.jsonl", "events.jsonl"):
+        path = root / filename
+        if not path.exists():
+            continue
+        for record in json_lines(path):
+            if not isinstance(record, dict):
+                continue
+            nodes = [record, *list(walk(record))]
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                cid = node.get("tool_call_id") or node.get("toolCallId") or node.get("id")
+                raw_name = (
+                    node.get("name")
+                    or node.get("tool_name")
+                    or node.get("toolName")
+                    or node.get("title")
+                )
+                name = canonical_tool(raw_name)
+                if name in wanted and cid is not None:
+                    names_by_id[str(cid)] = name
+                text = (
+                    node.get("content")
+                    or node.get("result")
+                    or node.get("output")
+                    or node.get("tool_result")
+                    or ""
+                )
+                if isinstance(text, (dict, list)):
+                    text = json.dumps(text, ensure_ascii=False)
+                if not text or not isinstance(text, str):
+                    continue
+                # Result-shaped nodes: tool_result rows, completed tool_call_update, or a named record carrying content.
+                is_result = (
+                    node.get("type") == "tool_result"
+                    or node.get("sessionUpdate") == "tool_call_update"
+                    or name in wanted
+                )
+                if not is_result:
+                    continue
+                n = name if name in wanted else names_by_id.get(str(cid), "")
+                if n in wanted:
+                    out.append((n, text))
+    return out
+
+
+def check_tool_result_bounded(case: dict[str, Any], root: Path) -> None:
+    cap = int(case.get("max_result_lines", 1000))
+    texts = [t for n, t in tool_result_texts(root) if n == "read_file"]
+    if not texts:
+        raise Failure("measured-nothing")
+    for text in texts:
+        lines = text.splitlines()
+        has_marker = (
+            "showing lines" in text
+            or "rerun with offset=" in text
+            or "exceeds maximum allowed tokens" in text
+        )
+        if len(lines) > cap and not has_marker:
+            raise Failure(f"tool_result_bounded: read_file result has {len(lines)} lines without continuation marker")
+
+
+def check_bash_output_bounded(case: dict[str, Any], root: Path) -> None:
+    texts = [t for n, t in tool_result_texts(root) if n in {"run_terminal_cmd", "bash", "run_terminal_command"}]
+    if not texts:
+        raise Failure("measured-nothing")
+    cap = int(case.get("max_bash_chars", 20_000))
+    for text in texts:
+        if len(text) > cap * 2 and "truncated" not in text.lower() and "full output at" not in text.lower():
+            raise Failure(f"bash_output_bounded: result is {len(text)} chars with no truncation marker")
+
+
+def check_call_count_bounded(case: dict[str, Any], root: Path) -> None:
+    names = [canonical_tool(n) for n in case.get("expect_tools", [])] or ["read_file"]
+    completed = [
+        e for e in tool_events(root, "tool_completed")
+        if e.get("outcome") == "success" and canonical_tool(e.get("tool_name")) in names
+    ]
+    min_success = int(case.get("min_tool_success", 0))
+    if min_success and len(completed) < min_success:
+        raise Failure(f"measured-nothing")
+    max_success = int(case.get("max_tool_success", 0))
+    if max_success and len(completed) > max_success:
+        raise Failure(f"call_count_bounded: {len(completed)} successful {names[0]} calls > {max_success}")
+
+
+def _contains_category(root: Path, category: str) -> bool:
+    needle = category.lower()
+    for name in ("events.jsonl", "updates.jsonl", "stderr.log", "wire.log"):
+        path = root / name
+        if path.exists() and needle in path.read_text(encoding="utf-8", errors="replace").lower():
+            return True
+    meta = result_obj(root).get("cancellationCategory") or result_obj(root).get("_meta")
+    if isinstance(meta, dict):
+        meta = meta.get("cancellationCategory")
+    return isinstance(meta, str) and meta.lower() == needle
+
+
+def check_stop_category(case: dict[str, Any], root: Path) -> None:
+    result = result_obj(root)
+    stop = result.get("stopReason")
+    expect_stop = case.get("expect_stop") or []
+    expect_category = case.get("expect_category")
+    if expect_stop and stop in expect_stop:
+        return
+    if expect_category and _contains_category(root, str(expect_category)):
+        return
+    if expect_stop or expect_category:
+        raise Failure(f"stop_category: stopReason={stop!r} lacks expect_stop/expect_category")
+    raise Failure("stop_category: case missing expect_stop and expect_category")
+
+
 CHECKS = {
     "tool_called": check_tool_called, "tool_not_called": check_tool_not_called,
     "file_unchanged": check_file_unchanged, "file_contains": check_file_contains,
@@ -506,6 +654,10 @@ CHECKS = {
     "subagent_present": check_subagent_present, "subagent_absent": check_subagent_absent,
     "child_budget": check_child_budget, "worktree_edit": check_worktree_edit,
     "acp_result": check_acp_result,
+    "tool_result_bounded": check_tool_result_bounded,
+    "bash_output_bounded": check_bash_output_bounded,
+    "call_count_bounded": check_call_count_bounded,
+    "stop_category": check_stop_category,
 }
 
 
@@ -634,6 +786,42 @@ def self_test() -> None:
             json.dumps({"type": "tool_completed", "tool_name": "read_file", "outcome": "success"}) + "\n"
         )
         assert not score(full, root)[0], "child events without workflow must not pass"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        over = "\n".join(f"line-{i}" for i in range(1, 1201))
+        (root / "chat_history.jsonl").write_text(json.dumps({"type": "user", "content": over}) + "\n")
+        assert not score({"checks": ["tool_result_bounded"]}, root)[0], "over-cap read without marker must fail"
+        marked = "\n".join(f"line-{i}" for i in range(1, 50)) + "\nshowing lines 1-49; rerun with offset=50"
+        (root / "chat_history.jsonl").write_text(json.dumps({"type": "user", "name": "read_file", "content": marked}) + "\n")
+        assert score({"checks": ["tool_result_bounded"]}, root)[0], "continuation marker must pass"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "chat_history.jsonl").write_text(json.dumps({"name": "run_terminal_cmd", "content": "x" * 50_000}) + "\n")
+        assert not score({"checks": ["bash_output_bounded"]}, root)[0], "inline huge bash without truncated marker must fail"
+        (root / "chat_history.jsonl").write_text(json.dumps({
+            "name": "run_terminal_cmd",
+            "content": ("head\n" + "x" * 100 + "\n... [truncated: showing first/last 20 of 50000 - full output at: /tmp/log]\n" + "tail\n"),
+        }) + "\n")
+        assert score({"checks": ["bash_output_bounded"]}, root)[0], "tail + full log path must pass"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "events.jsonl").write_text(
+            "\n".join(json.dumps({"type": "tool_completed", "tool_name": "read_file", "outcome": "success"}) for _ in range(13)) + "\n"
+        )
+        assert not score({"checks": ["call_count_bounded"], "expect_tools": ["read_file"], "max_tool_success": 12}, root)[0]
+        (root / "events.jsonl").write_text(
+            "\n".join(json.dumps({"type": "tool_completed", "tool_name": "read_file", "outcome": "success"}) for _ in range(2)) + "\n"
+        )
+        assert not score({"checks": ["call_count_bounded"], "expect_tools": ["read_file"], "max_tool_success": 12, "min_tool_success": 4}, root)[0], "too few calls is measured-nothing"
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "stdout.json").write_text(json.dumps({"text": "", "stopReason": "end_turn"}))
+        assert not score({"checks": ["stop_category"], "expect_category": "action_stationarity"}, root)[0]
+        (root / "events.jsonl").write_text(json.dumps({"type": "turn_ended", "cancellationCategory": "action_stationarity"}) + "\n")
+        assert score({"checks": ["stop_category"], "expect_category": "action_stationarity"}, root)[0]
+        (root / "events.jsonl").write_text("")
+        (root / "stdout.json").write_text(json.dumps({"text": "ok", "stopReason": "cancelled"}))
+        assert score({"checks": ["stop_category"], "expect_stop": ["cancelled"]}, root)[0]
     print("score.py self-test: pass")
 
 

@@ -4,7 +4,7 @@ This is an implementer spec. It describes a headless test harness that drives th
 
 The suite is the layer above `cargo test`: one debug binary, one real HTTP model, a throwaway git workdir, and pass/fail from the filesystem and the session record. It does not replace unit tests, and it does not drive the TUI or the desktop app.
 
-Default model: launcher `mimo26-9b` from `/home/thanh/models/model.sh`, wire id `mimo26`, config key `local/mimo26`, port 8080. The same runner must accept `bonsai2-27b` (`bonsai2`, `local/bonsai2`) and `spark25-4b` (`spark25`, `local/spark25`) without a code change. One model at a time. They share the port.
+Default model: launcher `spark25-4b` from `/home/thanh/models/model.sh`, wire id `spark25`, config key `local/spark25`, port 8080. The same runner must accept `mimo26-9b` (`mimo26`, `local/mimo26`) and `bonsai2-27b` (`bonsai2`, `local/bonsai2`) without a code change. One model at a time. They share the port. Model cases run with `PARALLEL=4` by default (score lines are flock-appended).
 
 Map of the product the cases line up against: `ARCHITECTURE.md`.
 
@@ -43,7 +43,7 @@ scripts/real-model-suite/prompts/<id>.txt
 
 | Flag | Meaning |
 |---|---|
-| `--phase cli\|tools\|session\|agents\|all` | Default `all`. `cli` never starts the model. |
+| `--phase cli\|tools\|session\|agents\|safeguard\|all` | Default `all`. `cli` never starts the model. `all` includes `safeguard`. |
 | `--case <id>` | One case. Still starts the model when that case has `"needs_model": true`. |
 | `--list` | Print id, phase, needs_model. Do not start anything. |
 | `--keep` | Do not delete `OUT_ROOT` on success. Failures are always kept. |
@@ -54,15 +54,16 @@ Environment, all optional:
 
 | Variable | Default |
 |---|---|
-| `MODEL` | `mimo26-9b` |
-| `WIRE` | `mimo26` (derived from `MODEL` when unset: strip the size suffix) |
+| `MODEL` | `spark25-4b` |
+| `PARALLEL` | `4` |
+| `WIRE` | `spark25` (derived from `MODEL` when unset: strip the size suffix) |
 | `MODEL_KEY` | `local/$WIRE` |
 | `BASE_URL` | `http://127.0.0.1:8080/v1` |
 | `COOK_BIN` | `<repo>/target/debug/xai-grok-pager` |
 | `MODEL_SH` | `/home/thanh/models/model.sh` |
 | `OUT_ROOT` | a new directory from `mktemp -d` |
 | `CONTEXT_WINDOW` | `32768`, except the compaction case |
-| `MAX_COMPLETION_TOKENS` | `2048`, with one retry at `8192` |
+| `MAX_COMPLETION_TOKENS` | `8192` (not a turn cap). Empty-text retry rewrites to `8192` when a lower default was used. |
 
 `README.md` in the suite directory is the short operator note: how to run a phase, how long `all` takes, and the “not covered” table from section 12. This document stays the spec. Do not copy the spec into the README.
 
@@ -90,7 +91,7 @@ model_provider = "local"
 name = "real-suite mimo26"
 input = ["text"]
 context_window = 32768
-max_completion_tokens = 2048
+max_completion_tokens = 8192
 supports_reasoning_effort = false
 supports_batch_api = true
 
@@ -118,7 +119,7 @@ Key lookup, in order, without echoing the value: `$LLAMA_API_KEY`, then `~/.conf
 
 `model.sh start <MODEL>` returns immediately (`nohup`) and stops whatever else is bound to port 8080. Say that on stderr before starting. Poll `GET $BASE_URL/models` with the bearer key, up to 180 times, 2 seconds apart. Ready means HTTP 200 and the JSON `data[].id` contains `WIRE`. A few `connection refused` replies during boot are normal. On any exit, including a signal, `trap` runs `model.sh stop <MODEL>`. Do not start a second model. The `cli` phase does not call `model.sh` at all.
 
-Empty assistant text is a MiMo cap problem, not a product bug by itself. If the top-level JSON `text` is empty and `stopReason` is not a clean `end_turn` with a successful tool, rewrite that case’s home with `max_completion_tokens = 8192` and run the case once more. Record which cap passed in `status.txt`. Do not loop further. A second empty result is a fail.
+Empty assistant text is a completion-cap problem, not a product bug by itself. If the top-level JSON `text` is empty and `stopReason` is not a clean `end_turn` with a successful tool, rewrite that case’s home with `max_completion_tokens = 8192` and run the case once more. Record which cap passed in `status.txt`. Do not loop further. A second empty result is a fail. The suite default is already `8192`; this retry is the floor when someone runs with a lower `MAX_COMPLETION_TOKENS`. Cases with `"no_empty_retry": true` (stationarity / max-turns style) keep the first stop.
 
 ## 4. How one model case is invoked
 
@@ -648,7 +649,7 @@ The local HTTP server for `web_fetch` binds `127.0.0.1` only and serves one dire
 Fix order once the harness itself is in place:
 
 1. Land the harness in one commit. No product change in that commit. `score.py --self-test` passes. `run.sh --phase cli` passes without a llama process.
-2. Start `mimo26-9b`. Run `--phase tools`. Fix the first failure in its `pillar` only. Add a unit test when the bug is a parser (the XML argument case is the example). Do not widen the oracle.
+2. Start the default launcher `spark25-4b` (`MODEL=spark25-4b`, `PARALLEL=4`). Run `--phase tools`. Fix the first failure in its `pillar` only. Add a unit test when the bug is a parser (the XML argument case is the example). Do not widen the oracle.
 3. Re-run `--case <id>`, then the whole phase.
 4. Repeat until `tools` is green, then `session`, then `agents`.
 5. One product bug per commit, subject line short, so the bugfix can be cherry-picked without the harness. The harness commit stays separate. That split matches `UPSTREAM-MERGE.md`: a third-party-model bugfix is in scope; the suite is fork test infrastructure and must not be required to compile the fix.
@@ -656,7 +657,7 @@ Fix order once the harness itself is in place:
 
 `unsupported` and `skip-nondeterministic` are listed at the bottom of `failures.md` under those headings and do not fail the exit code. `fail` and `hung` do. Exit 0 only when no case is `fail` or `hung`.
 
-Wall clock on MiMo, one model, no parallelism: `tools` about 30–50 minutes, `session` about 20 minutes, `agents` about 20–40 minutes. `all` is one GPU hold. `model.sh status` must not show `mimo26-9b` after the script exits, including after a kill, because of the trap.
+Wall clock on MiMo, one model, no parallelism: `tools` about 30–50 minutes, `session` about 20 minutes, `agents` about 20–40 minutes. `all` is one GPU hold. With `PARALLEL=4` the tools/session wall clock drops roughly with the pool. `model.sh status` must not show `spark25-4b` after the script exits, including after a kill, because of the trap.
 
 ## 14. What not to re-decide while implementing
 
@@ -673,7 +674,7 @@ Wall clock on MiMo, one model, no parallelism: `tools` about 30–50 minutes, `s
 
 ## 15. Implementation status and handoff (2026-09-24)
 
-Current phase: **`tools`** on launcher `mimo26-9b`. Harness cleanup from the 2026-09-23/24 chase is in tree; tools is **not** green yet.
+Current phase: **`safeguard` + `session` audited** on launcher `spark25-4b` (`PARALLEL=4`). Historical tools evidence below was `mimo26-9b` and is not green yet on a full spark25 tools score. Core-agent audit report: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
 
 Completed:
 
@@ -684,6 +685,8 @@ Completed:
 - [x] Product discoverability that unblocked earlier tools fails (with unit tests): `write` refuses non-empty overwrite and newline paths; bash requires `is_background` for `sleep` and documents trailing newlines; headless max-turns exits 0 with `stopReason=max_turn_requests`; headless prompt requires workspace-file follow-through and tool-backed durable memory; memory empty-search hints include a `write` example; `lsp_smoke` accepts mimo26 unavailability phrasing.
 - [x] Full tools phase on `mimo26-9b` (evidence `/tmp/real-model-suite-tools-20260924T051322Z`): **19 pass**, **4 fail**, **1 skip-nondeterministic**.
 - [x] `tools.ask_user_headless` scored `ask_user_question=success` on repeated full-phase runs — freeze that expected outcome when editing the case JSON.
+- [x] Safeguard phase (7 cases) and session phase (12 cases) on `spark25-4b` (`/tmp/real-model-safeguard-20260924T083113Z`, `/tmp/real-model-session-20260924T083459Z`): session **12/12**; safeguard **6/7** (`identical_reread` → `max_tokens_truncation`).
+- [x] Saved entrypoints `run-phase.sh` / `run-audit.sh`; suite default `MAX_COMPLETION_TOKENS=8192` so local reasoning models are not aborted mid-thought.
 
 Latest full tools `score.txt` (`mimo26-9b`, 2026-09-24):
 
@@ -695,19 +698,18 @@ Latest full tools `score.txt` (`mimo26-9b`, 2026-09-24):
 
 Remaining for the next implementer:
 
+- [ ] Fix product gap `max_tokens_hard_stop` (audit report) so `safeguard.identical_reread` can observe stationarity; re-run `run-phase.sh safeguard`.
+- [ ] Fix product gaps `large_read_silent_cap` / `file_too_large_no_next_offset` (next-offset continuation on line/token clip).
 - [ ] Clear the four tools fails above without loosening oracles (prefer pillar discoverability + unit tests). Re-run each fail, then a **full** `--phase tools` into a new `OUT_ROOT` until zero `fail`/`hung`.
-- [ ] Once tools is green: `--phase session`, then `--phase agents`, each with its own `OUT_ROOT --keep`.
-- [ ] `--phase all` for `cli.export` / `cli.sessions_after` / `cli.usage`.
+- [ ] Once tools is green: `--phase agents`, then `--phase all` for `cli.export` / `cli.sessions_after` / `cli.usage` (session is already green on spark25).
 - [ ] Operator order checklist: `docs/real-model-suite-run-order.md`.
+- [ ] File any new product gap under `docs/audits/`.
 
-Resume with:
+Resume with the saved entrypoints (defaults already `MODEL=spark25-4b`, `PARALLEL=4`):
 
 ```bash
-export MODEL=mimo26-9b
-cargo build -p xai-grok-pager-bin --bin xai-grok-pager
-python3 scripts/real-model-suite/score.py --self-test
-OUT_ROOT=/tmp/real-model-suite-tools-$(date -u +%Y%m%dT%H%M%SZ)
-MODEL=$MODEL OUT_ROOT="$OUT_ROOT" scripts/real-model-suite/run.sh --phase tools --keep
+scripts/real-model-suite/run-phase.sh tools
+scripts/real-model-suite/run-audit.sh   # safeguard then session
 ```
 
 Do not commit `OUT_ROOT`, wire logs, or suite configs that contain an `api_key`.

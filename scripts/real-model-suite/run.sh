@@ -18,22 +18,25 @@ while (($#)); do
     --list) LIST_ONLY=1; shift ;;
     --keep) KEEP=1; shift ;;
     -h|--help)
-      echo "usage: run.sh [--phase cli|tools|session|agents|all] [--case ID] [--list] [--keep]"
+      echo "usage: run.sh [--phase cli|tools|session|agents|safeguard|all] [--case ID] [--list] [--keep]"
       exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
-case "$PHASE" in cli|tools|session|agents|all) ;; *) echo "invalid phase: $PHASE" >&2; exit 2;; esac
+case "$PHASE" in cli|tools|session|agents|safeguard|all) ;; *) echo "invalid phase: $PHASE" >&2; exit 2;; esac
 
-MODEL=${MODEL:-mimo26-9b}
+MODEL=${MODEL:-spark25-4b}
+PARALLEL=${PARALLEL:-4}
 if [[ -z "${WIRE:-}" ]]; then WIRE=${MODEL%-*}; fi
 MODEL_KEY=${MODEL_KEY:-local/$WIRE}
 BASE_URL=${BASE_URL:-http://127.0.0.1:8080/v1}
 COOK_BIN=${COOK_BIN:-$REPO_ROOT/target/debug/xai-grok-pager}
 MODEL_SH=${MODEL_SH:-/home/thanh/models/model.sh}
 CONTEXT_WINDOW=${CONTEXT_WINDOW:-32768}
-MAX_COMPLETION_TOKENS=${MAX_COMPLETION_TOKENS:-2048}
-export MODEL WIRE MODEL_KEY BASE_URL COOK_BIN MODEL_SH CONTEXT_WINDOW MAX_COMPLETION_TOKENS
+# 2048 is too small for local reasoning models: max_tokens aborts the turn
+# before stationarity / tool budgets can be observed.
+MAX_COMPLETION_TOKENS=${MAX_COMPLETION_TOKENS:-8192}
+export MODEL WIRE MODEL_KEY BASE_URL COOK_BIN MODEL_SH CONTEXT_WINDOW MAX_COMPLETION_TOKENS PARALLEL
 
 mapfile -t ALL_CASE_FILES < <(find "$SUITE_DIR/cases" -maxdepth 1 -name '*.json' -type f | sort)
 if ((${#ALL_CASE_FILES[@]} == 0)); then echo "no cases found" >&2; exit 2; fi
@@ -84,8 +87,25 @@ OUT_ROOT=$(cd "$OUT_ROOT" && pwd)
 export OUT_ROOT
 SCORE_FILE=$OUT_ROOT/score.txt
 FAILURES_FILE=$OUT_ROOT/failures.md
+SCORE_LOCK=$OUT_ROOT/.score.lock
 : >"$SCORE_FILE"
 printf '# Real-model suite failures\n\n' >"$FAILURES_FILE"
+append_score() {
+  local line=$1
+  if command -v flock >/dev/null 2>&1; then
+    flock "$SCORE_LOCK" bash -c 'printf "%s\n" "$1" >>"$2"' _ "$line" "$SCORE_FILE"
+  else
+    printf '%s\n' "$line" >>"$SCORE_FILE"
+  fi
+}
+append_failure() {
+  local chunk=$1
+  if command -v flock >/dev/null 2>&1; then
+    flock "$SCORE_LOCK" bash -c 'printf "%s\n" "$1" >>"$2"' _ "$chunk" "$FAILURES_FILE"
+  else
+    printf '%s\n' "$chunk" >>"$FAILURES_FILE"
+  fi
+}
 REPO_STATUS_BEFORE=$(git -C "$REPO_ROOT" status --porcelain=v1)
 USER_CONFIG="$HOME/.cook/config.toml"
 USER_CONFIG_MTIME_BEFORE=$(stat -c %Y "$USER_CONFIG" 2>/dev/null || echo missing)
@@ -182,12 +202,13 @@ PY
 
 write_failure() {
   local id=$1 file=$2 case_dir=$3 status=$4
-  local pillar; pillar=$(case_field "$file" pillar unknown)
-  {
-    printf '## %s\n\n- Pillar: `%s`\n- Result: `%s`\n' "$id" "$pillar" "$status"
-    printf -- '- Artifacts: `%s`, `%s`, `%s`, `%s`\n\n' "$case_dir/stdout.json" "$case_dir/events.jsonl" "$case_dir/usage.json" "$case_dir/wire.log"
-    if [[ "$status" == *XML* || "$status" == *arguments* ]] && [[ -f "$case_dir/wire.log" ]]; then
-      python3 - "$case_dir/wire.log" <<'PY'
+  local pillar chunk; pillar=$(case_field "$file" pillar unknown)
+  chunk=$(
+    {
+      printf '## %s\n\n- Pillar: `%s`\n- Result: `%s`\n' "$id" "$pillar" "$status"
+      printf -- '- Artifacts: `%s`, `%s`, `%s`, `%s`\n\n' "$case_dir/stdout.json" "$case_dir/events.jsonl" "$case_dir/usage.json" "$case_dir/wire.log"
+      if [[ "$status" == *XML* || "$status" == *arguments* ]] && [[ -f "$case_dir/wire.log" ]]; then
+        python3 - "$case_dir/wire.log" <<'PY'
 import re,sys
 lines=open(sys.argv[1],errors="replace").read().splitlines()
 i=next((i for i,x in enumerate(lines) if "<tool_call>" in x),0)
@@ -197,7 +218,9 @@ for line in lines[max(0,i-20):i+20]:
 print("```")
 PY
     fi
-  } >>"$FAILURES_FILE"
+    }
+  )
+  append_failure "$chunk"
 }
 
 score_case() {
@@ -223,7 +246,7 @@ PY
     [[ "$status" == pass && -n "$outcome" ]] && status="pass ask_user_question=$outcome"
   fi
   printf '%s\n' "$status" >"$case_dir/status.txt"
-  printf '%s %s\n' "$id" "$status" >>"$SCORE_FILE"
+  append_score "$id $status"
   [[ "$status" == fail* || "$status" == hung* ]] && write_failure "$id" "$file" "$case_dir" "$status"
   return "$rc"
 }
@@ -235,7 +258,7 @@ run_cli_case() {
     local dep="$OUT_ROOT/tools/$after"
     if [[ ! -f "$dep/stdout.json" ]]; then
       printf 'unsupported dependency %s not run\n' "$after" >"$case_dir/status.txt"
-      printf '%s unsupported dependency %s not run\n' "$id" "$after" >>"$SCORE_FILE"
+      append_score "$id unsupported dependency $after not run"
       return 0
     fi
     home="$dep/home"; workdir="$dep/workdir"
@@ -282,7 +305,7 @@ run_cli_case() {
     esac
   fi
   printf '%s\n' "$status" >"$case_dir/status.txt"
-  printf '%s %s\n' "$id" "$status" >>"$SCORE_FILE"
+  append_score "$id $status"
   [[ "$status" == fail* || "$status" == hung* ]] && write_failure "$id" "$file" "$case_dir" "$status"
   ((failed==0))
 }
@@ -298,7 +321,18 @@ run_model_case() {
   max_turns=$(case_field "$file" max_turns 6); timeout_secs=$(case_field "$file" timeout_secs 480)
   allow=$(case_field "$file" allow); deny=$(case_field "$file" deny); extra=$(case_field "$file" extra_args)
   template="$SUITE_DIR/$(case_field "$file" prompt)"; marker_file="$workdir/secret.txt"
-  write_home_config "$home" "$permission" "$cap" "$window"
+  local pruning_toml
+  pruning_toml=$(python3 -c '
+import json,sys
+p=json.load(open(sys.argv[1])).get("pruning") or {}
+if not p:
+    print("")
+else:
+    print("[compaction.pruning]")
+    for k,v in p.items():
+        print(f"{k} = {v}")
+' "$file")
+  write_home_config "$home" "$permission" "$cap" "$window" "$pruning_toml"
   if [[ "$id" == session.hooks ]]; then
     # Relative hook commands resolve against the hook JSON's parent ($COOK_HOME/hooks/).
     mkdir -p "$home/hooks/bin"
@@ -361,7 +395,10 @@ run_model_case() {
   # different prompt. session.max_turns is scored from stopReason (no retry).
   # agents.acp_stdio has no plain-text stdout.json contract; agents.workflow_live
   # may put the nonce only in state.json and must not spawn a second parent.
-  if [[ "$id" != session.max_turns && "$id" != agents.acp_stdio && "$id" != agents.workflow_live ]]; then
+  # Cases with "no_empty_retry" (stationarity / max-turns style) keep the first stop.
+  local no_empty_retry
+  no_empty_retry=$(case_field "$file" no_empty_retry false)
+  if [[ "$id" != session.max_turns && "$id" != agents.acp_stdio && "$id" != agents.workflow_live && "$no_empty_retry" != true ]]; then
     text=$(result_value "$case_dir/stdout.json" text); stop=$(result_value "$case_dir/stdout.json" stopReason)
     if [[ -z "$text" && "$stop" != end_turn ]]; then
       # Drop the failed first session before the 8192 retry. Leaving it makes
@@ -379,23 +416,23 @@ run_model_case() {
         find "$cwd_root" -mindepth 1 -maxdepth 1 -type d -exec rm -rf {} +
       fi
       # Resume/fork retries need the existing session; leave cwd_root alone.
-      write_home_config "$home" "$permission" 8192 "$window"
+      write_home_config "$home" "$permission" 8192 "$window" "$pruning_toml"
       invoke_cook "$case_dir" "$home" "$workdir" "$prompt" "$timeout_secs" "$permission" "$allow" "$deny" "$extra"
       sid=$(result_value "$case_dir/stdout.json" sessionId); copy_session "$home" "$workdir" "$case_dir" "$sid" || true
       printf 'cap=8192\n' >"$case_dir/cap.txt"
     else printf 'cap=%s\n' "$cap" >"$case_dir/cap.txt"; fi
   else printf 'cap=%s\n' "$cap" >"$case_dir/cap.txt"; fi
   if [[ "$(<"$case_dir/exit-code.txt")" == 124 || "$(<"$case_dir/exit-code.txt")" == 137 ]]; then
-    printf 'hung timeout\n' >"$case_dir/status.txt"; printf '%s hung timeout\n' "$id" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" 'hung timeout'; return 1
+    printf 'hung timeout\n' >"$case_dir/status.txt"; append_score "$id hung timeout"; write_failure "$id" "$file" "$case_dir" 'hung timeout'; return 1
   fi
   if [[ ! -f "$case_dir/summary.json" ]]; then
-    printf 'fail no-session\n' >"$case_dir/status.txt"; printf '%s fail no-session\n' "$id" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" 'fail no-session'; return 1
+    printf 'fail no-session\n' >"$case_dir/status.txt"; append_score "$id fail no-session"; write_failure "$id" "$file" "$case_dir" 'fail no-session'; return 1
   fi
   # Headless returns an error after it has already recorded the max-turns stop.
   # Spec: every other nonzero exit is fail (timeout already scored as hung above).
   if [[ "$(<"$case_dir/exit-code.txt")" != 0 && "$id" != session.max_turns ]]; then
     rc=$(<"$case_dir/exit-code.txt")
-    printf 'fail exit %s\n' "$rc" >"$case_dir/status.txt"; printf '%s fail exit %s\n' "$id" "$rc" >>"$SCORE_FILE"; write_failure "$id" "$file" "$case_dir" "fail exit $rc"; return 1
+    printf 'fail exit %s\n' "$rc" >"$case_dir/status.txt"; append_score "$id fail exit $rc"; write_failure "$id" "$file" "$case_dir" "fail exit $rc"; return 1
   fi
   score_case "$file" "$case_dir" "$id"
 }
@@ -424,23 +461,66 @@ PY
 }
 
 overall=0
-for file in "${CASE_FILES[@]}"; do
+running=0
+run_one_case() {
+  local file=$1
+  local id phase case_dir home workdir rc
   id=$(case_field "$file" id); phase=$(case_field "$file" phase)
   case_dir="$OUT_ROOT/$phase/$id"; home="$case_dir/home"; workdir="$case_dir/workdir"
   mkdir -p "$case_dir"
   echo "[$phase] $id" >&2
+  rc=0
   if [[ "$phase" == cli ]]; then
-    run_cli_case "$file" "$id" "$case_dir" "$home" "$workdir" || overall=1
+    run_cli_case "$file" "$id" "$case_dir" "$home" "$workdir" || rc=1
   else
-    run_model_case "$file" "$id" "$phase" "$case_dir" "$home" "$workdir" || overall=1
+    run_model_case "$file" "$id" "$phase" "$case_dir" "$home" "$workdir" || rc=1
+  fi
+  return "$rc"
+}
+for file in "${CASE_FILES[@]}"; do
+  id=$(case_field "$file" id); phase=$(case_field "$file" phase)
+  case_dir="$OUT_ROOT/$phase/$id"
+  if [[ "$phase" == cli || "$PARALLEL" -le 1 ]]; then
+    run_one_case "$file" || overall=1
+  else
+    mkdir -p "$case_dir"
+    run_one_case "$file" >"$case_dir/runner.log" 2>&1 &
+    # ((running++)) is 0 when running was 0 and trips set -e.
+    ((++running))
+    if (( running >= PARALLEL )); then
+      wait -n || true
+      ((running--)) || true
+    fi
   fi
 done
+while (( running > 0 )); do
+  wait -n || true
+  ((running--)) || true
+done
+if (( PARALLEL > 1 )); then
+  for file in "${CASE_FILES[@]}"; do
+    id=$(case_field "$file" id); phase=$(case_field "$file" phase)
+    [[ "$phase" == cli ]] && continue
+    case_dir="$OUT_ROOT/$phase/$id"
+    status=$(cat "$case_dir/status.txt" 2>/dev/null || echo "fail no-status")
+    [[ "$status" == fail* || "$status" == hung* ]] && overall=1
+    if [[ ! -f "$case_dir/status.txt" ]]; then
+      append_score "$id fail no-status"
+      write_failure "$id" "$file" "$case_dir" "fail no-status"
+      overall=1
+    fi
+  done
+fi
 
 REPO_STATUS_AFTER=$(git -C "$REPO_ROOT" status --porcelain=v1)
 USER_CONFIG_MTIME_AFTER=$(stat -c %Y "$USER_CONFIG" 2>/dev/null || echo missing)
 if [[ "$REPO_STATUS_BEFORE" != "$REPO_STATUS_AFTER" || "$USER_CONFIG_MTIME_BEFORE" != "$USER_CONFIG_MTIME_AFTER" ]]; then
-  printf 'runner.isolated fail repository or user config changed\n' >>"$SCORE_FILE"
-  printf '## runner.isolated\n\n- Result: repository status or ~/.cook/config.toml mtime changed.\n\n' >>"$FAILURES_FILE"
+  append_score "runner.isolated fail repository or user config changed"
+  append_failure "## runner.isolated
+
+- Result: repository status or ~/.cook/config.toml mtime changed.
+
+"
   overall=1
 fi
 

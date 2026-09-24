@@ -1,0 +1,33 @@
+{
+  "id": "safeguard.identical_reread",
+  "phase": "safeguard",
+  "pillar": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs",
+  "needs_model": true,
+  "max_turns": 20,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "no_empty_retry": true,
+  "prompt": "prompts/safeguard.identical_reread.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [
+    "search_replace"
+  ],
+  "min_tool_success": 4,
+  "max_tool_success": 12,
+  "expect_category": "action_stationarity",
+  "checks": [
+    "tool_called",
+    "call_count_bounded",
+    "file_unchanged",
+    "stop_category",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

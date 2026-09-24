@@ -1,0 +1,28 @@
+{
+  "id": "safeguard.bash_bound",
+  "phase": "safeguard",
+  "pillar": "crates/codegen/xai-grok-tools/src/implementations/grok_build/bash",
+  "needs_model": true,
+  "max_turns": 6,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Bash(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "prompt": "prompts/safeguard.bash_bound.txt",
+  "expect_tools": [
+    "run_terminal_cmd"
+  ],
+  "forbid_tools": [
+    "read_file"
+  ],
+  "checks": [
+    "tool_called",
+    "bash_output_bounded",
+    "file_unchanged",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

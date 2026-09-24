@@ -1,0 +1,5 @@
+Calibration for pinned evidence.
+
+1. Read `{{WORKDIR}}/corpus/01.txt` first. Note the exact FAIL_TEST line and the special failure marker line.
+2. Then read `{{WORKDIR}}/corpus/02.txt`, `{{WORKDIR}}/corpus/03.txt`, and `{{WORKDIR}}/corpus/04.txt` so those newer reads fill the recent window.
+3. Finish by quoting both lines from file 01 exactly as they appear. Do not claim the run is clean. Do not edit any file.

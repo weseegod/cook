@@ -9,7 +9,7 @@ scripts/real-model-suite/run.sh --phase tools --keep
 scripts/real-model-suite/run.sh --case tools.read_file --keep
 ```
 
-Run `run.sh --list` to see the case ids. `MODEL=bonsai2-27b` and `MODEL=spark25-4b` select the other supported launchers; the wire id and config key are derived automatically. The default `all` run takes roughly 70–110 minutes on MiMo and holds one model for the run. Failure artifacts and `failures.md` are retained under the printed output root. See [`../../docs/real-model-feature-suite.md`](../../docs/real-model-feature-suite.md) for the full contract.
+Run `run.sh --list` to see the case ids. Defaults are `MODEL=spark25-4b`, `PARALLEL=4`, and `MAX_COMPLETION_TOKENS=8192` (completion budget, not `max_turns`). `MODEL=mimo26-9b` and `MODEL=bonsai2-27b` select the other supported launchers; the wire id and config key are derived automatically. Saved entrypoints: `scripts/real-model-suite/run-phase.sh <phase>` (score self-test + optional build + one phase into a fresh `OUT_ROOT`) and `scripts/real-model-suite/run-audit.sh` (safeguard then session). Failure artifacts and `failures.md` are retained under the printed output root. See [`../../docs/real-model-feature-suite.md`](../../docs/real-model-feature-suite.md) for the full contract and [`../../docs/real-model-suite-run-order.md`](../../docs/real-model-suite-run-order.md) for the full real-test order.
 
 ## Artifact shape
 

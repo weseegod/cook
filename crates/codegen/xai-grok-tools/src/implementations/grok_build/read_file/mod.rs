@@ -1622,6 +1622,54 @@ mod tests {
             other => panic!("Expected FileTooLarge, got {:?}", other),
         }
     }
+    /// Characterization: the whole-file token refusal names offset/limit keys but
+    /// does not compute a concrete next offset or a shown-range continuation marker.
+    #[tokio::test]
+    async fn token_limit_error_without_range_does_not_name_next_offset() {
+        let tmp = TempDir::new().unwrap();
+        let line = "x".repeat(200);
+        let big_content = std::iter::repeat_n(line.as_str(), 1100)
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(tmp.path().join("big.txt"), &big_content).unwrap();
+        let tool = ReadFileTool;
+        let mut resources = test_resources(tmp.path());
+        resources.insert(TemplateRenderer::new(
+            [(ToolKind::Search, "Grep".to_string())].into(),
+            Default::default(),
+        ));
+        let input = ReadFileInput {
+            path: "big.txt".to_string(),
+            offset: None,
+            limit: None,
+            pages: None,
+            format: None,
+        };
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            ReadFileOutput::FileTooLarge(msg) => {
+                assert!(msg.contains("exceeds maximum allowed tokens"));
+                assert!(
+                    msg.contains("offset"),
+                    "refusal should name the offset key: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("showing lines"),
+                    "whole-file refusal must not invent a shown range: {}",
+                    msg
+                );
+                assert!(
+                    !msg.contains("rerun with offset="),
+                    "whole-file refusal must not compute a next offset: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected FileTooLarge, got {:?}", other),
+        }
+    }
     #[tokio::test]
     async fn token_limit_error_when_range_specified_gives_better_message() {
         let tmp = TempDir::new().unwrap();

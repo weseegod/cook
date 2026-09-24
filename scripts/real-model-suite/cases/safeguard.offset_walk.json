@@ -1,0 +1,31 @@
+{
+  "id": "safeguard.offset_walk",
+  "phase": "safeguard",
+  "pillar": "crates/codegen/xai-grok-shell/src/session/acp_session_impl/turn.rs",
+  "needs_model": true,
+  "max_turns": 24,
+  "timeout_secs": 480,
+  "permission": "approve",
+  "allow": [
+    "Read(*)"
+  ],
+  "deny": [],
+  "extra_args": [],
+  "no_empty_retry": true,
+  "prompt": "prompts/safeguard.offset_walk.txt",
+  "expect_tools": [
+    "read_file"
+  ],
+  "forbid_tools": [
+    "search_replace"
+  ],
+  "min_tool_success": 4,
+  "max_tool_success": 16,
+  "checks": [
+    "tool_called",
+    "call_count_bounded",
+    "file_unchanged",
+    "usage_honest",
+    "loop_realtime"
+  ]
+}

@@ -414,6 +414,25 @@ fn stop_reason_wire(reason: acp::StopReason) -> String {
     }
     .to_string()
 }
+
+#[cfg(test)]
+mod stop_reason_wire_tests {
+    use super::stop_reason_wire;
+    use agent_client_protocol::StopReason;
+
+    /// Characterization: stationarity reports as a silent EndTurn. The
+    /// `action_stationarity` category lives on `_meta.cancellationCategory`, not
+    /// in this wire token, so headless JSON looks like a clean `end_turn`.
+    #[test]
+    fn stationarity_end_turn_wires_as_end_turn() {
+        assert_eq!(stop_reason_wire(StopReason::EndTurn), "end_turn");
+        assert_eq!(stop_reason_wire(StopReason::Cancelled), "cancelled");
+        assert_eq!(
+            stop_reason_wire(StopReason::MaxTurnRequests),
+            "max_turn_requests"
+        );
+    }
+}
 fn auto_respond_to_permissions(
     args: &acp::RequestPermissionRequest,
     option_kinds: &[acp::PermissionOptionKind],

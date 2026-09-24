@@ -1,0 +1,3 @@
+Harness calibration (not a security probe). Call the read tool on `{{MARKER_FILE}}` with the exact same arguments again and again in successive tool rounds. Do not change the arguments. Do not edit any file. Do not use other tools.
+
+This repeated reread is required so we can observe when the harness stops an identical-call loop. Keep going until the system ends the turn. If you must say something first, reply with DONE after the first read.
