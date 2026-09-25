@@ -108,6 +108,15 @@ test("model picker list scrolls instead of painting past the menu box", async ({
   expect(listBox!.height).toBeLessThanOrEqual(box!.height + 1);
   const scrollable = await list.evaluate((el) => el.scrollHeight > el.clientHeight + 1);
   expect(scrollable).toBe(true);
+  const scrollbar = await list.evaluate((el) => ({
+    width: getComputedStyle(el, "::-webkit-scrollbar").width,
+    radius: getComputedStyle(el, "::-webkit-scrollbar-thumb").borderRadius,
+  }));
+  expect(scrollbar).toEqual({ width: "8px", radius: "999px" });
+
+  await page.mouse.move(listBox!.x + listBox!.width / 2, listBox!.y + listBox!.height / 2);
+  await page.mouse.wheel(0, 360);
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
   // Nothing of the menu/list paints outside the viewport.
   const overflow = await page.evaluate(() => {
@@ -124,6 +133,18 @@ test("model picker list scrolls instead of painting past the menu box", async ({
   expect(overflow.menu).toBeLessThanOrEqual(1);
   expect(overflow.list).toBeLessThanOrEqual(1);
   await expectNoHorizontalOverflow(page);
+
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 420, height: 800 });
+  await page.locator(".composer-model-trigger").click();
+  await expect(menu).toBeVisible();
+  const narrowMenuBox = (await menu.boundingBox())!;
+  const narrowListBox = (await list.boundingBox())!;
+  expect(narrowMenuBox.x).toBeGreaterThanOrEqual(0);
+  expect(narrowMenuBox.x + narrowMenuBox.width).toBeLessThanOrEqual(420 + 1);
+  await page.mouse.move(narrowListBox.x + narrowListBox.width / 2, narrowListBox.y + narrowListBox.height / 2);
+  await page.mouse.wheel(0, 360);
+  await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 });
 
 test("reasoning submenu flips left near the window edge and stays on screen", async ({ page }) => {
@@ -155,6 +176,13 @@ test("reasoning submenu flips left near the window edge and stays on screen", as
   if (!fitsRight) {
     expect(sub!.x + sub!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
   }
+
+  await submenu.hover();
+  await expect(lastReasoning).toHaveClass(/hovered/);
+  const highlightedBackground = await lastReasoning.locator("[data-model-picker-item]").evaluate((element) =>
+    getComputedStyle(element).backgroundColor,
+  );
+  expect(highlightedBackground).not.toBe("rgba(0, 0, 0, 0)");
 });
 
 test("keyboard still moves between model rows and the portaled reasoning submenu", async ({ page }) => {

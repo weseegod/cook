@@ -1,0 +1,176 @@
+/* Design tokens: the only place theme colors are declared.
+   Dark is the default; light swaps values under [data-theme="light"].
+   Component rules must reference var(--…) only.
+   Contrast floors and token roles: docs/let-cook-color-contrast.md.
+   Hex exceptions in components: brand logo plates, macOS toggle chrome. */
+
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  color: var(--text);
+  background: var(--bg);
+
+  /* Surfaces */
+  --bg: #1f1f1f;
+  --panel: #181818;
+  --panel-elevated: #252526;
+  --panel-subtle: #242424;
+  --raised: #303030;
+  --raised-2: #3a3a3a;
+
+  /* Text */
+  --text: #eeeeee;
+  --text-soft: #d0d0d0;
+  --muted: #a6a6a6;
+
+  /* Lines */
+  --border: #3b3b3b;
+  --border-strong: #595959;
+  --control-border: #747474;
+  --focus-border: #007fd4;
+  --input-placeholder: #a6a6a6;
+  --scrollbar-thumb: #626262;
+
+  /* Accent */
+  --accent: #0078d4;
+  --accent-strong: #1084d8;
+  --accent-text: #75beff;
+  --accent-soft: #04395e;
+  --on-accent: #ffffff;
+
+  /* Status */
+  --success: #89d185;
+  --danger: #f48771;
+  --danger-light: #f48771;
+  --danger-button-fg: #f48771;
+  --warning: #cca700;
+
+  /* Code / terminal surfaces (stay dark in both themes — syntax themes are dark) */
+  --code-bg: #181818;
+  --code-text: #cccccc;
+  --code-inline-bg: #2d2d2d;
+  --code-inline-text: inherit;
+  --diff-add-bg: #173624;
+  --diff-add-text: #9bdeb3;
+  --diff-remove-bg: #3c1c22;
+  --diff-remove-text: #f1a6ac;
+
+  /* Overlay scrims */
+  --overlay-scrim: #0000008c;
+  --overlay-scrim-blur: #000000b5;
+
+  /* Semantic soft fills (tints that follow the theme) */
+  --danger-soft: #30211f;
+  --danger-soft-text: #d8aaa2;
+  --danger-soft-strong: #e1c1bb;
+  --warning-soft: #2a2115;
+  --warning-soft-text: #edca87;
+  --success-soft: #14251d;
+  --success-soft-text: #9fe0ba;
+  --accent-plate: #14395a;
+  --plan-accent: #d7a0d2;
+  --plan-accent-soft: #33203447;
+  --modal-icon-fg: #aeb8ff;
+  --modal-icon-bg: #272e55;
+  --modal-icon-warn-bg: #3a2d19;
+  --modal-icon-safe-bg: #173326;
+
+  /* Settings workspace (slightly distinct from the chat chrome) */
+  --settings-surface: #1e1e1e;
+  --settings-text: #f1f1f1;
+  --settings-soft: #d7d7d7;
+  --settings-muted: #b4b4b4;
+  --settings-border: #484848;
+  --settings-input-bg: #2b2b2b;
+  --settings-card-bg: #292929;
+  --settings-tab-active: #30343a;
+  --settings-tab-active-border: #42749b;
+  --settings-icon-bg: #2b2b2b;
+  --settings-icon-active-bg: #063b61;
+  --settings-section-head: #333;
+
+  /* Geometry / type */
+  --control-height: 34px;
+  --content-max: 860px;
+  --shadow: 0 8px 24px #0008;
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #ffffff;
+  --panel: #f3f3f3;
+  --panel-elevated: #ffffff;
+  --panel-subtle: #f5f5f5;
+  --raised: #e8e8e8;
+  --raised-2: #dcdcdc;
+
+  --text: #242424;
+  --text-soft: #444444;
+  --muted: #5f5f5f;
+
+  --border: #c9c9c9;
+  --border-strong: #9e9e9e;
+  --control-border: #767676;
+  --focus-border: #006fbe;
+  --input-placeholder: #5f5f5f;
+  --scrollbar-thumb: #a0a0a0;
+
+  --accent: #0078d4;
+  --accent-strong: #006cbe;
+  --accent-text: #005a9e;
+  --accent-soft: #d7ebf7;
+  --on-accent: #ffffff;
+
+  --success: #388a34;
+  --danger: #c72e0f;
+  --danger-light: #cd3131;
+  --danger-button-fg: #9e2638;
+  --warning: #8a6500;
+
+  /* Code keeps a dark plate so github-dark tokens stay readable; inline code flips light. */
+  --code-bg: #1f1f1f;
+  --code-text: #cccccc;
+  --code-inline-bg: #eeeeee;
+  --code-inline-text: inherit;
+  --diff-add-bg: #e6ffed;
+  --diff-add-text: #116329;
+  --diff-remove-bg: #ffebe9;
+  --diff-remove-text: #82071e;
+
+  --overlay-scrim: #27344a66;
+  --overlay-scrim-blur: #27344a66;
+
+  --danger-soft: #fff4f1;
+  --danger-soft-text: #a04d3d;
+  --danger-soft-strong: #7f2a18;
+  --warning-soft: #fff8e7;
+  --warning-soft-text: #895c09;
+  --success-soft: #e5f7ee;
+  --success-soft-text: #1e6b45;
+  --accent-plate: #e5f1fb;
+  --plan-accent: #4552af;
+  --plan-accent-soft: #ecefff;
+  --modal-icon-fg: var(--accent);
+  --modal-icon-bg: var(--accent-soft);
+  --modal-icon-warn-bg: #fff6df;
+  --modal-icon-safe-bg: #e5f7ee;
+
+  --settings-surface: #f8f8f8;
+  --settings-text: #202020;
+  --settings-soft: #343434;
+  --settings-muted: #5b5b5b;
+  --settings-border: #b8b8b8;
+  --settings-input-bg: #ffffff;
+  --settings-card-bg: #ffffff;
+  --settings-tab-active: #e1ebf1;
+  --settings-tab-active-border: #7daecc;
+  --settings-icon-bg: #e8e8e8;
+  --settings-icon-active-bg: #d7ebf7;
+  --settings-section-head: #ededed;
+
+  --shadow: 0 18px 55px #25324a1c;
+}

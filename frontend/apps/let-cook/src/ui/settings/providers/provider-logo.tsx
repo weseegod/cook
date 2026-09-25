@@ -14,6 +14,9 @@ const PROVIDER_LOGO_IDS = new Set([
   "deepseek",
   "openrouter",
   "xiaomi",
+  "zai",
+  "google",
+  "moonshot",
 ]);
 
 /** Display class used by tests and the theme when it differs from the provider id. */
@@ -22,9 +25,14 @@ const PROVIDER_LOGO_CLASS: Record<string, string> = {
   xai: "grok",
 };
 
+/** Filename overrides when the brand file is not named after the provider id. */
+const PROVIDER_LOGO_FILE: Record<string, string> = {
+  moonshot: "kimi",
+};
+
 export function providerLogoSrc(id: string): string | null {
   if (!PROVIDER_LOGO_IDS.has(id)) return null;
-  return `/providers/${id}.svg`;
+  return `/providers/${PROVIDER_LOGO_FILE[id] ?? id}.svg`;
 }
 
 export function ProviderLogo({ id, size = 22, label }: { id: string; size?: number; label?: string }) {

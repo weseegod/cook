@@ -1,0 +1,8 @@
+/* components.css — ordered imports (cascade = import order). */
+@import "./base.css";
+@import "./shell.css";
+@import "./chat.css";
+@import "./composer.css";
+@import "./overlays.css";
+@import "./settings.css";
+@import "./utility.css";

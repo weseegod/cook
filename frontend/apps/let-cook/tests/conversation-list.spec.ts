@@ -25,6 +25,48 @@ test.describe("conversation list", () => {
     return page.locator(".session-row .session-open strong").allTextContents();
   }
 
+  test("sidebar session list scrolls with a slim rounded scrollbar", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const seed = {
+      ...CONNECTED_SEED,
+      sessions: Array.from({ length: 48 }, (_, index) => ({
+        id: `scroll-${index}`,
+        title: `Conversation ${String(index + 1).padStart(2, "0")}`,
+        cwd: "/Users/demo/projects/cook-demo",
+        updatedAt: new Date(Date.UTC(2026, 8, 25, 0, index)).toISOString(),
+      })),
+    };
+    await openWorkspace(page, seed);
+
+    const list = page.locator(".session-list");
+    const box = (await list.boundingBox())!;
+    await expect.poll(() => list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    const scrollbar = await list.evaluate((el) => ({
+      width: getComputedStyle(el, "::-webkit-scrollbar").width,
+      radius: getComputedStyle(el, "::-webkit-scrollbar-thumb").borderRadius,
+    }));
+    expect(scrollbar).toEqual({ width: "8px", radius: "999px" });
+    const themeThumbs = await list.evaluate((el) => {
+      const root = document.documentElement;
+      root.dataset.theme = "dark";
+      const dark = getComputedStyle(el, "::-webkit-scrollbar-thumb").backgroundColor;
+      root.dataset.theme = "light";
+      const light = getComputedStyle(el, "::-webkit-scrollbar-thumb").backgroundColor;
+      root.dataset.theme = "dark";
+      return { dark, light };
+    });
+    expect(themeThumbs.dark).toMatch(/(?:,|\/)\s*0\.18\)$/);
+    expect(themeThumbs.light).not.toBe(themeThumbs.dark);
+
+    const idleScrollbarColor = await list.evaluate((el) => getComputedStyle(el).scrollbarColor);
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await expect.poll(() => list.evaluate((el) => getComputedStyle(el).scrollbarColor)).toBe(idleScrollbarColor);
+    await page.mouse.wheel(0, 420);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+    await page.mouse.wheel(0, -420);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(0);
+  });
+
   async function openRowMenu(page: Page, id: string) {
     const row = page.getByTestId(`session-row-${id}`);
     await row.hover();

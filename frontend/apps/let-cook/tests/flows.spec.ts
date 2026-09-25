@@ -288,6 +288,9 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(page.getByTestId("provider-row-deepseek").locator(".provider-logo-deepseek")).toBeVisible();
     await expect(page.getByTestId("provider-row-openrouter").locator(".provider-logo-openrouter")).toBeVisible();
     await expect(page.getByTestId("provider-row-xiaomi").locator(".provider-logo-xiaomi")).toBeVisible();
+    await expect(page.getByTestId("provider-row-zai").locator(".provider-logo-zai")).toBeVisible();
+    await expect(page.getByTestId("provider-row-google").locator(".provider-logo-google")).toBeVisible();
+    await expect(page.getByTestId("provider-row-moonshot").locator(".provider-logo-moonshot")).toBeVisible();
     await page.getByTestId("provider-add").click();
     const dialog = page.getByRole("dialog", { name: "Add provider" });
     await expect(dialog).toBeVisible();
@@ -297,6 +300,9 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(dialog.getByTestId("preset-deepseek").locator(".provider-logo-deepseek")).toBeVisible();
     await expect(dialog.getByTestId("preset-openrouter").locator(".provider-logo-openrouter")).toBeVisible();
     await expect(dialog.getByTestId("preset-xiaomi").locator(".provider-logo-xiaomi")).toBeVisible();
+    await expect(dialog.getByTestId("preset-zai").locator(".provider-logo-zai")).toBeVisible();
+    await expect(dialog.getByTestId("preset-google").locator(".provider-logo-google")).toBeVisible();
+    await expect(dialog.getByTestId("preset-moonshot").locator(".provider-logo-moonshot")).toBeVisible();
     await expect(dialog.getByTestId("preset-xiaomi")).toBeVisible();
     await expect(dialog.getByTestId("preset-xiaomi")).toContainText("Xiaomi MiMo");
     await expect(dialog.getByText("Choose a provider")).toHaveCount(0);
