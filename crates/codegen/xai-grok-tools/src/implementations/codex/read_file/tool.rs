@@ -27,6 +27,7 @@ const DESCRIPTION: &str = "Reads a local file with 1-indexed line numbers, suppo
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct CodexReadFileInput {
     /// Absolute path to the file
+    #[serde(alias = "target_file")]
     pub file_path: String,
 
     /// The line number to start reading from. Must be 1 or greater.
@@ -277,6 +278,29 @@ mod tests {
     use crate::types::tool_metadata::test_ctx;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    #[test]
+    fn read_file_accepts_target_file_alias_without_changing_schema() {
+        for key in ["file_path", "target_file"] {
+            let input: CodexReadFileInput = serde_json::from_value(serde_json::json!({
+                (key): "/tmp/main.rs", "offset": 2, "limit": 80
+            }))
+            .unwrap();
+            assert_eq!(input.file_path, "/tmp/main.rs");
+            assert_eq!(input.offset, 2);
+            assert_eq!(input.limit, 80);
+            let serialized = serde_json::to_value(input).unwrap();
+            assert_eq!(serialized["file_path"], "/tmp/main.rs");
+            assert!(serialized.get("target_file").is_none());
+        }
+        let schema = crate::registry::types::generate_schema::<CodexReadFileInput>();
+        assert!(schema["properties"].get("file_path").is_some());
+        assert!(schema["properties"].get("target_file").is_none());
+        assert!(serde_json::from_value::<CodexReadFileInput>(serde_json::json!({
+            "file_path": "a.rs", "target_file": "b.rs"
+        }))
+        .is_err());
+    }
 
     /// Set up Resources with real filesystem for tests.
     fn test_resources(cwd: &std::path::Path) -> Resources {

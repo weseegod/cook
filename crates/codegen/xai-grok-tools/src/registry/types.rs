@@ -644,6 +644,7 @@ impl ToolRegistryBuilder {
                 grok_build::search_replace::SearchReplaceParams,
             >();
         b.register_with_params::<grok_build::ListDirTool, grok_build::list_dir::ListDirParams>();
+        b.register::<grok_build::GlobTool>();
         b.register_with_params::<grok_build::GrepTool, grok_build::grep::GrepParams>();
         b.register::<grok_build::KillTaskTool>();
         b.register::<grok_build::KillTerminalCommandTool>();
@@ -4839,6 +4840,45 @@ mod tests {
             "output should contain test file, got: {}",
             result.prompt_text
         );
+    }
+
+    #[tokio::test]
+    async fn hub_dispatch_glob() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join("src/nested")).unwrap();
+        std::fs::write(tmp.path().join("src/nested/example.rs"), "").unwrap();
+        let config = ToolServerConfig {
+            tools: vec![ToolConfig::for_tool::<grok_build::GlobTool>()],
+            behavior_preset: None,
+        };
+        let bridge = crate::bridge::ToolBridge::finalize_builder(
+            ToolRegistryBuilder::new(),
+            config,
+            test_session_context(&tmp),
+        )
+        .await
+        .expect("finalize");
+        let result = bridge
+            .call(
+                "glob",
+                serde_json::json!({ "pattern": "**/*.rs" }),
+                "glob-call",
+            )
+            .await
+            .expect("glob call");
+        assert!(result.prompt_text.contains("src/nested/example.rs"));
+        let result = bridge
+            .call(
+                "glob",
+                serde_json::json!({
+                    "pattern": "**/*.rs",
+                    "path": tmp.path().join("src")
+                }),
+                "glob-absolute-path-call",
+            )
+            .await
+            .expect("glob call with absolute path");
+        assert!(result.prompt_text.contains("src/nested/example.rs"));
     }
     /// Parity: list_dir through hub dispatch produces the same prompt_text
     /// as the legacy path (FinalizedToolset::call).

@@ -145,7 +145,7 @@ fn schema_default_offset() -> Option<i64> {
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadFileInput {
-    #[serde(rename = "target_file")]
+    #[serde(rename = "target_file", alias = "file_path")]
     #[schemars(
         description = "The path of the file to read. You can use either a relative path in the workspace or an absolute path. If an absolute path is provided, it will be preserved as is."
     )]
@@ -901,6 +901,28 @@ mod tests {
     use crate::types::tool_metadata::test_ctx;
     use std::sync::Arc;
     use tempfile::TempDir;
+    #[test]
+    fn read_file_accepts_path_alias_without_changing_schema() {
+        for key in ["target_file", "file_path"] {
+            let input: ReadFileInput = serde_json::from_value(serde_json::json!({
+                (key): "src/main.rs", "offset": 2, "limit": 80
+            }))
+            .unwrap();
+            assert_eq!(input.path, "src/main.rs");
+            assert_eq!(input.offset, Some(2));
+            assert_eq!(input.limit, Some(80));
+            let serialized = serde_json::to_value(input).unwrap();
+            assert_eq!(serialized["target_file"], "src/main.rs");
+            assert!(serialized.get("file_path").is_none());
+        }
+        let schema = crate::registry::types::generate_schema::<ReadFileInput>();
+        assert!(schema["properties"].get("target_file").is_some());
+        assert!(schema["properties"].get("file_path").is_none());
+        assert!(serde_json::from_value::<ReadFileInput>(serde_json::json!({
+            "target_file": "a.rs", "file_path": "b.rs"
+        }))
+        .is_err());
+    }
     /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
     /// fits, and it takes a whole extra token's worth of bytes to exceed it.
     #[test]
