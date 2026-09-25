@@ -1193,6 +1193,10 @@ body {
   font-size: 10px;
 }
 
+.git-chip-menu button small {
+  overflow-wrap: anywhere;
+}
+
 /* Visual system v3: VS Code Dark Modern density with TUI-style transcript projection. */
 
 .git-chip {

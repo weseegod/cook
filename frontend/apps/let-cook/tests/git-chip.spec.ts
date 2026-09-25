@@ -9,6 +9,14 @@ import { WORKSPACE, api, capture, openWorkspace } from "./support/harness";
  */
 
 const DIRTY_SEED = { ...CONNECTED_SEED, workspace: WORKSPACE };
+const LONG_BRANCH = "feature/prepare-the-consolidated-chat-header-for-release";
+const LONG_BRANCH_SEED = {
+  ...DIRTY_SEED,
+  workspace: {
+    ...WORKSPACE,
+    review: { ...WORKSPACE.review, branch: LONG_BRANCH },
+  },
+};
 /** Two projects in one conversation list: the one the window connected to, and one with no git. */
 const TWO_PROJECTS_SEED = {
   ...CONNECTED_SEED,
@@ -68,17 +76,34 @@ test.describe("header git chip", () => {
     await expect(menu).toHaveCount(0);
   });
 
+  test("shows the full current branch in commit descriptions when the header truncates it", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkspace(page, LONG_BRANCH_SEED);
+
+    const chip = page.getByTestId("git-chip");
+    const branch = chip.locator(".git-chip-branch");
+    await expect(branch).toHaveText(LONG_BRANCH);
+    const branchWidth = await branch.evaluate((element) => ({
+      client: element.clientWidth,
+      content: element.scrollWidth,
+    }));
+    expect(branchWidth.content).toBeGreaterThan(branchWidth.client);
+
+    await chip.click();
+    for (const action of ["git-commit", "git-commit-and-push"]) {
+      const description = page.getByTestId(action).locator("small");
+      await expect(description).toContainText(`Branch: ${LONG_BRANCH}`);
+      const width = await description.evaluate((element) => ({
+        client: element.clientWidth,
+        content: element.scrollWidth,
+      }));
+      expect(width.content).toBeLessThanOrEqual(width.client);
+    }
+  });
+
   test("keeps the chip and its menu inside a narrow window", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openWorkspace(page, DIRTY_SEED);
-    const dimensions = await page.evaluate(() => ({
-      viewport: window.innerWidth,
-      document: document.documentElement.scrollWidth,
-      header: document.querySelector<HTMLElement>(".agent-header")?.getBoundingClientRect().toJSON(),
-      headerScrollWidth: document.querySelector<HTMLElement>(".agent-header")?.scrollWidth,
-      headerClientWidth: document.querySelector<HTMLElement>(".agent-header")?.clientWidth,
-    }));
-    console.log("NARROW_HEADER", JSON.stringify(dimensions));
 
     const chip = page.getByTestId("git-chip");
     await expect(chip).toBeVisible();
