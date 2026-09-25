@@ -118,6 +118,8 @@ export interface SessionState {
   planEntries: unknown[];
   transcriptCursor: TranscriptCursor;
   turnRunning: boolean;
+  /** The active request is between retry attempts; a previous decode rate is no longer live. */
+  retrying: boolean;
   turnStartedAt: number | null;
   /**
    * Every session with a prompt in flight, keyed by session id. `turnRunning` covers only the

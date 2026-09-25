@@ -61,6 +61,12 @@ const tpsSampler = {
   reset(): void {
     this.previous = null;
   },
+  baseline(state: ReturnType<typeof useSessionStore.getState>): void {
+    this.previous = {
+      tokens: estimateTokens(decodeTextForTurn(state.blocks, state.transcriptCursor.turnId)),
+      decodeMs: 0,
+    };
+  },
   sample(
     state: ReturnType<typeof useSessionStore.getState>,
     now = Date.now(),
@@ -82,6 +88,7 @@ const watcher = {
   hostCount: 0,
   turnId: null as string | null,
   wasRunning: false,
+  decodeTokenOffset: 0,
   unsubTurn: null as (() => void) | null,
   unsubReset: null as (() => void) | null,
 };
@@ -91,8 +98,21 @@ function ensureWatchers(): void {
     watcher.unsubTurn = useSessionStore.subscribe((state, prev) => {
       if (!watcher.flags.trackTps && !watcher.flags.trackDiffstat) return;
 
+      if (watcher.flags.trackTps && state.retrying !== prev.retrying) {
+        if (state.retrying) {
+          watcher.decodeTokenOffset = estimateTokens(decodeTextForTurn(prev.blocks, prev.transcriptCursor.turnId));
+        }
+        useComposerMetricsStore.getState().setTps(null);
+        decodeTracker.reset();
+        tpsSampler.reset();
+        if (!state.retrying) {
+          tpsSampler.baseline(prev);
+          decodeTracker.sync(state.activity?.kind ?? null, state.turnRunning);
+        }
+      }
+
       if (state.activity?.kind !== prev.activity?.kind || state.turnRunning !== prev.turnRunning) {
-        if (watcher.flags.trackTps) {
+        if (watcher.flags.trackTps && !state.retrying) {
           decodeTracker.sync(state.activity?.kind ?? null, state.turnRunning);
         }
       }
@@ -125,12 +145,13 @@ function ensureWatchers(): void {
 function beginTurn(turnId: string | null): void {
   watcher.turnId = turnId;
   watcher.wasRunning = true;
+  watcher.decodeTokenOffset = 0;
   const state = useSessionStore.getState();
   // The previous turn's rate must not linger into this one: the first sample lands 1.5s in.
   useComposerMetricsStore.getState().setTps(null);
   tpsSampler.reset();
   if (watcher.flags.trackTps) {
-    decodeTracker.sync(state.activity?.kind ?? null, true);
+    if (!state.retrying) decodeTracker.sync(state.activity?.kind ?? null, true);
   }
 }
 
@@ -142,7 +163,9 @@ function finishOpenTurn(state: ReturnType<typeof useSessionStore.getState>): voi
   if (watcher.flags.trackTps) {
     const decodeMs = decodeTracker.finish();
     const text = decodeTextForTurn(state.blocks, turnId);
-    useComposerMetricsStore.getState().setTps(computeTps(estimateTokens(text), decodeMs));
+    useComposerMetricsStore.getState().setTps(
+      state.retrying ? null : computeTps(Math.max(0, estimateTokens(text) - watcher.decodeTokenOffset), decodeMs),
+    );
   } else {
     decodeTracker.reset();
   }
@@ -157,6 +180,7 @@ function clearMetricsRuntime(): void {
   tpsSampler.reset();
   watcher.turnId = null;
   watcher.wasRunning = false;
+  watcher.decodeTokenOffset = 0;
 }
 
 /**
@@ -171,7 +195,7 @@ function syncWithLiveTurn(): void {
     return;
   }
   if (watcher.flags.trackTps) {
-    decodeTracker.sync(state.activity?.kind ?? null, true);
+    if (!state.retrying) decodeTracker.sync(state.activity?.kind ?? null, true);
   }
 }
 
@@ -208,7 +232,7 @@ function gitCannotAnswer(): boolean {
  */
 function sampleMetrics(): void {
   const state = useSessionStore.getState();
-  if (watcher.flags.trackTps) {
+  if (watcher.flags.trackTps && !state.retrying) {
     const next = tpsSampler.sample(state);
     if (next !== null) useComposerMetricsStore.getState().setTps(next);
   }

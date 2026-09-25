@@ -67,7 +67,7 @@ export class CookAcpClient {
   private pendingPromptRequests = 0;
   private readonly pendingQueuedIds = new Map<string, string[]>();
   private readonly queuedImagesById = new Map<string, string[]>();
-  private readonly paintedPromotions = new Set<string>();
+  private readonly paintedPromptIds = new Set<string>();
   private sendNowAwaitingConfirmation: { sessionId: string; id: string } | null = null;
   private readonly sendNowInFlight = new Map<string, number>();
   private readonly sessionEvents = new SessionEventDedupe();
@@ -108,7 +108,7 @@ export class CookAcpClient {
     this.cwd = cwd;
     this.pendingQueuedIds.clear();
     this.queuedImagesById.clear();
-    this.paintedPromotions.clear();
+    this.paintedPromptIds.clear();
     this.sendNowAwaitingConfirmation = null;
     this.sendNowInFlight.clear();
     const store = useSessionStore.getState();
@@ -169,7 +169,7 @@ export class CookAcpClient {
     this.sendNowAwaitingConfirmation = null;
     this.sendNowInFlight.clear();
     this.queuedImagesById.clear();
-    this.paintedPromotions.clear();
+    this.paintedPromptIds.clear();
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: NewSessionRequest = {
@@ -211,7 +211,7 @@ export class CookAcpClient {
     this.sendNowAwaitingConfirmation = null;
     this.sendNowInFlight.clear();
     this.queuedImagesById.clear();
-    this.paintedPromotions.clear();
+    this.paintedPromptIds.clear();
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: LoadSessionRequest = {
@@ -299,8 +299,12 @@ export class CookAcpClient {
   async prompt(text: string, attachments: Attachment[] = []): Promise<PromptResponse> {
     let sessionId = useSessionStore.getState().sessionId;
     if (!sessionId) sessionId = await this.newSession();
+    const promptId = crypto.randomUUID();
+    // A direct prompt briefly appears in the agent's queue before it starts. Its user bubble is
+    // already painted here, so the queue's running transition must not paint it a second time.
+    this.paintedPromptIds.add(`${sessionId}:${promptId}`);
     useSessionStore.getState().appendOptimisticUser(text, optimisticImages(attachments));
-    return this.dispatchPrompt(sessionId, this.buildParts(text, attachments));
+    return this.dispatchPrompt(sessionId, this.buildParts(text, attachments), promptId);
   }
 
   queuePrompt(text: string, attachments: Attachment[] = []): void {
@@ -354,12 +358,12 @@ export class CookAcpClient {
       runningId
       && (previousRow || pending?.includes(runningId))
       && (params.runningKind ?? previousRow?.kind ?? "prompt") === "prompt"
-      && !this.paintedPromotions.has(promotionKey)
+      && !this.paintedPromptIds.has(promotionKey)
     ) {
       const text = typeof params.runningText === "string" ? params.runningText : previousRow?.text ?? "";
       const images = this.queuedImagesById.get(runningId) ?? [];
       if (text.trim() || images.length > 0) {
-        this.paintedPromotions.add(promotionKey);
+        this.paintedPromptIds.add(promotionKey);
         useSessionStore.getState().appendOptimisticUser(text, images);
       }
     }
@@ -590,7 +594,7 @@ export class CookAcpClient {
     this.promptCorrelation.clear();
     this.pendingQueuedIds.clear();
     this.queuedImagesById.clear();
-    this.paintedPromotions.clear();
+    this.paintedPromptIds.clear();
     this.sendNowAwaitingConfirmation = null;
     this.sendNowInFlight.clear();
     for (const dispose of this.unlisten.splice(0)) dispose();

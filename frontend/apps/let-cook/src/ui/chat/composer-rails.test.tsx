@@ -86,6 +86,7 @@ beforeEach(() => {
     cwd: "/workspace",
     blocks: [],
     turnRunning: false,
+    retrying: false,
     activity: null,
     transcriptCursor: { turnId: null, assistantId: null, thoughtId: null, optimisticUserId: null },
   });
@@ -201,6 +202,43 @@ describe("composer rails", () => {
     // 50 more tokens decoded across the 1.5s sample window: 200 thinking + 200 prose chars at the
     // 4-chars-per-token estimate.
     expect(screen.getByTestId("turn-status-tps")).toHaveTextContent("33.3");
+  });
+
+  it("clears a stale rate during retry and resumes only after new output", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderRails();
+    act(() => {
+      useSessionStore.setState({
+        turnRunning: true,
+        transcriptCursor: { turnId: "turn-1", assistantId: "a1", thoughtId: null, optimisticUserId: null },
+        activity: { kind: "responding" },
+        blocks: [assistant("a".repeat(200))],
+      });
+    });
+    act(() => {
+      useSessionStore.setState({ blocks: [assistant("a".repeat(200)), assistant("b".repeat(200))] });
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+    expect(screen.getByTestId("turn-status-tps")).toBeVisible();
+
+    act(() => {
+      useSessionStore.getState().applyNotification({
+        sessionId: "sess-1",
+        update: { sessionUpdate: "retry_state", type: "retrying" },
+      } as never);
+    });
+    expect(screen.queryByTestId("turn-status-tps")).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(screen.queryByTestId("turn-status-tps")).toBeNull();
+
+    act(() => {
+      useSessionStore.getState().applyNotification({
+        sessionId: "sess-1",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "c".repeat(200) } },
+      } as never);
+    });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+    expect(screen.getByTestId("turn-status-tps")).toBeVisible();
   });
 
   it("leaves the edit fallback alone in a repository, where the header probe owns the numbers", async () => {

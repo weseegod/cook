@@ -65,6 +65,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
   let turnPausedMs = state.turnPausedMs;
   let questionOpenedAt = state.questionOpenedAt;
   let turnRunning = state.turnRunning;
+  let retrying = state.retrying;
   let pendingPermission = state.pendingPermission;
   let pendingQuestion = state.pendingQuestion;
   let goalSlice = { goal: state.goal, clearedGoalId: state.goalClearedId };
@@ -77,6 +78,11 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
   for (const notification of notifications) {
     const raw = notification.update as SessionUpdate & Record<string, unknown>;
     const kind = String(raw.sessionUpdate ?? "");
+    if (kind === "retry_state" && raw.type === "retrying") {
+      retrying = true;
+      continue;
+    }
+    if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") retrying = false;
     if (isTurnActivity(kind) && turnStartedAt === null) turnStartedAt = Date.now();
     if (kind === "usage_update") {
       usage = asRecord(raw.usage) ?? asRecord(raw);
@@ -194,6 +200,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
     turnPausedMs,
     questionOpenedAt,
     turnRunning,
+    retrying,
     pendingPermission,
     pendingQuestion,
     goal: goalSlice.goal,

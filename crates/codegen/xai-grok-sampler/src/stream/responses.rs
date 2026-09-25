@@ -103,6 +103,22 @@ pub(crate) fn responses_event_may_have_output(event: &rs::ResponseStreamEvent) -
         && responses_event_has_meaningful_content(event)
 }
 
+/// Only completed items can stand in for an omitted terminal output. A `done` event can
+/// still carry an explicit `incomplete` status, so it is not sufficient on its own.
+fn restorable_output_item(item: &rs::OutputItem) -> bool {
+    use rs::{OutputItem, OutputStatus};
+    match item {
+        OutputItem::Message(message) => message.status == OutputStatus::Completed,
+        OutputItem::FunctionCall(call) => call
+            .status
+            .is_none_or(|status| status == OutputStatus::Completed),
+        OutputItem::Reasoning(reasoning) => reasoning
+            .status
+            .is_none_or(|status| status == OutputStatus::Completed),
+        _ => false,
+    }
+}
+
 /// Copy everything the Doom-loop capture needs out of a frame.
 /// Any frame that names tool activity or compaction state vetoes the replay, since reasoning must never be retried without the item it is bound to.
 fn observe_for_recovery(capture: &FailedResponseCapture, event: &rs::ResponseStreamEvent) {
@@ -188,7 +204,6 @@ fn observe_for_recovery(capture: &FailedResponseCapture, event: &rs::ResponseStr
 }
 
 /// Transform a raw Responses API event stream into a stream of [`SamplingEvent`]s.
-/// `None` (check disabled) leaves the response untouched.
 pub fn stream_responses<'a>(
     raw_stream: BoxStream<'a, Result<rs::ResponseStreamEvent, SamplingError>>,
     model_metadata: Option<ResponseModelMetadata>,
@@ -254,6 +269,7 @@ pub(crate) fn stream_responses_tracked<'a>(
         // Later `ResponseFunctionCallArgumentsDelta` events look up `output_index` here to find the matching `tool_index`
         let mut output_to_tool_index: BTreeMap<u32, u32> = BTreeMap::new();
         let mut next_tool_index: u32 = 0;
+        let mut completed_output_items: BTreeMap<u32, rs::OutputItem> = BTreeMap::new();
 
         let mut stream = raw_stream;
         loop {
@@ -522,6 +538,9 @@ pub(crate) fn stream_responses_tracked<'a>(
                 // For WebSearchCall this includes the query and source URLs.
                 // For CustomToolCall this includes x_search results.
                 ResponseStreamEvent::ResponseOutputItemDone(done_event) => {
+                    if restorable_output_item(&done_event.item) {
+                        completed_output_items.insert(done_event.output_index, done_event.item.clone());
+                    }
                     match &done_event.item {
                         rs::OutputItem::WebSearchCall(ws) => {
                             let result = serde_json::to_value(ws).ok();
@@ -613,6 +632,17 @@ pub(crate) fn stream_responses_tracked<'a>(
                 return;
             }
         };
+
+        if matches!(response.status, Status::Completed)
+            && response.output.is_empty()
+            && !completed_output_items.is_empty()
+        {
+            tracing::debug!(
+                item_count = completed_output_items.len(),
+                "restoring completed output items omitted from terminal response"
+            );
+            response.output = completed_output_items.into_values().collect();
+        }
 
         // Billing fields (`prompt_tokens`, `completion_tokens`, `cached_prompt_tokens`, `reasoning_tokens`) are the cumulative wire values
         // The SSE decoder (`deserialize_response_event`) has already rewritten `u.total_tokens` to `context_details.input + output`
@@ -1434,6 +1464,163 @@ mod tests {
                 delta: delta.into(),
             },
         )
+    }
+
+    fn function_call_done_event(output_index: u32, call_id: &str) -> rs::ResponseStreamEvent {
+        rs::ResponseStreamEvent::ResponseOutputItemDone(rs_types::ResponseOutputItemDoneEvent {
+            sequence_number: 1,
+            output_index,
+            item: rs_types::OutputItem::FunctionCall(rs_types::FunctionToolCall {
+                arguments: "{\"value\":\"ok\"}".into(),
+                call_id: call_id.into(),
+                name: "ping".into(),
+                id: None,
+                status: None,
+            }),
+        })
+    }
+
+    #[tokio::test]
+    async fn restores_completed_tool_call_when_terminal_output_is_empty() {
+        // An OAuth Responses stream may finish its call in an item event while omitting it from
+        // the terminal output. Reconcile by protocol shape, independent of provider or model.
+        let raw = stream::iter(vec![
+            Ok(function_call_added_event(0, "call_ping", "ping")),
+            Ok(function_call_done_event(0, "call_ping")),
+            Ok(completed_event()),
+        ])
+        .boxed();
+        let events = collect(stream_responses(
+            raw,
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        let response = events
+            .iter()
+            .find_map(|event| match event {
+                SamplingEvent::Completed { response, .. } => Some(response),
+                _ => None,
+            })
+            .expect("terminal response");
+        assert_eq!(response.tool_calls().len(), 1);
+        assert_eq!(response.tool_calls()[0].id.as_ref(), "call_ping");
+        assert_eq!(
+            response.tool_calls()[0].arguments.as_ref(),
+            "{\"value\":\"ok\"}"
+        );
+        assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+        assert!(response.empty_reason().is_none());
+    }
+
+    #[tokio::test]
+    async fn terminal_output_wins_without_duplicate_and_unfinished_items_stay_ignored() {
+        let mut terminal = empty_completed_response();
+        terminal.output = vec![rs_types::OutputItem::FunctionCall(
+            rs_types::FunctionToolCall {
+                arguments: "{}".into(),
+                call_id: "call_terminal".into(),
+                name: "ping".into(),
+                id: None,
+                status: None,
+            },
+        )];
+        for include_done in [false, true] {
+            let mut frames = vec![Ok(function_call_added_event(0, "call_stream", "ping"))];
+            if include_done {
+                frames.push(Ok(function_call_done_event(0, "call_stream")));
+            }
+            frames.push(Ok(rs::ResponseStreamEvent::ResponseCompleted(
+                rs_types::ResponseCompletedEvent {
+                    response: terminal.clone(),
+                    sequence_number: 2,
+                },
+            )));
+            let events = collect(stream_responses(
+                stream::iter(frames).boxed(),
+                None,
+                rid(),
+                Duration::from_secs(60),
+                None,
+            ))
+            .await;
+            let response = events
+                .iter()
+                .find_map(|event| match event {
+                    SamplingEvent::Completed { response, .. } => Some(response),
+                    _ => None,
+                })
+                .expect("terminal response");
+            assert_eq!(response.tool_calls().len(), 1);
+            assert_eq!(response.tool_calls()[0].id.as_ref(), "call_terminal");
+        }
+
+        let events = collect(stream_responses(
+            stream::iter(vec![
+                Ok(function_call_added_event(0, "call_unfinished", "ping")),
+                Ok(completed_event()),
+            ])
+            .boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        let response = events
+            .iter()
+            .find_map(|event| match event {
+                SamplingEvent::Completed { response, .. } => Some(response),
+                _ => None,
+            })
+            .expect("terminal response");
+        assert!(response.tool_calls().is_empty());
+
+        let events = collect(stream_responses(
+            stream::iter(vec![
+                Ok(function_call_done_event(0, "call_cut_off")),
+                Ok(incomplete_event("max_output_tokens")),
+            ])
+            .boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        let response = events
+            .iter()
+            .find_map(|event| match event {
+                SamplingEvent::Completed { response, .. } => Some(response),
+                _ => None,
+            })
+            .expect("terminal response");
+        assert!(response.tool_calls().is_empty());
+
+        let mut incomplete_done = function_call_done_event(0, "call_incomplete");
+        if let rs::ResponseStreamEvent::ResponseOutputItemDone(event) = &mut incomplete_done
+            && let rs::OutputItem::FunctionCall(call) = &mut event.item
+        {
+            call.status = Some(rs::OutputStatus::Incomplete);
+        }
+        let events = collect(stream_responses(
+            stream::iter(vec![Ok(incomplete_done), Ok(completed_event())]).boxed(),
+            None,
+            rid(),
+            Duration::from_secs(60),
+            None,
+        ))
+        .await;
+        let response = events
+            .iter()
+            .find_map(|event| match event {
+                SamplingEvent::Completed { response, .. } => Some(response),
+                _ => None,
+            })
+            .expect("terminal response");
+        assert!(response.tool_calls().is_empty());
     }
 
     type Delta = (u32, Option<String>, Option<String>, Option<String>);

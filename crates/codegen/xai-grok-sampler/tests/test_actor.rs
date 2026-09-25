@@ -23,7 +23,7 @@ use xai_grok_sampler::{
 };
 use xai_grok_sampling_types::{
     ConversationItem, ConversationRequest, DoomLoopRecoveryPolicy, INVALID_IMAGE_ERROR_CODE,
-    SyntheticReason, UserItem,
+    StopReason, SyntheticReason, UserItem,
 };
 use xai_grok_test_support::{SseEvent, sse};
 
@@ -1510,6 +1510,78 @@ async fn responses_doom_loop_does_not_resample_after_output_when_retry_only_befo
         ),
         "the doomed turn is surfaced rather than resampled: {result:?}"
     );
+}
+
+/// A completed tool item omitted from the terminal Response must reach the actor once, without
+/// triggering an empty-response retry on a normal Responses backend.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_completed_item_empty_terminal_executes_once_without_retry() {
+    let counter = Arc::new(AtomicU32::new(0));
+    let counter_handler = Arc::clone(&counter);
+    let app = Router::new().route(
+        "/v1/responses",
+        post(move || {
+            let counter = Arc::clone(&counter_handler);
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut frames =
+                    sse::responses_api_zero_arg_tool_call_events("call_ping", "ping", "model");
+                let mut terminal: serde_json::Value =
+                    serde_json::from_str(&frames[2].data).unwrap();
+                terminal["response"]["output"] = json!([]);
+                terminal["sequence_number"] = json!(3);
+                frames[2].data = terminal.to_string();
+                frames.insert(
+                    2,
+                    SseEvent::data(
+                        json!({
+                            "type": "response.output_item.done",
+                            "sequence_number": 2,
+                            "output_index": 0,
+                            "item": {
+                                "type": "function_call", "call_id": "call_ping", "name": "ping",
+                                "arguments": "{}", "status": "completed"
+                            }
+                        })
+                        .to_string(),
+                    ),
+                );
+                let events = sse_events_to_axum(frames);
+                Sse::new(stream::iter(
+                    events.into_iter().map(Ok::<_, std::convert::Infallible>),
+                ))
+            }
+        }),
+    );
+    let server = MockServer::spawn(app).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let handle = SamplerActor::spawn(
+        responses_config(server.base_url(), None),
+        RetryPolicy::default(),
+        event_tx,
+    );
+
+    handle.submit(
+        RequestId::from("req-empty-terminal-tool"),
+        user_request("ping"),
+    );
+    let events = drain_until_terminal(&mut event_rx, Duration::from_secs(10)).await;
+    server.shutdown();
+
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SamplingEvent::Retrying { .. }))
+    );
+    match events.last().unwrap() {
+        SamplingEvent::Completed { response, .. } => {
+            assert_eq!(response.stop_reason, Some(StopReason::ToolCalls));
+            assert_eq!(response.tool_calls().len(), 1);
+            assert_eq!(response.tool_calls()[0].id.as_ref(), "call_ping");
+        }
+        other => panic!("expected completed tool call, got {other:?}"),
+    }
 }
 
 /// Streamed `output_text.delta` must complete even when the terminal Response has empty `output`.

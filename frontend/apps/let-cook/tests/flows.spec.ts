@@ -133,6 +133,30 @@ test.describe("first run", () => {
 });
 
 test.describe("chat, attachments and the model picker", () => {
+  test("keeps one user bubble when a direct prompt passes through the queue", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 1_500 });
+
+    await page.getByPlaceholder("Ask Cook anything…").fill("Check the queue transition");
+    await page.getByTestId("send-button").click();
+    const [request] = await waitForCalls(page, "session/prompt");
+    const promptId = (request.params._meta as { promptId: string }).promptId;
+    await page.evaluate((id) => {
+      window.__cookMock!.queueChanged([{ id, version: 1, text: "Check the queue transition" }]);
+      window.__cookMock!.queueChanged([], "mock-session", { id, text: "Check the queue transition" });
+      window.__cookMock!.sessionUpdate("mock-session", {
+        sessionUpdate: "user_message_chunk",
+        messageId: "server-user-1",
+        content: { type: "text", text: "Check the queue transition" },
+      });
+    }, promptId);
+
+    await expect(page.locator(".message-user")).toHaveCount(1);
+    await expect(page.locator(".message-user")).toHaveText("Check the queue transition");
+    await expect.poll(async () => (await mock.requests()).filter((entry) => entry.method === "session/prompt").length)
+      .toBe(1);
+  });
+
   test("renders streamed assistant text and groups the model picker by provider", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
