@@ -44,7 +44,7 @@ test.describe("header line changes", () => {
 
     await page.getByTestId("composer-input").fill("Edit the workspace for a live diffstat.");
     await page.getByTestId("send-button").click();
-    await expect(page.getByRole("button", { name: "[stop]" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
     const diffstat = page.getByTestId("header-diffstat");
     // The tree grows underneath the running turn; the 1.5s probe picks it up without a turn boundary.
@@ -52,7 +52,7 @@ test.describe("header line changes", () => {
     await expect(diffstat).toContainText("128", { timeout: 10_000 });
     await expect(diffstat).toContainText("64");
     await expect(diffstat).toHaveAttribute("title", /\+128 −64 in the working tree/);
-    await expect(page.getByRole("button", { name: "[stop]" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
   });
 
   test("opens the Tools panel on Review when clicked", async ({ page }) => {

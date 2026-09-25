@@ -416,7 +416,7 @@ export class CookAcpClient {
       _meta: { promptId, clientIdentifier: CAPABILITIES.clientIdentifier },
     };
     this.pendingPromptRequests += 1;
-    trackWorking(sessionId, Date.now());
+    trackWorking(sessionId, Date.now(), promptId);
     useSessionStore.getState().set({ turnRunning: true, error: null });
     let outcome: TurnOutcome = { kind: "completed" };
     try {
@@ -439,7 +439,7 @@ export class CookAcpClient {
       this.sessionUpdates.flushNow();
       this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       this.promptCorrelation.end(promptId);
-      trackWorking(sessionId, null);
+      trackWorking(sessionId, null, promptId);
       const store = useSessionStore.getState();
       // A backgrounded conversation's prompt must not close (or reopen) the active turn.
       if (store.sessionId === sessionId) {
@@ -459,14 +459,17 @@ export class CookAcpClient {
   }
 
   async cancel(): Promise<void> {
-    const sessionId = useSessionStore.getState().sessionId;
+    const store = useSessionStore.getState();
+    const sessionId = store.sessionId;
     if (!sessionId) return;
+    // Release only the running prompt; queued prompts still in flight keep the list row alive.
+    const runningPromptId = store.currentPromptId ?? undefined;
     await notify("session/cancel", { sessionId });
     await this.inboundMessages;
     this.sessionUpdates.flushNow();
     useSessionStore.getState().finishTurn({ kind: "cancelled" });
     useSessionStore.getState().set({ turnRunning: false });
-    trackWorking(sessionId, null);
+    trackWorking(sessionId, null, runningPromptId);
   }
 
   async setModel(modelId: string, reasoningEffort?: string): Promise<void> {

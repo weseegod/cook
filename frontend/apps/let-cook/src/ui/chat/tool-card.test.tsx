@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../acp/host", () => ({ openPath: vi.fn(async () => undefined) }));
 
@@ -62,34 +62,7 @@ describe("ThinkingRow", () => {
   });
 });
 
-describe("ToolRow", () => {
-  it("paints the edit diffstat on the collapsed one-liner and drops it when expanded", () => {
-    const { container } = render(<ToolRow tool={editTool} />);
-    expect(screen.getByText("+3")).toBeInTheDocument();
-    expect(screen.getByText("-1")).toBeInTheDocument();
-
-    const details = container.querySelector("details");
-    expect(details).not.toBeNull();
-    details!.open = true;
-    fireEvent(details!, new Event("toggle"));
-    expect(screen.queryByText("+3")).toBeNull();
-  });
-});
-
-/**
- * jsdom reports every box as 0×0, so the frame the row measures itself against is stubbed here:
- * `clientHeight` on the transcript ancestor, `offsetHeight` on the detail body it mounts.
- */
-function stubLayout(heights: { detail: number; frame: number }) {
-  vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
-    return this.classList.contains("transcript") ? heights.frame : 0;
-  });
-  vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
-    return this.classList.contains("tool-detail") ? heights.detail : 24;
-  });
-}
-
-describe("write rows", () => {
+describe("edit and write rows", () => {
   const writeTool = (newText: string): ToolBlock => ({
     ...editTool,
     id: "write-1",
@@ -99,42 +72,70 @@ describe("write rows", () => {
     paths: ["src/new.ts"],
   });
 
-  const renderInTranscript = (tool: ToolBlock) => render(<div className="transcript"><ToolRow tool={tool} /></div>);
+  it("opens a completed Edit on its diff and preserves manual collapse across updates", () => {
+    const { container, rerender } = render(<ToolRow tool={editTool} />);
+    const row = container.querySelector("details")!;
+    expect(row.open).toBe(true);
+    expect(row.querySelector(".diff-context")?.textContent).toContain("a");
+    expect(row.querySelector(".diff-remove")?.textContent).toContain("-b");
+    expect(row.querySelector(".diff-add")?.textContent).toContain("+X");
+    expect(row.querySelector(".tool-locations")).toBeNull();
+    row.open = false;
+    fireEvent(row, new Event("toggle"));
+    expect(row.open).toBe(false);
+    expect(row.querySelector(".row-diffstat")).toBeNull();
+    rerender(<ToolRow tool={{ ...editTool, content: [...editTool.content] }} />);
+    expect(row.open).toBe(false);
+  });
 
-  afterEach(() => vi.restoreAllMocks());
-
-  it("opens a write whose body fits the transcript frame", () => {
-    stubLayout({ detail: 240, frame: 600 });
-    const { container } = renderInTranscript(writeTool("one\ntwo\nthree"));
+  it("opens when a pending Edit receives content but leaves an empty call folded", () => {
+    const { container, rerender } = render(<ToolRow tool={{ ...editTool, content: [], status: "pending" }} />);
+    expect(container.querySelector("details")!.open).toBe(false);
+    rerender(<ToolRow tool={editTool} />);
     expect(container.querySelector("details")!.open).toBe(true);
-    expect(container.querySelector(".tool-detail-full")).not.toBeNull();
-    // The diffstat is the collapsed row's cue; the open row shows the lines instead.
-    expect(screen.queryByText("+3")).toBeNull();
   });
 
-  it("folds a write back to its one-liner once the body outgrows the frame", () => {
-    stubLayout({ detail: 620, frame: 600 });
-    const { container } = renderInTranscript(writeTool("one\ntwo\nthree"));
+  it("folds a failed Edit even when an earlier update carried a diff", () => {
+    const { container, rerender } = render(<ToolRow tool={{ ...editTool, status: "pending" }} />);
+    expect(container.querySelector("details")!.open).toBe(true);
+    rerender(<ToolRow tool={{ ...editTool, status: "failed" }} />);
     expect(container.querySelector("details")!.open).toBe(false);
-    expect(container.querySelector(".tool-detail-full")).toBeNull();
-    expect(screen.getByText("+3")).toBeInTheDocument();
   });
 
-  it("keeps an auto-folded write open after the user opens it", () => {
-    stubLayout({ detail: 620, frame: 600 });
-    const { container } = renderInTranscript(writeTool("one\ntwo\nthree"));
-    const details = container.querySelector("details")!;
-
-    details.open = true;
-    fireEvent(details, new Event("toggle"));
-    expect(details.open).toBe(true);
+  it("keeps Execute and Read folded by default", () => {
+    const execute = { ...editTool, kind: "execute", title: "Execute", command: "pnpm test" };
+    const { container, rerender } = render(<ToolRow tool={execute} />);
+    expect(container.querySelector("details")!.open).toBe(false);
+    rerender(<ToolRow tool={{ ...editTool, kind: "read", title: "Read src/a.ts" }} />);
+    expect(container.querySelector("details")!.open).toBe(false);
   });
 
-  it("leaves a write the Preview dock owns folded, even when the frame is roomy", () => {
-    stubLayout({ detail: 240, frame: 600 });
+  it("shows the entire Write and its line counts by default", () => {
     const lines = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`).join("\n");
-    const { container } = renderInTranscript(writeTool(lines));
-    expect(container.querySelector("details")!.open).toBe(false);
-    expect(screen.getByText(/Diff is large/)).toBeInTheDocument();
+    const { container } = render(<ToolRow tool={writeTool(lines)} />);
+    expect(container.querySelector("details")!.open).toBe(true);
+    expect(container.querySelector("pre")?.textContent).toContain("line 60");
+    expect(container.querySelector(".row-diffstat")?.textContent).toBe("+60/-0");
+    expect(screen.queryByRole("button", { name: /Show more/ })).toBeNull();
+    expect(screen.queryByText(/Diff is large/)).toBeNull();
+  });
+
+  it("folds a long Edit inline with Show more and Show less", () => {
+    const lines = Array.from({ length: 60 }, (_, index) => `line ${index + 1}`).join("\n");
+    const { container } = render(<ToolRow tool={{ ...editTool, content: [{ type: "diff", path: "src/a.ts", oldText: "", newText: lines }] }} />);
+    expect(container.querySelector("details")!.open).toBe(true);
+    expect(container.querySelector("pre")?.textContent).not.toContain("line 60");
+    fireEvent.click(screen.getByRole("button", { name: /Show more/ }));
+    expect(container.querySelector("pre")?.textContent).toContain("line 60");
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    expect(container.querySelector("pre")?.textContent).not.toContain("line 60");
+  });
+
+  it("keeps file headers neutral and shows multi-file paths", () => {
+    const { container } = render(<ToolRow tool={{ ...editTool, paths: ["src/a.ts", "src/b.ts"], content: [
+      { type: "text", text: "--- src/a.ts\n+++ src/a.ts\n@@ -1 +1 @@\n-old\n+new" },
+    ] }} />);
+    expect(container.querySelectorAll(".diff-meta")).toHaveLength(3);
+    expect(container.querySelector(".tool-locations")?.textContent).toContain("src/b.ts");
   });
 });

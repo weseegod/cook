@@ -520,8 +520,35 @@
   text-transform: capitalize;
 }
 
-.tool-detail-full > pre {
+.tool-detail.tool-detail-diff > pre {
   max-height: none;
+}
+
+.tool-edit .tool-detail > pre.diff {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
+
+.tool-detail > pre.diff > span {
+  display: block;
+  padding: 0 7px;
+  margin: 0 -7px;
+  white-space: pre-wrap;
+}
+
+.tool-detail > pre.diff > .diff-meta {
+  color: var(--muted);
+  background: var(--panel-elevated);
+}
+
+.tool-detail > pre.diff > .diff-context {
+  color: var(--text-soft);
+}
+
+.tool-fold-toggle {
+  margin: 2px 0 5px 10px;
+  padding: 2px 4px;
+  font-size: 11px;
 }
 
 .badge {
@@ -811,11 +838,42 @@
   white-space: nowrap;
 }
 
+.tool-row {
+  position: relative;
+}
+
 .tool-actions {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  right: 4px;
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 4px;
-  margin: 6px 0;
+  max-width: calc(100% - 22px);
+  padding: 1px 3px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tool-row:hover .tool-actions,
+.tool-row:focus-within .tool-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none) {
+  .tool-actions {
+    position: static;
+    justify-content: flex-start;
+    max-width: 100%;
+    box-shadow: none;
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .tool-actions button {
@@ -909,6 +967,33 @@
   min-width: 0;
   max-width: 100%;
   overflow-x: hidden;
+}
+
+.transcript, .tool-detail-diff > pre {
+  scrollbar-color: color-mix(in srgb, var(--text) 18%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+:is(.transcript, .tool-detail-diff > pre)::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:is(.transcript, .tool-detail-diff > pre)::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+:is(.transcript, .tool-detail-diff > pre)::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 18%, transparent);
+  background-clip: padding-box;
+  transition: background-color .15s ease;
+}
+
+:is(.transcript, .tool-detail-diff > pre)::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--text) 32%, transparent);
+  background-clip: padding-box;
 }
 
 .transcript-shell {

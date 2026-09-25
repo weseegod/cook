@@ -197,13 +197,13 @@ export const notificationEntries: NotificationEntry[] = [
     handle: (ctx) => {
       const store = useSessionStore.getState();
       const sessionId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : null;
-      // Background turn finished while another conversation is open — clear its list activity only.
+      const completedPromptId = typeof ctx.params.promptId === "string" ? ctx.params.promptId : undefined;
+      // Background turn finished while another conversation is open — release that prompt only.
       if (sessionId && store.sessionId && sessionId !== store.sessionId) {
-        trackWorking(sessionId, null);
+        trackWorking(sessionId, null, completedPromptId);
         return;
       }
       if (!store.turnRunning && store.turnStartedAt === null) return;
-      const completedPromptId = typeof ctx.params.promptId === "string" ? ctx.params.promptId : null;
       if (completedPromptId && store.currentPromptId && completedPromptId !== store.currentPromptId) return;
       const outcome = outcomeFromPromptComplete(ctx.params);
       store.finishTurn(outcome);

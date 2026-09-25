@@ -222,8 +222,10 @@ export const DEFAULT_SESSION_TITLE = "New chat";
 
 /** One in-flight turn, as the conversation list reports it. */
 export interface SessionTurn {
-  /** When the prompt went out, epoch ms. */
+  /** When the session first went busy, epoch ms. Survives later prompts in the same busy stretch. */
   startedAt: number;
   /** Last phase the window learned for this turn; `null` until the agent reports one. */
   activity: TurnActivity | null;
+  /** In-flight prompt ids for this session; the row clears only when this list is empty. */
+  promptIds: string[];
 }

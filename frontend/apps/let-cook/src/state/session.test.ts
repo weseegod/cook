@@ -56,7 +56,7 @@ describe("session conversation reset", () => {
       useSessionStore.setState({
         sessionId: "dead-session",
         turnRunning: true,
-        workingSessions: { "dead-session": { startedAt: Date.now(), activity: null } },
+        workingSessions: { "dead-session": { startedAt: Date.now(), activity: null, promptIds: [] } },
         editingQueueEntry: { id: "q1", version: 0 },
       });
       useSessionStore.getState().resetConversation(null);

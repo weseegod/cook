@@ -8,12 +8,55 @@ import { readLocal, writeLocal } from "../../ui/storage";
  * Record (or forget) a session's in-flight turn. The conversation list paints a live row from
  * this map, so a turn stays visible — with its last reported phase — after the user opens a
  * different conversation.
+ *
+ * A session stays busy while at least one `promptId` is registered. `startedAt` is the moment the
+ * session went from idle to busy and is not overwritten by later prompts. Passing `startedAt: null`
+ * without a `promptId` clears the whole entry (workspace switch, or a bare `prompt_complete`).
  */
-export function trackWorking(sessionId: string, startedAt: number | null): void {
-  const working = { ...useSessionStore.getState().workingSessions };
-  if (startedAt === null) delete working[sessionId];
-  else working[sessionId] = { startedAt, activity: working[sessionId]?.activity ?? null };
-  useSessionStore.getState().set({ workingSessions: working });
+export function trackWorking(sessionId: string, startedAt: number | null, promptId?: string): void {
+  useSessionStore.setState((state) => {
+    const working = state.workingSessions;
+    const existing = working[sessionId];
+
+    if (startedAt === null) {
+      if (promptId === undefined) {
+        if (!existing) return state;
+        const next = { ...working };
+        delete next[sessionId];
+        return { workingSessions: next };
+      }
+      if (!existing) return state;
+      if (!existing.promptIds.includes(promptId)) return state;
+      const promptIds = existing.promptIds.filter((id) => id !== promptId);
+      if (promptIds.length === 0) {
+        const next = { ...working };
+        delete next[sessionId];
+        return { workingSessions: next };
+      }
+      return { workingSessions: { ...working, [sessionId]: { ...existing, promptIds } } };
+    }
+
+    if (existing) {
+      if (promptId === undefined || existing.promptIds.includes(promptId)) return state;
+      return {
+        workingSessions: {
+          ...working,
+          [sessionId]: { ...existing, promptIds: [...existing.promptIds, promptId] },
+        },
+      };
+    }
+
+    return {
+      workingSessions: {
+        ...working,
+        [sessionId]: {
+          startedAt,
+          activity: null,
+          promptIds: promptId === undefined ? [] : [promptId],
+        },
+      },
+    };
+  });
 }
 
 /**
@@ -26,12 +69,20 @@ export function noteBackgroundActivity(
 ): void {
   const sessionId = typeof params.sessionId === "string" ? params.sessionId : null;
   if (!sessionId || !update) return;
-  const working = useSessionStore.getState().workingSessions;
-  const turn = working[sessionId];
-  if (!turn) return;
   const activity = activityFromUpdate(update);
-  if (!activity || phaseKey(activity) === phaseKey(turn.activity)) return;
-  useSessionStore.getState().set({ workingSessions: { ...working, [sessionId]: { ...turn, activity } } });
+  if (!activity) return;
+  useSessionStore.setState((state) => {
+    const turn = state.workingSessions[sessionId];
+    // Do not recreate a row that was already cleared — a late update after the last prompt ends.
+    if (!turn) return state;
+    if (phaseKey(activity) === phaseKey(turn.activity)) return state;
+    return {
+      workingSessions: {
+        ...state.workingSessions,
+        [sessionId]: { ...turn, activity },
+      },
+    };
+  });
 }
 
 /**

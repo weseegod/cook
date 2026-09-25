@@ -91,6 +91,34 @@ test.describe("subagent view", () => {
     await expect(page.getByLabel("Message this agent")).toHaveCount(0);
   });
 
+  test("opens edits in the subagent transcript with the same row behavior", async ({ page }) => {
+    await launch(page);
+    await spawn(page, "Edit the workspace", "general-purpose");
+    await childChunk(page, {
+      sessionUpdate: "tool_call",
+      toolCallId: "child-edit",
+      kind: "edit",
+      title: "edit",
+      rawInput: { path: "src/a.ts" },
+      status: "pending",
+    });
+    await childChunk(page, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "child-edit",
+      kind: "edit",
+      title: "edit",
+      status: "completed",
+      content: [{ type: "diff", path: "src/a.ts", oldText: "before", newText: "after" }],
+    });
+    await openSubagent(page);
+    const edit = page.getByTestId("tool-row-child-edit");
+    await expect(edit).toHaveAttribute("open", "");
+    await expect(edit.locator(".diff-remove")).toContainText("-before");
+    await expect(edit.locator(".diff-add")).toContainText("+after");
+    await edit.locator("summary").click();
+    await expect(edit.locator(".tool-detail")).toBeHidden();
+  });
+
   test("streams a planner that runs while the parent's own prompt is still open", async ({ page }) => {
     // A `/goal` planner is a child session started from inside the parent's turn, so the parent's
     // prompt is in flight for the whole run and the child streams under its own prompt id.

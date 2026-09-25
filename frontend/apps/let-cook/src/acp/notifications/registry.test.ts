@@ -121,7 +121,7 @@ describe("notification registry (C3)", () => {
       turnRunning: true,
       turnStartedAt: Date.now() - 500,
       workingSessions: {
-        background: { startedAt: Date.now() - 2_000, activity: null },
+        background: { startedAt: Date.now() - 2_000, activity: null, promptIds: ["bg-1"] },
       },
       blocks: [
         {
@@ -146,6 +146,41 @@ describe("notification registry (C3)", () => {
     expect(state.workingSessions.background).toBeUndefined();
     expect(state.blocks).toHaveLength(1);
     expect(state.blocks[0]).toMatchObject({ id: "m-active", streaming: true });
+  });
+
+  it("releases only the completed background prompt when promptId is present", async () => {
+    const startedAt = Date.now() - 2_000;
+    useSessionStore.setState({
+      sessionId: "active",
+      turnRunning: true,
+      turnStartedAt: Date.now() - 500,
+      workingSessions: {
+        background: { startedAt, activity: null, promptIds: ["bg-old", "bg-new"] },
+      },
+      blocks: [
+        {
+          type: "message",
+          id: "m-active",
+          turnId: "turn-active",
+          role: "assistant",
+          text: "still going",
+          images: [],
+          streaming: true,
+        },
+      ],
+    });
+    await dispatchNotification(
+      { method: "x.ai/session/prompt_complete", params: {} },
+      "x.ai/session/prompt_complete",
+      { sessionId: "background", promptId: "bg-old", stopReason: "cancelled" },
+    );
+    const state = useSessionStore.getState();
+    expect(state.turnRunning).toBe(true);
+    expect(state.workingSessions.background).toEqual({
+      startedAt,
+      activity: null,
+      promptIds: ["bg-new"],
+    });
   });
 
   it("notifies once on prompt_complete when the document is hidden", async () => {

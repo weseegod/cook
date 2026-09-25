@@ -79,6 +79,19 @@ for (const theme of ["dark", "light"] as const) {
   });
 }
 
+test("tools panel closes on an outside click and keeps interactions inside", async ({ page }) => {
+  await openConversation(page, shellSeed());
+  await page.getByRole("button", { name: "Open tools panel" }).click();
+  const panel = page.getByTestId("utility-panel");
+  await panel.getByRole("button", { name: "Files" }).click();
+  await expect(panel).toBeVisible();
+  await expect(panel.getByRole("button", { name: /Tools/ })).toBeVisible();
+  await page.getByTestId("composer-input").click();
+  await expect(panel).toHaveCount(0);
+  await page.getByRole("button", { name: "Open tools panel" }).click();
+  await expect(panel).toBeVisible();
+});
+
 test("transcript messages and activity rows use the chat width", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openConversation(page, shellSeed({

@@ -356,6 +356,57 @@ test.describe("conversation list", () => {
     await expect(working).toHaveAttribute("data-live", "false");
     expect(errors).toEqual([]);
   });
+
+  test("keeps the sidebar turn status across Send now", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    // Hold the first prompt long enough that Send now finishes promoting before its RPC returns.
+    await openWorkspace(page, { ...LIST_SEED, promptDelayMs: 8_000 });
+
+    await page.getByTestId("session-row-s-alpha-new").locator(".session-open").click();
+    await waitForCalls(page, "session/load");
+    const input = page.getByPlaceholder("Ask Cook anything…");
+    await input.fill("hold the first turn");
+    await input.press("Enter");
+    await waitForCalls(page, "session/prompt");
+
+    const status = page.getByTestId("session-row-s-alpha-new").getByTestId("session-turn-status");
+    await expect(status).toHaveAttribute("data-live", "true");
+    // Let the timer accumulate so a reset-to-near-zero would be obvious after Send now.
+    await page.waitForTimeout(2_000);
+    const timerBefore = await status.locator(".session-turn-timer").innerText();
+    const secondsBefore = Number.parseFloat(timerBefore);
+    expect(secondsBefore).toBeGreaterThanOrEqual(1.5);
+
+    await input.fill("promote me now");
+    await input.press("Enter");
+    const prompts = await waitForCalls(page, "session/prompt", 2);
+    const secondPromptId = String((prompts[1].params._meta as Record<string, unknown>).promptId);
+    await page.evaluate((id) => window.__cookMock!.queueChanged([
+      { id, version: 0, text: "promote me now", kind: "prompt", position: 0 },
+    ]), secondPromptId);
+    await page.getByTestId(`queue-send-now-${secondPromptId}`).click();
+    await expect.poll(async () =>
+      (await api(page).requests()).filter((entry) => entry.method === "x.ai/queue/interject"),
+    ).toHaveLength(1);
+
+    // First prompt's RPC settles (~8s from send); the promoted prompt is still in flight.
+    await page.waitForTimeout(6_500);
+    await expect(status).toBeVisible();
+    await expect(status).toHaveAttribute("data-live", "true");
+    const timerAfter = await status.locator(".session-turn-timer").innerText();
+    const secondsAfter = Number.parseFloat(timerAfter);
+    // Must not restart near zero relative to the pre-Send-now reading.
+    expect(secondsAfter).toBeGreaterThanOrEqual(secondsBefore - 0.5);
+
+    // When the remaining (promoted) prompt finishes, the status clears and the date returns.
+    await expect(page.getByTestId("session-row-s-alpha-new").getByTestId("session-turn-status")).toHaveCount(0, {
+      timeout: 15_000,
+    });
+    await expect(page.getByTestId("session-row-s-alpha-new").locator(".session-date")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   test("resizes the sidebar by dragging the edge and remembers the width", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

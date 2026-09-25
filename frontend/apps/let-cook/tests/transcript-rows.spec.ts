@@ -2,12 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { openWorkspace, shellSeed } from "./support/harness";
 
 /**
- * A TUI presentation rule on the transcript: a collapsed Edit row carries its `+N/-M`
- * (`scrollback/blocks/tool/edit.rs::header_line`).
- *
- * One deliberate divergence: a write row opens on the file the agent just wrote instead of the
- * TUI's one-liner, and folds back when that body would not fit the chat frame it is read in.
+ * Edit and Write rows show changed code inline. A long Edit uses Show more;
+ * Write opens the entire file with +N/-M in its title.
  */
+
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
 
 const launch = (page: Page, overrides: Record<string, unknown> = {}) => openWorkspace(page, shellSeed(overrides));
 
@@ -38,7 +37,7 @@ function writeUpdates(lines: string[]) {
 }
 
 test.describe("transcript rows", () => {
-  test("paints the edit diffstat on a collapsed row and drops it when expanded", async ({ page }) => {
+  test("opens an edit on its changed code and keeps its compact header when collapsed", async ({ page }) => {
     await launch(page, {
       promptUpdates: [
         {
@@ -66,16 +65,19 @@ test.describe("transcript rows", () => {
     const row = page.getByTestId("tool-row-edit-1");
     await expect(row).toBeVisible();
     await expect(row.locator("summary strong")).toHaveText("Edit src/main.tsx");
-    await expect(row.locator(".row-diff-add")).toHaveText("+3");
-    await expect(row.locator(".row-diff-del")).toHaveText("-1");
-
-    // The diffstat belongs to the one-liner: expanding the row shows the hunks instead.
+    await expect(row).toHaveAttribute("open", "");
+    await expect(row.locator(".diff-remove")).toContainText("-b");
+    await expect(row.locator(".diff-add").first()).toContainText("+X");
+    await expect(row.locator(".diff-meta")).toHaveCount(2);
+    await expect(row.locator(".tool-locations")).toHaveCount(0);
+    await row.locator("summary").click();
+    await expect(row.locator(".row-diffstat")).toHaveCount(0);
+    await expect(row.locator("summary strong")).toHaveText("Edit src/main.tsx");
     await row.locator("summary").click();
     await expect(row.locator(".row-diffstat")).toHaveCount(0);
   });
 
-  test("opens a write row on the created file and folds the diffstat back on click", async ({ page }) => {
-    // 32 painted lines stay under the 40-line Preview hand-off, so only the frame can fold this row.
+  test("opens the entire Write with line counts in its title", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 1500 });
     await launch(page, { promptUpdates: writeUpdates(LONG_FILE) });
     await page.getByTestId("composer-input").fill("Create the file.");
@@ -84,33 +86,87 @@ test.describe("transcript rows", () => {
     const row = page.getByTestId("tool-row-write-1");
     await expect(row).toBeVisible();
     await expect(row.locator("summary strong")).toHaveText("Creating src/created.ts");
-    // No click needed: the row already shows what the agent wrote.
-    await expect(row.locator(".tool-detail-full")).toBeVisible();
+    await expect(row.locator(".tool-detail-diff")).toBeVisible();
+    await expect(row.locator(".row-diffstat")).toHaveText("+30/-0");
     await expect(row.locator("pre")).toContainText("const value30 = 30;");
-    // The open body is not a 320px box with a scrollbar of its own; the frame fit is what allowed it.
+    await expect(row.getByRole("button", { name: /Show more/ })).toHaveCount(0);
     expect(await row.locator("pre").evaluate((node) => node.scrollHeight <= node.clientHeight)).toBe(true);
-    await expect(row.locator(".row-diffstat")).toHaveCount(0);
-
+    const scrollbars = await page.evaluate(() => ({
+      chat: getComputedStyle(document.querySelector(".transcript")!).scrollbarColor,
+      sidebar: getComputedStyle(document.querySelector(".session-list")!).scrollbarColor,
+    }));
+    expect(scrollbars.chat).toBe(scrollbars.sidebar);
     await row.locator("summary").click();
     await expect(row.locator(".tool-detail")).toBeHidden();
     await expect(row.locator(".row-diffstat")).toHaveText("+30/-0");
   });
 
-  test("folds a write row whose body outgrows the chat frame", async ({ page }) => {
-    // The same file as the open case above, read in a window the body cannot fit.
+  test("reveals the rest of a long Edit within chat", async ({ page }) => {
+    const longEdit = writeUpdates(Array.from({ length: 60 }, (_, index) => `line ${index + 1}`))
+      .map((update) => "kind" in update ? { ...update, kind: "edit", title: "edit" } : update);
+    await launch(page, { promptUpdates: longEdit });
+    await page.getByTestId("composer-input").fill("Edit the file.");
+    await page.getByTestId("send-button").click();
+    const row = page.getByTestId("tool-row-write-1");
+    await expect(row.locator(".tool-detail")).toBeVisible();
+    await expect(row.locator("pre")).not.toContainText("line 60");
+    await row.getByRole("button", { name: /Show more/ }).click();
+    await expect(row.locator("pre")).toContainText("line 60");
+    await row.getByRole("button", { name: "Show less" }).click();
+    await expect(row.locator("pre")).not.toContainText("line 60");
+  });
+
+  test("keeps a large write readable in a short chat frame", async ({ page }) => {
     await page.setViewportSize({ width: 1024, height: 520 });
     await launch(page, { promptUpdates: writeUpdates(LONG_FILE) });
     await page.getByTestId("composer-input").fill("Create the file.");
     await page.getByTestId("send-button").click();
 
     const row = page.getByTestId("tool-row-write-1");
-    await expect(row.locator("summary strong")).toHaveText("Creating src/created.ts");
-    await expect(row.locator(".tool-detail")).toBeHidden();
-    await expect(row.locator(".row-diffstat")).toHaveText("+30/-0");
-
-    // Folded by the frame, not taken away: the user can still open the row by hand.
-    await row.locator("summary").click();
     await expect(row.locator(".tool-detail")).toBeVisible();
+    await expect(row.locator(".row-diffstat")).toHaveText("+30/-0");
+    await expect(row.getByRole("button", { name: /Show more/ })).toHaveCount(0);
+    await expect(row).not.toContainText("Diff is large");
+    await expect(row.locator("pre")).toContainText("const value30 = 30;");
+  });
+
+  test("reveals tool actions on hover and keyboard focus without adding a row", async ({ page }) => {
+    await launch(page, { promptUpdates: writeUpdates(["export const ready = true;"]) });
+    await page.getByTestId("composer-input").fill("Create a file.");
+    await page.getByTestId("send-button").click();
+    const row = page.getByTestId("tool-row-write-1");
+    const actions = row.getByLabel("Tool actions");
+    await row.scrollIntoViewIfNeeded();
+    await page.mouse.move(0, 0);
+    await expect(actions).toHaveCSS("opacity", "0");
+    await row.hover();
+    await expect(actions).toHaveCSS("opacity", "1");
+    await row.getByRole("button", { name: "Copy path" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe("src/created.ts");
+    await row.getByRole("button", { name: "Copy output" }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain("+export const ready = true;");
+    await page.mouse.move(0, 0);
+    await row.locator("summary").focus();
+    await page.keyboard.press("Tab");
+    await expect(actions.locator("button").first()).toBeFocused();
+    await expect(actions).toHaveCSS("opacity", "1");
+  });
+
+  test.describe("touch viewport", () => {
+    test.use({ hasTouch: true, viewport: { width: 420, height: 780 } });
+
+    test("keeps edit actions tappable and the long diff readable", async ({ page }) => {
+      await launch(page, { promptUpdates: writeUpdates(Array.from({ length: 60 }, (_, index) => `line ${index + 1}`)) });
+      const baselineWidth = await page.evaluate(() => document.documentElement.scrollWidth);
+      await page.getByTestId("composer-input").fill("Create a file.");
+      await page.getByTestId("send-button").click();
+      const row = page.getByTestId("tool-row-write-1");
+      await expect(row.locator(".tool-actions")).toHaveCSS("opacity", "1");
+      await row.getByRole("button", { name: "Copy path" }).tap();
+      await expect(row.getByRole("button", { name: /Show more/ })).toHaveCount(0);
+      await expect(row.locator("pre")).toContainText("line 60");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(baselineWidth);
+    });
   });
 
   test("shows a long prompt three lines tall until the row is opened", async ({ page }) => {

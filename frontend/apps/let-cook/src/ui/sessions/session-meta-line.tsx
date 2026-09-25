@@ -28,7 +28,6 @@ export function SessionMetaLine(
 function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }) {
   const turnRunning = useSessionStore((state) => state.turnRunning);
   const derived = useSessionStore((state) => state.activity);
-  const turnStartedAt = useSessionStore((state) => state.turnStartedAt);
   const turnPausedMs = useSessionStore((state) => state.turnPausedMs);
   const questionOpenedAt = useSessionStore((state) => state.questionOpenedAt);
   const goalVerifying = useSessionStore((state) => state.goal?.verifyingCompletion === true);
@@ -49,10 +48,10 @@ function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }
     : turn.activity) ?? UNKNOWN_PHASE;
   const parts = activityParts(activity);
   const blocked = live && Boolean(pendingPermission || pendingQuestion);
-  // The open conversation times its turn on the shared clock, pauses included, exactly like the
-  // chat's own status row; a conversation in the background counts from when its prompt went out.
-  const elapsed = live && turnStartedAt !== null
-    ? turnElapsedMs({ turnStartedAt, turnPausedMs, questionOpenedAt })
+  // Always count from the session's busy start. Send now resets chat `turnStartedAt`, so the open
+  // row must not read that field — only subtract open-question pause time when live.
+  const elapsed = live
+    ? turnElapsedMs({ turnStartedAt: turn.startedAt, turnPausedMs, questionOpenedAt })
     : Date.now() - turn.startedAt;
 
   return (

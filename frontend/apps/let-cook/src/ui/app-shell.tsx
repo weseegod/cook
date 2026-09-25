@@ -120,6 +120,18 @@ export function AppShell() {
     if (artifactEpoch > 0) setUtilityPanelOpen(true);
   }, [artifactEpoch]);
 
+  useEffect(() => {
+    if (!utilityPanelOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      const panel = document.querySelector<HTMLElement>(".utility-panel");
+      if (!(event.target instanceof Element) || !panel || panel.contains(event.target)) return;
+      if (event.target.closest(".header-diffstat")) return;
+      setUtilityPanelOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, [utilityPanelOpen]);
+
   const pendingSettingsTab = useCatalogStore((state) => state.pendingSettingsTab);
 
   function openSettings(tab: SettingsTab) {

@@ -174,7 +174,7 @@ test.describe("tasks list", () => {
     await expect(menu).toHaveCount(0);
   });
 
-  test("shares its rows with the Activity tab without duplicate ids", async ({ page }) => {
+  test("closes the Activity panel when opening the Tasks menu", async ({ page }) => {
     await launch(page);
     await background(page, { task_id: "bg-1", description: "Wait for server", command: "sleep 30" });
 
@@ -185,7 +185,7 @@ test.describe("tasks list", () => {
     await page.getByTestId("tasks-chip").click();
     await expect(page.getByTestId("tasks-menu")).toBeVisible();
     await expect(page.getByTestId("task-row-bg-1")).toBeVisible();
-    await expect(page.getByTestId("activity-row-bg-1")).toBeVisible();
+    await expect(page.getByTestId("utility-panel")).toHaveCount(0);
   });
 
   test("fits a narrow window and survives a light theme", async ({ page }) => {
