@@ -9,13 +9,13 @@ Let Cook is workbench chrome, not an editor. VS Code's accessibility guideline a
 | File | Role |
 |---|---|
 | `frontend/apps/let-cook/src/theme/tokens.css` | The only place theme colors are declared. Dark on `:root`, light on `:root[data-theme="light"]` |
-| `frontend/apps/let-cook/src/theme/app.css` | Entry: Tailwind, then `tokens.css`, then `components.css` |
+| `frontend/apps/let-cook/src/theme/app.css` | Entry: `tokens.css`, then `components.css` |
 | `frontend/apps/let-cook/src/theme/components.css` | Ordered `@import` barrel for the component modules below |
-| `frontend/apps/let-cook/src/theme/base.css` | Reset, body, scrollbars, focus, shared chrome |
-| `frontend/apps/let-cook/src/theme/shell.css` | App frame, titlebar, sidebar, session list, header controls |
+| `frontend/apps/let-cook/src/theme/base.css` | Preflight reset, body, scrollbars, focus, shared chrome (chips, buttons, toggle) |
+| `frontend/apps/let-cook/src/theme/shell.css` | App frame, agent header, sidebar, session list |
 | `frontend/apps/let-cook/src/theme/chat.css` | Transcript, messages, markdown, tools, permissions |
 | `frontend/apps/let-cook/src/theme/composer.css` | Prompt, slash menu, attachments, model picker |
-| `frontend/apps/let-cook/src/theme/overlays.css` | Palette, modal, dialogs, popovers, shortcuts |
+| `frontend/apps/let-cook/src/theme/overlays.css` | Palette, dialogs, popovers, shortcuts |
 | `frontend/apps/let-cook/src/theme/settings.css` | Settings workspace, tabs, providers, models |
 | `frontend/apps/let-cook/src/theme/utility.css` | Utility panel, tasks/plan/goal chips, review/files |
 | `frontend/apps/let-cook/tests/ui-layout.spec.ts` | Composer text, placeholder, border, and focus, in both themes |
@@ -43,6 +43,8 @@ Not floors:
 ## Token roles
 
 Component CSS uses `var(--…)`. Do not add a hex in a component rule. Declare a new color in `tokens.css` for both themes.
+
+Keep a CSS class in sync with its markup: if the TSX no longer names a class, delete the rule. Dynamic names (`plan-entry-${status}`, `dialog-${size}`, `drop-${position}`) stay as long as the template is in the source.
 
 | Token | Use for | Do not use for |
 |---|---|---|

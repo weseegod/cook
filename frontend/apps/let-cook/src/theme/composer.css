@@ -8,16 +8,6 @@
   gap: 5px;
 }
 
-.composer-running {
-  margin-left: auto;
-  display: flex;
-  gap: 5px;
-}
-
-.composer-running .send-button {
-  margin-left: 0;
-}
-
 .composer.dragging {
   border-color: var(--accent);
   outline: 1px solid var(--border);
@@ -65,13 +55,6 @@
   height: 26px;
   border-radius: 5px;
   object-fit: cover;
-}
-
-.composer-tools {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
 }
 
 .slash-menu button:hover, .slash-menu button.active {
@@ -497,7 +480,7 @@
   font-size: 11px;
 }
 
-.queue-bar-list {
+.queue-bar-list, .plan-checklist {
   list-style: none;
   margin: 0;
   padding: 0;

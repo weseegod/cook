@@ -9,19 +9,6 @@
   container-type: inline-size;
 }
 
-.titlebar-workspace span:last-child {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
 .icon-button {
   width: 32px;
   height: 32px;
@@ -109,17 +96,6 @@
   background: var(--bg);
 }
 
-.titlebar-workspace > span:last-child {
-  max-width: 240px;
-}
-
-.titlebar-actions {
-  display: flex;
-  align-items: center;
-  margin-left: auto;
-  gap: 3px;
-}
-
 /* Multicolor / fixed-palette marks: paint the SVG as-is. */
 
 /* Kimi's mark is white on transparent; a brand-blue plate keeps it visible in both themes. */
@@ -136,11 +112,6 @@ img.brand-mark {
   gap: 5px;
 }
 
-.sidebar-footer .status-dot {
-  width: 6px;
-  height: 6px;
-}
-
 .sidebar-footer small {
   color: var(--muted);
 }
@@ -150,49 +121,6 @@ img.brand-mark {
     width: 220px;
     flex-basis: 220px;
   }
-}
-
-.titlebar {
-  flex: 0 0 54px;
-  display: flex;
-  align-items: center;
-  border-bottom: 1px solid var(--border);
-  height: 35px;
-  gap: 6px;
-  padding: 0 8px;
-  background: var(--panel);
-  flex-basis: 35px;
-  backdrop-filter: none;
-  border-bottom-color: var(--border);
-}
-
-.titlebar .icon-button {
-  width: 26px;
-  height: 26px;
-}
-
-.titlebar-workspace {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--text-soft);
-}
-
-.titlebar-workspace .status-dot {
-  width: 6px;
-  height: 6px;
-  box-shadow: none;
-}
-
-.titlebar-actions .ghost-button {
-  padding-inline: 9px;
-  min-height: 26px;
-  padding: 3px 7px;
-  border-radius: 3px;
-  font-size: 11px;
 }
 
 .icon-button, .ghost-button, .primary-button, .danger-button {
@@ -265,54 +193,8 @@ img.brand-mark {
   text-decoration: underline;
 }
 
-.sidebar-account {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 3px 4px;
-  border: 0;
-  border-radius: 2px;
-  color: var(--text);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.sidebar-account:hover, .sidebar-footer-button:hover {
+.sidebar-footer-button:hover {
   background: var(--raised-2);
-}
-
-.sidebar-avatar {
-  display: grid;
-  flex: 0 0 auto;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  color: var(--text);
-  background: var(--plan-accent);
-  font-size: 10px;
-  font-weight: 600;
-}
-
-.sidebar-account-copy {
-  min-width: 0;
-  display: grid;
-  gap: 1px;
-}
-
-.sidebar-account-copy strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.sidebar-account-copy small {
-  color: var(--muted);
-  font-size: 9px;
 }
 
 .sidebar-footer-actions {
@@ -653,11 +535,6 @@ img.brand-mark {
   gap: 6px;
 }
 
-.session-list-title {
-  color: var(--muted);
-  font-weight: 700;
-}
-
 .session-list-heading small {
   color: var(--muted);
   min-width: 18px;
@@ -819,11 +696,10 @@ img.brand-mark {
   box-shadow: var(--shadow);
 }
 
-.session-menu button {
+.session-menu button, .session-view-menu button, .session-sort-menu button, .plan-row-menu button {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: 100%;
   padding: 6px 8px;
   border: 0;
   border-radius: 4px;
@@ -831,6 +707,10 @@ img.brand-mark {
   background: transparent;
   text-align: left;
   cursor: pointer;
+}
+
+.session-menu button {
+  width: 100%;
   font-size: 12px;
 }
 
@@ -970,16 +850,6 @@ img.brand-mark {
 }
 
 .session-view-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text-soft);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
   font-size: 11px;
   letter-spacing: .04em;
 }
@@ -1046,16 +916,6 @@ img.brand-mark {
 }
 
 .session-sort-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text-soft);
-  background: transparent;
-  text-align: left;
-  cursor: pointer;
   font-size: 12px;
   letter-spacing: 0;
   text-transform: none;

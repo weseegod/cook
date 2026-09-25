@@ -1,9 +1,46 @@
 /* base.css — reset, body, scrollbars, focus, shared chrome */
 
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
 html, body, #root {
   height: 100%;
-  margin: 0;
   overflow: hidden;
+}
+
+body {
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+img, svg, video, canvas {
+  display: block;
+  max-width: 100%;
+}
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: transparent;
+  border: 0;
+}
+
+ul, ol {
+  list-style: none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-size: inherit;
+  font-weight: inherit;
 }
 
 ::selection {
@@ -22,19 +59,6 @@ html, body, #root {
 
 button {
   color: inherit;
-}
-
-.status-ready {
-  background: var(--success);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--success), transparent 30%);
-}
-
-.status-starting, .status-reconnecting {
-  background: var(--warning);
-}
-
-.status-error {
-  background: var(--danger);
 }
 
 button:disabled {
@@ -68,47 +92,10 @@ kbd {
   background: var(--raised);
 }
 
-.thought-block {
-  margin: -8px 0 20px 37px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.thought-block summary {
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
 .diff span {
   display: block;
   margin: 0 -12px;
   padding: 0 12px;
-}
-
-.secret-field {
-  display: flex;
-  align-items: center;
-  padding-right: 5px;
-}
-
-.secret-field input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text);
-}
-
-.secret-field button {
-  display: grid;
-  place-items: center;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
 }
 
 .toggle-row > span {
@@ -616,7 +603,7 @@ details[open] > summary > .row-chevron {
 
 /* Hover-only descriptions */
 
-.memory-source-label {
+.memory-source-label, .connector-origin-caption {
   display: block;
   margin: 8px 0 4px;
   color: var(--muted);
@@ -779,10 +766,6 @@ details[open] > summary > .row-chevron {
 
 .shell-prefix {
   color: var(--warning);
-}
-
-.danger-text {
-  color: var(--danger) !important;
 }
 
 .text-button {
@@ -1040,7 +1023,7 @@ body {
   flex: 0 0 auto;
 }
 
-.context-chip-trigger {
+.context-chip-trigger, .git-chip-trigger {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1055,7 +1038,8 @@ body {
   white-space: nowrap;
 }
 
-.context-chip-trigger:hover, .context-chip-trigger[aria-expanded="true"] {
+.context-chip-trigger:hover, .context-chip-trigger[aria-expanded="true"],
+.git-chip-trigger:hover, .git-chip-trigger[aria-expanded="true"] {
   color: var(--text);
   background: var(--raised-2);
 }
@@ -1123,7 +1107,7 @@ body {
   box-shadow: var(--shadow);
 }
 
-.context-chip-menu button {
+.context-chip-menu button, .git-chip-menu button {
   display: flex;
   align-items: flex-start;
   width: 100%;
@@ -1137,58 +1121,38 @@ body {
   text-align: left;
 }
 
-.context-chip-menu button:hover {
+.context-chip-menu button:hover, .git-chip-menu button:hover {
   color: var(--text);
   background: var(--raised-2);
 }
 
-.context-chip-menu button > svg {
+.context-chip-menu button > svg, .git-chip-menu button > svg {
   flex: 0 0 auto;
   margin-top: 1px;
   color: var(--accent);
 }
 
-/* Visual system v3: VS Code Dark Modern density with TUI-style transcript projection. */
-
-.context-chip-menu button span {
+.context-chip-menu button span, .git-chip-menu button span {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
-.context-chip-menu button strong {
+.context-chip-menu button strong, .git-chip-menu button strong {
   font-size: 11px;
   font-weight: 600;
 }
 
-.context-chip-menu button small {
+.context-chip-menu button small, .git-chip-menu button small {
   color: var(--muted);
   font-size: 10px;
 }
 
+/* Visual system v3: VS Code Dark Modern density with TUI-style transcript projection. */
+
 .git-chip {
   position: relative;
   flex: 0 0 auto;
-}
-
-.git-chip-trigger {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 24px;
-  padding: 3px 5px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--muted);
-  background: transparent;
-  cursor: pointer;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.git-chip-trigger:hover, .git-chip-trigger[aria-expanded="true"] {
-  color: var(--text);
-  background: var(--raised-2);
 }
 
 .git-chip-branch {
@@ -1226,50 +1190,9 @@ body {
   height: 4px;
 }
 
-.git-chip-menu button {
-  display: flex;
-  align-items: flex-start;
-  width: 100%;
-  gap: 8px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text-soft);
-  background: transparent;
-  cursor: pointer;
-  text-align: left;
-}
-
-.git-chip-menu button:hover {
-  color: var(--text);
-  background: var(--raised-2);
-}
-
 .git-chip-menu button:disabled {
   opacity: .6;
   cursor: default;
-}
-
-.git-chip-menu button > svg {
-  flex: 0 0 auto;
-  margin-top: 1px;
-  color: var(--accent);
-}
-
-.git-chip-menu button span {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.git-chip-menu button strong {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.git-chip-menu button small {
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .jump-latest {
@@ -1496,121 +1419,3 @@ body {
   color: var(--muted);
   font-size: 12px;
 }
-
-/* Skills read like a compact list: descriptions are visible, while long ones remain one line. */
-
-/* Group header: disclosure on the left, tri-state switch on the right. Shared by Skills and Connectors. */
-
-/* Providers: the add flow is a deliberate picker, not a second permanent card grid. */
-
-/* Complete model catalog. */
-
-/* Terminal parity */
-
-/* Turn status: the live activity row between the transcript and the prompt slot. */
-
-/* The spacer parks the tokens/sec rail at the right end of the row; working-tree line changes live
-   on the header, not here. */
-
-/* Line changes beside the git chip — the way into the Review panel, so it is a button and gets the
-   chip treatment on hover. */
-
-/* Shell parity: keep the controls where VS Code/Codex users expect to find them. */
-
-/* Label region: shrinks and clips so the row's controls beside it always stay on the row. */
-
-/* The TUI's ` · {activity}` suffix (`views/tasks_pane.rs`); it yields before the clock and controls. */
-
-/* The row's `[view]`, beside `[✕]`. Named `activity-open`, not `activity-view`: that class is the
-   panel root, and a width rule shared with it collapses the whole panel. */
-
-/* Clicking anywhere on the row opens it, the way the TUI opens on a double-click. */
-
-/* Tasks pane: the popover under the header's Tasks chip (`views/tasks_pane.rs`), centred on the
-   chat, half as wide as it and capped like the plans list. The chip script measures the chat and
-   sets the width and offset; these are the fallbacks. */
-
-/* Rows only, like the plans list, and about as tall per row: the shared row carries a 30px
-   minimum for the Tools panel's touch targets, which is more air than a header popover needs. */
-
-/* Three classes deep: the header's own `.agent-header .icon-button` sizes every icon in the bar. */
-
-/* Section header inside the row list (`views/tasks_pane.rs`: Workflows / Subagents / Tasks / Watchers). */
-
-/* Header chip for the conversation's background work, beside the plan chip. The badge is the TUI's
-   running count (`agent_status.rs::task_status_line`), in the same blue as the turn-status spinner. */
-
-/* How many jobs are running, beside the label the Plans chip mirrors; parked work in warning. */
-
-/* The background-command viewer (`views/tasks_pane.rs` `[view]` → block viewer): a command's
-   stdout. Read-only, so it stays a plain scrolling body. A subagent is not a command and opens its
-   own session instead (`.subagent-takeover`). */
-
-/* One subagent's own view (`app/agent_view/subagent_takeover.rs`): the framed child session
-   replaces the chat column, and its rows use the chat's own transcript classes. */
-
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* Current shell pass: process-first chrome, readable type, and higher-contrast controls. */
-
-/* Agent status bar: cwd left, chips right — one margin-left:auto. */
-
-/* A little air between the folder name and the plan chip, so a shrinking folder label never reads
-   as part of the chip. */
-
-/* Keep each optional control in the same horizontal slot while its data appears or disappears. */
-
-/* Hover opens this menu, so bridge the 3px gap: crossing it must not look like leaving the chip. */
-
-/* Long tool output and pasted code must wrap inside the chat viewport. */
-
-/* Final Settings geometry: the surface spans the app, while its content stays on a readable grid. */
-
-/* Settings contrast pass: make hierarchy readable against the full-width surface. */
-
-/* Keep the settings content dense without letting controls touch the shell. */
-
-/* Unified Models settings: every supported provider owns one compact model/credential row. */
-
-/* Provider connection is a header-level action; model deletion stays quiet until confirmed. */
-
-/* Dialog shell: one heading row, a scrolling body, and the caller's actions. */
-
-/* Provider popups: connection settings, and one model at a time. */
-
-/* Dialogs sit outside .settings-section, so their controls carry their own frame. */
-
-/* ── Plan review (chip, popup, line comments) ───────────────────────────────
-   Plan accent shared by the header chip and PlanDialog. */
-
-/* How many plans this conversation holds, beside the label the Tasks chip mirrors. */
-
-/* The plan list: one row per episode file, newest first, current one marked. */
-
-/* The header always lists the conversation's plans, so the popover has to read as "none yet"
-   rather than as a failed load. */
-
-/* Hidden until the row is hovered, like the conversation sidebar's row menu. */
-
-/* Doubled up so a selected line keeps its tint under the cursor, where `:hover` would win. */
-
-/* Comment rows sit directly under the line they anchor to, as the TUI's comment lines do. */
-
-/* P9 follow-ups + queue (queue sits above turn-status, TUI §9.7) */
-
-/* P11 artifacts preview */
-
-/* Conversation sidebar: keep the list scannable at narrow desktop widths. */
-
-/* One overflow menu per conversation replaces the row of action icons. */
-
-/* Drag to arrange: only accepted inside the same block (pinned vs. unpinned). */
-
-/* Reordering, live turn status and the width handle for the conversation sidebar. */
-
-/* Rows reorder by pointer drag; the grab cursor is the affordance. */
-
-/* A working conversation keeps its workspace path and gains the live turn on the right of the same
-   line, where the date sits on an idle row. */
-
-/* The chat frame owns its gutters; the composer no longer has a second width cap. */

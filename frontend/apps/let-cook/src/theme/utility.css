@@ -17,15 +17,6 @@
 
 /* Settings workspace */
 
-.plan-checklist {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 .plan-entry {
   display: flex;
   align-items: flex-start;
@@ -337,12 +328,6 @@
 
 .turn-status-spacer {
   flex: 1 1 0;
-}
-
-.turn-status-stop {
-  flex: 0 0 auto;
-  font-family: var(--font-mono);
-  font-size: 11px;
 }
 
 .turn-status-metric {
@@ -1092,18 +1077,8 @@
 }
 
 .plan-row-menu button {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
-  border: 0;
-  border-radius: 4px;
-  color: var(--text-soft);
-  background: transparent;
   font-size: 11px;
-  text-align: left;
-  cursor: pointer;
 }
 
 .plan-row-menu button:hover:not(:disabled) {

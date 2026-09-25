@@ -32,12 +32,6 @@
   flex: 1 1 auto;
 }
 
-.message-user .message-avatar {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  border-color: var(--border);
-}
-
 .markdown > :first-child {
   margin-top: 0;
 }
@@ -102,15 +96,6 @@
 
 .tool-card summary::-webkit-details-marker {
   display: none;
-}
-
-.tool-card[open] .tool-chevron {
-  transform: rotate(90deg);
-}
-
-.tool-chevron {
-  display: flex;
-  transition: transform .15s;
 }
 
 .tool-card summary strong {
@@ -307,26 +292,6 @@
   border-color: var(--border-strong);
   background: var(--raised-2);
   color: var(--text);
-}
-
-.message-avatar {
-  display: grid;
-  place-items: center;
-  border: 1px solid var(--border);
-  color: var(--muted);
-  background: var(--raised);
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-}
-
-.message-heading {
-  margin-bottom: 3px;
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: .04em;
-  text-transform: uppercase;
 }
 
 .tool-card {

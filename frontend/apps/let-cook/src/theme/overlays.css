@@ -7,46 +7,6 @@
   line-height: 1.5;
 }
 
-.modal-close {
-  position: absolute;
-  right: 12px;
-  top: 12px;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.modal-close:hover {
-  background: var(--raised-2);
-  color: var(--text);
-}
-
-.modal-icon {
-  width: 42px;
-  height: 42px;
-  display: grid;
-  place-items: center;
-  border-radius: 11px;
-  color: var(--modal-icon-fg);
-  background: var(--modal-icon-bg);
-}
-
-.modal-icon.warning {
-  color: var(--warning);
-  background: var(--modal-icon-warn-bg);
-}
-
-.modal-icon.safe {
-  color: var(--success);
-  background: var(--modal-icon-safe-bg);
-}
-
 .permission-modal > pre {
   overflow-x: auto;
   max-height: 220px;
@@ -56,13 +16,6 @@
   border-radius: 7px;
   background: var(--panel-elevated);
   font-size: 11px;
-}
-
-.modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 7px;
-  margin-top: 20px;
 }
 
 .palette-backdrop {
@@ -160,16 +113,6 @@
   line-height: 1.55;
 }
 
-.dialog-icon {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  color: var(--warning);
-  background: color-mix(in srgb, var(--warning), transparent 84%);
-}
-
 .dialog-field {
   display: block;
   margin-top: 16px;
@@ -211,10 +154,6 @@
 .dialog-field input:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent), transparent 82%);
-}
-
-.dialog .modal-actions {
-  margin-top: 20px;
 }
 
 .dialog .field-error {
@@ -348,15 +287,6 @@
   margin: 0 2px;
 }
 
-.titlebar-actions .ghost-button[aria-label="Command palette"] {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.titlebar-actions .ghost-button[aria-label="Command palette"]:hover {
-  color: var(--text);
-}
-
 .shortcut-list span {
   display: flex;
   justify-content: space-between;
@@ -444,12 +374,6 @@
   background: var(--panel-elevated);
   box-shadow: var(--shadow);
   padding: 18px;
-}
-
-.modal-icon, .dialog-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 3px;
 }
 
 .dialog {

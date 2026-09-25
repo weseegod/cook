@@ -28,7 +28,7 @@
   line-height: 1.5;
 }
 
-.settings-panel section > input, .settings-panel section > select, .secret-field {
+.settings-panel section > input, .settings-panel section > select {
   width: 100%;
   height: 38px;
   margin-bottom: 8px;
@@ -89,7 +89,7 @@
   color: var(--muted);
 }
 
-.provider-list, .connector-list, .skill-list {
+.connector-list, .skill-list {
   display: flex;
   flex-direction: column;
   gap: 7px;
@@ -114,15 +114,6 @@
 
 .connector-section > .connector-list {
   margin-bottom: 8px;
-}
-
-.connector-origin-caption {
-  display: block;
-  margin: 8px 0 4px;
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .connector-group-meta {
@@ -196,7 +187,7 @@
   overflow-wrap: anywhere;
 }
 
-.provider-row-actions, .provider-actions, .settings-actions {
+.provider-actions, .settings-actions                        {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -248,7 +239,7 @@
   background: var(--danger-soft);
 }
 
-.model-checklist label, .connector-toggle {
+.model-checklist label                    {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -256,7 +247,7 @@
   color: var(--text-soft);
 }
 
-.model-checklist input, .connector-toggle input {
+.model-checklist input                          {
   accent-color: var(--accent);
 }
 
@@ -269,11 +260,6 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--settings-card-bg);
-}
-
-.settings-empty {
-  color: var(--muted);
-  font-size: 11px;
 }
 
 .provider-logo {
@@ -377,13 +363,13 @@
   font-size: 10px;
 }
 
-.settings-body .provider-list, .settings-body .connector-list, .settings-body .skill-list {
+/* MCP sections: Managed / Plugin: X / Local, each with its own switch. */
+
+.settings-body .connector-list, .settings-body .skill-list {
   margin-bottom: 14px;
 }
 
-/* MCP sections: Managed / Plugin: X / Local, each with its own switch. */
-
-.settings-body .provider-list > li, .settings-body .connector-list > li, .settings-body .skill-list > li {
+.settings-body .connector-list > li, .settings-body .skill-list > li {
   padding: 12px;
   border-radius: 9px;
 }
@@ -452,13 +438,13 @@
   font-size: 11px;
 }
 
-.settings-panel, .settings-heading h2, .settings-detail-heading h3, .settings-section > h3 {
+/* Composer attachments */
+
+.settings-panel, .settings-heading h2, .settings-section > h3 {
   color: var(--text);
 }
 
-/* Composer attachments */
-
-.settings-detail-heading h3[title], .settings-section > h3[title] {
+.settings-section > h3[title] {
   cursor: help;
 }
 
@@ -592,10 +578,6 @@
   white-space: nowrap;
 }
 
-.provider-row-actions {
-  flex: 0 0 auto;
-}
-
 .provider-editor {
   margin: 10px 0;
   padding: 12px;
@@ -691,6 +673,8 @@
   backdrop-filter: none;
 }
 
+/* Shared in-app dialogs */
+
 .settings-heading h2 {
   margin: 0;
   font-size: 20px;
@@ -698,19 +682,16 @@
   font-weight: 400;
 }
 
-/* Shared in-app dialogs */
-
-.settings-note, .provider-editor, .connector-form, .provider-list li, .connector-list > li, .skill-list li,
-.theme-options button, .preset-card, .provider-test-result, .async-state {
+.settings-note, .provider-editor, .connector-form, .connector-list > li, .skill-list li, .theme-options button, .preset-card, .provider-test-result, .async-state {
   border-radius: 2px;
   background: var(--panel-elevated);
 }
 
-.provider-list li, .connector-list > li, .skill-list li {
+.connector-list > li, .skill-list li {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--settings-border);
   border-radius: 8px;
   background: var(--settings-card-bg);
   min-width: 0;
@@ -736,19 +717,6 @@
   background: var(--raised);
 }
 
-.preset-mark {
-  flex: 0 0 30px;
-  display: grid;
-  place-items: center;
-  background: var(--accent-soft);
-  color: var(--accent-text);
-  width: 24px;
-  height: 24px;
-  border-radius: 2px;
-  font-size: 15px;
-  flex-basis: 24px;
-}
-
 .connect-provider .provider-editor, .connect-provider .connect-step {
   border-radius: 3px;
   background: var(--panel);
@@ -756,7 +724,7 @@
 
 /* macOS controls */
 
-.settings-detail-heading p, .settings-section-description {
+.settings-section-description {
   margin: 0 0 13px;
   color: var(--muted);
   font-size: 11px;
@@ -857,104 +825,6 @@
   color: var(--accent);
 }
 
-.provider-add-picker {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.provider-auth-status {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 10px;
-  margin-bottom: 7px;
-  padding: 9px 10px;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--success), var(--panel-elevated) 88%);
-}
-
-.provider-auth-status .badge {
-  flex: 0 0 auto;
-}
-
-.provider-connections > header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 7px;
-  color: var(--text-soft);
-  font-size: 11px;
-}
-
-.provider-connections > header span {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.provider-connection-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 6px;
-}
-
-.provider-connection-list .provider-auth-status {
-  margin: 0;
-  padding: 7px 8px;
-}
-
-.provider-auth-status > div {
-  display: grid;
-  min-width: 0;
-  flex: 1 1 auto;
-  gap: 2px;
-}
-
-.provider-auth-status > div strong, .provider-auth-status > div small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.provider-auth-status > div strong {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.provider-auth-status > div small {
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.provider-add-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.provider-add-heading > div {
-  display: grid;
-  min-width: 0;
-  gap: 3px;
-}
-
-.provider-add-heading strong {
-  font-size: 12px;
-}
-
-.provider-add-heading span {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.provider-add-heading .ghost-button {
-  flex: 0 0 auto;
-  min-height: 26px;
-  padding: 4px 8px;
-}
-
 .provider-row-main > small:last-child {
   color: var(--text-soft);
 }
@@ -977,31 +847,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.model-provider-list {
-  display: grid;
-  gap: 12px;
-}
-
-.model-provider {
-  min-width: 0;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--panel-elevated);
-}
-
-.model-provider-heading > div {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-  gap: 8px;
-}
-
-.model-provider-heading span {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 10px;
 }
 
 .model-list {
@@ -1066,33 +911,6 @@
   font-family: var(--font-mono);
 }
 
-.model-editor {
-  display: grid;
-  gap: 10px;
-}
-
-.model-input-field {
-  display: flex;
-  gap: 18px;
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--border);
-}
-
-.model-input-field legend {
-  padding: 0 5px;
-  color: var(--text-soft);
-  font-size: 11px;
-}
-
-.model-input-field label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-soft);
-  font-size: 11px;
-}
-
 .model-edit-button {
   color: var(--accent);
 }
@@ -1142,8 +960,7 @@
   font-size: 12px;
 }
 
-.settings-panel section > input, .settings-panel section > select, .secret-field,
-.field input, .field select, .field textarea, .settings-textarea, .elicit-field input, .elicit-field select {
+.settings-panel section > input, .settings-panel section > select, .field input, .field select, .field textarea, .settings-textarea, .elicit-field input, .elicit-field select {
   min-height: 28px;
   border-radius: 2px;
   background: var(--panel-elevated);
@@ -1172,51 +989,8 @@
   min-height: 0;
 }
 
-.settings-detail-heading > div {
-  min-width: 0;
-}
-
-.settings-detail-heading h3 {
-  letter-spacing: -.02em;
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 15px;
-  font-weight: 500;
-  margin-bottom: 3px;
-  margin: 0;
-}
-
-.settings-detail-heading p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 11px;
-  display: none;
-}
-
-.settings-heading h2, .settings-detail-heading h3, .settings-section > h3 {
+.settings-heading h2, .settings-section > h3 {
   color: var(--settings-text);
-}
-
-.settings-detail-heading {
-  display: flex;
-  gap: 11px;
-  margin: 0 0 18px;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 10px;
-  margin-bottom: 10px;
-  align-items: center;
-  border-bottom-color: var(--settings-border);
-}
-
-.settings-detail-icon {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 2px;
-  color: var(--accent-text);
-  background: var(--settings-icon-active-bg);
 }
 
 .settings-tabs button {
@@ -1327,7 +1101,7 @@
    (`scrollback/blocks/user.rs`: `COLLAPSED_MAX_LINES`). A block still arriving streams as a
    `<pre>`, whose own scroll container is what stops the clamp from cutting it. */
 
-.settings-section .provider-list li, .settings-section .connector-list > li, .settings-section .skill-list li {
+.settings-section .connector-list > li, .settings-section .skill-list li {
   padding: 12px 14px;
 }
 
@@ -1431,100 +1205,12 @@
   background: var(--settings-input-bg);
 }
 
-.provider-list li, .connector-list > li, .skill-list li, .model-provider {
-  border-color: var(--settings-border);
-  background: var(--settings-card-bg);
-}
-
 .provider-row-main strong, .connector-main strong, .skill-list li > div:first-child > strong, .model-row-copy strong {
   color: var(--settings-text);
 }
 
 .provider-row-main small, .connector-main small, .skill-description, .model-row-copy code {
   color: var(--settings-muted);
-}
-
-.provider-connections {
-  margin-bottom: 12px;
-  padding: 10px;
-  border: 1px solid var(--border);
-  background: var(--settings-card-bg);
-  border-color: var(--settings-border);
-}
-
-.provider-connections > header, .provider-add-heading strong {
-  color: var(--settings-soft);
-}
-
-.model-provider-heading {
-  display: flex;
-  align-items: center;
-  min-height: 34px;
-  padding: 6px 9px;
-  border-bottom: 1px solid var(--border);
-  background: var(--settings-section-head);
-  border-bottom-color: var(--settings-border);
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.model-add-button {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  gap: 5px;
-  min-height: 25px;
-  padding: 4px 8px;
-  border: 1px solid var(--settings-border);
-  color: var(--settings-soft);
-  background: transparent;
-  cursor: pointer;
-  font-size: 10px;
-}
-
-.model-add-button:hover {
-  border-color: var(--accent-text);
-  color: var(--settings-text);
-  background: var(--settings-icon-active-bg);
-}
-
-.model-add-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 10px;
-  padding: 12px 10px 4px;
-  border-bottom: 1px solid var(--settings-border);
-  background: var(--panel-subtle);
-}
-
-.model-add-form .field {
-  min-width: 0;
-  margin-bottom: 8px;
-}
-
-.model-add-form .field > span {
-  display: flex;
-  align-items: baseline;
-  gap: 4px;
-}
-
-.model-add-form .field > span small {
-  color: var(--settings-muted);
-  font-size: 9px;
-}
-
-.model-add-actions {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding-bottom: 8px;
-}
-
-.model-add-actions button {
-  min-height: 27px;
-  padding: 4px 8px;
-  font-size: 10px;
 }
 
 .model-list li {
@@ -1535,15 +1221,6 @@
   padding: 8px 9px;
   border-bottom: 1px solid color-mix(in srgb, var(--border), transparent 38%);
   border-bottom-color: var(--border);
-}
-
-.model-provider-heading strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--settings-text);
 }
 
 .theme-options button {
@@ -1707,16 +1384,6 @@
   font-size: 11px;
 }
 
-.provider-model-content > .provider-row-actions {
-  align-self: end;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-}
-
-.provider-model-card .model-add-form {
-  grid-column: 1 / -1;
-}
-
 /* Inherits the row's size so `4.5em` on the clip is exactly three lines. */
 
 .dialog:has(.provider-editor) {
@@ -1868,11 +1535,6 @@
     padding: 8px 18px 18px;
   }
 
-  .model-add-form {
-    grid-template-columns: 1fr;
-    gap: 4px;
-  }
-
   .provider-catalog-toolbar {
     align-items: stretch;
     flex-direction: column;
@@ -1901,10 +1563,6 @@
 
   .provider-model-content {
     grid-template-columns: 1fr;
-  }
-
-  .provider-model-content > .provider-row-actions {
-    justify-content: flex-start;
   }
 
   .provider-header-actions {
