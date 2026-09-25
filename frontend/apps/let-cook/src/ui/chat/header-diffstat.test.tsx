@@ -95,8 +95,7 @@ describe("header line changes", () => {
     const rail = screen.getByTestId("header-diffstat");
     expect(rail).toHaveTextContent("12");
     expect(rail).toHaveTextContent("4");
-    expect(rail).toHaveAttribute("aria-label", "12 lines added, 4 lines removed. Open the Review panel");
-    expect(rail).toHaveAttribute("title", "+12 −4 in the working tree — click for Review");
+    expect(rail).toHaveAttribute("aria-label", "12 lines added, 4 lines removed");
   });
 
   it("follows the probe while it is the source of truth", () => {
@@ -158,7 +157,6 @@ describe("header line changes", () => {
     const rail = await screen.findByTestId("header-diffstat");
     expect(rail).toHaveTextContent("3");
     expect(rail).toHaveTextContent("1");
-    expect(rail).toHaveAttribute("title", "+3 −1 from this turn's edits (no git here) — click for Review");
   });
 
   it("prefers the working tree over stale edit totals once git answers", async () => {
@@ -179,8 +177,8 @@ describe("header line changes", () => {
     });
 
     expect(screen.getByTestId("header-diffstat")).toHaveAttribute(
-      "title",
-      "+12 −4 in the working tree — click for Review",
+      "aria-label",
+      "12 lines added, 4 lines removed",
     );
   });
 

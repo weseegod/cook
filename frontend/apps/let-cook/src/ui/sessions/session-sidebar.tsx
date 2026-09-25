@@ -23,6 +23,7 @@ import { SessionSortMenu } from "./session-sidebar/session-sort-menu";
 import { SessionViewMenu } from "./session-sidebar/session-view-menu";
 import { useSidebarDrag } from "./session-sidebar/use-sidebar-drag";
 import { useSidebarResize } from "./session-sidebar/use-sidebar-resize";
+import { UpdateBanner } from "../update-banner";
 
 export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSettings: () => void; onOpenSearch: () => void }) {
   const activeId = useSessionStore((state) => state.sessionId);
@@ -311,12 +312,15 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
           ))}
           {rows.length === 0 && <div className="sidebar-hint">No conversations found.</div>}
         </div>
-        <footer className="sidebar-footer">
-          <div className="sidebar-footer-actions">
-            <button type="button" className="sidebar-footer-button" onClick={onOpenSettings} aria-label="Settings" title="Settings"><Settings size={15} /></button>
-            <button type="button" className="sidebar-footer-button" aria-label="Help" title="Help"><CircleHelp size={15} /></button>
-          </div>
-        </footer>
+        <div className="sidebar-dock">
+          <UpdateBanner />
+          <footer className="sidebar-footer">
+            <div className="sidebar-footer-actions">
+              <button type="button" className="sidebar-footer-button" onClick={onOpenSettings} aria-label="Settings" title="Settings"><Settings size={15} /></button>
+              <button type="button" className="sidebar-footer-button" aria-label="Help" title="Help"><CircleHelp size={15} /></button>
+            </div>
+          </footer>
+        </div>
         {notice && <div className="sidebar-notice" data-testid="notice-banner" role="status" aria-live="polite">{notice}</div>}
         <div
           className="sidebar-resizer"

@@ -1,3 +1,4 @@
+import { RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   checkForAppUpdates,
@@ -5,7 +6,7 @@ import {
   type UpdateCheckResult,
 } from "../updater";
 
-/** One-shot update notice in the chat column. Shares `updater.ts` with Settings → About; no shared state. */
+/** One-shot update notice above the sidebar Settings button. Shares `updater.ts` with Settings → About; no shared state. */
 export function UpdateBanner() {
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -38,18 +39,25 @@ export function UpdateBanner() {
 
   return (
     <div className="update-banner" data-testid="update-banner" role="status">
-      <p className="update-banner-copy">
-        Update available: <strong>{result.version}</strong>
-      </p>
-      {installError && <p className="update-banner-error">{installError}</p>}
-      <div className="update-banner-actions">
-        <button type="button" className="ghost-button" disabled={busy} onClick={() => void onInstall()}>
-          {busy ? "Installing…" : "Install and update"}
-        </button>
-        <button type="button" className="ghost-button" disabled={busy} onClick={() => setDismissed(true)}>
-          Dismiss update
+      <div className="update-banner-header">
+        <p className="update-banner-copy">
+          Update available: <strong>{result.version}</strong>
+        </p>
+        <button
+          type="button"
+          className="update-banner-close"
+          aria-label="Dismiss update"
+          disabled={busy}
+          onClick={() => setDismissed(true)}
+        >
+          <X size={14} />
         </button>
       </div>
+      {installError && <p className="update-banner-error">{installError}</p>}
+      <button type="button" className="update-banner-install" disabled={busy} onClick={() => void onInstall()}>
+        <RefreshCw size={14} aria-hidden="true" />
+        <span>{busy ? "Installing…" : "Install and Update"}</span>
+      </button>
     </div>
   );
 }

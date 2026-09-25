@@ -175,7 +175,8 @@ Markdown is `markdown.tsx`.
 ### Header
 
 `ui/chat/agent-header.tsx` is the status bar. Left: workspace and plans.
-Right, in fixed slots: goal or the plan checklist, line changes, Git, tools.
+Right, in fixed slots: goal or the plan checklist, Git with line changes, tools.
+The Git chip menu shows the changed-file count in Preview and opens the diff, or starts Commit / Commit and push.
 
 | Chip | File |
 |---|---|
@@ -183,8 +184,7 @@ Right, in fixed slots: goal or the plan checklist, line changes, Git, tools.
 | Tasks | `ui/activity/tasks-chip.tsx`, menu `tasks-menu.tsx` |
 | Goal | `ui/chat/goal-status.tsx`, detail `goal-detail.tsx` |
 | Checklist when there is no goal | `ui/chat/todo-chip.tsx` |
-| Diffstat | `ui/chat/header-diffstat.tsx` |
-| Git | `ui/chat/git-chip.tsx`, probe `git-status.ts` |
+| Git and line changes | `ui/chat/git-chip.tsx`, line totals `ui/chat/header-diffstat.tsx`, probe `git-status.ts` |
 | Context | `ui/chat/context-chip.tsx` |
 
 ### Composer and queue
@@ -331,7 +331,7 @@ The updater plugin updates this app binary. It does not write
 | Change which `cook` binary starts | `src-tauri/src/bin_resolve.rs` |
 | Change desktop logging | `src-tauri/src/logging.rs` |
 | Add a Tauri command | Implement it in `src-tauri/src/`, register it in `lib.rs`, call it from `src/acp/host.ts` |
-| Change the app updater | `src/updater.ts`, open-app banner in `update-banner.tsx` (outside sidebar), Settings → About in `settings-panel.tsx`, `tauri.release.conf.json`. Publish path: [`docs/desktop-release.md`](../../../docs/desktop-release.md) |
+| Change the app updater | `src/updater.ts`, sidebar banner in `update-banner.tsx` (above Settings), Settings → About in `settings-panel.tsx`, `tauri.release.conf.json`. Publish path: [`docs/desktop-release.md`](../../../docs/desktop-release.md) |
 | Change a model, a tool, or session storage | The agent. Repo map: [`ARCHITECTURE.md`](../../../ARCHITECTURE.md) |
 
 ### Tests

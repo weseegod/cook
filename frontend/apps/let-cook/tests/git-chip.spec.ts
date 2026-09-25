@@ -3,9 +3,9 @@ import { CONNECTED_SEED } from "./seed";
 import { WORKSPACE, api, capture, openWorkspace } from "./support/harness";
 
 /**
- * The header git chip: a dirty tree shows a Git icon whose hover/click menu offers "Commit" and
- * "Commit and push". Both items send the slash command the agent expands, so the suite reads the
- * request the renderer put on the wire rather than trusting that the menu looked right.
+ * The header Git chip: a dirty tree shows the branch and line totals. Its menu offers Preview,
+ * Commit, and Commit and push. Commit actions send slash commands, so the suite reads the request
+ * the renderer put on the wire rather than trusting that the menu looked right.
  */
 
 const DIRTY_SEED = { ...CONNECTED_SEED, workspace: WORKSPACE };
@@ -47,14 +47,19 @@ test.describe("header git chip", () => {
 
     const chip = page.getByTestId("git-chip");
     await expect(chip).toBeVisible();
-    await expect(page.getByTestId("git-chip-count")).toHaveText("1");
+    await expect(page.getByTestId("git-chip-count")).toHaveCount(0);
+    await expect(page.getByTestId("header-diffstat")).toContainText("3");
+    await expect(page.getByTestId("header-diffstat")).toContainText("1");
 
-    // Hover is enough to reveal the two actions.
+    // Hover is enough to reveal the three actions.
     await chip.hover();
     const menu = page.getByTestId("git-chip-menu");
     await expect(menu).toBeVisible();
+    await expect(page.getByTestId("git-preview")).toContainText("Preview");
+    await expect(page.getByTestId("git-preview")).toContainText("1 changed file");
     await expect(page.getByTestId("git-commit")).toContainText("Commit");
     await expect(page.getByTestId("git-commit-and-push")).toContainText("Commit and push");
+    await expect(menu.getByRole("menuitem")).toHaveCount(3);
     await capture(page, "git-chip-hover");
 
     await page.getByTestId("git-commit").click();
@@ -66,10 +71,20 @@ test.describe("header git chip", () => {
   test("keeps the chip and its menu inside a narrow window", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await openWorkspace(page, DIRTY_SEED);
+    const dimensions = await page.evaluate(() => ({
+      viewport: window.innerWidth,
+      document: document.documentElement.scrollWidth,
+      header: document.querySelector<HTMLElement>(".agent-header")?.getBoundingClientRect().toJSON(),
+      headerScrollWidth: document.querySelector<HTMLElement>(".agent-header")?.scrollWidth,
+      headerClientWidth: document.querySelector<HTMLElement>(".agent-header")?.clientWidth,
+    }));
+    console.log("NARROW_HEADER", JSON.stringify(dimensions));
 
     const chip = page.getByTestId("git-chip");
     await expect(chip).toBeVisible();
+    await expect(page.getByTestId("header-diffstat")).toBeVisible();
     await chip.click();
+    await expect(page.getByTestId("git-preview")).toContainText("1 changed file");
 
     const menu = await page.getByTestId("git-chip-menu").boundingBox();
     expect(menu).not.toBeNull();

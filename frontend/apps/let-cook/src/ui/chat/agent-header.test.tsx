@@ -71,7 +71,8 @@ describe("AgentHeader git chip", () => {
 
     const chip = await screen.findByTestId("git-chip");
     expect(screen.getByTestId("agent-header")).toContainElement(chip);
-    expect(screen.getByTestId("git-chip-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("header-diffstat")).toHaveTextContent("9");
+    expect(screen.queryByTestId("git-chip-count")).toBeNull();
   });
 
   it("keeps the chip for a clean tree and leaves the rest of the header alone", async () => {
@@ -102,16 +103,18 @@ describe("AgentHeader git chip", () => {
 });
 
 describe("AgentHeader layout", () => {
-  it("carries the plans on the left and the workspace git state on the right", async () => {
+  it("carries the plans on the left and combines git state with line changes on the right", async () => {
     vi.mocked(loadGitStatus).mockResolvedValue(dirty);
     renderHeader();
 
     const chip = await screen.findByTestId("git-chip");
-    const rail = screen.getByTestId("header-diffstat");
+    const diffstat = screen.getByTestId("header-diffstat");
     expect(screen.getByTestId("plan-chip").closest(".agent-header-left")).not.toBeNull();
-    expect(rail.closest(".agent-header-right")).not.toBeNull();
-    // The diffstat reads immediately before the chip that owns the commit commands.
-    expect(rail.compareDocumentPosition(chip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chip.closest(".agent-header-right")).not.toBeNull();
+    expect(chip).toContainElement(diffstat);
+    const branch = chip.querySelector(".git-chip-branch")!;
+    expect(branch.compareDocumentPosition(diffstat) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(chip.querySelector(".git-chip-count")).toBeNull();
   });
 
   it("reserves stable slots for optional header controls", () => {
@@ -120,7 +123,6 @@ describe("AgentHeader layout", () => {
     const slots = Array.from(document.querySelectorAll(".agent-header-right > .agent-header-slot"));
     expect(slots.map((slot) => slot.className)).toEqual([
       "agent-header-slot agent-header-slot-goal agent-header-slot-goal-empty",
-      "agent-header-slot agent-header-slot-diffstat",
       "agent-header-slot agent-header-slot-git",
       "agent-header-slot agent-header-slot-tools",
     ]);
@@ -142,11 +144,12 @@ describe("AgentHeader layout", () => {
     expect(chip.closest(".agent-header-slot")).toHaveClass("agent-header-slot-goal-checklist");
   });
 
-  it("asks the shell for the Review panel when the line changes are clicked", async () => {
+  it("opens the Review panel from the Git chip Preview action", async () => {
     vi.mocked(loadGitStatus).mockResolvedValue(dirty);
     renderHeader();
 
-    fireEvent.click(await screen.findByTestId("header-diffstat"));
+    fireEvent.click(await screen.findByTestId("git-chip"));
+    fireEvent.click(screen.getByTestId("git-preview"));
     expect(useToolsPanelStore.getState().target).toBe("review");
     expect(useToolsPanelStore.getState().nonce).toBe(1);
   });

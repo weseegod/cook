@@ -705,24 +705,13 @@ details[open] > summary > .row-chevron {
 .header-diffstat {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
   flex: 0 0 auto;
-  min-height: 24px;
-  padding: 3px 5px;
-  border: 0;
-  border-radius: 4px;
   color: var(--muted);
-  background: transparent;
-  cursor: pointer;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.header-diffstat:hover {
-  color: var(--text-soft);
-  background: var(--raised-2);
 }
 
 .header-diffstat > span {
@@ -1080,10 +1069,24 @@ body {
   white-space: nowrap;
 }
 
+.git-chip-trigger {
+  min-height: 26px;
+  padding-inline: 7px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text-soft);
+  background: var(--panel);
+  transition: border-color .15s, background .15s, color .15s;
+}
+
 .context-chip-trigger:hover, .context-chip-trigger[aria-expanded="true"],
 .git-chip-trigger:hover, .git-chip-trigger[aria-expanded="true"] {
   color: var(--text);
   background: var(--raised-2);
+}
+
+.git-chip-trigger:hover, .git-chip-trigger[aria-expanded="true"] {
+  border-color: var(--border-strong);
 }
 
 .context-chip-display {
@@ -1203,11 +1206,6 @@ body {
   color: var(--text-soft);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.git-chip-count {
-  color: var(--text-soft);
-  font-variant-numeric: tabular-nums;
 }
 
 .git-chip-menu {

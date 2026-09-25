@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe("GitChip", () => {
-  it("stays on the header for a clean tree, naming the branch and disabling both commands", async () => {
+  it("stays on the header for a clean tree, naming the branch and disabling all actions", async () => {
     vi.mocked(loadGitStatus).mockResolvedValue(clean);
     render(<GitChip />);
 
@@ -57,11 +57,12 @@ describe("GitChip", () => {
     expect(screen.queryByTestId("git-chip-count")).toBeNull();
 
     fireEvent.click(trigger);
+    expect(screen.getByTestId("git-preview")).toBeDisabled();
     expect(screen.getByTestId("git-commit")).toBeDisabled();
     expect(screen.getByTestId("git-commit-and-push")).toBeDisabled();
   });
 
-  it("says so, with both commands disabled, outside a git repository", async () => {
+  it("says so, with all actions disabled, outside a git repository", async () => {
     vi.mocked(loadGitStatus).mockResolvedValue({ ...clean, isGitRepo: false, branch: null });
     render(<GitChip />);
 
@@ -71,6 +72,7 @@ describe("GitChip", () => {
     expect(trigger).toHaveAttribute("title", "This folder is not a git repository");
 
     fireEvent.click(trigger);
+    expect(screen.getByTestId("git-preview")).toBeDisabled();
     expect(screen.getByTestId("git-commit")).toBeDisabled();
     expect(screen.getByTestId("git-commit")).toHaveTextContent("This folder is not a git repository");
     expect(screen.getByTestId("git-commit-and-push")).toBeDisabled();
@@ -86,12 +88,17 @@ describe("GitChip", () => {
     expect(container.querySelector(".git-chip")).toBeNull();
   });
 
-  it("shows the change count and a branch/diff summary", async () => {
+  it("shows line totals in the header and the changed-file count in Preview", async () => {
     render(<GitChip />);
 
     const trigger = await screen.findByTestId("git-chip");
-    expect(screen.getByTestId("git-chip-count")).toHaveTextContent("3");
-    expect(trigger).toHaveAttribute("title", "3 changed files on main · +12 −4");
+    expect(screen.queryByTestId("git-chip-count")).toBeNull();
+    expect(screen.getByTestId("header-diffstat")).toHaveTextContent("12");
+    expect(screen.getByTestId("header-diffstat")).toHaveTextContent("4");
+    expect(trigger).toHaveAttribute("title", "Workspace changes on main · +12 −4");
+
+    fireEvent.click(trigger);
+    expect(screen.getByTestId("git-preview")).toHaveTextContent("3 changed files");
   });
 
   it("opens the menu on hover and closes it again", async () => {
@@ -102,6 +109,7 @@ describe("GitChip", () => {
 
     fireEvent.mouseEnter(trigger);
     expect(screen.getByTestId("git-chip-menu")).toBeInTheDocument();
+    expect(screen.getByTestId("git-preview")).toHaveTextContent("Preview");
     expect(screen.getByTestId("git-commit")).toHaveTextContent("Commit");
     expect(screen.getByTestId("git-commit-and-push")).toHaveTextContent("Commit and push");
 

@@ -2,17 +2,30 @@ import { expect, test } from "@playwright/test";
 import { CONNECTED_SEED } from "./seed";
 import { openWorkspace } from "./support/harness";
 
-test("shows an update banner outside the sidebar on open", async ({ page }) => {
+test("shows an update banner above Settings in the sidebar on open", async ({ page }) => {
   await openWorkspace(page, CONNECTED_SEED);
   const banner = page.getByTestId("update-banner");
   await expect(banner).toBeVisible();
   await expect(banner).toContainText("-local");
-  await expect(page.locator(".sidebar .update-banner")).toHaveCount(0);
-  expect(await banner.evaluate((el) => Boolean(el.closest(".sidebar")))).toBe(false);
+  await expect(page.locator(".sidebar .update-banner")).toBeVisible();
+  expect(await banner.evaluate((el) => Boolean(el.closest(".sidebar")))).toBe(true);
 
-  await banner.getByRole("button", { name: "Install and update" }).click();
+  const settings = page.locator(".sidebar .sidebar-footer-button[aria-label='Settings']");
+  await expect(settings).toBeVisible();
+  const bannerAboveSettings = await page.evaluate(() => {
+    const notice = document.querySelector(".update-banner");
+    const settingsBtn = document.querySelector(".sidebar .sidebar-footer-button[aria-label='Settings']");
+    if (!notice || !settingsBtn) return false;
+    return notice.getBoundingClientRect().bottom <= settingsBtn.getBoundingClientRect().top + 1;
+  });
+  expect(bannerAboveSettings).toBe(true);
+
+  await banner.getByRole("button", { name: "Install and Update" }).click();
   await expect(banner).toBeVisible();
-  await expect(banner.getByRole("button", { name: "Install and update" })).toBeVisible();
+  await expect(banner.getByRole("button", { name: "Install and Update" })).toBeVisible();
+
+  await banner.getByRole("button", { name: "Dismiss update" }).click();
+  await expect(banner).toHaveCount(0);
 });
 
 test("shows and focuses the local update preview by default", async ({ page }) => {
@@ -26,6 +39,7 @@ test("shows and focuses the local update preview by default", async ({ page }) =
   const installButton = settingsPanel.getByRole("button", { name: "Install and update" });
   await expect(installButton).toBeVisible();
   await expect(installButton).toBeFocused();
+  await expect(installButton).toHaveClass(/primary-button/);
   await expect(page.locator(".about-updates button")).toHaveCount(1);
   await expect(settingsPanel.getByRole("button", { name: "Check for updates" })).toHaveCount(0);
 

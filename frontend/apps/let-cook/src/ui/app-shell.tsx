@@ -21,7 +21,6 @@ import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
 import type { SettingsTab } from "./settings/settings-panel";
 import { ShortcutsSheet } from "./shortcuts/shortcuts-sheet";
-import { UpdateBanner } from "./update-banner";
 import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
@@ -126,7 +125,7 @@ export function AppShell() {
     const closeOnOutsideClick = (event: PointerEvent) => {
       const panel = document.querySelector<HTMLElement>(".utility-panel");
       if (!(event.target instanceof Element) || !panel || panel.contains(event.target)) return;
-      if (event.target.closest(".header-diffstat")) return;
+      if (event.target.closest(".git-chip")) return;
       setUtilityPanelOpen(false);
     };
     document.addEventListener("pointerdown", closeOnOutsideClick);
@@ -274,7 +273,6 @@ export function AppShell() {
           utilityPanelOpen={utilityPanelOpen}
           onOpenTools={() => setUtilityPanelOpen(true)}
         />
-        <UpdateBanner />
         {!cwd ? (
           <Welcome onChooseWorkspace={chooseWorkspace} />
         ) : needsConnect ? (

@@ -1,7 +1,6 @@
 /* shell.css — app frame, titlebar, sidebar, session list, header controls */
 
 .main-column {
-  position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
@@ -11,15 +10,12 @@
 }
 
 .update-banner {
-  position: absolute;
-  z-index: 5;
-  top: 48px;
-  left: 12px;
-  max-width: min(360px, calc(100% - 24px));
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 10px;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   color: var(--text);
@@ -27,7 +23,12 @@
   box-shadow: var(--shadow);
   font-size: 11px;
   line-height: 1.4;
-  overflow-wrap: anywhere;
+}
+
+.update-banner-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .update-banner-copy,
@@ -35,19 +36,74 @@
   margin: 0;
 }
 
+.update-banner-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .update-banner-error {
   color: var(--danger);
 }
 
-.update-banner-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+.update-banner-close {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin: -2px -4px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
 }
 
-.update-banner-actions .ghost-button {
-  padding: 4px 8px;
+.update-banner-close:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--raised-2);
+}
+
+.update-banner-close:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.update-banner-install {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent), var(--border) 60%);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text);
   font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+
+.update-banner-install span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.update-banner-install:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft), var(--raised-2) 30%);
+}
+
+.update-banner-install:disabled {
+  opacity: 0.7;
+  cursor: default;
 }
 
 .icon-button {
@@ -447,16 +503,8 @@ img.brand-mark {
   width: 240px;
 }
 
-.agent-header-slot-diffstat {
-  width: 64px;
-}
-
 .agent-header-slot-git {
-  width: 148px;
-}
-
-.agent-header-slot-diffstat .header-diffstat {
-  justify-content: center;
+  width: 190px;
 }
 
 .session-event {
@@ -980,10 +1028,17 @@ img.brand-mark {
   color: var(--muted);
 }
 
+.sidebar-dock {
+  margin-top: auto;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
 .sidebar-footer {
   display: flex;
   justify-content: space-between;
-  margin-top: auto;
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 10px;
@@ -1161,12 +1216,8 @@ body.session-dragging .session-list {
     width: 72px;
   }
 
-  .agent-header-slot-diffstat {
-    width: 44px;
-  }
-
   .agent-header-slot-git {
-    width: 76px;
+    width: 124px;
   }
 
   .agent-header-left .agent-cwd {
@@ -1195,12 +1246,8 @@ body.session-dragging .session-list {
     width: 96px;
   }
 
-  .agent-header-slot-diffstat {
-    width: 48px;
-  }
-
   .agent-header-slot-git {
-    width: 96px;
+    width: 144px;
   }
 
   .agent-header-slot-git .git-chip-trigger {

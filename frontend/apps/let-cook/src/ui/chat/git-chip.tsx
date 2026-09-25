@@ -1,16 +1,19 @@
-import { ArrowUpFromLine, ChevronDown, GitBranch, GitCommitHorizontal, LoaderCircle } from "lucide-react";
+import { ArrowUpFromLine, ChevronDown, Eye, GitBranch, GitCommitHorizontal, LoaderCircle } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
 import { useSessionStore } from "../../state/session";
+import { useToolsPanelStore } from "../../state/tools-panel";
+import { HeaderDiffstat } from "./header-diffstat";
 import { useGitStatus, useGitStatusPoll } from "./git-status";
 
 /**
- * Header git chip: the branch name, the changed-file count when the tree is dirty, and a `/commit`
- * / `/commit-and-push` menu on hover or click. Detection is the shared counts-only `git status`
- * probe behind {@link useGitStatusPoll} — the per-file diff stays in the Review panel's on-demand
- * snapshot. A clean tree keeps the menu but disables the commands that would have nothing to do,
- * and a workspace outside a repository says so rather than vanishing from the header.
+ * Header git chip: branch and line changes, with Preview, Commit, and Commit and push actions.
+ * The Preview menu item carries the changed-file count. Detection is the shared counts-only
+ * `git status` probe behind {@link useGitStatusPoll} — the per-file diff stays in the Review panel's
+ * on-demand snapshot.
+ * A clean tree keeps the menu but disables actions that would have nothing to do, and a workspace
+ * outside a repository says so rather than vanishing from the header.
  */
 export function GitChip() {
   useGitStatusPoll();
@@ -69,15 +72,25 @@ export function GitChip() {
   // disabled is available without the pointer passing over the chip on the way elsewhere.
   const open = inRepo ? menuOpen || hovered : menuOpen;
 
-  const changed = status.changedFiles === 1 ? "1 changed file" : `${status.changedFiles} changed files`;
+  const filesChanged = status.changedFiles === 1 ? "1 changed file" : `${status.changedFiles} changed files`;
   const counts = status.additions > 0 || status.deletions > 0 ? ` · +${status.additions} −${status.deletions}` : "";
   const branch = status.branch ? ` on ${status.branch}` : "";
   const label = !inRepo
     ? "This folder is not a git repository"
     : status.operationInProgress
       ? `Git operation in progress${branch}`
-      : dirty ? `${changed}${branch}${counts}` : `Clean tree${branch}`;
+      : dirty ? `Workspace changes${branch}${counts}` : `Clean tree${branch}`;
   const hint = !inRepo ? "This folder is not a git repository" : dirty ? null : "Nothing to commit";
+  const previewHint = !inRepo
+    ? "This folder is not a git repository"
+    : status.changedFiles > 0 ? filesChanged : "No changed files to preview";
+
+  function preview() {
+    if (!dirty) return;
+    setMenuOpen(false);
+    setHovered(false);
+    useToolsPanelStore.getState().request("review");
+  }
 
   return (
     <div
@@ -93,17 +106,30 @@ export function GitChip() {
         onClick={() => setMenuOpen((value) => !value)}
         aria-expanded={open}
         aria-haspopup="menu"
-        aria-label={!inRepo ? "No git repository" : dirty ? "Workspace changes" : "Working tree clean"}
+        aria-label={!inRepo ? "No git repository" : dirty ? `Workspace changes${branch}${counts}` : `Working tree clean${branch}`}
         title={label}
       >
         {sending ? <LoaderCircle className="spin" size={14} /> : <GitBranch size={14} />}
         {!inRepo && <span className="git-chip-branch">No git</span>}
         {inRepo && status.branch && <span className="git-chip-branch">{status.branch}</span>}
-        {dirty && <span className="git-chip-count" data-testid="git-chip-count">{status.changedFiles}</span>}
+        <HeaderDiffstat />
         <ChevronDown size={11} aria-hidden="true" />
       </button>
       {open && (
         <div className="git-chip-menu" role="menu" data-testid="git-chip-menu">
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="git-preview"
+            disabled={!dirty}
+            onClick={preview}
+          >
+            <Eye size={13} />
+            <span>
+              <strong>Preview</strong>
+              <small>{previewHint}</small>
+            </span>
+          </button>
           <button
             type="button"
             role="menuitem"

@@ -885,12 +885,24 @@
   display: flex;
   align-items: flex-start;
   gap: 8px;
+  min-width: 0;
   min-height: 36px;
-  width: calc(100% - 48px);
+  width: auto;
+  max-width: 100%;
   margin: 0 24px 8px;
   border: 1px solid color-mix(in srgb, var(--danger), transparent 45%);
   border-left: 2px solid var(--danger-soft-text);
   border-radius: 3px;
+}
+
+.chat-error > svg {
+  flex: 0 0 auto;
+}
+
+.error-copy span {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .message-body {

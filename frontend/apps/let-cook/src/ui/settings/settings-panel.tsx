@@ -283,7 +283,7 @@ function AboutUpdates() {
       <button
         ref={installButtonRef}
         type="button"
-        className="ghost-button"
+        className={result?.status === "available" ? "primary-button" : "ghost-button"}
         disabled={(!UPDATER_CONFIGURED && !UPDATER_PREVIEW) || busy !== null}
         onClick={() => void (result?.status === "available" ? onInstall() : onCheck())}
       >

@@ -6,7 +6,6 @@ import { useSessionStore } from "../../state/session";
 import { TasksChip } from "../activity/tasks-chip";
 import { GitChip } from "./git-chip";
 import { GoalStatus } from "./goal-status";
-import { HeaderDiffstat } from "./header-diffstat";
 import { PlanChip } from "./plan-chip";
 import { TodoChip } from "./todo-chip";
 
@@ -14,7 +13,7 @@ import { TodoChip } from "./todo-chip";
  * Agent status bar (catalog §3.3): the workspace and its plans left, chips right. One
  * `margin-left: auto` on the right cluster — no ProcessStatus, no competing auto margins. The
  * right cluster uses fixed slots so optional status chips can appear without moving a neighbor:
- * goal (or the plan checklist when there is no goal), line changes, Git, then tools.
+ * goal (or the plan checklist when there is no goal), Git with line changes, then tools.
  */
 export function AgentHeader({
   sidebarOpen,
@@ -65,9 +64,6 @@ export function AgentHeader({
       <div className="agent-header-right">
         <div className={`agent-header-slot agent-header-slot-goal${hasGoal ? "" : hasChecklist ? " agent-header-slot-goal-checklist" : " agent-header-slot-goal-empty"}`}>
           {hasGoal ? <GoalStatus /> : <TodoChip />}
-        </div>
-        <div className="agent-header-slot agent-header-slot-diffstat">
-          <HeaderDiffstat />
         </div>
         <div className="agent-header-slot agent-header-slot-git">
           <GitChip />

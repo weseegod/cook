@@ -868,14 +868,12 @@
 }
 
 .agent-header-slot-goal .goal-chip,
-.agent-header-slot-diffstat .header-diffstat,
 .agent-header-slot-git .git-chip,
 .agent-header-slot-git .git-chip-trigger {
   max-width: 100%;
 }
 
 .agent-header-slot-goal .goal-chip,
-.agent-header-slot-diffstat .header-diffstat,
 .agent-header-slot-git .git-chip-trigger {
   width: 100%;
 }
