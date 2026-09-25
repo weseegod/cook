@@ -27,6 +27,7 @@ use tracing::Instrument;
 use xai_grok_sampling_types::error::{
     parse_error_code, try_parse_stream_error, user_facing_api_error_message,
 };
+use xai_grok_sampling_types::provider_error::parse_provider_error;
 use xai_grok_sampling_types::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatThinking,
     ChatThinkingType, ConversationRequest, ConversationResponse, CreateResponseWrapper,
@@ -51,6 +52,29 @@ const DEFAULT_CLIENT_IDENTIFIER: &str = "grok-shell";
 /// Product identifier baked into User-Agent strings.
 const AGENT_PRODUCT: &str = "grok-shell";
 const ANTHROPIC_DEFAULT_MAX_TOKENS: u32 = 128_000;
+
+/// Retry only when the provider explicitly rejects the optional temperature field.
+/// Other 400s, including invalid temperature values, must keep their original error.
+fn rejects_unsupported_temperature(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return false;
+    }
+    let Some(error) = parse_provider_error(body) else {
+        return false;
+    };
+    let message = error.message.trim().to_ascii_lowercase();
+    let Some(parameter) = message.strip_prefix("unsupported parameter:") else {
+        return false;
+    };
+    parameter
+        .trim()
+        .trim_matches(['\'', '"', '`'])
+        .eq_ignore_ascii_case("temperature")
+        && error
+            .param
+            .as_deref()
+            .is_none_or(|param| param.eq_ignore_ascii_case("temperature"))
+}
 
 /// Per-request `x-grok-*` headers. Optional fields are skipped when empty/`None`.
 struct GrokRequestHeaders<'a> {
@@ -1377,36 +1401,38 @@ impl SamplingClient {
             user_id: request.x_grok_user_id.as_deref(),
         };
         let extra_tool_entries = std::mem::take(&mut request.extra_tool_entries);
-        let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
-            tracing::error!("Failed to serialize responses request: {}", e);
-            SamplingError::Serialization(e)
-        })?;
-        splice_extra_tool_entries(&mut request_body, extra_tool_entries);
-        append_response_includes(&mut request_body, &self.defaults.extra_response_includes);
-        // async-openai's ReasoningTextContent struct omits the `type` discriminator that the Responses API requires on input
-        // Patch it in after serializing
-        xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
-        self.prepare_bearer().await;
-        let SentRequest {
-            builder,
-            sent_bearer,
-        } = self.post(self.endpoint("responses"));
-        let built_request = self
-            .build_json_request(grok_headers.apply(builder), &request_body)
-            .await?;
-        let response = self.send(built_request).await?;
+        let bytes = loop {
+            let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
+                tracing::error!("Failed to serialize responses request: {}", e);
+                SamplingError::Serialization(e)
+            })?;
+            splice_extra_tool_entries(&mut request_body, extra_tool_entries.clone());
+            append_response_includes(&mut request_body, &self.defaults.extra_response_includes);
+            // async-openai's ReasoningTextContent omits the required `type` discriminator.
+            xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
+            self.prepare_bearer().await;
+            let SentRequest {
+                builder,
+                sent_bearer,
+            } = self.post(self.endpoint("responses"));
+            let built_request = self
+                .build_json_request(grok_headers.apply(builder), &request_body)
+                .await?;
+            let response = self.send(built_request).await?;
 
-        let status = response.status();
-        request_region
-            .span()
-            .record("status_code", status.as_u16() as i64);
-        request_region.span().record("success", status.is_success());
-        let model_metadata = extract_model_metadata(response.headers());
-        let retry_after_secs = extract_retry_after(response.headers());
-        let should_retry = extract_should_retry(response.headers());
-        let bytes = response.bytes().await?;
+            let status = response.status();
+            request_region
+                .span()
+                .record("status_code", status.as_u16() as i64);
+            request_region.span().record("success", status.is_success());
+            let model_metadata = extract_model_metadata(response.headers());
+            let retry_after_secs = extract_retry_after(response.headers());
+            let should_retry = extract_should_retry(response.headers());
+            let bytes = response.bytes().await?;
 
-        if !status.is_success() {
+            if status.is_success() {
+                break bytes;
+            }
             if status == reqwest::StatusCode::UNAUTHORIZED {
                 self.record_401_attribution(
                     crate::attribution::SamplingConsumer::Responses,
@@ -1418,6 +1444,13 @@ impl SamplingClient {
                     format!("Unauthorized (401) from {endpoint}: {server_message}"),
                     sent_bearer.as_deref(),
                 ));
+            }
+            if request.inner.temperature.is_some()
+                && rejects_unsupported_temperature(status, bytes.as_ref())
+            {
+                tracing::warn!(model_id = %model_id, "responses endpoint rejected temperature; retrying without");
+                request.inner.temperature = None;
+                continue;
             }
 
             let message = user_facing_api_error_message(status, bytes.as_ref());
@@ -1436,7 +1469,7 @@ impl SamplingClient {
                 should_retry,
                 error_code: parse_error_code(bytes.as_ref()),
             });
-        }
+        };
 
         let response_obj = serde_json::from_slice::<rs::Response>(&bytes).map_err(|e| {
             let raw_body = String::from_utf8_lossy(&bytes);
@@ -1598,6 +1631,13 @@ impl SamplingClient {
                     "responses endpoint rejected stream_tool_calls; retrying without"
                 );
                 include_stream_tool_calls = false;
+                continue 'responses_request;
+            }
+            if request.inner.temperature.is_some()
+                && rejects_unsupported_temperature(status, bytes.as_ref())
+            {
+                tracing::warn!(model_id = %model_id, "responses endpoint rejected temperature; retrying without");
+                request.inner.temperature = None;
                 continue 'responses_request;
             }
             let message = user_facing_api_error_message(status, bytes.as_ref());
@@ -2350,8 +2390,8 @@ mod tests {
     use indexmap::IndexMap;
     use tokio::net::TcpListener;
     use tokio::sync::oneshot;
-    use xai_grok_sampling_types::ApiErrorCode;
     use xai_grok_sampling_types::types::ChatRequestMessage;
+    use xai_grok_sampling_types::{ApiErrorCode, ConversationItem};
 
     #[test]
     fn splice_extra_tool_entries_extends_existing_tools_array() {
@@ -2639,6 +2679,164 @@ mod tests {
     }
 
     const EMPTY_RESPONSE_JSON: &str = r#"{"id":"resp","object":"response","created_at":0,"model":"test-model","status":"completed","output":[],"usage":{"input_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens":0,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":0}}"#;
+
+    async fn response_temperature_case(
+        streaming: bool,
+        failures: Vec<&'static str>,
+        stream_tool_calls: bool,
+    ) -> (Result<()>, Vec<serde_json::Value>) {
+        let bodies = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = bodies.clone();
+        let app = Router::new().route(
+            "/v1/responses",
+            post(move |body: Bytes| {
+                let captured = captured.clone();
+                let failures = failures.clone();
+                async move {
+                    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+                    let attempt = {
+                        let mut bodies = captured.lock().unwrap();
+                        bodies.push(body);
+                        bodies.len() - 1
+                    };
+                    let (status, content_type, reply) = if let Some(message) = failures.get(attempt)
+                    {
+                        (
+                            reqwest::StatusCode::BAD_REQUEST,
+                            "application/json",
+                            serde_json::json!({"error": {"message": message}}).to_string(),
+                        )
+                    } else if streaming {
+                        (
+                            reqwest::StatusCode::OK,
+                            "text/event-stream",
+                            "data: [DONE]\n\n".to_owned(),
+                        )
+                    } else {
+                        (
+                            reqwest::StatusCode::OK,
+                            "application/json",
+                            EMPTY_RESPONSE_JSON.to_owned(),
+                        )
+                    };
+                    axum::response::Response::builder()
+                        .status(status)
+                        .header("content-type", content_type)
+                        .body(axum::body::Body::from(reply))
+                        .unwrap()
+                }
+            }),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        let client = SamplingClient::new(SamplerConfig {
+            base_url: format!("http://{addr}/v1"),
+            api_backend: ApiBackend::Responses,
+            stream_tool_calls,
+            ..minimal_config()
+        })
+        .unwrap();
+        let request = ConversationRequest::from_items(vec![ConversationItem::user("summarize")])
+            .with_temperature(1.0);
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            if streaming {
+                client
+                    .conversation_stream_responses(request)
+                    .await
+                    .map(drop)
+            } else {
+                client.conversation_responses(request).await.map(drop)
+            }
+        })
+        .await
+        .expect("Responses request must finish without a retry loop");
+        server.abort();
+        let _ = server.await;
+        let bodies = Arc::try_unwrap(bodies).unwrap().into_inner().unwrap();
+        (result, bodies)
+    }
+
+    #[tokio::test]
+    async fn responses_retry_unsupported_temperature_once_for_stream_and_unary() {
+        for streaming in [false, true] {
+            let (result, bodies) = response_temperature_case(
+                streaming,
+                vec!["Unsupported parameter: temperature"],
+                false,
+            )
+            .await;
+            result.expect("request should succeed without temperature");
+            assert_eq!(bodies.len(), 2);
+            assert_eq!(bodies[0]["temperature"], 1.0);
+            assert!(bodies[1].get("temperature").is_none());
+            let mut original = bodies[0].clone();
+            original.as_object_mut().unwrap().remove("temperature");
+            assert_eq!(bodies[1], original, "only temperature should change");
+
+            let (result, bodies) = response_temperature_case(
+                streaming,
+                vec![
+                    "Unsupported parameter: temperature",
+                    "Unsupported parameter: temperature",
+                ],
+                false,
+            )
+            .await;
+            assert!(
+                result.is_err(),
+                "a repeated rejection must return its error"
+            );
+            assert_eq!(
+                bodies.len(),
+                2,
+                "temperature fallback is limited to one retry"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_temperature_fallback_preserves_supported_and_other_errors() {
+        for streaming in [false, true] {
+            let (result, bodies) = response_temperature_case(streaming, vec![], false).await;
+            result.expect("provider accepts temperature");
+            assert_eq!(bodies.len(), 1);
+            assert_eq!(bodies[0]["temperature"], 1.0);
+
+            for message in [
+                "Invalid value for 'temperature'",
+                "Unsupported parameter: top_p",
+            ] {
+                let (result, bodies) =
+                    response_temperature_case(streaming, vec![message], false).await;
+                assert!(result.is_err(), "{message}");
+                assert_eq!(bodies.len(), 1, "{message} must not trigger a retry");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn responses_temperature_and_stream_tool_call_fallbacks_are_bounded() {
+        let (result, bodies) = response_temperature_case(
+            true,
+            vec![
+                "Unsupported parameter: temperature",
+                "Unsupported parameter: stream_tool_calls",
+            ],
+            true,
+        )
+        .await;
+        result.expect("both optional fields can be removed in separate retries");
+        assert_eq!(bodies.len(), 3);
+        assert_eq!(bodies[0]["temperature"], 1.0);
+        assert_eq!(bodies[0]["stream_tool_calls"], true);
+        assert!(bodies[1].get("temperature").is_none());
+        assert_eq!(bodies[1]["stream_tool_calls"], true);
+        assert!(bodies[2].get("temperature").is_none());
+        assert!(bodies[2].get("stream_tool_calls").is_none());
+    }
 
     async fn capture_response_body(streaming: bool) -> serde_json::Value {
         let (body_tx, body_rx) = oneshot::channel();
