@@ -1,6 +1,6 @@
 # Real-model suite: run order after a code update
 
-Operator note for the next person who changes product code and needs a green `scripts/real-model-suite` score. Spec: [`real-model-feature-suite.md`](./real-model-feature-suite.md). Short README: [`../scripts/real-model-suite/README.md`](../scripts/real-model-suite/README.md). Latest core-agent audit: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
+Operator note for the next person who changes product code and needs a green `scripts/real-model-suite` score. Spec: [`real-model-feature-suite.md`](./real-model-feature-suite.md). Short README: [`../scripts/real-model-suite/README.md`](../scripts/real-model-suite/README.md). Experiment v3 (deleted the four fork-only turn stops): [`core-agent-token-optimization-experiment-v3.md`](./core-agent-token-optimization-experiment-v3.md). Prior core-agent audit: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
 
 ## Why order matters
 
@@ -16,6 +16,7 @@ Operator note for the next person who changes product code and needs a green `sc
 - Non-zero exit is `fail`, except timeouts already scored as `hung` and `session.max_turns` (scored from `stopReason`).
 - `skip-nondeterministic` is not a fail.
 - `all` includes every phase (including `safeguard`). `cli` never starts the model.
+- Loop-stop recovery after experiment v3 is grok-build identical-call stationarity only (nudge 4/8, halt 8/12, true-noop halt 4). A distinct read of a new path or new offset is progress. Do not expect a 16-round read-only cut; that sentence and its counter are gone from the product.
 
 ## Full real test (follow this next time)
 
@@ -103,9 +104,27 @@ Never commit `OUT_ROOT`, wire logs, or suite `config.toml` files that contain an
 - [ ] Evidence (`score.txt`, `failures.md`, suite log, unit/self-test logs) saved under your scratch dir
 - [ ] For a core-agent audit: both `safeguard` and `session` green (or failures filed in `docs/audits/`)
 
-## Latest core-agent audit (2026-09-24, `spark25-4b`)
+## Latest after v3 (2026-09-25, `spark25-4b`)
 
-Evidence: `/tmp/real-model-safeguard-20260924T100456Z` and `/tmp/real-model-session-20260924T101101Z` (post-fix). Pre-fix: `/tmp/real-model-safeguard-20260924T083113Z` and `/tmp/real-model-session-20260924T083459Z`. Full report: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
+Evidence: `/tmp/grok-v3-suite-docs-20260925/safeguard` and `/tmp/grok-v3-suite-docs-20260925/session`. Product contract: [`core-agent-token-optimization-experiment-v3.md`](./core-agent-token-optimization-experiment-v3.md). Prior report: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
+
+| Phase | Result |
+|---|---|
+| safeguard | 6 pass / 1 fail (`identical_reread`) |
+| session | 11 pass / 1 fail (`streaming_json`) |
+
+| Result | Cases |
+|---|---|
+| safeguard pass | `safeguard.bash_bound`, `safeguard.dangerous_rm`, `safeguard.large_read`, `safeguard.terminal_fanout`, `safeguard.pin_failure`, `safeguard.offset_walk` |
+| safeguard fail | `safeguard.identical_reread` (`measured-nothing`: one successful `read_file` then `stopReason=end_turn` with `DONE`; model never emitted the 4–12 identical loop) |
+| session pass | `session.hooks`, `session.max_turns`, `session.fork`, `session.permissions_read_only`, `session.resume_by_id`, `session.resume`, `session.title_side_call`, `session.permissions_deny_bash`, `session.worktree`, `session.compaction`, `session.memory_flush` |
+| session fail | `session.streaming_json` (`final record lacks marker`: known StreamingJson `text_buffer` gap; out of v3 scope) |
+
+`offset_walk` is green with no 16-call ceiling. The deleted 16-round stop sentence appears in no case log. `identical_reread` stays a measurement gap: keep the 4–12 oracle; do not loosen it or raise `MAX_COMPLETION_TOKENS`. `streaming_json` is a known headless gap, not a suite regression. Unit gates for this run: turn module 90 pass, read_file + hashline 354 pass, `score.py --self-test` pass.
+
+## Previous core-agent audit (2026-09-24, `spark25-4b`, superseded by the table above)
+
+Evidence: `/tmp/real-model-safeguard-20260924T100456Z` and `/tmp/real-model-session-20260924T101101Z` (post-fix). Pre-fix: `/tmp/real-model-safeguard-20260924T083113Z` and `/tmp/real-model-session-20260924T083459Z`.
 
 | Phase | Result |
 |---|---|
@@ -117,7 +136,7 @@ Evidence: `/tmp/real-model-safeguard-20260924T100456Z` and `/tmp/real-model-sess
 | pass | `safeguard.bash_bound`, `safeguard.dangerous_rm`, `safeguard.large_read`, `safeguard.terminal_fanout`, `safeguard.pin_failure` |
 | fail | `safeguard.identical_reread` (`tool_called: no successful read_file`, exit 0, `stopReason=max_tokens`); `safeguard.offset_walk` (`measured-nothing`, 3 reads then `max_tokens`) |
 
-`max_tokens_hard_stop` and `large_read_silent_cap` are fixed in tree (LengthSalvage on top-level max-tokens; line-cap continuation marker). Residual fails are oracle/model measurement, not Internal error. Next: re-run those two cases; do not loosen oracles or raise `MAX_COMPLETION_TOKENS`.
+`max_tokens_hard_stop` is fixed in tree (LengthSalvage on top-level max-tokens). `offset_walk` later went green after v3 dropped the 16-call ceiling. Do not loosen oracles or raise `MAX_COMPLETION_TOKENS`.
 
 ## Latest tools phase (2026-09-24, `mimo26-9b`)
 
@@ -134,6 +153,7 @@ Not green yet. Those four fails have each passed on earlier single-case retries 
 ## Related docs
 
 - Spec / case oracles: `docs/real-model-feature-suite.md`
+- Experiment v3 (fork-only stops deleted): `docs/core-agent-token-optimization-experiment-v3.md`
 - Core-agent audit: `docs/audits/2026-09-24-core-agent-flow-and-safeguards.md`
 - Suite README: `scripts/real-model-suite/README.md`
 - Model launcher: `/home/thanh/models/model.sh start <launcher>` (e.g. `spark25-4b`)

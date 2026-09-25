@@ -481,3 +481,5 @@ For each phase:
 4. If the quality cells pass, commit the phase and append the result table here. Include `unreported` cache cells as written. Do not average the three models into one saving.
 
 Phase 1 has no product diff. Its commit is the result table in this file, and only after the six fidelity cells exist.
+
+The follow-up for safeguard edge cases, and the decision to use grok-build's existing read and stationarity behavior, is in [core-agent-token-optimization-experiment-v3.md](core-agent-token-optimization-experiment-v3.md).

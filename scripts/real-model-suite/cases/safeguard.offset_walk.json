@@ -20,7 +20,6 @@
     "search_replace"
   ],
   "min_tool_success": 4,
-  "max_tool_success": 16,
   "checks": [
     "tool_called",
     "call_count_bounded",
