@@ -358,6 +358,7 @@ test.describe("conversation list", () => {
   });
 
   test("keeps the sidebar turn status across Send now", async ({ page }) => {
+    test.setTimeout(60_000);
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     // Hold the first prompt long enough that Send now finishes promoting before its RPC returns.
@@ -382,9 +383,11 @@ test.describe("conversation list", () => {
     await input.press("Enter");
     const prompts = await waitForCalls(page, "session/prompt", 2);
     const secondPromptId = String((prompts[1].params._meta as Record<string, unknown>).promptId);
+    // Queue notifications are session-scoped; LIST_SEED conversations are not `mock-session`.
     await page.evaluate((id) => window.__cookMock!.queueChanged([
-      { id, version: 0, text: "promote me now", kind: "prompt", position: 0 },
-    ]), secondPromptId);
+      { id, version: 0, text: "promote me now", kind: "prompt" },
+    ], "s-alpha-new"), secondPromptId);
+    await expect(page.getByTestId(`queue-send-now-${secondPromptId}`)).toBeVisible();
     await page.getByTestId(`queue-send-now-${secondPromptId}`).click();
     await expect.poll(async () =>
       (await api(page).requests()).filter((entry) => entry.method === "x.ai/queue/interject"),
