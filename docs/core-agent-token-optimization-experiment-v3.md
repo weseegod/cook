@@ -6,7 +6,7 @@ Upstream pin: `xai-org/grok-build` `upstream/main` at `f0e3be11` (`Synced from m
 
 Core design, which stays: [core-agent-flow-and-token-optimization.md](core-agent-flow-and-token-optimization.md). What v2 already shipped and measured: [core-agent-token-optimization-experiment-v2.md](core-agent-token-optimization-experiment-v2.md). The 2026-09-24 suite notes stay where they are, as history: [audits/2026-09-24-core-agent-flow-and-safeguards.md](audits/2026-09-24-core-agent-flow-and-safeguards.md) and [real-model-suite-run-order.md](real-model-suite-run-order.md).
 
-This document is the best-practice follow-up after the real-model suite. The suite produced scores. It also surfaced three problems: a large file the agent does not finish, the sentence `Stopped after 16 consecutive read-only tool rounds with no edits.`, and other safeguard stops that end a turn without saying why. The sentence and those extra stops are fork additions. grok-build already continues a large file with `offset` and `limit`, and it already stops a loop only when the same call repeats. v3 uses those paths. It does not add a reader, a stop, or a truncation style.
+This document is the best-practice follow-up after the real-model suite. The suite produced scores. It also surfaced three problems: a large file the agent does not finish, the fork-only 16-round read-only stop that tells the user the agent stopped mid-walk, and other safeguard stops that end a turn without saying why. That stop and those extra guards are fork additions. grok-build already continues a large file with `offset` and `limit`, and it already stops a loop only when the same call repeats. v3 uses those paths. It does not add a reader, a stop, or a truncation style.
 
 No phase below has been executed. v2's token tables are not copied here. Task correctness is the gate. A change that drops the file, the failure, or the edit is a failed phase.
 
@@ -27,7 +27,7 @@ Checked on `upstream/main` at `f0e3be11`. The same read constants and the same i
 | What showed up | grok-build | This fork, and only this fork |
 |---|---|---|
 | A large file | `read_file` caps a window at `MAX_LINES_READ = 1000` lines and refuses a window over `READ_FILE_MAX_TOKENS = 25000` estimated tokens. The tool description says the default read is up to `{max_lines_read}` lines. The `offset` and `limit` schema text says to pass them when the file is too large to read at once. See section 3 for the four cases. | `split_trailing_continuation_marker` in `read_file/mod.rs`, so a hashline reformat can keep a marker that `run_read_file` already attached. It does not create a new notice. `ReadOnlyExplorationRun` then cuts the walk off at 16 rounds, so the model often never gets to use `offset`. |
-| `Stopped after 16 consecutive read-only tool rounds with no edits.` | The string is absent. `ReadOnlyExplorationRun` is absent. Distinct reads, searches, and lists do not end the turn. | `MAX_CONSECUTIVE_READ_ONLY_ROUNDS = 16`. Read, search, list, web, lsp, and a shell that is only `git log` or `rg` all increment it. Different paths and offsets still count (`differing_read_arguments_still_accumulate`). An edit is the only reset. There is no nudge. Round 16 sends that sentence and returns `TurnOutcome::StationarityEnded`. The unit test `multi_file_corpus_reads_do_not_stop_early` only protects 13 rounds (one list plus 12 files). |
+| The fork-only 16-round read-only stop | The string is absent. `ReadOnlyExplorationRun` is absent. Distinct reads, searches, and lists do not end the turn. | `MAX_CONSECUTIVE_READ_ONLY_ROUNDS = 16`. Read, search, list, web, lsp, and a shell that is only `git log` or `rg` all increment it. Different paths and offsets still count (`differing_read_arguments_still_accumulate`). An edit is the only reset. There is no nudge. Round 16 sends the 16-round stop message and returns `TurnOutcome::StationarityEnded`. The unit test `multi_file_corpus_reads_do_not_stop_early` only protects 13 rounds (one list plus 12 files). |
 | A repeated identical call | Identical-call stationarity, already the product behavior. Nudge after `NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS = 4` for `Read` and `Plan`, or after `NUDGE_AFTER_IDENTICAL_TOOL_CALLS = 8` for anything else. Halt at `MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS = 8` or `MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS = 12`. A `true` keepalive halts at `MAX_CONSECUTIVE_TRUE_NOOPS = 4` and is not nudged. The nudge text starts `You have called the same tool (`${{ tool_name }}`) with the exact same arguments ${{ run_len }} times in a row`. | Nothing extra is required. Keep these constants. |
 | Other stops that look like an error | `StationarityEnded` exists for the identical-call halt. There is no terminal-fanout guard and no argument-error cycle stop. | `TerminalFanoutGuard`: more than `MAX_TERMINAL_CALLS_BEFORE_REMINDER = 4` terminal commands in one response, and none of them run. The reminder starts `Your last response proposed more than four terminal commands in parallel, so none were run.` `TerminalObservationRun` nudges, then stops, on repeated status checks. `ToolArgumentErrorRun` nudges at `NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES = 2` and stops at `MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES = 4`. Those three return `StationarityEnded` with no sentence like the 16-round one, so the turn just ends. |
 | Top-level `max_tokens` reported as an internal error | `LengthSalvage` in `acp_session_impl/length_salvage.rs`. | A classifier, `classify_top_level_max_tokens`, calls that salvage for a top-level stop and still fails a budgeted workflow child. About 71 lines. It does not define a second salvage policy. Keep it. |
@@ -100,12 +100,14 @@ After this phase a long read of distinct files, or of one file at new offsets, b
 
 Pass, before any suite re-score:
 
-- A unit walk of 20 distinct `read_file` calls does not stop, and the 16-round sentence is gone from the tree (`rg` finds no `consecutive read-only tool rounds`).
+- A unit walk of 20 distinct `read_file` calls does not stop, and the 16-round stop message is gone from the product tree (`rg` finds no read-only-round stop string).
 - The identical-call tests still halt a repeated `Read` at 8 and still nudge it at 4.
 - `FileTooLarge` text is unchanged from section 3.
 - `cargo test` for the touched `turn.rs` module is green, apart from the pre-existing shell failures already listed in the suite spec.
 
 This phase does not edit `read_file`.
+
+**Result (2026-09-25).** The four stops, their constants, helpers, loop branches, reminders, telemetry, and pinning tests are deleted from `turn.rs`. Identical-call stationarity is unchanged. The unit walk `twenty_distinct_read_file_calls_do_not_stop` feeds 20 distinct `read_file` calls (new paths and new offsets) through `IdenticalToolCallRun` and asserts no nudge and no halt. The nine `identical_tool_call_run_tests` are green, including nudge at 4 / 8 and halt at 8 / 12 and the true-noop halt at 4. `rg` finds no read-only-round stop string and none of the four fork identifiers in `crates/`. The phase-1 product diff is `turn.rs` only; `read_file` is untouched.
 
 ## 6. Phase 2 — confirm the read recipe, no product diff
 
@@ -135,7 +137,7 @@ Re-score on spark25-4b with `scripts/real-model-suite/run-audit.sh` (safeguard, 
 
 Pass:
 
-- The 16-round sentence appears in no case log.
+- The 16-round stop message appears in no case log.
 - `safeguard.identical_reread` still stops inside 4–12 identical `read_file` calls with category `action_stationarity`, when the model actually emits that loop. A `max_tokens` stop with zero tool calls is recorded and is not "fixed" by a new guard.
 - `safeguard.large_read` still reports both markers.
 - Session stays at the checks it already has. A new failure is a failed phase, not a new stop.

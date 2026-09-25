@@ -2725,8 +2725,6 @@ impl SessionActor {
         let mut tool_turn_count: usize = 1;
         let mut loop_index: u32 = 0;
         let mut identical_tool_calls = IdenticalToolCallRun::default();
-        let mut tool_argument_errors = ToolArgumentErrorRun::default();
-        let mut read_only_exploration = ReadOnlyExplorationRun::default();
         let mut todo_gate_fires: u32 = 0;
         let mut length_salvage_streak = LengthSalvageStreak::default();
         let mut auth_retry_schedule = AuthRetrySchedule::new();
@@ -2740,8 +2738,6 @@ impl SessionActor {
         let mut turn_span_totals = TurnSpanTotals::default();
         let mut structured_output_retries: u32 = 0;
         let mut media_gen_resamples: u32 = 0;
-        let mut terminal_fanout = TerminalFanoutGuard::default();
-        let mut terminal_observation = TerminalObservationRun::default();
         let structured_output_validator = json_schema.as_ref().map(|schema| {
             jsonschema::validator_for(schema).map_err(|e| format!("invalid output schema: {e}"))
         });
@@ -2771,46 +2767,6 @@ impl SessionActor {
         loop {
             self.emit_event(crate::session::events::Event::LoopStarted { loop_index });
             loop_index += 1;
-            if tool_argument_errors.should_stop() {
-                let consecutive_cycles = tool_argument_errors.consecutive_cycles;
-                tracing::warn!(
-                    session_id = %self.session_info.id,
-                    consecutive_cycles,
-                    "tool argument error loop: ending turn after repeated parse/schema failures"
-                );
-                xai_grok_telemetry::unified_log::warn(
-                    "shell.turn.tool_argument_error_loop_stop",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "loop_index": loop_index,
-                        "consecutive_cycles": consecutive_cycles,
-                    })),
-                );
-                self.finalize_turn_bookkeeping(
-                    req_id,
-                    std::mem::take(&mut turn_span_totals),
-                    turn_sampling,
-                )
-                .await;
-                return Ok(TurnOutcome::StationarityEnded);
-            }
-            if tool_argument_errors.take_nudge() {
-                let consecutive_cycles = tool_argument_errors.consecutive_cycles;
-                tracing::warn!(
-                    session_id = %self.session_info.id,
-                    consecutive_cycles,
-                    "tool argument error loop: nudging model to emit valid independent calls"
-                );
-                xai_grok_telemetry::unified_log::warn(
-                    "shell.turn.tool_argument_error_loop_nudge",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "loop_index": loop_index,
-                        "consecutive_cycles": consecutive_cycles,
-                    })),
-                );
-                self.push_system_reminder(TOOL_ARGUMENT_ERROR_NUDGE);
-            }
             if identical_tool_calls.run_len >= identical_tool_calls.hard_stop_threshold() {
                 let run_len = identical_tool_calls.run_len;
                 let tool_name = identical_tool_calls.tool_name.clone();
@@ -2849,56 +2805,6 @@ impl SessionActor {
                 )
                 .await;
                 return Ok(TurnOutcome::StationarityEnded);
-            }
-            if read_only_exploration.should_stop() {
-                let rounds = read_only_exploration.rounds;
-                tracing::warn!(
-                    session_id = %self.session_info.id,
-                    rounds,
-                    "read-only exploration loop: ending turn after consecutive explore-only rounds"
-                );
-                xai_grok_telemetry::unified_log::warn(
-                    "shell.turn.read_only_exploration_stop",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "loop_index": loop_index,
-                        "rounds": rounds,
-                    })),
-                );
-                self.send_update(
-                    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                        acp::ContentBlock::Text(acp::TextContent::new(format!(
-                            "Stopped after {rounds} consecutive read-only tool rounds with no edits. \
-                             Resume the turn when you want the agent to keep going."
-                        ))),
-                    )),
-                    None,
-                )
-                .await;
-                self.finalize_turn_bookkeeping(
-                    req_id,
-                    std::mem::take(&mut turn_span_totals),
-                    turn_sampling,
-                )
-                .await;
-                return Ok(TurnOutcome::StationarityEnded);
-            }
-            if terminal_observation.should_stop() {
-                xai_grok_telemetry::unified_log::warn(
-                    "shell.terminal_safeguard.observation_stop",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({ "rounds": terminal_observation.rounds })),
-                );
-                self.finalize_turn_bookkeeping(
-                    req_id,
-                    std::mem::take(&mut turn_span_totals),
-                    turn_sampling,
-                )
-                .await;
-                return Ok(TurnOutcome::StationarityEnded);
-            }
-            if terminal_observation.take_nudge() {
-                self.push_system_reminder(TERMINAL_OBSERVATION_REMINDER);
             }
             if identical_tool_calls.take_nudge() {
                 let run_len = identical_tool_calls.run_len;
@@ -3671,49 +3577,6 @@ impl SessionActor {
                 self.turn_phases.discard_uncommitted_first_meaningful();
                 continue;
             }
-            let (terminal_count, remind_terminal_fanout) = {
-                let bridge = self.tool_bridge_handle();
-                terminal_fanout.inspect(tool_calls.iter().map(|call| bridge.tool_kind(&call.name)))
-            };
-            if remind_terminal_fanout {
-                tracing::warn!(
-                    session_id = %self.session_info.id,
-                    terminal_count,
-                    "terminal command fanout — discarding generation and resampling once"
-                );
-                xai_grok_telemetry::unified_log::info(
-                    "shell.terminal_safeguard.batch_resampled",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "terminal_count": terminal_count,
-                        "max_before_reminder": MAX_TERMINAL_CALLS_BEFORE_REMINDER,
-                        "attempt": 1,
-                    })),
-                );
-                self.send_xai_notification(XaiSessionUpdate::RetryState(
-                    crate::extensions::notification::RetryState::Retrying {
-                        attempt: 1,
-                        max_retries: 1,
-                        reason: "Too many parallel terminal commands; retrying".to_string(),
-                        error_type: None,
-                    },
-                ))
-                .await;
-                self.push_system_reminder(TERMINAL_FANOUT_REMINDER);
-                self.turn_phases.discard_uncommitted_first_token();
-                self.turn_phases.discard_uncommitted_first_meaningful();
-                continue;
-            }
-            if terminal_fanout.reminded {
-                xai_grok_telemetry::unified_log::info(
-                    "shell.terminal_safeguard.after_reminder",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "terminal_count": terminal_count,
-                        "disposition": "partition_observers",
-                    })),
-                );
-            }
             metrics_drop_guard.record_model_response(tool_calls.len());
             if !tool_calls.is_empty() {
                 self.record_turn_first_token(None);
@@ -4016,22 +3879,6 @@ impl SessionActor {
                 }
                 turn_tools_called.push(tc.name.clone());
             }
-            let skipped_observers = if terminal_fanout.reminded {
-                let bridge = self.tool_bridge_handle();
-                terminal_observer_skip_indices(&tool_calls, |name| bridge.tool_kind(name))
-            } else {
-                std::collections::BTreeSet::new()
-            };
-            let skipped_with_effect = !skipped_observers.is_empty()
-                && tool_calls.iter().any(|call| {
-                    self.tool_bridge_handle().tool_kind(&call.name) == Some(ToolKind::Execute)
-                        && classify_terminal_command(call.arguments.as_ref())
-                            == TerminalCommandClass::Effect
-                });
-            let observation_step =
-                terminal_observation_step(&tool_calls, &skipped_observers, |name| {
-                    self.tool_bridge_handle().tool_kind(name)
-                });
             let step_signature = step_signature(&tool_calls);
             let step_tool_name = tool_calls
                 .iter()
@@ -4051,7 +3898,6 @@ impl SessionActor {
                 step_problematic,
                 is_true_noop,
             );
-            read_only_exploration.observe(&tool_calls, &step_tool_kinds);
             if is_true_noop {
                 xai_grok_telemetry::session_ctx::log_event(
                     xai_grok_telemetry::events::ShellTrueNoop {
@@ -4059,41 +3905,17 @@ impl SessionActor {
                     },
                 );
             }
-            let (tool_call_responses, skipped_tool_calls): (Vec<_>, Vec<_>) = tool_calls
+            let tool_call_responses: Vec<_> = tool_calls
                 .into_iter()
-                .enumerate()
-                .map(|(index, tc)| {
-                    (
-                        index,
-                        ToolCallResponse {
-                            id: tc.id.as_ref().to_owned(),
-                            kind: "function".to_string(),
-                            function: crate::sampling::types::ToolCallFunction {
-                                name: tc.name,
-                                arguments: tc.arguments.as_ref().to_owned(),
-                            },
-                        },
-                    )
+                .map(|tc| ToolCallResponse {
+                    id: tc.id.as_ref().to_owned(),
+                    kind: "function".to_string(),
+                    function: crate::sampling::types::ToolCallFunction {
+                        name: tc.name,
+                        arguments: tc.arguments.as_ref().to_owned(),
+                    },
                 })
-                .partition(|(index, _)| !skipped_observers.contains(index));
-            let tool_call_responses: Vec<_> = tool_call_responses
-                .into_iter()
-                .map(|(_, call)| call)
                 .collect();
-            let skipped_tool_calls: Vec<_> = skipped_tool_calls
-                .into_iter()
-                .map(|(_, call)| call)
-                .collect();
-            if !skipped_tool_calls.is_empty() {
-                xai_grok_telemetry::unified_log::info(
-                    "shell.terminal_safeguard.observers_skipped",
-                    Some(self.session_info.id.0.as_ref()),
-                    Some(serde_json::json!({
-                        "kept": tool_call_responses.len(),
-                        "skipped": skipped_tool_calls.len(),
-                    })),
-                );
-            }
             self.emit_event(crate::session::events::Event::PhaseChanged {
                 phase: crate::session::events::Phase::ToolExecution,
             });
@@ -4106,17 +3928,9 @@ impl SessionActor {
                 .await;
             let execute_tool_calls_result = {
                 let _tool_phase = turn_phases.begin_tool_blocking();
-                self.skip_terminal_observers(skipped_tool_calls, skipped_with_effect)
-                    .await?;
                 self.execute_tool_calls_reported(tool_call_responses, requested_model)
                     .await
             };
-            if let Ok((_, report)) = &execute_tool_calls_result {
-                tool_argument_errors.observe(report.had_tool_parsing_error());
-                terminal_observation.observe(observation_step);
-            } else {
-                terminal_observation.reset();
-            }
             match execute_tool_calls_result {
                 Ok((ToolLoop::PermissionReject { tool_name, reason }, _)) => {
                     return Ok(TurnOutcome::Cancelled {
@@ -4175,470 +3989,6 @@ impl SessionActor {
 }
 /// Discard an egregious (2x cap) media-gen generation and re-sample this many times; later over-caps in the same turn use first-K.
 const MAX_MEDIA_GEN_OVER_CAP_RESAMPLES: u32 = 1;
-const MAX_TERMINAL_CALLS_BEFORE_REMINDER: usize = 4;
-const TERMINAL_FANOUT_REMINDER: &str = "Your last response proposed more than four terminal commands in parallel, so none were run. Check the user's task and any already-running task IDs. For each goal or condition, use one command or monitor and consume its result before starting another equivalent command. Reissue only the commands still needed.";
-const TERMINAL_OBSERVATION_REMINDER: &str = "The status is already in the previous tool result. Wait with monitor or read the existing task ID once before starting another shell status check.";
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum TerminalCommandClass {
-    Effect,
-    Observer(std::collections::BTreeSet<String>),
-    Other,
-}
-
-fn terminal_command(arguments: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(arguments).ok()?;
-    value
-        .get("command")
-        .or_else(|| value.get("cmd"))?
-        .as_str()
-        .map(str::to_owned)
-}
-
-/// Intentionally conservative: an unknown shell command is always dispatched.
-fn classify_terminal_command(arguments: &str) -> TerminalCommandClass {
-    let Some(command) = terminal_command(arguments) else {
-        return TerminalCommandClass::Other;
-    };
-    let lower = command.to_ascii_lowercase();
-    let words: Vec<_> = lower.split_whitespace().collect();
-    let invocation = words
-        .iter()
-        .position(|word| !word.contains('=') && *word != "env")
-        .unwrap_or(0);
-    let words = &words[invocation..];
-    let executable = match words {
-        ["bash" | "sh", script, ..] if !script.starts_with('-') => *script,
-        [first, ..] => *first,
-        [] => "",
-    };
-    let basename = executable.rsplit('/').next().unwrap_or(executable);
-    if lower.trim_end().ends_with('&')
-        || matches!(
-            basename,
-            "run-audit.sh" | "run.sh" | "start-audit.sh" | "nohup" | "kill" | "killall" | "pkill"
-        )
-        || (basename == "model.sh" && words.iter().any(|word| matches!(*word, "start" | "stop")))
-        || words.starts_with(&["docker", "stop"])
-    {
-        return TerminalCommandClass::Effect;
-    }
-    let write_markers = [
-        ">",
-        " rm ",
-        "mv ",
-        "tee ",
-        "chmod ",
-        "commit",
-        " push",
-        "write_text",
-        "write_bytes",
-        ".write(",
-        "os.remove",
-        "os.unlink",
-        "os.kill",
-        "mkdir",
-        "touch ",
-        "subprocess.run",
-        "subprocess.popen",
-        "mode='w'",
-        "mode=\"w\"",
-    ];
-    if write_markers.iter().any(|marker| lower.contains(marker)) {
-        return TerminalCommandClass::Other;
-    }
-    let trimmed = lower.trim_start();
-    let observer = trimmed.starts_with("python -c ")
-        || trimmed.starts_with("python3 -c ")
-        || trimmed.starts_with("bash -c ")
-        || trimmed.starts_with("sh -c ")
-        || trimmed.starts_with("bash -n ")
-        || trimmed.starts_with("ps ")
-        || trimmed == "ps"
-        || trimmed.starts_with("pgrep ")
-        || trimmed.starts_with("ss ")
-        || trimmed == "ss"
-        || trimmed.starts_with("docker ps")
-        || trimmed.starts_with("/proc/");
-    if !observer {
-        return TerminalCommandClass::Other;
-    }
-    // Interpreter calls need an observation cue; arbitrary one-liners may do work.
-    if (trimmed.starts_with("python")
-        || trimmed.starts_with("bash -c")
-        || trimmed.starts_with("sh -c"))
-        && ![
-            "/proc", "pgrep", "ps ", "process", "socket", "ss ", "bash -n",
-        ]
-        .iter()
-        .any(|marker| lower.contains(marker))
-    {
-        return TerminalCommandClass::Other;
-    }
-    let targets = command
-        .split(|c: char| c.is_whitespace() || "\"'();,=<>{}[]".contains(c))
-        .filter_map(|token| {
-            let token = token.trim_end_matches([':', '.', '\\']);
-            ((token.starts_with('/') && token != "/proc")
-                || token.starts_with("./")
-                || (token.len() >= 4
-                    && token.len() <= 5
-                    && token.bytes().all(|b| b.is_ascii_digit())))
-            .then(|| token.to_owned())
-        })
-        .collect();
-    TerminalCommandClass::Observer(targets)
-}
-
-fn terminal_observer_skip_indices(
-    calls: &[xai_grok_sampling_types::conversation::ToolCall],
-    kind_of: impl Fn(&str) -> Option<ToolKind>,
-) -> std::collections::BTreeSet<usize> {
-    let mut observers = Vec::new();
-    let mut has_effect = false;
-    let mut has_other = false;
-    for (index, call) in calls.iter().enumerate() {
-        if kind_of(&call.name) != Some(ToolKind::Execute) {
-            has_other = true;
-            continue;
-        }
-        match classify_terminal_command(call.arguments.as_ref()) {
-            TerminalCommandClass::Effect => has_effect = true,
-            TerminalCommandClass::Observer(_) => observers.push(index),
-            TerminalCommandClass::Other => has_other = true,
-        }
-    }
-    if has_effect {
-        observers.into_iter().collect()
-    } else if !has_other {
-        observers.into_iter().skip(1).collect()
-    } else {
-        std::collections::BTreeSet::new()
-    }
-}
-
-enum TerminalObservationStep {
-    Observe(std::collections::BTreeSet<String>),
-    Ignore,
-    Reset,
-}
-
-fn terminal_observation_step(
-    calls: &[xai_grok_sampling_types::conversation::ToolCall],
-    skipped: &std::collections::BTreeSet<usize>,
-    kind_of: impl Fn(&str) -> Option<ToolKind>,
-) -> TerminalObservationStep {
-    let mut targets = std::collections::BTreeSet::new();
-    let mut observed = false;
-    for (index, call) in calls.iter().enumerate() {
-        if skipped.contains(&index) {
-            continue;
-        }
-        let kind = kind_of(&call.name);
-        if kind == Some(ToolKind::Monitor)
-            || matches!(
-                call.name.as_str(),
-                "get_command_or_subagent_output" | "get_task_output"
-            )
-        {
-            continue;
-        }
-        if kind != Some(ToolKind::Execute) {
-            return TerminalObservationStep::Reset;
-        }
-        match classify_terminal_command(call.arguments.as_ref()) {
-            TerminalCommandClass::Observer(found) => {
-                observed = true;
-                targets.extend(found);
-            }
-            _ => return TerminalObservationStep::Reset,
-        }
-    }
-    if observed {
-        TerminalObservationStep::Observe(targets)
-    } else {
-        TerminalObservationStep::Ignore
-    }
-}
-
-#[derive(Default)]
-struct TerminalObservationRun {
-    rounds: u32,
-    targets: std::collections::BTreeSet<String>,
-    nudged: bool,
-}
-
-impl TerminalObservationRun {
-    fn observe(&mut self, step: TerminalObservationStep) {
-        match step {
-            TerminalObservationStep::Observe(targets) => {
-                if targets.is_subset(&self.targets) && self.rounds > 0 {
-                    self.rounds = self.rounds.saturating_add(1);
-                } else {
-                    self.rounds = 1;
-                    self.nudged = false;
-                }
-                self.targets.extend(targets);
-            }
-            TerminalObservationStep::Reset => self.reset(),
-            TerminalObservationStep::Ignore => {}
-        }
-    }
-    fn reset(&mut self) {
-        *self = Self::default();
-    }
-    fn take_nudge(&mut self) -> bool {
-        let fire = self.rounds >= 2 && !self.nudged;
-        self.nudged |= fire;
-        fire
-    }
-    fn should_stop(&self) -> bool {
-        self.rounds >= 4
-    }
-}
-
-#[derive(Default)]
-struct TerminalFanoutGuard {
-    reminded: bool,
-}
-
-impl TerminalFanoutGuard {
-    fn inspect(&mut self, kinds: impl IntoIterator<Item = Option<ToolKind>>) -> (usize, bool) {
-        let count = kinds
-            .into_iter()
-            .filter(|kind| matches!(kind, Some(ToolKind::Execute)))
-            .count();
-        let remind = count > MAX_TERMINAL_CALLS_BEFORE_REMINDER && !self.reminded;
-        self.reminded |= remind;
-        (count, remind)
-    }
-}
-
-#[cfg(test)]
-mod terminal_fanout_tests {
-    use super::*;
-
-    fn call(id: usize, command: &str) -> xai_grok_sampling_types::conversation::ToolCall {
-        xai_grok_sampling_types::conversation::ToolCall {
-            id: format!("call-{id}").into(),
-            name: "run_terminal_command".to_string(),
-            arguments: serde_json::json!({"command": command}).to_string().into(),
-        }
-    }
-
-    fn execute_kind(_: &str) -> Option<ToolKind> {
-        Some(ToolKind::Execute)
-    }
-
-    #[test]
-    fn reminds_once_then_dispatches_even_if_fanout_persists() {
-        let mut guard = TerminalFanoutGuard::default();
-        let batch = [Some(ToolKind::Execute); 8];
-        assert_eq!(guard.inspect(batch), (8, true));
-        assert_eq!(guard.inspect(batch), (8, false));
-        let independent = [
-            "cat /tmp/file",
-            "head /tmp/file",
-            "tail /tmp/file",
-            "wc /tmp/file",
-            "sha256sum /tmp/file",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(i, command)| call(i, command))
-        .collect::<Vec<_>>();
-        assert!(terminal_observer_skip_indices(&independent, execute_kind).is_empty());
-        let repeated_observers = (0..8)
-            .map(|i| call(i, &format!("bash -n /tmp/start-audit.sh && echo probe_{i}")))
-            .collect::<Vec<_>>();
-        assert_eq!(
-            terminal_observer_skip_indices(&repeated_observers, execute_kind),
-            (1..8).collect()
-        );
-    }
-
-    #[test]
-    fn small_parallel_batches_and_other_tools_do_not_trigger_reminder() {
-        let mut guard = TerminalFanoutGuard::default();
-        let batch = [
-            Some(ToolKind::Execute),
-            Some(ToolKind::Execute),
-            Some(ToolKind::Execute),
-            Some(ToolKind::Execute),
-            Some(ToolKind::Read),
-        ];
-        assert_eq!(guard.inspect(batch), (4, false));
-        assert_eq!(guard.inspect([Some(ToolKind::Execute); 5]), (5, true));
-    }
-
-    #[test]
-    fn launch_skips_parallel_proc_probes_after_reminder() {
-        let mut guard = TerminalFanoutGuard::default();
-        assert_eq!(guard.inspect([Some(ToolKind::Execute); 8]), (8, true));
-        let mut calls = vec![call(0, "bash /tmp/start-audit.sh")];
-        calls.extend((1..=7).map(|i| call(i, &format!("python3 -c 'import time; time.sleep({i}); print(open(\"/proc/1/stat\").read())'"))));
-        assert_eq!(
-            terminal_observer_skip_indices(&calls, execute_kind),
-            (1..=7).collect()
-        );
-        assert!(matches!(
-            terminal_observation_step(&calls, &(1..=7).collect(), execute_kind),
-            TerminalObservationStep::Reset
-        ));
-    }
-
-    #[test]
-    fn bash_syntax_probes_keep_one() {
-        let calls: Vec<_> = (0..7)
-            .map(|i| {
-                call(
-                    i,
-                    &format!("bash -n /tmp/start-audit.sh && echo syntax_ok_{i}"),
-                )
-            })
-            .collect();
-        assert_eq!(
-            terminal_observer_skip_indices(&calls, execute_kind),
-            (1..7).collect()
-        );
-    }
-
-    #[test]
-    fn launch_with_environment_prefix_is_effect() {
-        let arguments =
-            serde_json::json!({"command": "SKIP_BUILD=1 ./run.sh --phase safeguard"}).to_string();
-        assert_eq!(
-            classify_terminal_command(&arguments),
-            TerminalCommandClass::Effect
-        );
-        let background = serde_json::json!({"command": "bash /tmp/audit-worker.sh &"}).to_string();
-        assert_eq!(
-            classify_terminal_command(&background),
-            TerminalCommandClass::Effect
-        );
-    }
-
-    #[test]
-    fn independent_inspects_and_writing_python_are_kept() {
-        let calls = [
-            "cat /tmp/file",
-            "head /tmp/file",
-            "tail /tmp/file",
-            "wc /tmp/file",
-            "sha256sum /tmp/file",
-        ]
-        .iter()
-        .enumerate()
-        .map(|(i, command)| call(i, command))
-        .collect::<Vec<_>>();
-        assert!(terminal_observer_skip_indices(&calls, execute_kind).is_empty());
-        assert_eq!(classify_terminal_command(&serde_json::json!({"command": "python3 -c 'from pathlib import Path; Path(\"/tmp/file\").write_text(\"x\")'"}).to_string()), TerminalCommandClass::Other);
-    }
-
-    #[test]
-    fn observation_rounds_nudge_then_stop_and_effect_resets() {
-        let mut run = TerminalObservationRun::default();
-        let same_target = || TerminalObservationStep::Observe(["/tmp/audit".to_string()].into());
-        run.observe(same_target());
-        assert!(!run.take_nudge());
-        run.observe(same_target());
-        assert!(run.take_nudge());
-        run.observe(TerminalObservationStep::Ignore);
-        assert!(!run.take_nudge());
-        run.observe(same_target());
-        assert!(!run.should_stop());
-        run.observe(same_target());
-        assert!(run.should_stop());
-        run.observe(TerminalObservationStep::Reset);
-        assert_eq!(run.rounds, 0);
-        run.observe(same_target());
-        assert!(!run.should_stop());
-        run.observe(TerminalObservationStep::Observe(
-            ["/tmp/new".to_string()].into(),
-        ));
-        assert_eq!(run.rounds, 1);
-    }
-}
-const NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES: u32 = 2;
-const MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES: u32 = 4;
-const _: () =
-    assert!(NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES < MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES);
-const TOOL_ARGUMENT_ERROR_NUDGE: &str = "Tool arguments have failed JSON/schema validation in \
-     consecutive steps. Emit each tool as a separate native tool call with one complete JSON \
-     object matching that tool's schema. Do not concatenate calls, nest one tool's arguments \
-     inside another, or repeat the malformed calls. If you cannot form a valid call, stop and \
-     explain the blocker.";
-
-#[derive(Default)]
-struct ToolArgumentErrorRun {
-    consecutive_cycles: u32,
-    nudged: bool,
-}
-
-impl ToolArgumentErrorRun {
-    fn observe(&mut self, had_tool_parsing_error: bool) -> u32 {
-        if had_tool_parsing_error {
-            self.consecutive_cycles = self.consecutive_cycles.saturating_add(1);
-        } else {
-            self.consecutive_cycles = 0;
-            self.nudged = false;
-        }
-        self.consecutive_cycles
-    }
-
-    fn take_nudge(&mut self) -> bool {
-        let fire =
-            self.consecutive_cycles >= NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES && !self.nudged;
-        self.nudged |= fire;
-        fire
-    }
-
-    fn should_stop(&self) -> bool {
-        self.consecutive_cycles >= MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES
-    }
-}
-
-#[cfg(test)]
-mod tool_argument_error_run_tests {
-    use super::{
-        MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES, NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES,
-        ToolArgumentErrorRun,
-    };
-
-    #[test]
-    fn nudges_after_two_error_cycles_and_stops_after_four() {
-        let mut run = ToolArgumentErrorRun::default();
-        for cycle in 1..=MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES {
-            assert_eq!(run.observe(true), cycle);
-            if cycle < NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES {
-                assert!(!run.take_nudge());
-            } else if cycle == NUDGE_AFTER_TOOL_ARGUMENT_ERROR_CYCLES {
-                assert!(run.take_nudge());
-            } else {
-                assert!(!run.take_nudge(), "the run is nudged only once");
-            }
-            assert_eq!(
-                run.should_stop(),
-                cycle >= MAX_CONSECUTIVE_TOOL_ARGUMENT_ERROR_CYCLES
-            );
-        }
-    }
-
-    #[test]
-    fn clean_cycle_resets_count_and_nudge_state() {
-        let mut run = ToolArgumentErrorRun::default();
-        assert_eq!(run.observe(true), 1);
-        assert_eq!(run.observe(true), 2);
-        assert!(run.take_nudge());
-
-        assert_eq!(run.observe(false), 0);
-        assert!(!run.should_stop());
-        assert_eq!(run.observe(true), 1);
-        assert_eq!(run.observe(true), 2);
-        assert!(run.take_nudge(), "a new error run receives its own nudge");
-    }
-}
-
 /// Tool kinds whose identical repeats are almost never productive, so they get tighter thresholds than everything else.
 /// A production turn repeated one `ToolKind::Plan` call (`todo_write`) with byte-identical arguments 12 times (224 in the turn).
 /// Names are client-renameable and vary by toolset (`read_file`, `hashline_read`, `Read`; `todo_write`, `todowrite`); the registered kind does not.
@@ -4655,102 +4005,6 @@ fn step_is_problematically_repeating(kinds: &[Option<ToolKind>]) -> bool {
             .all(|kind| is_problematically_repeating_kind(*kind))
 }
 
-/// Consecutive model rounds that only explore (read/search/list / read-only shell) with no edit.
-/// Distinct from identical-call stationarity: each round's arguments can differ slightly and still loop.
-/// Multi-file corpus reads (e.g. "read every file and answer") legitimately need a dozen-plus
-/// read-only rounds; 3 aborted those before the model could reply. Keep the stop for true
-/// aimless exploration, but leave room for a full directory sweep.
-pub(super) const MAX_CONSECUTIVE_READ_ONLY_ROUNDS: u32 = 16;
-
-fn is_edit_kind(kind: Option<ToolKind>) -> bool {
-    matches!(
-        kind,
-        Some(ToolKind::Edit | ToolKind::Write | ToolKind::Delete | ToolKind::Move)
-    )
-}
-
-fn is_read_only_kind(kind: Option<ToolKind>) -> bool {
-    matches!(
-        kind,
-        Some(
-            ToolKind::Read
-                | ToolKind::Search
-                | ToolKind::List
-                | ToolKind::ListDir
-                | ToolKind::MemorySearch
-                | ToolKind::MemoryGet
-                | ToolKind::WebSearch
-                | ToolKind::WebFetch
-                | ToolKind::Lsp
-        )
-    )
-}
-
-/// `run_terminal_cmd` / `run_terminal_command` whose command is only `git log` or `rg` (and close variants).
-fn is_read_only_shell_command(arguments: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
-        return false;
-    };
-    let Some(command) = value
-        .get("command")
-        .and_then(|v| v.as_str())
-        .or_else(|| value.get("cmd").and_then(|v| v.as_str()))
-    else {
-        return false;
-    };
-    let trimmed = command.trim();
-    let first = trimmed.split_whitespace().next().unwrap_or("");
-    matches!(first, "git" | "rg" | "grep")
-        && (first != "git" || trimmed.split_whitespace().nth(1) == Some("log"))
-}
-
-fn step_is_read_only_exploration(
-    tool_calls: &[xai_grok_sampling_types::conversation::ToolCall],
-    kinds: &[Option<ToolKind>],
-) -> bool {
-    if tool_calls.is_empty() || tool_calls.len() != kinds.len() {
-        return false;
-    }
-    if kinds.iter().any(|kind| is_edit_kind(*kind)) {
-        return false;
-    }
-    tool_calls.iter().zip(kinds.iter()).all(|(tc, kind)| {
-        if is_read_only_kind(*kind) {
-            return true;
-        }
-        if matches!(kind, Some(ToolKind::Execute)) {
-            return is_read_only_shell_command(tc.arguments.as_ref());
-        }
-        false
-    })
-}
-
-#[derive(Default)]
-struct ReadOnlyExplorationRun {
-    rounds: u32,
-}
-
-impl ReadOnlyExplorationRun {
-    fn observe(
-        &mut self,
-        tool_calls: &[xai_grok_sampling_types::conversation::ToolCall],
-        kinds: &[Option<ToolKind>],
-    ) {
-        if kinds.iter().any(|kind| is_edit_kind(*kind)) {
-            self.rounds = 0;
-            return;
-        }
-        if step_is_read_only_exploration(tool_calls, kinds) {
-            self.rounds = self.rounds.saturating_add(1);
-        } else {
-            self.rounds = 0;
-        }
-    }
-
-    fn should_stop(&self) -> bool {
-        self.rounds >= MAX_CONSECUTIVE_READ_ONLY_ROUNDS
-    }
-}
 pub(super) const NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS: u32 = 4;
 pub(super) const NUDGE_AFTER_IDENTICAL_TOOL_CALLS: u32 = 8;
 pub(super) const MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS: u32 = 8;
@@ -5061,105 +4315,40 @@ mod identical_tool_call_run_tests {
         assert_eq!(last, NUDGE_AFTER_IDENTICAL_TOOL_CALLS);
         assert!(run.take_nudge());
     }
-}
 
-#[cfg(test)]
-mod read_only_exploration_run_tests {
-    use super::{
-        MAX_CONSECUTIVE_READ_ONLY_ROUNDS, ReadOnlyExplorationRun, ToolKind,
-        is_read_only_shell_command, step_is_read_only_exploration,
-    };
-
-    fn call(name: &str, args: &str) -> xai_grok_sampling_types::conversation::ToolCall {
-        xai_grok_sampling_types::conversation::ToolCall {
-            id: "id".into(),
-            name: name.to_string(),
-            arguments: args.into(),
-        }
-    }
-
+    /// Distinct `read_file` calls (new paths and new offsets) are progress.
+    /// They must not nudge or halt the turn under grok-build's identical-call stationarity.
     #[test]
-    fn enough_read_only_rounds_stop_the_turn() {
-        let mut run = ReadOnlyExplorationRun::default();
-        let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
-        let kinds = [Some(ToolKind::Read)];
-        for i in 1..=MAX_CONSECUTIVE_READ_ONLY_ROUNDS {
-            run.observe(&reads, &kinds);
-            assert_eq!(run.rounds, i);
-        }
-        assert!(run.should_stop());
-    }
-
-    #[test]
-    fn multi_file_corpus_reads_do_not_stop_early() {
-        // session.compaction-style sweep: list + one read per file, no edits, must not abort.
-        let mut run = ReadOnlyExplorationRun::default();
-        run.observe(
-            &[call("list_dir", r#"{"target_directory":"corpus"}"#)],
-            &[Some(ToolKind::ListDir)],
-        );
-        for i in 1..=12 {
-            run.observe(
-                &[call(
-                    "read_file",
-                    &format!(r#"{{"target_file":"{i:02}.txt"}}"#),
-                )],
-                &[Some(ToolKind::Read)],
+    fn twenty_distinct_read_file_calls_do_not_stop() {
+        let mut run = IdenticalToolCallRun::default();
+        for i in 1..=20u32 {
+            let (target_file, offset) = if i % 2 == 0 {
+                (format!("src/file_{:02}.rs", i / 2), (i * 25) + 1)
+            } else {
+                ("src/corpus.md".to_string(), (i * 25) + 1)
+            };
+            let call = xai_grok_sampling_types::conversation::ToolCall {
+                id: format!("call-{i}").into(),
+                name: "read_file".to_string(),
+                arguments: format!(
+                    r#"{{"target_file":"{target_file}","offset":{offset},"limit":50}}"#
+                )
+                .into(),
+            };
+            let signature = step_signature(std::slice::from_ref(&call));
+            let kinds = [Some(ToolKind::Read)];
+            let problematic = step_is_problematically_repeating(&kinds);
+            assert_eq!(
+                run.observe(&signature, "read_file", problematic, false),
+                1,
+                "distinct read {i} ({target_file} offset {offset}) must not extend an identical run"
             );
+            assert!(!run.take_nudge(), "distinct read {i} must not nudge");
             assert!(
-                !run.should_stop(),
-                "must not stop after listing + {i} distinct file reads"
+                run.run_len < run.hard_stop_threshold(),
+                "distinct read {i} must not reach the halt threshold"
             );
         }
-        assert_eq!(run.rounds, 13);
-        assert!(!run.should_stop());
-    }
-
-    #[test]
-    fn an_edit_resets_the_read_only_counter() {
-        let mut run = ReadOnlyExplorationRun::default();
-        let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
-        run.observe(&reads, &[Some(ToolKind::Read)]);
-        run.observe(&reads, &[Some(ToolKind::Read)]);
-        assert_eq!(run.rounds, 2);
-        let edit = [call("search_replace", r#"{"file":"a.rs"}"#)];
-        run.observe(&edit, &[Some(ToolKind::Edit)]);
-        assert_eq!(run.rounds, 0);
-        assert!(!run.should_stop());
-    }
-
-    #[test]
-    fn git_log_and_rg_shell_commands_count_as_read_only() {
-        assert!(is_read_only_shell_command(r#"{"command":"git log -1"}"#));
-        assert!(is_read_only_shell_command(r#"{"command":"rg pattern"}"#));
-        assert!(!is_read_only_shell_command(r#"{"command":"cargo test"}"#));
-        assert!(!is_read_only_shell_command(r#"{"command":"git status"}"#));
-
-        let calls = [call(
-            "run_terminal_cmd",
-            r#"{"command":"git log --oneline"}"#,
-        )];
-        let kinds = [Some(ToolKind::Execute)];
-        assert!(step_is_read_only_exploration(&calls, &kinds));
-    }
-
-    #[test]
-    fn differing_read_arguments_still_accumulate() {
-        let mut run = ReadOnlyExplorationRun::default();
-        let reads = [call("read_file", r#"{"target_file":"a.rs"}"#)];
-        let kinds = [Some(ToolKind::Read)];
-        for _ in 0..MAX_CONSECUTIVE_READ_ONLY_ROUNDS {
-            run.observe(&reads, &kinds);
-        }
-        assert!(run.should_stop());
-        run.observe(
-            &[call("grep", r#"{"pattern":"foo"}"#)],
-            &[Some(ToolKind::Search)],
-        );
-        assert!(
-            run.should_stop(),
-            "non-edit rounds must not reset the counter"
-        );
     }
 }
 
