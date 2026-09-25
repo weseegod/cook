@@ -82,7 +82,6 @@ test("walks multi-question tabs and submits answers in index order", async ({ pa
   await expect(card.getByTestId("question-label")).toContainText("Which approach should I use?");
 
   await card.getByTestId("question-option-0-safe").click();
-  await card.getByTestId("question-tab-2").click();
   await expect(card.getByTestId("question-tab-counter")).toHaveText(/2\s*\/\s*3/);
   await card.getByTestId("question-option-1-tests").click();
   await card.getByTestId("question-option-1-docs").click();

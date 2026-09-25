@@ -1,11 +1,14 @@
 import { HelpCircle, ShieldCheck, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore, type PendingQuestion } from "../../state/session";
 import { Markdown } from "../chat/markdown";
 import { InfoTip } from "../components/info-tip";
 import { StopTurnButton } from "../chat/stop-turn-button";
 import { elicitContent, elicitFields, elicitFormComplete } from "./elicit-fields";
+
+/** Pause after a committing select so the accent flash registers before the next tab. */
+export const SELECT_ADVANCE_MS = 280;
 
 /** TUI option jump keys: `1`–`9` then `a`–`f` (`option_index_for_key`). */
 function optionKeyLabel(index: number): string {
@@ -24,6 +27,12 @@ function optionIndexForKey(key: string): number | null {
 
 function questionAnswered(answers: (string[] | undefined)[], notes: (string | undefined)[], index: number): boolean {
   return (answers[index]?.length ?? 0) > 0 || (notes[index]?.trim() ?? "") !== "";
+}
+
+function prefersReducedMotion(): boolean {
+  return typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
 /** Wire payload matching TUI `build_accepted_response`. */
@@ -56,16 +65,30 @@ export function InteractionModal() {
   const [answers, setAnswers] = useState<(string[] | undefined)[]>([]);
   const [notes, setNotes] = useState<(string | undefined)[]>([]);
   const [activeTab, setActiveTab] = useState(0);
+  const [confirmingLabel, setConfirmingLabel] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const advanceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const elicitSchema = pending?.kind === "elicit" ? pending.raw.requestedSchema : undefined;
   const fields = useMemo(() => elicitFields(elicitSchema), [elicitSchema]);
 
+  function clearAdvanceTimer() {
+    if (advanceTimer.current != null) {
+      clearTimeout(advanceTimer.current);
+      advanceTimer.current = null;
+    }
+    setConfirmingLabel(null);
+  }
+
   useEffect(() => {
     const n = pending?.questions.length ?? 0;
+    clearAdvanceTimer();
     setAnswers(Array.from({ length: n }, () => undefined));
     setNotes(Array.from({ length: n }, () => undefined));
     setActiveTab(0);
     setValues(Object.fromEntries(elicitFields(pending?.raw.requestedSchema).map((field) => [field.name, field.default ?? ""])));
+    return () => {
+      if (advanceTimer.current != null) clearTimeout(advanceTimer.current);
+    };
   }, [pending?.rpcId, pending?.raw.requestedSchema, pending?.questions.length]);
 
   useEffect(() => {
@@ -77,18 +100,21 @@ export function InteractionModal() {
         return;
       }
       if (pending.kind !== "question") return;
+      if (confirmingLabel != null) return;
       const target = event.target as HTMLElement | null;
       const inFreeform = target?.closest?.(".other-option") != null || target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
 
       if (event.key === "ArrowLeft" || event.key === "[" || event.key.toLowerCase() === "h") {
         if (inFreeform) return;
         event.preventDefault();
+        clearAdvanceTimer();
         setActiveTab((tab) => Math.max(0, tab - 1));
         return;
       }
       if (event.key === "ArrowRight" || event.key === "]" || event.key.toLowerCase() === "l") {
         if (inFreeform) return;
         event.preventDefault();
+        clearAdvanceTimer();
         setActiveTab((tab) => Math.min(pending.questions.length - 1, tab + 1));
         return;
       }
@@ -98,11 +124,11 @@ export function InteractionModal() {
       const question = pending.questions[activeTab];
       if (!question || optionIdx >= question.options.length) return;
       event.preventDefault();
-      choose(activeTab, question.options[optionIdx].label, question.multiSelect ?? false);
+      choose(activeTab, question.options[optionIdx].label, question.multiSelect ?? false, true);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [pending, activeTab]);
+  }, [pending, activeTab, confirmingLabel, answers]);
 
   // Plan review verdicts live on the transcript pane + shared composer — no second inline card.
   if (!pending || pending.kind === "plan") return null;
@@ -113,25 +139,55 @@ export function InteractionModal() {
     : 0;
   const canSubmitQuestions = pending.kind === "question" && questionCount > 0 && answeredCount === questionCount;
 
-  function choose(questionIndex: number, label: string, multi: boolean) {
+  /**
+   * Select or toggle an option. Single-select click / option-key commit flashes the choice, then
+   * advances to the next question. Multi-select click toggles in place.
+   */
+  function choose(questionIndex: number, label: string, multi: boolean, advance: boolean) {
+    if (confirmingLabel != null) return;
+    const existing = answers[questionIndex] ?? [];
+    let nextLabels: string[];
+    let didSelect: boolean;
+    if (multi) {
+      const removing = existing.includes(label);
+      nextLabels = removing ? existing.filter((item) => item !== label) : [...existing, label];
+      didSelect = !removing;
+    } else if (existing.length === 1 && existing[0] === label) {
+      nextLabels = [];
+      didSelect = false;
+    } else {
+      nextLabels = [label];
+      didSelect = true;
+    }
     setAnswers((current) => {
       const next = current.slice();
       while (next.length <= questionIndex) next.push(undefined);
-      const existing = next[questionIndex] ?? [];
-      if (multi) {
-        next[questionIndex] = existing.includes(label)
-          ? existing.filter((item) => item !== label)
-          : [...existing, label];
-      } else {
-        // Single-select allows deselect (TUI parity).
-        next[questionIndex] = existing.length === 1 && existing[0] === label ? [] : [label];
-      }
+      next[questionIndex] = nextLabels;
       return next;
     });
+    if (!(advance && didSelect && questionIndex < questionCount - 1)) return;
+
+    const goNext = () => {
+      advanceTimer.current = null;
+      setConfirmingLabel(null);
+      setActiveTab(questionIndex + 1);
+    };
+    if (prefersReducedMotion()) {
+      goNext();
+      return;
+    }
+    setConfirmingLabel(label);
+    advanceTimer.current = setTimeout(goNext, SELECT_ADVANCE_MS);
+  }
+
+  function selectTab(index: number) {
+    clearAdvanceTimer();
+    setActiveTab(index);
   }
 
   async function submitQuestions() {
     if (activePending.kind !== "question") return;
+    clearAdvanceTimer();
     await acpClient.answerQuestion(buildAcceptedPayload(activePending.questions, answers, notes));
     setAnswers([]);
     setNotes([]);
@@ -183,7 +239,7 @@ export function InteractionModal() {
                   aria-selected={index === activeTab}
                   className={index === activeTab ? "active" : ""}
                   data-testid={`question-tab-${index + 1}`}
-                  onClick={() => setActiveTab(index)}
+                  onClick={() => selectTab(index)}
                 >
                   {index + 1}
                 </button>
@@ -203,13 +259,14 @@ export function InteractionModal() {
               {activeQuestion.options.map((option, index) => {
                 const selected = (answers[activeQuestion.index] ?? []).includes(option.label);
                 const multi = activeQuestion.multiSelect ?? false;
+                const confirming = confirmingLabel === option.label;
                 return (
                   <button
                     key={option.id}
                     type="button"
-                    className={selected ? "selected" : ""}
+                    className={[selected ? "selected" : "", confirming ? "confirming" : ""].filter(Boolean).join(" ")}
                     data-testid={`question-option-${activeQuestion.index}-${option.id}`}
-                    onClick={() => choose(activeQuestion.index, option.label, multi)}
+                    onClick={() => choose(activeQuestion.index, option.label, multi, !multi)}
                   >
                     <span className="question-option-top">
                       <kbd>{optionKeyLabel(index)}</kbd>

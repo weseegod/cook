@@ -1,9 +1,15 @@
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { acpClient } from "../../acp/client";
 import { elicitInteraction, questionInteraction, splitQuestionLabelDesc } from "../../acp/reverse";
 import { useSessionStore, type PendingQuestion } from "../../state/session";
-import { InteractionModal } from "./interaction-modal";
+import { InteractionModal, SELECT_ADVANCE_MS } from "./interaction-modal";
+
+function advanceSelectConfirm() {
+  act(() => {
+    vi.advanceTimersByTime(SELECT_ADVANCE_MS);
+  });
+}
 
 const FORM_REQUEST = {
   sessionId: "s1",
@@ -60,6 +66,7 @@ function show(question: PendingQuestion) {
 afterEach(() => {
   cleanup();
   useSessionStore.setState({ pendingQuestion: null });
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -139,6 +146,10 @@ describe("plan review card", () => {
 });
 
 describe("question card tabs", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   it("renders a 1 / 3 counter and shows only the active question label", () => {
     show(MULTI_ASK);
     expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/1\s*\/\s*3/);
@@ -160,11 +171,14 @@ describe("question card tabs", () => {
     show(MULTI_ASK);
 
     fireEvent.click(screen.getByTestId("question-option-0-safe"));
-    fireEvent.click(screen.getByTestId("question-tab-2"));
+    expect(screen.getByTestId("question-option-0-safe").className).toContain("confirming");
+    advanceSelectConfirm();
+    expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/2\s*\/\s*3/);
     fireEvent.click(screen.getByTestId("question-option-1-tests"));
     fireEvent.click(screen.getByTestId("question-option-1-docs"));
     fireEvent.click(screen.getByTestId("question-tab-3"));
     fireEvent.click(screen.getByTestId("question-option-2-staging"));
+    advanceSelectConfirm();
     fireEvent.click(screen.getByTestId("question-submit"));
 
     expect(answer).toHaveBeenCalledWith({
@@ -177,6 +191,18 @@ describe("question card tabs", () => {
     });
   });
 
+  it("flashes the selected option before advancing", () => {
+    show(MULTI_ASK);
+    fireEvent.click(screen.getByTestId("question-option-0-safe"));
+    expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/1\s*\/\s*3/);
+    expect(screen.getByTestId("question-option-0-safe").className).toMatch(/selected/);
+    expect(screen.getByTestId("question-option-0-safe").className).toMatch(/confirming/);
+    advanceSelectConfirm();
+    expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/2\s*\/\s*3/);
+    expect(screen.getByTestId("question-panel-2")).toBeTruthy();
+    expect(screen.queryByTestId("question-option-0-safe")).toBeNull();
+  });
+
   it("keeps freeform text on one question out of another question's answer", async () => {
     const answer = vi.spyOn(acpClient, "answerQuestion").mockResolvedValue();
     show(MULTI_ASK);
@@ -187,6 +213,7 @@ describe("question card tabs", () => {
     fireEvent.click(screen.getByTestId("question-option-1-tests"));
     fireEvent.click(screen.getByTestId("question-tab-3"));
     fireEvent.click(screen.getByTestId("question-option-2-prod"));
+    advanceSelectConfirm();
     fireEvent.click(screen.getByTestId("question-submit"));
 
     expect(answer).toHaveBeenCalledWith({
@@ -204,23 +231,39 @@ describe("question card tabs", () => {
 
   it("toggles multi-select and replaces single-select", () => {
     show(MULTI_ASK);
-    const safe = screen.getByTestId("question-option-0-safe");
-    fireEvent.click(safe);
-    expect(safe.className).toContain("selected");
+    fireEvent.click(screen.getByTestId("question-option-0-safe"));
+    advanceSelectConfirm();
+    // Advanced to question 2 — go back to verify single-select state.
+    fireEvent.click(screen.getByTestId("question-tab-1"));
+    expect(screen.getByTestId("question-option-0-safe").className).toContain("selected");
     fireEvent.click(screen.getByTestId("question-option-0-fast"));
-    expect(safe.className).not.toContain("selected");
+    advanceSelectConfirm();
+    fireEvent.click(screen.getByTestId("question-tab-1"));
+    expect(screen.getByTestId("question-option-0-safe").className).not.toContain("selected");
     expect(screen.getByTestId("question-option-0-fast").className).toContain("selected");
-    // deselect
+    // deselect (stays on this tab)
     fireEvent.click(screen.getByTestId("question-option-0-fast"));
     expect(screen.getByTestId("question-option-0-fast").className).not.toContain("selected");
+    expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/1\s*\/\s*3/);
 
     fireEvent.click(screen.getByTestId("question-tab-2"));
     fireEvent.click(screen.getByTestId("question-option-1-tests"));
     fireEvent.click(screen.getByTestId("question-option-1-docs"));
     expect(screen.getByTestId("question-option-1-tests").className).toContain("selected");
     expect(screen.getByTestId("question-option-1-docs").className).toContain("selected");
+    // Multi-select click does not auto-advance.
+    expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/2\s*\/\s*3/);
     fireEvent.click(screen.getByTestId("question-option-1-tests"));
     expect(screen.getByTestId("question-option-1-tests").className).not.toContain("selected");
+  });
+
+  it("advances on option jump keys after the confirm flash", () => {
+    show(MULTI_ASK);
+    fireEvent.keyDown(document, { key: "1" });
+    expect(screen.getByTestId("question-option-0-safe").className).toContain("confirming");
+    advanceSelectConfirm();
+    expect(screen.getByTestId("question-tab-counter").textContent).toMatch(/2\s*\/\s*3/);
+    expect(screen.getByTestId("question-panel-2")).toBeTruthy();
   });
 
   it("shows option descriptions inline and the answered hint", () => {

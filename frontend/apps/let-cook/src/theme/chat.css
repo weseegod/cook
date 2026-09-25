@@ -683,6 +683,25 @@
   color: var(--on-accent);
 }
 
+.question-options > button.confirming {
+  animation: question-select-confirm 280ms ease-out;
+}
+
+@keyframes question-select-confirm {
+  0% {
+    background: var(--accent-strong);
+  }
+  100% {
+    background: var(--accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .question-options > button.confirming {
+    animation: none;
+  }
+}
+
 .question-options > button:focus-visible {
   outline: 2px solid var(--focus-border);
   outline-offset: 1px;
