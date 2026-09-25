@@ -50,7 +50,33 @@ describe("model catalog normalization", () => {
       contextWindow: 1_000_000,
       configured: true,
     });
-    expect(merged.models.find((model) => model.id === "grok-4.5")?.provider).toBe("xai");
+    expect(merged.models.map((model) => model.id)).toEqual(["gpt-5"]);
+  });
+
+  it("offers only saved Grok models while retaining catalog metadata", () => {
+    const catalog = modelCatalog({
+      currentModelId: "grok-4.7",
+      availableModels: [
+        { id: "grok-4.5", name: "Grok 4.5", provider: "xai" },
+        { id: "grok-4.6", name: "Grok 4.6", provider: "xai", _meta: { totalContextTokens: 500_000 } },
+        { id: "grok-4.7", name: "Grok 4.7", provider: "xai" },
+        { id: "grok-4.8", name: "Grok 4.8", provider: "xai" },
+      ],
+    });
+    const configured = {
+      providers: [],
+      models: [
+        { id: "grok-4.6", provider: "xai", input: ["text"] },
+        { id: "grok-custom", provider: "xai", name: "Grok Custom", input: ["text"] },
+      ],
+    };
+
+    const merged = mergeConfiguredModels(catalog, configured);
+    expect(merged.models.map((model) => model.id)).toEqual(["grok-4.6", "grok-custom"]);
+    expect(merged.models[0]).toMatchObject({ name: "Grok 4.6", contextWindow: 500_000, configured: true });
+    expect(merged.currentModelId).toBe("grok-4.7");
+    expect(mergeConfiguredModels(catalog, { providers: [], models: [] }).models).toEqual([]);
+    expect(mergeConfiguredModels(catalog, null).models).toHaveLength(4);
   });
 
   it("keeps configured models selectable when the ACP catalog omits them", () => {

@@ -388,6 +388,64 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(page.getByRole("button", { name: "Model" })).toContainText("Grok Custom");
   });
 
+  test("chat picker follows the two saved Grok models from a four-model OAuth catalog", async ({ page }) => {
+    const grokCatalogModels = ["grok-4.5", "grok-4.6", "grok-4.7", "grok-4.8"]
+      .map((id) => ({ id, name: id.toUpperCase() }));
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      authMethodId: "grok.com",
+      defaultModel: "grok-4.5",
+      providers: [],
+      grokCatalogModels,
+      promptDelayMs: 1_500,
+      xaiModels: grokCatalogModels.slice(0, 2),
+    });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    const row = page.getByTestId("provider-row-xai");
+    await expect(row.locator("[data-testid^='model-row-']")).toHaveCount(2);
+    await page.getByTestId("provider-add-model-xai").click();
+    await page.getByTestId("model-get-models").click();
+    const candidates = page.getByTestId("model-candidates");
+    await expect(candidates).toContainText("GROK-4.7");
+    await expect(candidates).toContainText("GROK-4.8");
+    await page.getByRole("dialog", { name: "Add model to xAI" }).getByRole("button", { name: "Cancel" }).click();
+
+    await page.keyboard.press("Escape");
+    const picker = page.getByRole("button", { name: "Model" });
+    await picker.click();
+    await expect(page.locator("[data-model-picker-item]")).toHaveCount(2);
+    await expect(page.getByRole("menuitem", { name: "GROK-4.7" })).toHaveCount(0);
+    await page.getByRole("menuitem", { name: "GROK-4.6" }).click();
+    await expect(picker).toContainText("GROK-4.6");
+
+    await page.getByTestId("composer-input").fill("Check models during a turn");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+    await page.evaluate((availableModels) => window.__cookMock!.modelsUpdate({
+      currentModelId: "grok-4.6", availableModels,
+    }), grokCatalogModels);
+    await picker.click();
+    await expect(page.locator("[data-model-picker-item]")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Model" })).toContainText("GROK-4.6");
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.locator("[data-model-picker-item]")).toHaveCount(2);
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("model-remove-grok-4.5").click();
+    await page.getByTestId("model-remove-confirm").click();
+    await expect(row.locator("[data-testid^='model-row-']")).toHaveCount(1);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.locator("[data-model-picker-item]")).toHaveCount(1);
+    await expect(page.getByRole("menuitem", { name: "GROK-4.6" })).toBeVisible();
+  });
+
   test("Get models reads the Grok OAuth catalog without an API key", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, { ...CONNECTED_SEED, authMethodId: "grok.com" });

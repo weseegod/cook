@@ -161,6 +161,8 @@ export interface MockState {
   providers: MockProvider[];
   /** User-added models routed through the built-in xAI account rather than a BYOK provider. */
   xaiModels: MockSeedModel[];
+  /** Models the Grok OAuth catalog offers before they are saved in Settings. */
+  grokCatalogModels?: MockSeedModel[];
   /** Whether the simulated host has an xAI Platform API key for /models. */
   xaiApiKeyPresent: boolean;
   discoverable: MockSeedModel[];

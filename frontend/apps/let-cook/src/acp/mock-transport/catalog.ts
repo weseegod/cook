@@ -37,7 +37,15 @@ export function providerList() {
 export function modelCatalog() {
   const models: Array<Record<string, unknown>> = [];
   if (state.authMethodId) {
-    models.push({ id: "grok-4.5", name: "Grok 4.5", provider: "xai", inputModalities: ["text", "image"], _meta: { totalContextTokens: 500_000 } });
+    for (const model of state.grokCatalogModels ?? [{ id: "grok-4.5", name: "Grok 4.5", input: ["text", "image"], contextWindow: 500_000 }]) {
+      models.push({
+        id: model.id,
+        name: model.name ?? model.id,
+        provider: "xai",
+        inputModalities: model.input ?? ["text"],
+        _meta: { totalContextTokens: model.contextWindow ?? 300_000 },
+      });
+    }
   }
   for (const model of state.xaiModels) {
     models.push({

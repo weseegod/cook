@@ -52,6 +52,28 @@ describe("notification registry (C3)", () => {
     ]);
   });
 
+  it("keeps saved models when a raw catalog update arrives during a turn or refresh failure", async () => {
+    const saved = [
+      { id: "grok-4.5", name: "Grok 4.5", provider: "xai", configured: true },
+      { id: "grok-4.6", name: "Grok 4.6", provider: "xai", configured: true },
+    ];
+    useCatalogStore.getState().setModelCatalog({ currentModelId: "grok-4.5", models: saved });
+    const update = {
+      currentModelId: "grok-4.7",
+      availableModels: ["grok-4.5", "grok-4.6", "grok-4.7", "grok-4.8"].map((id) => ({ id })),
+    };
+    const refreshModels = vi.fn(async () => { throw new Error("offline"); });
+    useSessionStore.setState({ turnRunning: true });
+    await dispatchNotification({ method: "x.ai/models/update", params: update }, "x.ai/models/update", update, { refreshModels });
+    expect(refreshModels).not.toHaveBeenCalled();
+    expect(useCatalogStore.getState()).toMatchObject({ currentModelId: "grok-4.7", models: saved });
+
+    useSessionStore.setState({ turnRunning: false });
+    await dispatchNotification({ method: "x.ai/models/update", params: update }, "x.ai/models/update", update, { refreshModels });
+    expect(refreshModels).toHaveBeenCalledOnce();
+    expect(useCatalogStore.getState().models).toEqual(saved);
+  });
+
   it("accepts mcpServers payload shape from the agent", () => {
     const servers = mcpServersFromParams({
       mcpServers: [{ name: "slack", source: "managed", type: "http", url: "https://example" }],

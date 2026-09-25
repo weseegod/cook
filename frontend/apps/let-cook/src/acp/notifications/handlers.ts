@@ -175,12 +175,15 @@ export const notificationEntries: NotificationEntry[] = [
       if (ctx.refreshModels && !turnRunning) {
         try {
           await ctx.refreshModels();
+          return;
         } catch {
-          // A notification must not turn into a stale/empty picker just because the optional
-          // re-list failed; the payload is still a useful fallback.
-          if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
+          // Keep the saved-model list when the config-backed refresh is unavailable.
         }
-      } else if (catalog.models.length > 0) useCatalogStore.getState().setModelCatalog(catalog);
+      }
+      const latest = useCatalogStore.getState();
+      if (catalog.currentModelId && latest.currentModelId !== catalog.currentModelId) {
+        latest.setModelCatalog({ currentModelId: catalog.currentModelId, models: latest.models });
+      }
     },
   },
   {

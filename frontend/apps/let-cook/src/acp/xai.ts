@@ -306,10 +306,8 @@ export function modelCatalog(value: unknown): ModelCatalog {
 /**
  * Restore provider/config metadata that the agent's model catalog can omit.
  *
- * The ACP catalog is intentionally provider-agnostic for many ids, so an unnamespaced `gpt-*`
- * entry otherwise falls through to the historical `xai` default in `normalizeModel`. Explicit
- * `[model.*]` rows are the source of truth for Desktop and are also available from the browser
- * mock, which makes this merge useful to both transports.
+ * Explicit `[model.*]` rows determine which models the chat picker offers. The agent's catalog
+ * supplies runtime metadata for those rows and may include additional models for discovery.
  */
 export function mergeConfiguredModels(catalog: ModelCatalog, configured?: ProviderList | null): ModelCatalog {
   if (!configured) return catalog;
@@ -335,10 +333,11 @@ export function mergeConfiguredModels(catalog: ModelCatalog, configured?: Provid
     });
   }
 
-  const models = new Map(catalog.models.map((model) => [model.id, model]));
+  const catalogModels = new Map(catalog.models.map((model) => [model.id, model]));
+  const models: ModelSummary[] = [];
   for (const [id, configuredModel] of configuredModels) {
-    const existing = models.get(id);
-    models.set(id, {
+    const existing = catalogModels.get(id);
+    models.push({
       ...existing,
       ...configuredModel,
       // The ACP catalog may know richer runtime metadata than config.toml. Keep it when the
@@ -357,7 +356,7 @@ export function mergeConfiguredModels(catalog: ModelCatalog, configured?: Provid
   const currentModelId = catalog.currentModelId || configured.defaultModel || null;
   return {
     currentModelId,
-    models: [...models.values()].map((model) => ({
+    models: models.map((model) => ({
       ...model,
       isDefault: model.id === currentModelId || model.isDefault,
     })),
