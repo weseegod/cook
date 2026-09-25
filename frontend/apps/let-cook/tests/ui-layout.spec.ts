@@ -79,18 +79,34 @@ for (const theme of ["dark", "light"] as const) {
   });
 }
 
-test("prose stays readable while code uses the chat width", async ({ page }) => {
+test("assistant reply uses the chat width for prose and code", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openConversation(page, shellSeed({
-    reply: "A short explanation of the change.\n\n```ts\nexport const answer = 42;\n```",
+    reply: "## A wider reply\n\nA short explanation of the change.\n\n- First item\n- Second item\n\n```ts\nexport const answer = 42;\n```",
   }));
   await page.getByTestId("composer-input").fill("Show a code example");
   await page.getByTestId("composer-input").press("Enter");
   await expect(page.locator(".message-assistant .code-block")).toBeVisible();
-  const widths = await page.evaluate(() => ({
-    paragraph: document.querySelector(".message-assistant .markdown p")?.getBoundingClientRect().width ?? 0,
-    code: document.querySelector(".message-assistant .code-block")?.getBoundingClientRect().width ?? 0,
-  }));
-  expect(widths.paragraph).toBeGreaterThan(0);
-  expect(widths.code).toBeGreaterThan(widths.paragraph + 100);
+
+  for (const width of [1440, 840]) {
+    await page.setViewportSize({ width, height: 900 });
+    if (width === 840) {
+      await page.getByRole("button", { name: "Open tools panel" }).click();
+      await expect(page.locator(".sidebar")).toHaveCount(0);
+    }
+    const bounds = await page.evaluate(() => {
+      const rect = (selector: string) => document.querySelector(selector)?.getBoundingClientRect();
+      const markdown = rect(".message-assistant .markdown");
+      return {
+        markdown: markdown?.width ?? 0,
+        children: ["h2", "p", "ul"].map((selector) => rect(`.message-assistant .markdown > ${selector}`)?.width ?? 0),
+        code: rect(".message-assistant .markdown > pre")?.width ?? 0,
+        overflow: document.body.scrollWidth - window.innerWidth,
+      };
+    });
+    expect(bounds.markdown).toBeGreaterThan(0);
+    for (const child of bounds.children) expect(Math.abs(child - bounds.markdown)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bounds.code - bounds.markdown)).toBeLessThanOrEqual(1);
+    expect(bounds.overflow).toBeLessThanOrEqual(0);
+  }
 });

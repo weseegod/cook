@@ -1890,7 +1890,6 @@ body { font-size: 14px; }
 .sticky-prompt .response-top { position: static; display: grid; margin: 3px auto 0; pointer-events: auto; }
 .message, .verb-group, .tool-row, .thinking-row, .session-event, .tool-card { min-width: 0; max-width: 100%; }
 .message-user { max-width: 78ch; }
-.message-assistant .markdown > :is(p, ul, ol, blockquote, h1, h2, h3, h4, h5, h6) { max-width: 78ch; }
 .message-body, .markdown, .tool-detail { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
 .markdown pre, .shiki-wrap pre, .tool-detail > pre { max-width: 100%; overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
 .markdown table { display: block; max-width: 100%; overflow: hidden; table-layout: fixed; overflow-wrap: anywhere; }
