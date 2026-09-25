@@ -65,6 +65,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
   let turnPausedMs = state.turnPausedMs;
   let questionOpenedAt = state.questionOpenedAt;
   let turnRunning = state.turnRunning;
+  let currentPromptId = state.currentPromptId;
   let retrying = state.retrying;
   let pendingPermission = state.pendingPermission;
   let pendingQuestion = state.pendingQuestion;
@@ -143,6 +144,8 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
     }
     // U-turn: honor `turn_completed` when the agent emits it (alongside prompt RPC completion).
     if (kind === "turn_completed") {
+      const completedPromptId = typeof raw.promptId === "string" ? raw.promptId : null;
+      if (completedPromptId && currentPromptId && completedPromptId !== currentPromptId) continue;
       if (turnStartedAt !== null || cursor.turnId) {
         const stop = String(raw.stopReason ?? raw.stop_reason ?? "");
         const outcome: TurnOutcome = /cancel/i.test(stop)
@@ -166,6 +169,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
         turnPausedMs = 0;
         questionOpenedAt = null;
         turnRunning = false;
+        currentPromptId = null;
         pendingPermission = null;
         pendingQuestion = null;
       }
@@ -200,6 +204,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
     turnPausedMs,
     questionOpenedAt,
     turnRunning,
+    currentPromptId,
     retrying,
     pendingPermission,
     pendingQuestion,

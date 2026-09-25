@@ -71,6 +71,22 @@ describe("P9/P10 notification handlers", () => {
     });
   });
 
+  it("ignores a late prompt_complete for the turn replaced by Send now", async () => {
+    useSessionStore.getState().appendOptimisticUser("first", [], "prompt-first");
+    useSessionStore.getState().appendOptimisticUser("send now", [], "prompt-second");
+    useSessionStore.getState().set({ turnRunning: true });
+    const before = useSessionStore.getState();
+    await dispatchNotification(
+      { method: "x.ai/session/prompt_complete", params: {} },
+      "x.ai/session/prompt_complete",
+      { sessionId: "s1", promptId: "prompt-first", stopReason: "cancelled" },
+    );
+    const after = useSessionStore.getState();
+    expect(after.turnRunning).toBe(true);
+    expect(after.currentPromptId).toBe("prompt-second");
+    expect(after.transcriptCursor).toEqual(before.transcriptCursor);
+  });
+
   it("N-settings invalidates providers and skills queries", async () => {
     const { queryClient } = await import("../../state/query-client");
     const spy = vi.spyOn(queryClient, "invalidateQueries");

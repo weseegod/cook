@@ -200,6 +200,8 @@ export const notificationEntries: NotificationEntry[] = [
         return;
       }
       if (!store.turnRunning && store.turnStartedAt === null) return;
+      const completedPromptId = typeof ctx.params.promptId === "string" ? ctx.params.promptId : null;
+      if (completedPromptId && store.currentPromptId && completedPromptId !== store.currentPromptId) return;
       const outcome = outcomeFromPromptComplete(ctx.params);
       store.finishTurn(outcome);
       store.set({ turnRunning: false });

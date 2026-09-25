@@ -589,6 +589,24 @@ describe("plan review", () => {
     expect(state.turnStartedAt).toBeNull();
     expect(state.blocks.at(-1)).toMatchObject({ type: "session-event", kind: "turn" });
   });
+
+  it("keeps a promoted prompt active when the previous turn_completed arrives late", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("s1");
+    useSessionStore.getState().appendOptimisticUser("first", [], "prompt-first");
+    useSessionStore.getState().appendOptimisticUser("send now", [], "prompt-second");
+    useSessionStore.getState().set({ turnRunning: true });
+    const before = useSessionStore.getState();
+    before.applyNotification({
+      sessionId: "s1",
+      update: { sessionUpdate: "turn_completed", promptId: "prompt-first", stopReason: "cancelled" },
+    } as never);
+    const after = useSessionStore.getState();
+    expect(after.currentPromptId).toBe("prompt-second");
+    expect(after.turnRunning).toBe(true);
+    expect(after.transcriptCursor).toEqual(before.transcriptCursor);
+    expect(after.blocks).toEqual(before.blocks);
+  });
 });
 
 describe("activity session updates (P4)", () => {

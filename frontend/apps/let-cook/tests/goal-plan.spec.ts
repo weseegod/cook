@@ -165,6 +165,39 @@ test.describe("goal and plan presentation", () => {
     await expect(promoted).toHaveCount(1);
   });
 
+  test("send now keeps one user bubble when the prior turn finishes before its echo", async ({ page }) => {
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 3_000 });
+    const input = page.getByTestId("composer-input");
+    await input.fill("first turn");
+    await input.press("Enter");
+    const [firstPrompt] = await waitForCalls(page, "session/prompt");
+    const firstPromptId = String((firstPrompt.params._meta as Record<string, unknown>).promptId);
+    await page.waitForTimeout(1_000);
+    await input.fill("send now once");
+    await input.press("Enter");
+    const prompts = await waitForCalls(page, "session/prompt", 2);
+    const promptId = String((prompts[1].params._meta as Record<string, unknown>).promptId);
+    await page.evaluate((id) => window.__cookMock!.queueChanged([
+      { id, version: 0, text: "send now once", kind: "prompt" },
+    ]), promptId);
+    await page.getByTestId(`queue-send-now-${promptId}`).click();
+    await expect(page.locator(".message-user").filter({ hasText: "send now once" })).toHaveCount(1);
+
+    await page.evaluate((id) => window.__cookMock!.sessionNotification({
+      sessionUpdate: "turn_completed", promptId: id, stopReason: "cancelled",
+    }), firstPromptId);
+    await expect(page.locator(".message-user").filter({ hasText: "send now once" })).toHaveCount(1);
+
+    // The first RPC finishes while the queued prompt remains in flight. Its turn-end must leave
+    // the queued prompt's optimistic user bubble available for the live echo.
+    await page.waitForTimeout(2_200);
+    await page.evaluate((id) => window.__cookMock!.sessionUpdate("mock-session", {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "send now once" },
+    }, { promptId: id }), promptId);
+    await expect(page.locator(".message-user").filter({ hasText: "send now once" })).toHaveCount(1);
+  });
+
   test("queue pane can edit, send now, and remove held prompts", async ({ page }) => {
     // Keep the turn open through the edit flow, even under parallel browser-test load.
     await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 10_000 });

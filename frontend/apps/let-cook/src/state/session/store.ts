@@ -16,6 +16,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   planEntries: EMPTY_PLAN_ENTRIES,
   transcriptCursor: emptyCursor(),
   turnRunning: false,
+  currentPromptId: null,
   retrying: false,
   turnStartedAt: null,
   workingSessions: {},
@@ -181,6 +182,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       transcriptCursor: emptyCursor(),
       sessionTitle: DEFAULT_SESSION_TITLE,
       turnRunning: false,
+      currentPromptId: null,
       retrying: false,
       turnStartedAt: null,
       turnPausedMs: 0,
@@ -210,7 +212,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       notice: null,
       error: null,
     }),
-  appendOptimisticUser: (text, images = []) =>
+  appendOptimisticUser: (text, images = [], promptId) =>
     set((state) => {
       const localId = `local-${crypto.randomUUID()}`;
       const turnId = `turn-${crypto.randomUUID()}`;
@@ -220,6 +222,7 @@ export const useSessionStore = create<SessionState>((set) => ({
           { type: "message", id: localId, turnId, role: "user", text, images: [...images], streaming: false },
         ],
         transcriptCursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: localId },
+        currentPromptId: promptId ?? null,
         activity: null,
         retrying: false,
         turnStartedAt: Date.now(),
@@ -238,6 +241,7 @@ export const useSessionStore = create<SessionState>((set) => ({
         blocks: appendTurnMarker(finished, state, outcome),
         activity: null,
         transcriptCursor: emptyCursor(),
+        currentPromptId: null,
         turnStartedAt: null,
         turnPausedMs: 0,
         questionOpenedAt: null,

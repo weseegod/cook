@@ -118,6 +118,8 @@ export interface SessionState {
   planEntries: unknown[];
   transcriptCursor: TranscriptCursor;
   turnRunning: boolean;
+  /** Prompt whose user bubble currently owns the live transcript cursor. */
+  currentPromptId: string | null;
   /** The active request is between retry attempts; a previous decode rate is no longer live. */
   retrying: boolean;
   turnStartedAt: number | null;
@@ -202,7 +204,7 @@ export interface SessionState {
   savePlanComment: (...args: [text: string] | [id: number | null, lineRange: [number, number], text: string]) => void;
   removePlanComment: (id: number) => void;
   resetConversation: (sessionId?: string | null) => void;
-  appendOptimisticUser: (text: string, images?: string[]) => void;
+  appendOptimisticUser: (text: string, images?: string[], promptId?: string) => void;
   applyNotification: (notification: SessionNotification) => void;
   applyNotifications: (notifications: SessionNotification[]) => void;
   finishTurn: (outcome?: TurnOutcome) => void;

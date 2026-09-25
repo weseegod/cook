@@ -303,7 +303,7 @@ export class CookAcpClient {
     // A direct prompt briefly appears in the agent's queue before it starts. Its user bubble is
     // already painted here, so the queue's running transition must not paint it a second time.
     this.paintedPromptIds.add(`${sessionId}:${promptId}`);
-    useSessionStore.getState().appendOptimisticUser(text, optimisticImages(attachments));
+    useSessionStore.getState().appendOptimisticUser(text, optimisticImages(attachments), promptId);
     return this.dispatchPrompt(sessionId, this.buildParts(text, attachments), promptId);
   }
 
@@ -364,7 +364,7 @@ export class CookAcpClient {
       const images = this.queuedImagesById.get(runningId) ?? [];
       if (text.trim() || images.length > 0) {
         this.paintedPromptIds.add(promotionKey);
-        useSessionStore.getState().appendOptimisticUser(text, images);
+        useSessionStore.getState().appendOptimisticUser(text, images, runningId);
       }
     }
     if (runningId) this.queuedImagesById.delete(runningId);
@@ -442,7 +442,9 @@ export class CookAcpClient {
       const store = useSessionStore.getState();
       // A backgrounded conversation's prompt must not close (or reopen) the active turn.
       if (store.sessionId === sessionId) {
-        if (store.turnStartedAt !== null) {
+        // Send now may paint the promoted prompt before the old request settles. Its completion
+        // must leave the promoted prompt's optimistic cursor in place for the live user echo.
+        if (store.turnStartedAt !== null && (!store.currentPromptId || store.currentPromptId === promptId)) {
           store.finishTurn(outcome);
         }
         store.set({
