@@ -237,6 +237,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: None,
+            archived: false,
         };
         merged_session_to_row(m, facet_registry())
     }

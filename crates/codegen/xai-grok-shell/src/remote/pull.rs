@@ -180,6 +180,7 @@ pub(crate) mod hydrate {
             last_active_at: None,
             generated_title,
             title_is_manual,
+            archived: false,
             worktree_label: None,
             agent: Default::default(),
             // Hydrated locally: record the profile this process runs under

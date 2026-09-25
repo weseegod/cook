@@ -1241,6 +1241,10 @@ pub struct Summary {
     /// Manual titles render inline in the prompt's top border on resume.
     #[serde(default, skip_serializing_if = "is_false")]
     pub title_is_manual: bool,
+    /// Hide this local (build) session from the active Conversations list.
+    /// Chat archive state lives on the remote conversations service; this flag is build-only.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub archived: bool,
     /// Human-readable label for the worktree directory (e.g. "nuke-v-tables").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_label: Option<String>,
@@ -1350,6 +1354,7 @@ impl Summary {
             last_active_at: None,
             generated_title: None,
             title_is_manual: false,
+            archived: false,
             worktree_label: None,
             agent: PersistedAgentSelection::default(),
             sandbox_profile: None,

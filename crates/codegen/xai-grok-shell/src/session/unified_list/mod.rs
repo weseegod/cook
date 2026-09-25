@@ -229,7 +229,7 @@ pub async fn build_unified_list(
     reg.apply_pushdown(&facet_filters, &mut source_query);
     let headless = HeadlessPolicy::from_wire(req.headless.as_deref());
     let exclude_conversations = excludes_conversations(&facet_filters, headless);
-    let exclude_build = req.archived || excludes_build(&facet_filters);
+    let exclude_build = excludes_build(&facet_filters);
     let over = crate::session::merge::over_fetch(limit);
     let cwd_scope = req.cwd_scope;
     let can_relax = relax_eligible(RelaxGate {
@@ -360,6 +360,10 @@ pub async fn build_unified_list(
         );
     }
     let local_rows = reg.apply_in_memory_filters(&facet_filters, local_rows);
+    let local_rows: Vec<_> = local_rows
+        .into_iter()
+        .filter(|r| r.archived == req.archived)
+        .collect();
     let conv_lane = match conv_lane {
         ConvLane::Page {
             rows,
@@ -597,6 +601,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: Some("worktree".into()),
+            archived: false,
         }
     }
     fn row(session_id: &str, updated_at: &str) -> UnifiedRow {
@@ -1142,6 +1147,31 @@ mod tests {
         let req: ListReq = serde_json::from_str("{}").expect("parse");
         assert!(!req.archived);
     }
+
+    #[test]
+    fn archived_build_rows_match_conversations_or_archives_view() {
+        let active = row("build-active", "2026-06-18T20:10:00Z");
+        let mut archived_merged = local("build-archived", "2026-06-17T20:10:00Z");
+        archived_merged.archived = true;
+        let archived = merged_session_to_row(archived_merged, facet_registry());
+        assert!(!active.archived);
+        assert!(archived.archived);
+
+        let rows = [active, archived];
+        let conversations: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.archived == false)
+            .map(|r| r.legacy.session_id.as_str())
+            .collect();
+        let archives: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.archived == true)
+            .map(|r| r.legacy.session_id.as_str())
+            .collect();
+        assert_eq!(conversations, ["build-active"]);
+        assert_eq!(archives, ["build-archived"]);
+    }
+
     #[test]
     fn relax_rows_scopes_to_repo_and_requires_messages() {
         use crate::session::persistence::Summary;

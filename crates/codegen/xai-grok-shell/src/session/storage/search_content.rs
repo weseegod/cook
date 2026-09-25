@@ -351,6 +351,7 @@ pub(super) fn test_summary(
         last_active_at: None,
         generated_title: None,
         title_is_manual: false,
+        archived: false,
         worktree_label: None,
         agent: Default::default(),
         sandbox_profile: None,

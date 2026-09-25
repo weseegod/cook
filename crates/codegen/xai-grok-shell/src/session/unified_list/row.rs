@@ -74,9 +74,10 @@ pub fn merged_session_to_row(m: MergedSession, reg: &FacetRegistry) -> UnifiedRo
     let facets = reg.extract_all(&NormalizedItem::from_merged(&m));
     let title = m.summary.clone();
     let updated_at = effective_local_ts(&m);
+    let archived = m.archived;
     UnifiedRow {
         kind: SessionKind::Build,
-        archived: false,
+        archived,
         legacy: m,
         title,
         updated_at,
@@ -115,6 +116,7 @@ pub fn conversation_to_row(c: Conversation, reg: &FacetRegistry) -> UnifiedRow {
         last_turn_summary: None,
         last_recap: None,
         session_kind: None,
+        archived: false,
     };
     UnifiedRow {
         kind: SessionKind::Chat,
@@ -278,6 +280,27 @@ mod tests {
         };
         let row = conversation_to_row(c, facet_registry());
         assert!(row.archived);
+
+        let meta = serde_json::to_value(row.into_ext_superset()).unwrap();
+        assert_eq!(
+            meta.pointer("/_meta/x.ai~1session/archived")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn build_row_preserves_archived_flag() {
+        let merged = MergedSession {
+            session_id: "build_archived".into(),
+            summary: "Local build".into(),
+            archived: true,
+            cwd: "/Users/me/xai".into(),
+            ..MergedSession::default()
+        };
+        let row = merged_session_to_row(merged, facet_registry());
+        assert!(row.archived);
+        assert_eq!(row.kind, SessionKind::Build);
 
         let meta = serde_json::to_value(row.into_ext_superset()).unwrap();
         assert_eq!(

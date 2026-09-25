@@ -590,6 +590,8 @@ fn fork_summary(
         generated_title: source.generated_title,
         // A fork keeps the parent's title, so whether that title was set manually carries over too
         title_is_manual: source.title_is_manual,
+        // A fork is a new conversation row; do not inherit the parent's archive hide flag
+        archived: false,
         // Re-derived from the target path, never inherited: the source's label describes the parent's worktree, not this one
         worktree_label: target_worktree_identity
             .as_ref()

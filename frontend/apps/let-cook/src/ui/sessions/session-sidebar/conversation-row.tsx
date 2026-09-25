@@ -105,12 +105,10 @@ export function ConversationRow({
             <Download size={13} />
             <span>Export</span>
           </button>
-          {session.kind === "chat" && (
-            <button type="button" role="menuitem" data-testid={`session-archive-${session.id}`} onClick={onArchive}>
-              {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-              <span>{session.archived ? "Unarchive" : "Archive"}</span>
-            </button>
-          )}
+          <button type="button" role="menuitem" data-testid={`session-archive-${session.id}`} onClick={onArchive}>
+            {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+            <span>{session.archived ? "Unarchive" : "Archive"}</span>
+          </button>
           <div className="session-menu-separator" role="separator" />
           <button
             type="button"

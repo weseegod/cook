@@ -63,6 +63,9 @@ pub struct MergedSession {
     pub last_recap: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_kind: Option<String>,
+    /// Local build-session archive flag from `summary.json` (chat archive is remote-only).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 use crate::session::visibility::HeadlessPolicy;
@@ -310,6 +313,7 @@ pub fn merge(
                 last_turn_summary: s.last_turn_summary,
                 last_recap: s.last_recap,
                 session_kind: s.session_kind,
+                archived: s.archived,
             },
         );
     }
@@ -368,6 +372,7 @@ pub fn merge(
                 last_turn_summary: local.last_turn_summary,
                 last_recap: local.last_recap,
                 session_kind: local.session_kind,
+                archived: local.archived,
             },
         );
     }
@@ -497,6 +502,7 @@ mod tests {
             last_active_at: None,
             generated_title: None,
             title_is_manual: false,
+            archived: false,
             worktree_label: None,
             agent: Default::default(),
             sandbox_profile: None,
@@ -1380,6 +1386,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: None,
+            archived: false,
         }
     }
 

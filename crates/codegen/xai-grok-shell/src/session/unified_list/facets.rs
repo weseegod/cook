@@ -417,6 +417,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: None,
+            archived: false,
         };
         merged_session_to_row(m, &build_facet_registry())
     }
@@ -484,6 +485,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: None,
+            archived: false,
         });
         let lf = reg.extract_all(&local);
         assert!(!lf.contains_key(WORKSPACE_FACET_KEY));
@@ -613,6 +615,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: None,
+            archived: false,
         });
         assert!(!reg.extract_all(&local).contains_key(STARRED_FACET_KEY));
     }
@@ -660,6 +663,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: None,
+            archived: false,
         };
         merged_session_to_row(m, &build_facet_registry())
     }
@@ -688,6 +692,7 @@ mod tests {
             last_turn_summary: None,
             last_recap: None,
             session_kind: Some("worktree".into()),
+            archived: false,
         });
         let f = reg.extract_all(&local);
         assert!(matches!(

@@ -103,6 +103,8 @@ pub(crate) struct SummaryPatch {
     pub session_kind_if_absent: Option<String>,
     /// The session's selected agent, applied as one unit (see [`Summary::set_agent`]).
     pub agent: Option<PersistedAgent>,
+    /// Hide/show a build session in Conversations vs Archives (last-writer-wins).
+    pub archived: Option<bool>,
 }
 
 impl Summary {
@@ -176,6 +178,9 @@ impl Summary {
             && self.session_kind.is_none()
         {
             self.session_kind = Some(kind.clone());
+        }
+        if let Some(archived) = patch.archived {
+            self.archived = archived;
         }
         let mut absent_title_applied = false;
         if patch.reset_title_to_auto {
@@ -1040,6 +1045,38 @@ mod tests {
             Some("subagent"),
             "an existing kind must win over a later stamp"
         );
+    }
+
+    #[tokio::test]
+    async fn archived_patch_toggles_build_session_flag() {
+        let dir = TempDir::new().unwrap();
+        let (adapter, info, summary_path) = new_session(&dir).await;
+
+        assert!(!read_summary(&summary_path).unwrap().archived);
+
+        adapter
+            .apply_summary_patch(
+                &info,
+                SummaryPatch {
+                    archived: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(read_summary(&summary_path).unwrap().archived);
+
+        adapter
+            .apply_summary_patch(
+                &info,
+                SummaryPatch {
+                    archived: Some(false),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!read_summary(&summary_path).unwrap().archived);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

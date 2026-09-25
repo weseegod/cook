@@ -161,10 +161,10 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     const nextArchived = !session.archived;
     try {
       if (nextArchived) {
-        await acpClient.xai.archiveSession(session.id);
+        await acpClient.xai.archiveSession(session.id, session.kind);
         useSessionStore.getState().set({ notice: "Conversation archived." });
       } else {
-        await acpClient.xai.unarchiveSession(session.id);
+        await acpClient.xai.unarchiveSession(session.id, session.kind);
         useSessionStore.getState().set({ notice: "Conversation unarchived." });
       }
       if (session.id === activeId) setActiveArchived(nextArchived);

@@ -111,7 +111,7 @@ test.describe("conversation list", () => {
 
     const row = await openRowMenu(page, "s-alpha-old");
     const menu = row.getByRole("menu");
-    await expect(menu.getByRole("menuitem")).toHaveText(["Pin to top", "Rename", "Fork", "Export", "Delete"]);
+    await expect(menu.getByRole("menuitem")).toHaveText(["Pin to top", "Rename", "Fork", "Export", "Archive", "Delete"]);
 
     // Delete reads as the light red danger tone; the other actions stay grey.
     const [danger, plain] = await Promise.all([
@@ -449,7 +449,7 @@ test.describe("conversation archives", () => {
     return row;
   }
 
-  test("switches views and archives/unarchives chat conversations", async ({ page }) => {
+  test("switches views and archives/unarchives conversations of both kinds", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await openWorkspace(page, ARCHIVE_SEED);
@@ -458,6 +458,19 @@ test.describe("conversation archives", () => {
     await expect(page.getByTestId("session-row-chat-active")).toBeVisible();
     await expect(page.getByTestId("session-row-build-local")).toBeVisible();
     await expect(page.getByTestId("session-row-chat-archived")).toHaveCount(0);
+
+    const build = await openRowMenu(page, "build-local");
+    await expect(build.getByRole("menu").getByRole("menuitem")).toHaveText([
+      "Pin to top",
+      "Rename",
+      "Fork",
+      "Export",
+      "Archive",
+      "Delete",
+    ]);
+    await build.getByTestId("session-archive-build-local").click();
+    await waitForCalls(page, "x.ai/session/archive");
+    await expect(page.getByTestId("session-row-build-local")).toHaveCount(0);
 
     const active = await openRowMenu(page, "chat-active");
     await expect(active.getByRole("menu").getByRole("menuitem")).toHaveText([
@@ -469,7 +482,7 @@ test.describe("conversation archives", () => {
       "Delete",
     ]);
     await active.getByTestId("session-archive-chat-active").click();
-    await waitForCalls(page, "x.ai/session/archive");
+    await waitForCalls(page, "x.ai/session/archive", 2);
     await expect(page.getByTestId("session-row-chat-active")).toHaveCount(0);
 
     await page.getByTestId("conversation-view").click();
@@ -477,17 +490,24 @@ test.describe("conversation archives", () => {
     await expect(page.getByTestId("conversation-view")).toContainText("ARCHIVES");
     await expect(page.getByTestId("session-row-chat-active")).toBeVisible();
     await expect(page.getByTestId("session-row-chat-archived")).toBeVisible();
+    await expect(page.getByTestId("session-row-build-local")).toBeVisible();
+
+    const archivedBuild = await openRowMenu(page, "build-local");
+    await expect(archivedBuild.getByTestId("session-archive-build-local")).toContainText("Unarchive");
+    await archivedBuild.getByTestId("session-archive-build-local").click();
+    await waitForCalls(page, "x.ai/session/unarchive");
     await expect(page.getByTestId("session-row-build-local")).toHaveCount(0);
 
     const archived = await openRowMenu(page, "chat-active");
     await expect(archived.getByTestId("session-archive-chat-active")).toContainText("Unarchive");
     await archived.getByTestId("session-archive-chat-active").click();
-    await waitForCalls(page, "x.ai/session/unarchive");
+    await waitForCalls(page, "x.ai/session/unarchive", 2);
     await expect(page.getByTestId("session-row-chat-active")).toHaveCount(0);
 
     await page.getByTestId("conversation-view").click();
     await page.getByTestId("conversation-view-conversations").click();
     await expect(page.getByTestId("session-row-chat-active")).toBeVisible();
+    await expect(page.getByTestId("session-row-build-local")).toBeVisible();
     await expect(page.getByTestId("session-row-chat-archived")).toHaveCount(0);
 
     // The remote-backed state survives a renderer reload.
@@ -496,6 +516,7 @@ test.describe("conversation archives", () => {
     await page.getByTestId("conversation-view").click();
     await page.getByTestId("conversation-view-archives").click();
     await expect(page.getByTestId("session-row-chat-active")).toHaveCount(0);
+    await expect(page.getByTestId("session-row-build-local")).toHaveCount(0);
     await expect(page.getByTestId("session-row-chat-archived")).toBeVisible();
     expect(errors).toEqual([]);
   });

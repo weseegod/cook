@@ -48,7 +48,7 @@ pub type FacetMap = BTreeMap<String, FacetValue>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMetaEnvelope {
     pub kind: SessionKind,
-    /// Remote chat conversations only; omitted when false so build rows stay wire-compatible.
+    /// Remote chat and local build conversations; omitted when false so unarchived rows stay wire-compatible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
     #[serde(default, skip_serializing_if = "FacetMap::is_empty")]

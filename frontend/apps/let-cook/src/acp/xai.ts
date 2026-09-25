@@ -125,12 +125,12 @@ export class XaiClient {
     return extractArray(value, ["sessions", "items"]).map(normalizeSession);
   }
 
-  archiveSession(sessionId: string) {
-    return this.call("x.ai/session/archive", { sessionId, kind: "chat" });
+  archiveSession(sessionId: string, kind: SessionSummary["kind"] = "build") {
+    return this.call("x.ai/session/archive", { sessionId, kind });
   }
 
-  unarchiveSession(sessionId: string) {
-    return this.call("x.ai/session/unarchive", { sessionId, kind: "chat" });
+  unarchiveSession(sessionId: string, kind: SessionSummary["kind"] = "build") {
+    return this.call("x.ai/session/unarchive", { sessionId, kind });
   }
 
   async loadHistory(sessionId: string): Promise<unknown> {

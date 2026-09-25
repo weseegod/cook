@@ -434,32 +434,62 @@ async fn handle_session_archive(
     archive: bool,
 ) -> ExtResult {
     let req: SessionArchiveRequest = parse_params(args)?;
-    if req.kind != SessionKind::Chat {
-        return Err(acp::Error::invalid_request().data("only chat conversations can be archived"));
+
+    if req.kind == SessionKind::Chat {
+        let Some(client) = agent.conversations_client() else {
+            return Err(acp::Error::invalid_request().data(
+                "chat conversation archive requires the conversations lane (OIDC + chat feature)",
+            ));
+        };
+
+        let action = if archive { "archive" } else { "unarchive" };
+        let result = if archive {
+            client.archive_conversation(&req.session_id).await
+        } else {
+            client.unarchive_conversation(&req.session_id).await
+        };
+        result.map_err(|e| match e {
+            crate::remote::ConvError::NoOauth => acp::Error::invalid_request().data(format!(
+                "chat conversation {action} requires xAI OAuth credentials"
+            )),
+            other => acp::Error::internal_error()
+                .data(format!("chat conversation {action} failed: {other}")),
+        })?;
+
+        tracing::info!(session_id = %req.session_id, archive, "Chat conversation archive state changed");
+        return to_raw_response(&serde_json::json!({ "success": true, "archived": archive }));
     }
 
-    let Some(client) = agent.conversations_client() else {
-        return Err(acp::Error::invalid_request().data(
-            "chat conversation archive requires the conversations lane (OIDC + chat feature)",
-        ));
-    };
+    if req.kind != SessionKind::Build {
+        return Err(acp::Error::invalid_request().data("only build and chat conversations can be archived"));
+    }
 
-    let action = if archive { "archive" } else { "unarchive" };
-    let result = if archive {
-        client.archive_conversation(&req.session_id).await
-    } else {
-        client.unarchive_conversation(&req.session_id).await
-    };
-    result.map_err(|e| match e {
-        crate::remote::ConvError::NoOauth => acp::Error::invalid_request().data(format!(
-            "chat conversation {action} requires xAI OAuth credentials"
-        )),
-        other => {
-            acp::Error::internal_error().data(format!("chat conversation {action} failed: {other}"))
-        }
-    })?;
+    let session_id = acp::SessionId::new(Arc::from(req.session_id.as_str()));
+    let summaries = list_summaries(None)
+        .await
+        .map_err(|e| acp::Error::internal_error().data(format!("failed to list sessions: {e}")))?;
+    let summary = summaries
+        .iter()
+        .find(|s| s.info.id == session_id)
+        .ok_or_else(|| {
+            acp::Error::invalid_request().data(format!("session not found: {}", req.session_id))
+        })?;
+    let info = summary.info.clone();
+    let storage = JsonlStorageAdapter::default();
+    storage
+        .apply_summary_patch(
+            &info,
+            crate::session::storage::summary_write::SummaryPatch {
+                archived: Some(archive),
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| {
+            acp::Error::internal_error().data(format!("failed to update session archive state: {e}"))
+        })?;
 
-    tracing::info!(session_id = %req.session_id, archive, "Chat conversation archive state changed");
+    tracing::info!(session_id = %req.session_id, archive, "Build conversation archive state changed");
     to_raw_response(&serde_json::json!({ "success": true, "archived": archive }))
 }
 
@@ -1117,6 +1147,33 @@ mod sanitize_rename_title_tests {
             ordinary.kind,
             crate::session::unified_list::SessionKind::Chat
         );
+    }
+
+    #[test]
+    fn archive_request_accepts_build_kind() {
+        let build: super::SessionArchiveRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "sid",
+            "kind": "build",
+        }))
+        .unwrap();
+        assert_eq!(build.kind, crate::session::unified_list::SessionKind::Build);
+        assert_eq!(build.session_id, "sid");
+
+        let default_kind: super::SessionArchiveRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "sid",
+        }))
+        .unwrap();
+        assert_eq!(
+            default_kind.kind,
+            crate::session::unified_list::SessionKind::Build
+        );
+
+        let chat: super::SessionArchiveRequest = serde_json::from_value(serde_json::json!({
+            "sessionId": "sid",
+            "kind": "chat",
+        }))
+        .unwrap();
+        assert_eq!(chat.kind, crate::session::unified_list::SessionKind::Chat);
     }
 
     #[test]

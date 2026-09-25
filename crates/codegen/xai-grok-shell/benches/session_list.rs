@@ -522,6 +522,7 @@ fn write_summary(
         last_active_at: Some(active_at),
         generated_title: Some(format!("Benchmark session {ordinal}")),
         title_is_manual: false,
+        archived: false,
         worktree_label: worktree_label.map(str::to_owned),
         agent_name: Some("benchmark-agent".to_owned()),
         sandbox_profile: Some("workspace".to_owned()),
