@@ -3,10 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
 import { InfoTip } from "../components/info-tip";
+import { StopTurnButton } from "../chat/stop-turn-button";
 import { elicitContent, elicitFields, elicitFormComplete } from "./elicit-fields";
 
 export function InteractionModal() {
   const pending = useSessionStore((state) => state.pendingQuestion);
+  const turnRunning = useSessionStore((state) => state.turnRunning);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [values, setValues] = useState<Record<string, string>>({});
@@ -140,16 +142,21 @@ export function InteractionModal() {
           ))}
         </div>
       )}
-      {pending.kind === "elicit" && (
+      {(pending.kind === "elicit" || pending.kind === "question" || turnRunning) && (
         <div className="inline-interaction-actions">
-          <button className="ghost-button" data-testid="elicit-decline" onClick={() => void pickSpecial("decline")}>Decline</button>
-          <button className="primary-button" data-testid="elicit-accept" onClick={() => void pickSpecial("accept")} disabled={!elicitFormComplete(fields, values)}>{typeof pending.raw.url === "string" ? "Open and continue" : "Send to connector"}</button>
-        </div>
-      )}
-      {pending.kind === "question" && (
-        <div className="inline-interaction-actions">
-          <button className="ghost-button" onClick={() => void cancelPending(pending.kind)}>Cancel</button>
-          <button className="primary-button" onClick={() => void submitQuestions()} disabled={Object.keys(answers).length === 0}>Submit answers</button>
+          {pending.kind === "elicit" && (
+            <>
+              <button className="ghost-button" data-testid="elicit-decline" onClick={() => void pickSpecial("decline")}>Decline</button>
+              <button className="primary-button" data-testid="elicit-accept" onClick={() => void pickSpecial("accept")} disabled={!elicitFormComplete(fields, values)}>{typeof pending.raw.url === "string" ? "Open and continue" : "Send to connector"}</button>
+            </>
+          )}
+          {pending.kind === "question" && (
+            <>
+              <button className="ghost-button" onClick={() => void cancelPending(pending.kind)}>Cancel</button>
+              <button className="primary-button" onClick={() => void submitQuestions()} disabled={Object.keys(answers).length === 0}>Submit answers</button>
+            </>
+          )}
+          {turnRunning && <StopTurnButton />}
         </div>
       )}
     </section>

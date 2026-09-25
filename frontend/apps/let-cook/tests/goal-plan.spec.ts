@@ -112,7 +112,7 @@ test.describe("goal and plan presentation", () => {
     const prompts = await waitForCalls(page, "session/prompt", 2);
     expect((prompts.at(-1)?.params.prompt as Array<Record<string, unknown>>)).toEqual([{ type: "text", text: "follow up" }]);
     expect((prompts.at(-1)?.params._meta as Record<string, unknown>).clientIdentifier).toBe("grok-desktop");
-    await expect(page.getByTestId("send-button")).toContainText("Queue");
+    await expect(page.getByTestId("stop-button")).toBeVisible();
 
     // Agent queue list paints above turn-status (TUI §3 / §9.7).
     await page.evaluate(() => window.__cookMock!.queueChanged([
@@ -161,8 +161,8 @@ test.describe("goal and plan presentation", () => {
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "follow up now" },
     }, { promptId: id }), promptId);
-    await expect(page.locator('[id^="transcript-row-user-"]').filter({ hasText: "follow up now" })).toHaveCount(1);
     await expect(promoted).toHaveCount(1);
+    await expect(promoted).toHaveText("follow up now");
   });
 
   test("send now keeps one user bubble when the prior turn finishes before its echo", async ({ page }) => {

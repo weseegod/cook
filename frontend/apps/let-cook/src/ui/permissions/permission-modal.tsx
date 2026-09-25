@@ -3,9 +3,11 @@ import { useEffect } from "react";
 import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
 import { InfoTip } from "../components/info-tip";
+import { StopTurnButton } from "../chat/stop-turn-button";
 
 export function PermissionModal() {
   const pending = useSessionStore((state) => state.pendingPermission);
+  const turnRunning = useSessionStore((state) => state.turnRunning);
   useEffect(() => {
     if (!pending) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -45,6 +47,7 @@ export function PermissionModal() {
             <kbd>{index + 1}</kbd>{option.name}
           </button>
         ))}
+        {turnRunning && <StopTurnButton />}
       </div>
     </section>
   );

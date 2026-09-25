@@ -976,6 +976,9 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 .send-button:hover { background: #006cbe; }
 :root[data-theme="light"] .send-button:hover { background: #006cbe; }
 .stop-button { color: #fff; background: #a1260d; }
+.stop-button:hover:not(:disabled) { background: #c3381d; }
+.stop-button:focus-visible { outline: 2px solid var(--focus-border); outline-offset: 2px; }
+:root[data-theme="light"] .stop-button:hover:not(:disabled) { color: #8b1d2d; background: #ffd9df; }
 .attachment-chip { border-radius: 2px; background: var(--raised); }
 .slash-menu { left: 20px; right: 20px; padding: 3px; border-radius: 3px; background: #252526; }
 .slash-menu button { min-height: 28px; padding: 4px 7px; border-radius: 2px; }
@@ -1193,7 +1196,6 @@ details[open] > summary > .row-chevron { transform: rotate(90deg); }
 /* The spacer parks the tokens/sec rail at the right end of the row; working-tree line changes live
    on the header, not here. */
 .turn-status-spacer { flex: 1 1 0; }
-.turn-status-stop { flex: 0 0 auto; font-family: var(--font-mono); font-size: 11px; }
 .prompt-slot { flex: 0 0 auto; width: calc(100% - 48px); margin: 0 24px 8px; }
 .prompt-composer.stashed { display: none; }
 .turn-status-metric {

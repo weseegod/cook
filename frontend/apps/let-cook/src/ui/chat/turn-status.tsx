@@ -1,5 +1,4 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import { acpClient } from "../../acp/client";
 import { useSessionStore } from "../../state/session";
 import { COMPOSER_SHOW_TPS_KEY, useBooleanPref } from "../preferences";
 import {
@@ -47,7 +46,7 @@ export function TurnStatusRow({
   tick: number;
   blocked?: boolean;
   queuedHint?: string | null;
-  /** Right-aligned controls the surface owns — the parent's t/s rail and `[stop]`. */
+  /** Right-aligned controls the surface owns — the parent's t/s rail. */
   trailing?: ReactNode;
 }) {
   const parts = activityParts(activity);
@@ -124,16 +123,7 @@ export function TurnStatus() {
           tick={tick}
           blocked={blocked}
           queuedHint={queuedHint}
-          trailing={
-            <>
-              <ComposerTpsRail />
-              {turnRunning && (
-                <button type="button" className="stop-button turn-status-stop" onClick={() => void acpClient.cancel()}>
-                  [stop]
-                </button>
-              )}
-            </>
-          }
+          trailing={<ComposerTpsRail />}
         />
       ) : (
         <div className="turn-status idle-metrics" data-testid="turn-status" role="status" aria-live="off">

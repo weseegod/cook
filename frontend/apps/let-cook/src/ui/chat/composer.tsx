@@ -23,6 +23,7 @@ import { normalizeDisplayPath } from "./at-context";
 import { ModelPicker } from "./model-picker";
 import { cancelQueueEdit, saveQueueEdit } from "./queue-bar";
 import { isSendableWait, resolveTurnActivity } from "./turn-activity";
+import { StopTurnButton } from "./stop-turn-button";
 
 export function Composer() {
   const [busy, setBusy] = useState(false);
@@ -103,6 +104,8 @@ export function Composer() {
 
   const { attachments, setAttachments, dragging, setDragging, filePicker, addFiles, openPicker } =
     useComposerAttachments(blocked);
+  const hasPromptInput = Boolean(text.trim()) || attachments.length > 0;
+  const specialSubmit = planFocus === "commenting" || planReview || Boolean(editingQueueEntry);
 
   /** Mark an operation in flight; the returned finisher clears it only if nothing newer started. */
   function beginWork(): () => void {
@@ -437,6 +440,7 @@ export function Composer() {
                 event.target.value = "";
               }}
             />
+            {turnRunning && !blocked && specialSubmit && <StopTurnButton />}
             {planFocus === "commenting" ? (
               <button
                 type="button"
@@ -467,8 +471,10 @@ export function Composer() {
               >
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Save
               </button>
+            ) : turnRunning && !blocked && !hasPromptInput ? (
+              <StopTurnButton />
             ) : turnRunning ? (
-              <button type="button" className="send-button" data-testid="send-button" disabled={blocked || (!text.trim() && attachments.length === 0) || busy} onClick={() => void submit()}>
+              <button type="button" className="send-button" data-testid="send-button" disabled={blocked || !hasPromptInput} onClick={() => void submit()}>
                 {busy ? <LoaderCircle className="spin" size={15} /> : <CornerDownLeft size={15} />} Queue
               </button>
             ) : (
