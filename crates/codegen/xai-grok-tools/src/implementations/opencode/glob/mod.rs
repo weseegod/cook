@@ -14,7 +14,7 @@ use crate::implementations::grok_build::grep::ripgrep::rg_path;
 use crate::types::output::ToolOutput;
 #[allow(unused_imports)]
 use crate::types::resources::{
-    Cwd, DisplayCwd, SharedResources, display_cwd_or_cwd, resolve_model_path,
+    Cwd, DenyReadGlobs, DisplayCwd, SharedResources, display_cwd_or_cwd, resolve_model_path,
 };
 use crate::types::tool::{ToolKind, ToolNamespace};
 use crate::types::tool_io::ToolInput;
@@ -155,11 +155,16 @@ impl xai_tool_runtime::Tool for GlobTool {
         let resources = shared_resources(&ctx)?;
 
         let cwd = crate::types::tool_metadata::resolve_cwd(&ctx, &resources).await?;
-        let display_cwd = resources
-            .lock()
-            .await
-            .get::<DisplayCwd>()
-            .map(|d| d.0.clone());
+        let (display_cwd, deny_read_globs) = {
+            let resources = resources.lock().await;
+            (
+                resources.get::<DisplayCwd>().map(|d| d.0.clone()),
+                resources
+                    .get::<DenyReadGlobs>()
+                    .map(|denies| denies.0.clone())
+                    .unwrap_or_default(),
+            )
+        };
 
         // ── Resolve search directory ────────────────────────────
         let search_dir = resolve_model_path(
@@ -176,8 +181,12 @@ impl xai_tool_runtime::Tool for GlobTool {
             .arg("--glob=!.git/*")
             .arg("--hidden")
             .arg("--glob")
-            .arg(&input.pattern)
-            .arg(&search_dir)
+            .arg(&input.pattern);
+        // Read-deny patterns must take precedence over the requested pattern.
+        for deny in &deny_read_globs {
+            cmd.arg("--glob").arg(format!("!{deny}"));
+        }
+        cmd.arg(&search_dir)
             .stdout(Stdio::piped())
             // stderr is never read; a pipe would block rg once warnings fill it.
             // Cached descriptor, not `Stdio::null()`: an unlinked `/dev/null`

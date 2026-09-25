@@ -263,7 +263,7 @@ fn grok_build_core_toolset_with(
         (&grok_build::ReadFileTool).into(),
         (&grok_build::SearchReplaceTool).into(),
         (&grok_build::ListDirTool).into(),
-        (&grok_build::GlobTool).into(),
+        (&opencode::OpenCodeGlobTool).into(),
         (&grok_build::GrepTool).into(),
         kill_task_tool_config(),
         (&grok_build::TodoWriteTool).into(),
@@ -1612,8 +1612,8 @@ impl AgentDefinition {
 mod tests {
     use super::*;
     #[test]
-    fn default_grok_build_toolsets_include_native_glob() {
-        let id = ToolConfig::from(&grok_build::GlobTool).id;
+    fn default_grok_build_toolsets_include_opencode_glob() {
+        let id = ToolConfig::from(&opencode::OpenCodeGlobTool).id;
         for toolset in [default_agent_toolset(), workspace_grok_build_toolset()] {
             assert!(toolset.tools.iter().any(|tool| tool.id == id));
         }

@@ -14896,7 +14896,6 @@ dependencies = [
  "fs2",
  "futures",
  "futures-util",
- "glob",
  "globset",
  "htmd",
  "ignore",

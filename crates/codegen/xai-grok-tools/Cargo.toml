@@ -33,7 +33,6 @@ base64 = { workspace = true }
 xai-grok-image = { workspace = true }
 ignore = { workspace = true }
 infer = { workspace = true }
-glob = { workspace = true }
 globset = { workspace = true }
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
 kamadak-exif = { workspace = true, optional = true }
