@@ -318,7 +318,7 @@ The goal verifier should receive explicit evidence: requirements, diff, and test
 
 ### 6.6 P2 — reduce loops that make no progress
 
-Extend stationarity beyond “same tool + args” to action/result fingerprints: rereading the same file/range/hash, repeating an unchanged test failure without a code change, or repeating a search that yields no new evidence. The response should nudge a strategy change or stop with an evidence-backed blocker.
+The shipped loop stop is grok-build's identical-call stationarity: the same tool and the same arguments, nudged at 4 (`Read` / `Plan`) or 8 (anything else), halted at 8 or 12, with a `true` keepalive halted at 4. A read of a different file, or of the same file at a new offset, is progress, and it must not end the turn. A fingerprint stop (same path, same range, same content hash, or the same failing test with no edit) is out of scope until grok-build ships one. Do not add a counter of read-only rounds in this fork.
 
 Polling a live job is an exception: use actual process/session state, notifications, or a timed wait; unchanged output does not prove a stall. Do not hard-stop a long build merely because `get_task_output` repeats.
 

@@ -160,6 +160,8 @@ Leave the following paragraph, about polling a live job, as it is. It already ma
 
 Pass: section 6.6 names the upstream constants and does not ask this fork to add a stationarity mechanism. No other section of the design doc changes in this phase.
 
+**Result (2026-09-25).** Section 6.6's stationarity paragraph is the v3 §8 block. The live-job-polling paragraph is byte-identical. No other section of the design doc changed.
+
 ## 9. What is deliberately not a phase
 
 - A computed next offset on `FileTooLarge`.
