@@ -813,6 +813,8 @@ mod tests {
     }
 
     /// Regression: no-limit reads must be capped at MAX_LINES_READ.
+    /// The default clip does not print `rerun with offset`; that marker is written only by
+    /// `apply_byte_budget` when `read_file_max_output_bytes` is set. Continuation is `offset`/`limit`.
     #[tokio::test]
     async fn large_file_truncated_to_max_lines() {
         let tmp = TempDir::new().unwrap();
@@ -837,8 +839,8 @@ mod tests {
             ReadFileOutput::FileContent(fc) => {
                 let (body, marker) = crate::implementations::grok_build::read_file::split_trailing_continuation_marker(&fc.content);
                 assert!(
-                    marker.is_some(),
-                    "line cap must name the next offset: {}",
+                    marker.is_none(),
+                    "default clip must not print a continuation marker: {}",
                     fc.content
                 );
                 let content_lines: Vec<&str> = body.lines().collect();
@@ -851,12 +853,6 @@ mod tests {
                 assert!(
                     last.trim_start()
                         .starts_with(&format!("{}:", MAX_LINES_READ))
-                );
-                assert!(
-                    marker
-                        .unwrap()
-                        .contains(&format!("rerun with offset={}", MAX_LINES_READ + 1)),
-                    "marker: {marker:?}"
                 );
             }
             other => panic!("Expected FileContent, got {:?}", other),
@@ -892,7 +888,7 @@ mod tests {
         }
     }
 
-    /// Explicit limit exceeding MAX_LINES_READ gets capped.
+    /// Explicit limit exceeding MAX_LINES_READ gets capped, with no byte-budget marker.
     #[tokio::test]
     async fn explicit_large_limit_capped_to_max_lines() {
         let tmp = TempDir::new().unwrap();
@@ -917,8 +913,8 @@ mod tests {
             ReadFileOutput::FileContent(fc) => {
                 let (body, marker) = crate::implementations::grok_build::read_file::split_trailing_continuation_marker(&fc.content);
                 assert!(
-                    marker.is_some(),
-                    "line cap must name the next offset: {}",
+                    marker.is_none(),
+                    "default clip must not print a continuation marker: {}",
                     fc.content
                 );
                 let content_lines: Vec<&str> = body.lines().collect();

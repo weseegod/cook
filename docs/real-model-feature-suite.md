@@ -672,9 +672,33 @@ Wall clock on MiMo, one model, no parallelism: `tools` about 30–50 minutes, `s
 - Empty completions retry once at 8192 tokens, except `session.max_turns`.
 - The five known `xai-grok-shell` lib failures (`goal_use_current_model_only_env_true`, `goal_use_current_model_only_env_overrides_config_false`, `validate_hooks_path_rejects_outside_grok_home`, `validate_hooks_path_rejects_traversal_attack`, `parse_list_req_forces_kind_under_process_chat_mode_only`) are pre-existing. A new failing test name is in scope. The consent monotonicity test flakes under parallel `cargo test` and is not a suite regression when it fails only in the full parallel run.
 
-## 15. Implementation status and handoff (2026-09-24)
+## 15. Implementation status and handoff (updated 2026-09-25 after experiment v3)
 
-Current phase: **`safeguard` + `session` audited** on launcher `spark25-4b` (`PARALLEL=4`). Historical tools evidence below was `mimo26-9b` and is not green yet on a full spark25 tools score. Core-agent audit report: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
+Current phase: **post-v3 re-score** on launcher `spark25-4b` (`PARALLEL=4`). Product contract: [core-agent-token-optimization-experiment-v3.md](core-agent-token-optimization-experiment-v3.md). Prior core-agent audit: [`audits/2026-09-24-core-agent-flow-and-safeguards.md`](./audits/2026-09-24-core-agent-flow-and-safeguards.md).
+
+### Product contract after v3
+
+The four fork-only turn stops are gone from `turn.rs` (read-only round counter, terminal fanout, terminal observation, tool-argument-error cycle). The shipped loop stop is grok-build identical-call stationarity: nudge after 4 identical `Read` / `Plan` calls or 8 identical calls of any other tool, halt at 8 or 12, true-noop halt at 4. A read of a different file, or of the same file at a new offset, is progress and does not end the turn. `safeguard.offset_walk` has no 16-call ceiling; a walk past 16 new offsets is a pass. The default `MAX_LINES_READ` clip does **not** print `rerun with offset`; `apply_byte_budget` is the sole writer of that marker, and `safeguard.large_read` continues from the next line when no notice appears.
+
+### Latest scores (2026-09-25, `spark25-4b`)
+
+Evidence: `/tmp/grok-v3-suite-docs-20260925/safeguard` and `/tmp/grok-v3-suite-docs-20260925/session` (`run-phase.sh` with `--keep`).
+
+| Phase | Result |
+|---|---|
+| safeguard | 6 pass / 1 fail (`identical_reread`) |
+| session | 11 pass / 1 fail (`streaming_json`) |
+
+| Result | Cases |
+|---|---|
+| safeguard pass | `safeguard.bash_bound`, `safeguard.dangerous_rm`, `safeguard.large_read`, `safeguard.terminal_fanout`, `safeguard.pin_failure`, `safeguard.offset_walk` |
+| safeguard fail | `safeguard.identical_reread` (`measured-nothing`: one successful `read_file` then `stopReason=end_turn` with `DONE`; the model never emitted the 4–12 identical loop) |
+| session pass | `session.hooks`, `session.max_turns`, `session.fork`, `session.permissions_read_only`, `session.resume_by_id`, `session.resume`, `session.title_side_call`, `session.permissions_deny_bash`, `session.worktree`, `session.compaction`, `session.memory_flush` |
+| session fail | `session.streaming_json` (`final record lacks marker`: known StreamingJson `text_buffer` gap; out of v3 scope) |
+
+No case log contains the deleted 16-round stop sentence. Unit gates for this score: turn module 90 pass, read_file + hashline 354 pass, `score.py --self-test` pass, pager rebuild ok.
+
+### Historical tools evidence (2026-09-24, `mimo26-9b`)
 
 Completed:
 
@@ -685,7 +709,9 @@ Completed:
 - [x] Product discoverability that unblocked earlier tools fails (with unit tests): `write` refuses non-empty overwrite and newline paths; bash requires `is_background` for `sleep` and documents trailing newlines; headless max-turns exits 0 with `stopReason=max_turn_requests`; headless prompt requires workspace-file follow-through and tool-backed durable memory; memory empty-search hints include a `write` example; `lsp_smoke` accepts mimo26 unavailability phrasing.
 - [x] Full tools phase on `mimo26-9b` (evidence `/tmp/real-model-suite-tools-20260924T051322Z`): **19 pass**, **4 fail**, **1 skip-nondeterministic**.
 - [x] `tools.ask_user_headless` scored `ask_user_question=success` on repeated full-phase runs — freeze that expected outcome when editing the case JSON.
-- [x] Safeguard phase (7 cases) and session phase (12 cases) on `spark25-4b` (`/tmp/real-model-safeguard-20260924T083113Z`, `/tmp/real-model-session-20260924T083459Z`): session **12/12**; safeguard **6/7** (`identical_reread` → `max_tokens_truncation`).
+- [x] Experiment v3 deleted the four fork-only turn stops and dropped the `safeguard.offset_walk` 16-call ceiling; post-v3 safeguard re-score is 6/7 above (`offset_walk` green).
+- [x] Product gap `max_tokens_hard_stop` fixed: top-level `MaxTokensTruncation` completes via `LengthSalvage` as `stopReason=max_tokens` / exit 0.
+- [x] Product gap `large_read_silent_cap` clarified after v3: the default `MAX_LINES_READ` clip prints no `rerun with offset`; `apply_byte_budget` is the only marker writer. `safeguard.large_read` continues without a notice. `file_too_large_no_next_offset` stays design §6.2 (refusal without a computed offset).
 - [x] Saved entrypoints `run-phase.sh` / `run-audit.sh`; suite default `MAX_COMPLETION_TOKENS=8192` so local reasoning models are not aborted mid-thought.
 
 Latest full tools `score.txt` (`mimo26-9b`, 2026-09-24):
@@ -698,11 +724,10 @@ Latest full tools `score.txt` (`mimo26-9b`, 2026-09-24):
 
 Remaining for the next implementer:
 
-- [x] Fix product gap `max_tokens_hard_stop` (audit report): top-level `MaxTokensTruncation` completes via `LengthSalvage` as `stopReason=max_tokens` / exit 0. Residual: `safeguard.identical_reread` still needs 4–12 identical `read_file` calls (oracle not loosened).
-- [x] Fix product gap `large_read_silent_cap`: `MAX_LINES_READ` clip emits the shared next-offset continuation marker; `safeguard.large_read` follows the tool-named offset. `file_too_large_no_next_offset` stays design §6.2 (refusal without a computed offset).
-- [ ] Clear residual `safeguard.identical_reread` / `safeguard.offset_walk` measurement fails (model must emit the loops; do not loosen oracles or raise `MAX_COMPLETION_TOKENS`).
+- [ ] `safeguard.identical_reread` stays a measurement gap when the model never emits the 4–12 identical `read_file` loop (`measured-nothing` / `end_turn` after one read). Keep `min_tool_success` 4 and `max_tool_success` 12. Do not loosen the oracle or raise `MAX_COMPLETION_TOKENS`.
+- [ ] `session.streaming_json` needs the StreamingJson `text_buffer` fill in headless `on_text_chunk` (known product gap; out of experiment v3).
 - [ ] Clear the four tools fails above without loosening oracles (prefer pillar discoverability + unit tests). Re-run each fail, then a **full** `--phase tools` into a new `OUT_ROOT` until zero `fail`/`hung`.
-- [ ] Once tools is green: `--phase agents`, then `--phase all` for `cli.export` / `cli.sessions_after` / `cli.usage` (session is already green on spark25).
+- [ ] Once tools is green: `--phase agents`, then `--phase all` for `cli.export` / `cli.sessions_after` / `cli.usage`.
 - [ ] Operator order checklist: `docs/real-model-suite-run-order.md`.
 - [ ] File any new product gap under `docs/audits/`.
 

@@ -318,7 +318,7 @@ The goal verifier should receive explicit evidence: requirements, diff, and test
 
 ### 6.6 P2 — reduce loops that make no progress
 
-Extend stationarity beyond “same tool + args” to action/result fingerprints: rereading the same file/range/hash, repeating an unchanged test failure without a code change, or repeating a search that yields no new evidence. The response should nudge a strategy change or stop with an evidence-backed blocker.
+The shipped loop stop is grok-build's identical-call stationarity: the same tool and the same arguments, nudged at 4 (`Read` / `Plan`) or 8 (anything else), halted at 8 or 12, with a `true` keepalive halted at 4. A read of a different file, or of the same file at a new offset, is progress, and it must not end the turn. A fingerprint stop (same path, same range, same content hash, or the same failing test with no edit) is out of scope until grok-build ships one. Do not add a counter of read-only rounds in this fork.
 
 Polling a live job is an exception: use actual process/session state, notifications, or a timed wait; unchanged output does not prove a stall. Do not hard-stop a long build merely because `get_task_output` repeats.
 
@@ -336,7 +336,7 @@ Polling a live job is an exception: use actual process/session state, notificati
 
 Names such as `cost-conscious coding`, `tool_round`, `call purpose`, and `input_budget` are **proposals**, not claims that public config/API already exists. Do not edit the generated root `Cargo.toml`; core changes belong in shell/chat-state/tools, and desktop remains a leaf ACP client.
 
-Recommended order: keep current defaults → evidence pins → append-only output caps → hit/miss reporting → catalog only if named skills still surface → compaction policy only if task success holds → goal and side-call gates. The provider Batch API is not a row in this table; section 9 limits it to frozen evaluation on models that actually discount it. Run each change as its own phase. One phase, one matrix, and a commit only when that matrix’s quality cells pass. The matrix and the phase list are in the v2 experiment document. Do not combine arms before the matrix attributes the result.
+Recommended order: keep current defaults → evidence pins → append-only output caps → hit/miss reporting → catalog only if named skills still surface → compaction policy only if task success holds → goal and side-call gates. The provider Batch API is not a row in this table; section 9 limits it to frozen evaluation on models that actually discount it. Run each change as its own phase. One phase, one matrix, and a commit only when that matrix’s quality cells pass. The matrix and the phase list are in the v2 experiment document. Safeguard edge cases — large reads, the read-only round stop, and the other fork-only guards — are in [core-agent-token-optimization-experiment-v3.md](core-agent-token-optimization-experiment-v3.md), which follows grok-build instead of adding a mechanism. Do not combine arms before the matrix attributes the result.
 
 ## 8. Benchmark and decision criteria
 
