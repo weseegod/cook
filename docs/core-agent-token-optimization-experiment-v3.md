@@ -122,6 +122,8 @@ Pass:
 
 A model run is not required for this phase.
 
+**Result (2026-09-25).** No product change. `apply_byte_budget` remains the only writer of the `rerun with offset` marker. `FileTooLarge` still names no computed next offset. `prompt_offload` still pins `MAX_NOTICE_WINDOWS = 6`. `large_file_truncated_to_max_lines` and the sibling `explicit_large_limit_capped_to_max_lines` now assert a `MAX_LINES_READ` clip with no continuation marker. The byte-budget tests (`max_output_bytes_truncates_to_whole_lines_with_marker`, `max_output_bytes_marker_uses_requested_offset_and_renamed_param`) still show `apply_byte_budget` writing the marker. Hashline (22) and `grok_build::read_file` (123) tests are green. The phase-2 diff is test-only.
+
 ## 7. Phase 3 — score the suite against grok-build
 
 The safeguard cases were written while the fork stops existed. Two of them will force those stops back if they stay as they are.
