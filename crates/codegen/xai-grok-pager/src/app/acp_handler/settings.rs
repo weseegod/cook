@@ -391,25 +391,26 @@ pub(super) fn apply_soft_default_permission_mode(
 /// `yolo_mode` is deliberately OMITTED: the agent skips the yolo branch when the key is absent.
 /// A sibling tab's always-approve is thus preserved; only auto is cleared.
 pub(super) fn notify_sessions_leave_auto(app: &AppView, session_ids: &[acp::SessionId]) {
-    if session_ids.is_empty() {
-        return;
+    for session_id in session_ids {
+        let params = serde_json::json!({
+            "sessionId": session_id,
+            "auto_mode": false,
+            "permission_mode": "ask",
+        });
+        let notification = acp::ExtNotification::new(
+            "x.ai/yolo_mode_changed",
+            serde_json::value::to_raw_value(&params)
+                .expect("serialize yolo_mode_changed params")
+                .into(),
+        );
+
+        let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
+        let args = xai_acp_lib::AcpArgs {
+            request: notification,
+            response_tx,
+        };
+        let _ = app.acp_tx.send(args.into());
     }
-    let params = serde_json::json!({
-        "auto_mode": false,
-        "permission_mode": "ask",
-    });
-    let notification = acp::ExtNotification::new(
-        "x.ai/yolo_mode_changed",
-        serde_json::value::to_raw_value(&params)
-            .expect("serialize yolo_mode_changed params")
-            .into(),
-    );
-    let (response_tx, _response_rx) = tokio::sync::oneshot::channel();
-    let args = xai_acp_lib::AcpArgs {
-        request: notification,
-        response_tx,
-    };
-    let _ = app.acp_tx.send(args.into());
 }
 
 /// Handle `x.ai/sessions/changed`: the leader broadcasts roster upserts/removals to all clients (FleetView dashboard).
@@ -431,7 +432,10 @@ pub(super) fn handle_sessions_changed(notif: &acp::ExtNotification, app: &mut Ap
     affected
 }
 
-pub(super) fn handle_announcements_update(_notif: &acp::ExtNotification, _app: &mut AppView) -> bool {
+pub(super) fn handle_announcements_update(
+    _notif: &acp::ExtNotification,
+    _app: &mut AppView,
+) -> bool {
     false
 }
 

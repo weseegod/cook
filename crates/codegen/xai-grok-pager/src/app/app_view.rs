@@ -550,6 +550,18 @@ pub struct PendingCodingDataWrite {
     /// Replies are not ordered by server commit, so a late older success can still overwrite a newer value here.
     pub rollback_to_opted_in: bool,
 }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthIdentity {
+    pub email: Option<String>,
+    pub team_id: Option<String>,
+    pub team_principal: bool,
+}
+impl AuthIdentity {
+    /// An absent email never matches: two users without one would otherwise compare equal.
+    pub fn matches(&self, other: &AuthIdentity) -> bool {
+        self.email.is_some() && self == other
+    }
+}
 /// Root view component: owns all application state.
 pub struct AppView {
     /// Taken by whichever path reaches a usable session (or interactive idle) first.
@@ -1013,14 +1025,18 @@ pub struct AppView {
     pub auth_clipboard_delivery: Option<crate::clipboard::ClipboardDelivery>,
     /// Generation of the current auth copy feedback and its clear timer.
     pub auth_clipboard_feedback_generation: u64,
-    /// Team principal UUID from auth (`None` for personal sessions).
+    /// Team id from the token: the team principal's id, or a personal account's billing team.
     pub team_id: Option<String>,
+    /// The credential is a team principal, so `/user` can resolve `can_administer_team`. A personal account never resolves it.
+    pub is_team_principal: bool,
     /// Team name from auth (displayed in the shortcuts bar).
     pub team_name: Option<String>,
     /// Whether the user's team has enterprise Zero Data Retention enabled.
     pub is_zdr: bool,
-    /// Team role (e.g. "Admin", "Member", "Read Only") for access-control checks.
+    /// Team role from auth (e.g. "Admin", "Member").
     pub team_role: Option<String>,
+    /// Advisory `canAdministerTeam` from auth meta. `None` is unknown, never false.
+    pub can_administer_team: Option<bool>,
     /// Whether the user has opted out of coding data retention.
     pub coding_data_retention_opt_out: bool,
     /// Remote settings `privacy_notice_rollout` (cohort on for this user).
@@ -1189,25 +1205,30 @@ impl AppView {
     pub fn is_access_blocked(&self) -> bool {
         !self.has_access() || self.is_zdr_blocked()
     }
-    /// Coding-data preference is team-admin-owned for non-admin members.
-    pub fn is_team_non_admin(&self) -> bool {
-        self.team_name.is_some()
-            && !self
-                .team_role
-                .as_deref()
-                .is_some_and(|r| r.eq_ignore_ascii_case("admin"))
-    }
     /// Whether `/feedback` may offer the trace-consent question: the shell advertised the offer and no card answer latched it off this session.
     /// Derived so no code path can fabricate an offer the shell never made.
     pub fn feedback_trace_offer(&self) -> bool {
         self.shell_feedback_trace_offer && !self.feedback_trace_choice_latched
     }
+    /// A cached team credential from before `canAdministerTeam` reads unknown and nothing refetches `/user` at startup; a personal account (which also carries a `team_id`) reads unknown on every call and is not asked.
+    pub fn needs_team_capability_hydration(&self) -> bool {
+        self.is_team_principal
+            && self.can_administer_team.is_none()
+            && !self.is_api_key_auth
+            && self.account_email.is_some()
+    }
+    pub fn auth_identity(&self) -> AuthIdentity {
+        AuthIdentity {
+            email: self.account_email.clone(),
+            team_id: self.team_id.clone(),
+            team_principal: self.is_team_principal,
+        }
+    }
     /// Why `coding_data_sharing` is locked for this user (`None` means editable).
-    /// Mirrors the dispatch guards in `set_coding_data_sharing`.
     pub fn coding_data_sharing_lock(&self) -> Option<crate::settings::CodingDataSharingLock> {
         if self.is_zdr {
             Some(crate::settings::CodingDataSharingLock::Zdr)
-        } else if self.is_team_non_admin() {
+        } else if self.can_administer_team == Some(false) {
             Some(crate::settings::CodingDataSharingLock::TeamManaged)
         } else {
             None
@@ -1226,7 +1247,9 @@ impl AppView {
         if !self.privacy_notice_rollout {
             return false;
         }
-        if self.is_zdr || self.is_team_non_admin() {
+        if self.coding_data_sharing_lock().is_some()
+            || (self.is_team_principal && self.can_administer_team.is_none())
+        {
             return false;
         }
         if self.coding_data_pending_write.is_some() {
@@ -1287,12 +1310,14 @@ impl AppView {
         let was_gated = self.gate.is_some();
         self.account_email = meta.email.clone();
         self.team_id = meta.team_id.clone();
+        self.is_team_principal = meta.is_team_principal;
         self.team_name = meta.team_name.clone();
         self.is_zdr = meta.is_zdr;
         self.team_role = meta.team_role.clone();
         if let Some(pending) = self.coding_data_pending_write.as_mut() {
             pending.rollback_to_opted_in = !meta.coding_data_retention_opt_out;
         }
+        self.can_administer_team = meta.can_administer_team;
         self.coding_data_retention_opt_out = meta.coding_data_retention_opt_out;
         self.shell_feedback_trace_offer = meta.feedback_trace_offer;
         self.gate = meta.gate.clone();
@@ -1326,6 +1351,7 @@ impl AppView {
         if let Some(show) = meta.show_resolved_model {
             self.show_resolved_model = show;
         }
+        super::dispatch::refresh_open_settings_modals(self);
     }
     /// Mirror the billing and `/usage` gates onto every slash surface (agents, welcome, dashboard dispatch / peek-reply).
     pub(crate) fn sync_billing_surface_to_agents(&mut self) {
@@ -1549,9 +1575,11 @@ impl AppView {
             auth_clipboard_delivery: None,
             auth_clipboard_feedback_generation: 0,
             team_id: None,
+            is_team_principal: false,
             team_name: None,
             is_zdr: false,
             team_role: None,
+            can_administer_team: None,
             coding_data_retention_opt_out: true,
             privacy_notice_rollout: false,
             privacy_banner_reshow_days: None,
@@ -4805,7 +4833,6 @@ impl AppView {
                                             None
                                         },
                                     },
-                                    &self.bundle_state,
                                     overlay_active,
                                     link_spans,
                                     AppRenderParams {
@@ -4927,7 +4954,6 @@ impl AppView {
                                             .get(&agent_id)
                                             .map(crate::views::session_title::entry_title)
                                             .unwrap_or_else(|| "(session)".to_string());
-                                        let bundle_state = &self.bundle_state;
                                         let (cursor, post_flush, drawn) =
                                             crate::views::dashboard::render_popup_overlay(
                                                 f.buffer_mut(),
@@ -4946,7 +4972,6 @@ impl AppView {
                                                         None,
                                                         false,
                                                         crate::app::agent_view::BannerSlotParams::none(),
-                                                        bundle_state,
                                                         false,
                                                         link_spans,
                                                         AppRenderParams {
@@ -5301,7 +5326,7 @@ impl AppView {
     /// Produces redraws when there are running entries with animated accents.
     pub fn tick(&mut self) -> bool {
         let mut needs_redraw = false;
-        needs_redraw |= self.minimal_state.transcript.is_some();
+        needs_redraw |= self.minimal_state.needs_frames();
         needs_redraw |= self.poll_clipboard_focus_tip();
         if matches!(self.active_view, ActiveView::Welcome) {
             self.welcome_tick = self.welcome_tick.wrapping_add(1);
@@ -5658,7 +5683,7 @@ impl AppView {
         if self.pending_action.is_some() {
             return TickDemand::Fast;
         }
-        if self.minimal_state.transcript.is_some() {
+        if self.minimal_state.needs_frames() {
             return TickDemand::Fast;
         }
         if self

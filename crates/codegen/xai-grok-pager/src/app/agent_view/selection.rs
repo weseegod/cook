@@ -2200,10 +2200,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // reclamp_drag_head_post_render tests
-    // -----------------------------------------------------------------------
-
     fn mouse_down(col: u16, row: u16) -> MouseEvent {
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -2396,10 +2392,6 @@ mod tests {
         let drag = agent.drag_selection.expect("drag still active");
         assert_eq!(drag.head.block_line_idx, 3, "btw rebuild moves the head");
     }
-
-    // -----------------------------------------------------------------------
-    // anchor_content_width snapshot tests
-    // -----------------------------------------------------------------------
 
     /// The linear copy resolves the anchor entry's lines with the drag-start width snapshot when the block is gone from `visible_blocks`.
     /// A block can scroll fully out before mouse-up; without the snapshot that copy fails.
@@ -2853,10 +2845,6 @@ mod tests {
         assert!(agent.drag_table_geometry.is_none());
         assert!(agent.btw_selection_wrap_width.is_none());
     }
-
-    // -----------------------------------------------------------------------
-    // deferred text-press (anchor on entry into text) tests
-    // -----------------------------------------------------------------------
 
     fn mouse_up(col: u16, row: u16) -> MouseEvent {
         MouseEvent {
@@ -3388,10 +3376,6 @@ mod tests {
         assert!(agent2.drag_selection.is_none());
         assert!(agent2.deferred_text_press.is_none());
     }
-
-    // -----------------------------------------------------------------------
-    // drag-autoscroll bounce tests (tick + reclamp interplay)
-    // -----------------------------------------------------------------------
 
     /// Agent over real scrollback content taller than its viewport, so `tick_drag_autoscroll` moves real offsets against real clamps.
     /// 30 one-line messages through the real layout; pane rows 0-9, prompt at rows 14-16, so rows 10-13 are the strip band.

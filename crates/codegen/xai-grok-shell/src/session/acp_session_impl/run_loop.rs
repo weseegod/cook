@@ -2339,23 +2339,11 @@ pub(super) async fn run_session(
                             ..
                         })
                     );
-                    // Capture only a genuine root query that completed its tool loop with
-                    // EndTurn. Synthetic wakes and built-ins also produce PromptTurnOk, but
-                    // neither is durable conversation evidence for memory extraction.
-                    let v2_capture_eligible = super::memory_capture::is_successful_query_loop(
-                        &result,
-                    ) && {
-                        let state = session.state.lock().await;
-                        state.pending_inputs.front().is_some_and(|input| {
-                            input.prompt_id == prompt_id
-                                && input.queue_meta.is_some()
-                                && !input.input_origin.is_synthetic()
-                                && crate::session::slash_authority::parse_slash_prefix(
-                                    &input.prompt_blocks,
-                                )
-                                .is_none()
-                        })
-                    };
+                    let v2_capture_eligible =
+                        super::memory_capture::is_capturable_turn_result(&result) && {
+                            let state = session.state.lock().await;
+                            SessionActor::is_capturable_front(&state, &prompt_id)
+                        };
                     let v2_capture_source_prompt_index = if v2_capture_eligible {
                         Some(*session.tool_context.prompt_index.lock().await)
                     } else {
@@ -2374,7 +2362,7 @@ pub(super) async fn run_session(
                     }
                     if let Some(source_prompt_index) = v2_capture_source_prompt_index {
                         session
-                            .enqueue_v2_completed_turn(source_prompt_index)
+                            .enqueue_v2_turn_capture(source_prompt_index)
                             .await;
                     }
                     #[cfg(test)]

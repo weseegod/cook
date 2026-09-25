@@ -11,7 +11,7 @@ dhat-heap = ["dep:dhat"]
 # load, and bench tests. Off by default; the tests/benches that use it declare
 # it via `required-features`. Forwards login, sampler, and workspace
 # `test-support` so downstream test builds see those crates' test seams
-# (including `WorkspaceOps::for_test` used by `isolated_spawn_e2e`).
+# (`isolated_spawn_e2e` uses `WorkspaceOps::for_test`).
 test-support = [
     "xai-grok-login/test-support",
     "xai-grok-sampler/test-support",
@@ -275,16 +275,62 @@ name = "test_startup_prefetch_policy"
 required-features = ["test-support"]
 
 [[test]]
+name = "test_startup_prefetch_repair_overlap"
+required-features = ["test-support"]
+
+[[test]]
 name = "test_startup_prefetch_repair_skip"
 required-features = ["test-support"]
 
 [[test]]
-name = "test_startup_prefetch_shared"
+name = "mcp_toggle_gateway_persist"
 required-features = ["test-support"]
 
-# BYOK provider extensions driven over ACP (`x.ai/providers/*`, `x.ai/models/set_default`).
 [[test]]
-name = "agent_provider_acp"
+name = "plugins_action_policy_gate"
+required-features = ["test-support"]
+
+[[test]]
+name = "session_create_hook_deferral"
+required-features = ["test-support"]
+
+[[test]]
+name = "e2e_grove_worktree"
+required-features = ["test-support"]
+
+[[test]]
+name = "plugins_action_uninstall_data"
+required-features = ["test-support"]
+
+[[test]]
+name = "session_create_subphase_timers"
+required-features = ["test-support"]
+
+[[test]]
+name = "sessions_active_gauge"
+required-features = ["test-support"]
+[[test]]
+name = "spawn_actor_timers"
+required-features = ["test-support"]
+
+[[test]]
+name = "subagent_bootstrap_regression"
+required-features = ["test-support"]
+
+[[test]]
+name = "test_image_strip_recovery"
+required-features = ["test-support"]
+
+[[test]]
+name = "test_startup_boot_current_thread"
+required-features = ["test-support"]
+
+[[test]]
+name = "test_startup_settings_unpersisted_session"
+required-features = ["test-support"]
+
+[[test]]
+name = "test_startup_prefetch_shared"
 required-features = ["test-support"]
 
 [[test]]

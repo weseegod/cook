@@ -124,9 +124,7 @@ impl<'de> Visitor<'de> for InputVisitor<'_> {
 
     fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
         let mut values = serde_json::Map::new();
-        let mut saw_any_key = false;
         while let Some(key) = map.next_key::<String>()? {
-            saw_any_key = true;
             let canonical = self.reverse.get(&key).map_or(key.as_str(), String::as_str);
             if FIELDS.contains(&canonical) {
                 if values.contains_key(canonical) {
@@ -164,14 +162,6 @@ impl<'de> Visitor<'de> for InputVisitor<'_> {
             (false, false, false, true) => Ok(UseToolInput::InvocationFile {
                 file: parse_path(values.remove("file"))?,
             }),
-            // Empty `{}` is the weak-model miss real agents.mcp_echo still hits after the
-            // schema description: spell the inline fill-in so the next call can succeed.
-            _ if !saw_any_key => Err(de::Error::custom(
-                "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}; \
-                 empty {} is invalid. Required inline form \
-                 {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}} \
-                 — example {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}",
-            )),
             _ => Err(de::Error::custom(
                 "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}",
             )),
@@ -199,8 +189,8 @@ impl schemars::JsonSchema for UseToolInput {
 impl UseToolInput {
     pub(crate) fn input_schema(supports_file_input: bool) -> schemars::Schema {
         let tool_name =
-            serde_json::json!({"type": "string", "description": "Discovered MCP target name, e.g. echo__echo"});
-        let tool_input = serde_json::json!({"type": "object", "additionalProperties": true, "description": "Inline remote arguments object, e.g. {\"text\": \"hello\"}; match the discovered tool schema. Never omit."});
+            serde_json::json!({"type": "string", "description": "Discovered MCP target name"});
+        let tool_input = serde_json::json!({"type": "object", "additionalProperties": true, "description": "Inline remote arguments; use the discovered input schema"});
         if !supports_file_input {
             return schemars::json_schema!({
                 "type": "object",
@@ -211,18 +201,20 @@ impl UseToolInput {
         let tool_input_file = serde_json::json!({"type": "string", "minLength": 1, "description": "UTF-8 JSON file containing only the complete remote argument object"});
         let file = serde_json::json!({"type": "string", "minLength": 1, "description": "UTF-8 JSON file containing canonical tool_name and object tool_input"});
         // Root unions compile each branch without inheriting the root properties.
-        // Do not send `oneOf` to the model: llama.cpp guided JSON mishandles the
-        // exclusive union and spark25-4b then emits `{}` (real agents.mcp_echo).
-        // Root `required` forces the preferred inline pair; the parser still accepts
-        // file forms when a client ignores schema validation.
         schemars::json_schema!({
             "type": "object",
-            "description": "Use exactly one form. Preferred inline (both keys, never empty {}): {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}}. Example: {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}. Alternative forms: tool_name + tool_input_file, or file (UTF-8 JSON document).",
-            "required": ["tool_name", "tool_input"],
             "properties": {
                 "tool_name": tool_name, "tool_input": tool_input,
                 "tool_input_file": tool_input_file, "file": file
-            }
+            },
+            "oneOf": [
+                {"type": "object", "properties": {"tool_name": tool_name, "tool_input": tool_input},
+                 "required": ["tool_name", "tool_input"], "not": {"anyOf": [{"required": ["tool_input_file"]}, {"required": ["file"]}]}},
+                {"type": "object", "properties": {"tool_name": tool_name, "tool_input_file": tool_input_file},
+                 "required": ["tool_name", "tool_input_file"], "not": {"anyOf": [{"required": ["tool_input"]}, {"required": ["file"]}]}},
+                {"type": "object", "properties": {"file": file},
+                 "required": ["file"], "not": {"anyOf": [{"required": ["tool_name"]}, {"required": ["tool_input"]}, {"required": ["tool_input_file"]}]}}
+            ]
         })
     }
 }

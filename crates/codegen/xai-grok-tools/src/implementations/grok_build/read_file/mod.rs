@@ -72,6 +72,21 @@ pub const MAX_LINES_READ: usize = 1_000;
 pub fn exceeds_read_cap(text: &str) -> bool {
     xai_token_estimation::estimate_tokens(text) > READ_FILE_MAX_TOKENS as u64
 }
+
+/// Split a trailing continuation marker off a formatted window. Used by callers that reformat
+/// `content` (hashline) so the notice survives.
+pub(crate) fn split_trailing_continuation_marker(content: &str) -> (&str, Option<&str>) {
+    let body = content.trim_end_matches('\n');
+    let (head, last) = match body.rsplit_once('\n') {
+        Some(pair) => pair,
+        None => ("", body),
+    };
+    if last.starts_with("... [") && last.ends_with("] ...") {
+        (head, Some(last))
+    } else {
+        (content, None)
+    }
+}
 pub use crate::implementations::read_file::{
     FileMetadata, PDF_MAX_PAGES_PER_READ, bytes_to_metadata, parse_page_range,
 };
@@ -130,9 +145,7 @@ fn schema_default_offset() -> Option<i64> {
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct ReadFileInput {
-    // MiMo sometimes sends the common `file_path` field even though our advertised schema uses
-    // `target_file`. Accept it at the input boundary; keep one canonical field on the wire.
-    #[serde(rename = "target_file", alias = "file_path")]
+    #[serde(rename = "target_file")]
     #[schemars(
         description = "The path of the file to read. You can use either a relative path in the workspace or an absolute path. If an absolute path is provided, it will be preserved as is."
     )]
@@ -190,42 +203,6 @@ fn lines_within_byte_budget(content: &str, budget: usize) -> usize {
     }
     kept.max(1)
 }
-/// Shared read-continuation notice: next offset, total line count, and the shown range.
-fn continuation_marker(
-    truncated_bytes: usize,
-    total_lines: usize,
-    start_line: usize,
-    end_line: usize,
-    next_offset: usize,
-    offset_param: &str,
-) -> String {
-    format!(
-        "\n... [{truncated_bytes} characters truncated; file has {total_lines} total lines; \
-         showing lines {start_line}-{end_line}; rerun with {offset_param}={next_offset}] ..."
-    )
-}
-
-/// Append the shared continuation marker to the formatted fields only (never `raw_output`).
-fn push_continuation_marker(extracted: &mut ExtractedContent, marker: &str) {
-    extracted.content.push_str(marker);
-    extracted.content_concise.push_str(marker);
-}
-
-/// Split a trailing continuation marker off a formatted window. Used by callers that reformat
-/// `content` (hashline) so the notice survives.
-pub(crate) fn split_trailing_continuation_marker(content: &str) -> (&str, Option<&str>) {
-    let body = content.trim_end_matches('\n');
-    let (head, last) = match body.rsplit_once('\n') {
-        Some(pair) => pair,
-        None => ("", body),
-    };
-    if last.starts_with("... [") && last.ends_with("] ...") {
-        (head, Some(last))
-    } else {
-        (content, None)
-    }
-}
-
 /// Cut the window to whole lines within `budget` and tell the model where to resume. Re-extracts so
 /// `raw_output` and `extracted_images` match the returned lines; the marker is appended to the
 /// formatted text only.
@@ -247,15 +224,12 @@ fn apply_byte_budget(
     let end_line = start_line + kept - 1;
     let next_offset = start_line + kept;
     let truncated_bytes = full_len.saturating_sub(bounded.content.len());
-    let marker = continuation_marker(
-        truncated_bytes,
-        total_lines,
-        start_line,
-        end_line,
-        next_offset,
-        offset_param,
+    let marker = format!(
+        "\n... [{truncated_bytes} characters truncated; file has {total_lines} total lines; \
+         showing lines {start_line}-{end_line}; rerun with {offset_param}={next_offset}] ..."
     );
-    push_continuation_marker(&mut bounded, &marker);
+    bounded.content.push_str(&marker);
+    bounded.content_concise.push_str(&marker);
     bounded
 }
 /// Harness-compatible negative offset resolution (1-indexed start line). Negatives use the reference `split('\n')` field count plus a phantom
@@ -666,12 +640,10 @@ pub(crate) async fn run_read_file(
         None => {
             let start_line = resolve_read_start_line(&file_content, input.offset);
             let remaining = total_lines.saturating_sub(start_line.saturating_sub(1));
-            let requested_limit = input.limit.unwrap_or(usize::MAX);
-            let effective_limit = requested_limit.min(max_lines);
             let extracted = extract_file_content_lines(
                 &file_content,
                 input.offset,
-                Some(effective_limit),
+                Some(input.limit.unwrap_or(usize::MAX).min(max_lines)),
                 total_lines,
             );
             observed.note_window(
@@ -693,39 +665,6 @@ pub(crate) async fn run_read_file(
             total_lines,
             invoking_param_names.resolve("offset"),
         );
-    }
-    if windowed
-        && split_trailing_continuation_marker(&extracted.content)
-            .1
-            .is_none()
-    {
-        let requested_limit = input.limit.unwrap_or(usize::MAX);
-        let start_line = resolve_read_start_line(&file_content, input.offset);
-        let kept = extracted.raw_output.lines().count();
-        let end_line = start_line.saturating_add(kept.saturating_sub(1));
-        let next_offset = end_line.saturating_add(1);
-        // Only MAX_LINES_READ (not a smaller caller limit) is allowed to leave a resume hint.
-        let cap_clipped = requested_limit > max_lines && kept >= max_lines;
-        if cap_clipped && kept > 0 {
-            let remainder = extract_file_content_lines(
-                &file_content,
-                Some(next_offset as i64),
-                None,
-                total_lines,
-            );
-            // A trailing-newline phantom field is not a resumable line.
-            if !remainder.raw_output.is_empty() {
-                let marker = continuation_marker(
-                    remainder.raw_output.len(),
-                    total_lines,
-                    start_line,
-                    end_line,
-                    next_offset,
-                    invoking_param_names.resolve("offset"),
-                );
-                push_continuation_marker(&mut extracted, &marker);
-            }
-        }
     }
     if exceeds_read_cap(&extracted.content) {
         let token_count = crate::util::truncate::estimate_tokens(&extracted.content);
@@ -959,7 +898,7 @@ mod tests {
     use crate::notification::types::ToolNotificationHandle;
     use crate::types::context::WholeReadPolicy;
     use crate::types::resources::{NotificationHandle, Resources};
-    use crate::types::tool_metadata::{test_ctx, test_ctx_with_call_id};
+    use crate::types::tool_metadata::test_ctx;
     use std::sync::Arc;
     use tempfile::TempDir;
     /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
@@ -977,6 +916,17 @@ mod tests {
         assert!(multibyte.len() >= cap_bytes + bytes_per_token);
         assert!(multibyte.chars().count() < cap_bytes);
         assert!(exceeds_read_cap(&multibyte));
+    }
+    #[test]
+    fn split_trailing_continuation_marker_round_trips() {
+        let marker = "... [15 characters truncated; file has 20 total lines; showing lines 1-5; rerun with offset=6] ...";
+        let content = format!("1→a\n2→b\n{marker}");
+        let (body, split) = split_trailing_continuation_marker(&content);
+        assert_eq!(body, "1→a\n2→b");
+        assert_eq!(split, Some(marker));
+        let (unchanged, none) = split_trailing_continuation_marker("1→a\n2→b");
+        assert_eq!(unchanged, "1→a\n2→b");
+        assert_eq!(none, None);
     }
     #[test]
     fn lines_within_byte_budget_keeps_whole_lines_that_fit() {
@@ -1124,234 +1074,6 @@ mod tests {
         };
         assert!(fc.content.contains("line000200"));
         assert!(!fc.content.contains("truncated"));
-    }
-    /// Cell `cap_off_identical`: a session that never sets the config key installs no
-    /// `Params<ReadFileParams>`, so the byte-budget branch's guard is unmet and the read of a file
-    /// far over any would-be budget is the tool's ordinary full-window read — byte-identical to a
-    /// read whose budget cannot bind.
-    #[tokio::test]
-    async fn cap_off_identical() {
-        let tmp = TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
-        let input = || ReadFileInput {
-            path: "big.txt".to_string(),
-            offset: None,
-            limit: None,
-            pages: None,
-            format: None,
-        };
-        // Flag unset: exactly the Resources a session that never sets the key builds.
-        let unset = test_resources(tmp.path()).into_shared();
-        assert!(
-            max_output_bytes(&unset).await.is_none(),
-            "no ReadFileParams means the budget branch cannot be entered"
-        );
-        let ReadFileOutput::FileContent(flag_off) =
-            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(unset), input())
-                .await
-                .unwrap()
-        else {
-            panic!("expected FileContent");
-        };
-        // Budget that cannot bind: the branch runs and must leave the window alone.
-        let roomy = budget_resources(tmp.path(), usize::MAX).into_shared();
-        assert_eq!(max_output_bytes(&roomy).await, Some(usize::MAX));
-        let ReadFileOutput::FileContent(flag_roomy) =
-            xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(roomy), input())
-                .await
-                .unwrap()
-        else {
-            panic!("expected FileContent");
-        };
-        eprintln!("--- CAP OFF (flag unset) ---\n{}", flag_off.content);
-        eprintln!(
-            "--- CAP ROOMY (budget cannot bind) ---\n{}",
-            flag_roomy.content
-        );
-        assert_eq!(
-            flag_off.content, flag_roomy.content,
-            "unset flag must be byte-identical to a non-binding budget"
-        );
-        assert_eq!(flag_off.raw_output, flag_roomy.raw_output);
-        // The unset arm is the whole file, uncapped, with no marker of any style.
-        let fixture = budget_fixture();
-        assert_eq!(flag_off.raw_output.lines().count(), 200);
-        for line in fixture.lines() {
-            assert!(flag_off.content.contains(line), "missing {line}");
-        }
-        assert!(
-            !flag_off.content.contains("truncated"),
-            "{}",
-            flag_off.content
-        );
-        assert!(!flag_off.content.contains("..."));
-        assert_eq!(flag_off.total_lines, 200);
-        eprintln!("--- CAP OFF CHECK: 200/200 lines, no marker, byte-identical: OK ---");
-        // The global caps are the only size limits in the unset case.
-        assert_eq!(READ_FILE_MAX_TOKENS, 25_000);
-        assert_eq!(MAX_LINES_READ, 1_000);
-    }
-    /// Cell `cap_names_next_offset`: with the flag set, an over-cap read keeps the first whole
-    /// lines that fit, answers the same single tool call, and reuses the read tool's own
-    /// continuation marker — next offset, total line count, shown range — with no second style.
-    #[tokio::test]
-    async fn cap_names_next_offset() {
-        let tmp = TempDir::new().unwrap();
-        std::fs::write(tmp.path().join("big.txt"), budget_fixture()).unwrap();
-        let shared = budget_resources(tmp.path(), 500).into_shared();
-        // The full formatted window this file produces, measured through the shipped path with a
-        // budget that cannot bind, so the expected truncated-byte count is not hard-coded.
-        let ReadFileOutput::FileContent(roomy) = xai_tool_runtime::Tool::run(
-            &ReadFileTool,
-            test_ctx(budget_resources(tmp.path(), usize::MAX).into_shared()),
-            ReadFileInput {
-                path: "big.txt".to_string(),
-                offset: None,
-                limit: None,
-                pages: None,
-                format: None,
-            },
-        )
-        .await
-        .unwrap() else {
-            panic!("expected FileContent");
-        };
-        let ctx = test_ctx_with_call_id(shared, "call_cap_names_next_offset");
-        let call_id = ctx.call_id.clone();
-        let out = xai_tool_runtime::Tool::run(
-            &ReadFileTool,
-            ctx.clone(),
-            ReadFileInput {
-                path: "big.txt".to_string(),
-                offset: None,
-                limit: None,
-                pages: None,
-                format: None,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            ctx.call_id, call_id,
-            "cap must not rewrite the tool call id"
-        );
-        let ReadFileOutput::FileContent(fc) = out else {
-            panic!("expected one FileContent result for the call");
-        };
-        let (body, marker) = fc
-            .content
-            .rsplit_once('\n')
-            .expect("marker on its own line");
-        let kept = body.lines().count();
-        assert!(kept > 0 && kept < 200, "kept {kept}");
-        assert!(body.starts_with("1→line000001\n"), "body: {body:?}");
-        assert!(marker.starts_with("... ["), "marker: {marker:?}");
-        assert_eq!(
-            marker,
-            format!(
-                "... [{} characters truncated; file has 200 total lines; showing lines 1-{kept}; \
-                 rerun with offset={}] ...",
-                roomy.content.len() - body.len(),
-                kept + 1
-            ),
-            "marker must name the next offset, total lines and shown range"
-        );
-        // One truncation style only, and the global caps are untouched.
-        assert_eq!(fc.content.matches("... [").count(), 1);
-        assert_eq!(fc.raw_output.lines().count(), kept);
-        assert_eq!(fc.total_lines, 200);
-        assert_eq!(READ_FILE_MAX_TOKENS, 25_000);
-        assert_eq!(MAX_LINES_READ, 1_000);
-    }
-    fn line_cap_resources(cwd: &std::path::Path, max_lines_read: usize) -> Resources {
-        let mut resources = test_resources(cwd);
-        resources.insert(TruncationCfg(TruncationConfig {
-            max_lines_read: Some(max_lines_read),
-            ..TruncationConfig::default()
-        }));
-        resources
-    }
-    /// `MAX_LINES_READ` clip keeps the head and reuses the byte-budget continuation marker.
-    #[tokio::test]
-    async fn line_cap_names_next_offset() {
-        let tmp = TempDir::new().unwrap();
-        let content: String = (1..=20)
-            .map(|i| format!("line{i:04}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
-        let shared = line_cap_resources(tmp.path(), 5).into_shared();
-        let out = xai_tool_runtime::Tool::run(
-            &ReadFileTool,
-            test_ctx(shared),
-            ReadFileInput {
-                path: "big.txt".to_string(),
-                offset: None,
-                limit: None,
-                pages: None,
-                format: None,
-            },
-        )
-        .await
-        .unwrap();
-        let ReadFileOutput::FileContent(fc) = out else {
-            panic!("expected FileContent, got {out:?}");
-        };
-        let (body, marker) = fc
-            .content
-            .rsplit_once('\n')
-            .expect("marker on its own line");
-        assert_eq!(body.lines().count(), 5);
-        assert!(body.starts_with("1→line0001\n"), "body: {body:?}");
-        assert!(marker.starts_with("... ["), "marker: {marker:?}");
-        assert!(
-            marker.contains("file has 20 total lines")
-                && marker.contains("showing lines 1-5")
-                && marker.contains("rerun with offset=6"),
-            "marker: {marker:?}"
-        );
-        assert_eq!(fc.content.matches("... [").count(), 1);
-        assert_eq!(fc.total_lines, 20);
-    }
-    /// A caller-chosen smaller limit that was fully returned needs no resume hint.
-    #[tokio::test]
-    async fn line_cap_omits_marker_when_limit_is_honored() {
-        let tmp = TempDir::new().unwrap();
-        let content: String = (1..=20)
-            .map(|i| format!("line{i:04}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(tmp.path().join("big.txt"), &content).unwrap();
-        let shared = line_cap_resources(tmp.path(), 5).into_shared();
-        let out = xai_tool_runtime::Tool::run(
-            &ReadFileTool,
-            test_ctx(shared),
-            ReadFileInput {
-                path: "big.txt".to_string(),
-                offset: None,
-                limit: Some(3),
-                pages: None,
-                format: None,
-            },
-        )
-        .await
-        .unwrap();
-        let ReadFileOutput::FileContent(fc) = out else {
-            panic!("expected FileContent, got {out:?}");
-        };
-        assert_eq!(fc.content.lines().count(), 3);
-        assert!(!fc.content.contains("... ["), "{}", fc.content);
-    }
-    #[test]
-    fn split_trailing_continuation_marker_round_trips() {
-        let marker = continuation_marker(12, 20, 1, 5, 6, "offset");
-        let content = format!("1→a\n2→b{marker}");
-        let (body, split) = split_trailing_continuation_marker(&content);
-        assert_eq!(body, "1→a\n2→b");
-        assert_eq!(split, Some(marker.trim_start_matches('\n')));
-        let (unchanged, none) = split_trailing_continuation_marker("1→a\n2→b");
-        assert_eq!(unchanged, "1→a\n2→b");
-        assert_eq!(none, None);
     }
     /// Set up Resources with real filesystem for tests.
     fn test_resources(cwd: &std::path::Path) -> Resources {
@@ -1780,54 +1502,6 @@ mod tests {
                 assert!(
                     msg.contains("Grep"),
                     "Error should reference renamed grep tool: {}",
-                    msg
-                );
-            }
-            other => panic!("Expected FileTooLarge, got {:?}", other),
-        }
-    }
-    /// Characterization: the whole-file token refusal names offset/limit keys but
-    /// does not compute a concrete next offset or a shown-range continuation marker.
-    #[tokio::test]
-    async fn token_limit_error_without_range_does_not_name_next_offset() {
-        let tmp = TempDir::new().unwrap();
-        let line = "x".repeat(200);
-        let big_content = std::iter::repeat_n(line.as_str(), 1100)
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(tmp.path().join("big.txt"), &big_content).unwrap();
-        let tool = ReadFileTool;
-        let mut resources = test_resources(tmp.path());
-        resources.insert(TemplateRenderer::new(
-            [(ToolKind::Search, "Grep".to_string())].into(),
-            Default::default(),
-        ));
-        let input = ReadFileInput {
-            path: "big.txt".to_string(),
-            offset: None,
-            limit: None,
-            pages: None,
-            format: None,
-        };
-        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
-            .await
-            .unwrap();
-        match result {
-            ReadFileOutput::FileTooLarge(msg) => {
-                assert!(msg.contains("exceeds maximum allowed tokens"));
-                assert!(
-                    msg.contains("offset"),
-                    "refusal should name the offset key: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("showing lines"),
-                    "whole-file refusal must not invent a shown range: {}",
-                    msg
-                );
-                assert!(
-                    !msg.contains("rerun with offset="),
-                    "whole-file refusal must not compute a next offset: {}",
                     msg
                 );
             }
@@ -3489,26 +3163,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         let str_neg: ReadFileInput =
             serde_json::from_str(r#"{"target_file":"x","offset":"-3"}"#).unwrap();
         assert_eq!(str_neg.offset, Some(-3));
-    }
-    #[test]
-    fn read_file_input_accepts_file_path_alias_without_changing_its_schema() {
-        let input: ReadFileInput =
-            serde_json::from_str(r#"{"file_path":"src/main.rs","offset":90,"limit":50}"#).unwrap();
-        assert_eq!(input.path, "src/main.rs");
-        assert_eq!(input.offset, Some(90));
-        assert_eq!(input.limit, Some(50));
-        let serialized = serde_json::to_value(&input).unwrap();
-        assert_eq!(serialized["target_file"], "src/main.rs");
-        assert!(serialized.get("file_path").is_none());
-
-        let schema = schemars::schema_for!(ReadFileInput);
-        let schema = serde_json::to_value(schema).unwrap();
-        assert_eq!(schema["required"], serde_json::json!(["target_file"]));
-        assert!(schema["properties"].get("file_path").is_none());
-        assert!(
-            serde_json::from_str::<ReadFileInput>(r#"{"target_file":"a.rs","file_path":"b.rs"}"#)
-                .is_err()
-        );
     }
     #[test]
     fn stored_read_offset_drops_negatives() {

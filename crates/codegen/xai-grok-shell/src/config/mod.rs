@@ -373,7 +373,6 @@ impl SubagentsConfig {
     /// `enabled` is deliberately not remotely gated. Only explicit local intent (CLI flag, `GROK_SUBAGENTS`, `[subagents] enabled`) changes the default.
     /// A `[subagents]` table without an `enabled` key is not intent: it keeps the default so tuning `max_depth` or `[subagents.models]` cannot turn subagents off.
     /// Project files are excluded from this trust-independent base; Task boundaries overlay them using the parent cwd's authoritative trust verdict.
-    /// `cli_flag`: `None` = no CLI intent; `Some(true)` force-enables; `Some(false)` force-disables (`--no-subagents`).
     pub fn resolve(cli_flag: Option<bool>, config: &toml::Value) -> Self {
         let user_grok_root = xai_grok_config::user_grok_home();
         Self::resolve_base_with_sources(

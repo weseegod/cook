@@ -327,10 +327,7 @@ impl crate::types::tool_metadata::ToolMetadata for UseTool {
     fn description_template(&self) -> &str {
         "Call a discovered MCP integration tool with `${{ params.use_tool.tool_name }}` and \
          `${{ params.use_tool.tool_input }}`. Arguments must match the discovered schema\
-         ${%- if tools.by_kind.search_tool %} from `${{ tools.by_kind.search_tool }}`${%- endif %}.\n\n\
-         Required inline form (both keys, never empty `{}`):\n\
-         {\"tool_name\": \"<discovered name>\", \"tool_input\": {\"<param>\": <value>}}\n\
-         Example: {\"tool_name\": \"echo__echo\", \"tool_input\": {\"text\": \"hello\"}}."
+         ${%- if tools.by_kind.search_tool %} from `${{ tools.by_kind.search_tool }}`${%- endif %}."
     }
 
     fn versioned_definition(
@@ -373,8 +370,7 @@ const FILE_INPUT_DESCRIPTION: &str = "Call a discovered MCP integration tool.\n\
          File forms require Read permission, then normal MCP approval. \
          Files must be complete regular files, at most 8 MiB. Do not mix forms or delegate to another file or native tool. \
          Remote keys and JSON-encoded strings remain unchanged. Arguments must match the discovered schema\
-         ${%- if tools.by_kind.search_tool %} from `${{ tools.by_kind.search_tool }}`${%- endif %}. \
-         Never send empty `{}`; the input schema root describes the preferred inline fill-in.";
+         ${%- if tools.by_kind.search_tool %} from `${{ tools.by_kind.search_tool }}`${%- endif %}.";
 
 impl xai_tool_runtime::Tool for UseTool {
     type Args = UseToolInput;

@@ -356,11 +356,11 @@ The dock above the prompt lists subagents. With the dock focused, `h` toggles hi
 
 ### Fullscreen framed view (the child transcript)
 
-When you open a subagent (from a scrollback block, the tasks pane, or a dashboard row), a bordered frame replaces the parent view and shows the child's full transcript:
+When you open a subagent (from a scrollback block or the tasks pane), a bordered frame replaces the parent view and shows the child's full transcript:
 
 - Title bar inside the frame: status icon (spinner / ✓ / ✗), label + bold description + model, optional "resumed"/"forked" badge, live activity · elapsed time, and [✗] close button.
 - The child's own scrollback, thinking, and tool calls render inside the frame.
-- The parent tasks pane, todos pane, dock, and catalog hide for the duration of the view.
+- The parent tasks pane, todos pane, and dock hide for the duration of the view.
 
 This view is observational. The composer is hidden (zero rows). You cannot focus it, type a prompt, stash a draft, or send a follow-up from here. The parent session still owns prompts. To steer a running child, close the view and use `send_subagent_message` from the parent (see [Sending messages to subagents](#sending-messages-to-subagents)).
 

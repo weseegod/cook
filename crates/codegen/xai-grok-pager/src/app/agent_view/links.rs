@@ -663,7 +663,6 @@ mod link_click_tests {
         privacy_banner: bool,
     ) -> Buffer {
         let area = Rect::new(0, 0, cols, 30);
-        let bundle = crate::app::bundle::BundleState::default();
         let mut buf = Buffer::empty(area);
         let mut scratch = ScratchBuffer::new();
         agent.draw(
@@ -681,7 +680,6 @@ mod link_click_tests {
                 mouse_pos: None,
                 tip: None,
             },
-            &bundle,
             false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),
@@ -975,8 +973,14 @@ mod link_click_tests {
             screen.contains("2 commands still running"),
             "summary must show count; screen:\n{screen}"
         );
-        assert!(screen.contains("sleep 5"), "command 1 missing; screen:\n{screen}");
-        assert!(screen.contains("npm run dev"), "command 2 missing; screen:\n{screen}");
+        assert!(
+            screen.contains("sleep 5"),
+            "command 1 missing; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("npm run dev"),
+            "command 2 missing; screen:\n{screen}"
+        );
     }
     /// Bg twin: the `[↓]` demote button sits on the same turn-status row, so its rect must drop under an open dropdown too.
     /// A dropdown click must never background the running execute tool.
@@ -2486,16 +2490,6 @@ mod link_click_tests {
     fn render_agent(agent: &mut AgentView, area: Rect, reg: &ActionRegistry) -> Buffer {
         let mut buf = Buffer::empty(area);
         let mut scratch = ScratchBuffer::new();
-        let bundle = crate::app::bundle::BundleState {
-            has_cache: false,
-            version: String::new(),
-            personas: Vec::new(),
-            roles: Vec::new(),
-            agents: Vec::new(),
-            skills: Vec::new(),
-            persona_details: Vec::new(),
-            role_details: Vec::new(),
-        };
         agent.draw(
             area,
             &mut buf,
@@ -2504,7 +2498,6 @@ mod link_click_tests {
             None,
             false,
             crate::app::agent_view::BannerSlotParams::none(),
-            &bundle,
             false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),
@@ -2601,16 +2594,6 @@ mod link_click_tests {
         assert!(agent.ephemeral_tip.is_active());
         let mut buf = Buffer::empty(tall);
         let mut scratch = ScratchBuffer::new();
-        let bundle = crate::app::bundle::BundleState {
-            has_cache: false,
-            version: String::new(),
-            personas: Vec::new(),
-            roles: Vec::new(),
-            agents: Vec::new(),
-            skills: Vec::new(),
-            persona_details: Vec::new(),
-            role_details: Vec::new(),
-        };
         agent.draw(
             tall,
             &mut buf,
@@ -2622,7 +2605,6 @@ mod link_click_tests {
                 tip: Some("ZZSESSIONTIPZZ never shown in agent view"),
                 ..crate::app::agent_view::BannerSlotParams::none()
             },
-            &bundle,
             false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),
@@ -2681,16 +2663,6 @@ mod link_click_tests {
         );
         let mut buf = Buffer::empty(tall);
         let mut scratch = ScratchBuffer::new();
-        let bundle = crate::app::bundle::BundleState {
-            has_cache: false,
-            version: String::new(),
-            personas: Vec::new(),
-            roles: Vec::new(),
-            agents: Vec::new(),
-            skills: Vec::new(),
-            persona_details: Vec::new(),
-            role_details: Vec::new(),
-        };
         agent.draw(
             tall,
             &mut buf,
@@ -2706,7 +2678,6 @@ mod link_click_tests {
                 mouse_pos: None,
                 tip: Some(long_tip.as_str()),
             },
-            &bundle,
             false,
             &mut Vec::new(),
             crate::app::agent_view::AppRenderParams::default(),

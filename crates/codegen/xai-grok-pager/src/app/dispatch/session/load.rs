@@ -406,7 +406,7 @@ pub(in crate::app::dispatch) fn dispatch_pick_session(
             app.welcome_history_load_as_build = true;
         }
     }
-    if crate::app::is_daemon_session_row(&source) {
+    if crate::app::is_daemon_or_remote_control_row(&source) {
         return dispatch_daemon_session_pick(app, session_id, cwd);
     }
     if chat_kind {
@@ -524,7 +524,7 @@ pub(in crate::app::dispatch) fn dispatch_pick_session_in_worktree(
         app.show_toast("Chat conversations can't be resumed in a worktree");
         return vec![];
     }
-    if crate::app::is_daemon_session_row(&source) {
+    if crate::app::is_daemon_or_remote_control_row(&source) {
         app.show_toast("Daemon sessions can't be resumed in a worktree");
         return vec![];
     }

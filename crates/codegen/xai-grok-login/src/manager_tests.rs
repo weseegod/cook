@@ -3052,6 +3052,7 @@ fn apply_user_info_enrichment_preserves_token_fields() {
         user_blocked_reason: None,
         team_blocked_reasons: None,
         coding_data_retention_opt_out: None,
+        can_administer_team: None,
         subscription_tier: None,
     };
     apply_user_info_enrichment(&mut disk, user_info);
@@ -3068,6 +3069,30 @@ fn apply_user_info_enrichment_preserves_token_fields() {
     assert_eq!(disk.team_id.as_deref(), Some("new-team"));
     assert_eq!(disk.team_name.as_deref(), Some("New Team"));
     assert_eq!(disk.first_name.as_deref(), Some("New"));
+}
+#[test]
+fn apply_user_info_enrichment_overwrites_can_administer_team() {
+    for (on_disk, from_server) in [
+        (Some(true), Some(false)),
+        (Some(false), Some(true)),
+        (Some(true), None),
+        (None, Some(false)),
+    ] {
+        let mut disk = GrokAuth {
+            can_administer_team: on_disk,
+            ..GrokAuth::test_default()
+        };
+        let user_info: UserInfo = serde_json::from_value(serde_json::json!({
+            "userId": "u",
+            "canAdministerTeam": from_server,
+        }))
+        .unwrap();
+        apply_user_info_enrichment(&mut disk, user_info);
+        assert_eq!(
+            from_server, disk.can_administer_team,
+            "{on_disk:?} -> {from_server:?}"
+        );
+    }
 }
 /// Regression: async provider calls must drive `auth()` so tool requests get refreshed tokens.
 #[tokio::test]

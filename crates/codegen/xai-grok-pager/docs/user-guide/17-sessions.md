@@ -329,6 +329,31 @@ cook clone https://example.com/org/repo.git --no-redirects
 
 `GROVE_REDIRECTS=0` remains a runtime kill switch. Cook does not save the kill switch as the clone's redirect choice.
 
+### Manage Grove redirections
+
+A Grove worktree can redirect ignored artifact directories such as `target` and `node_modules` to storage outside the projected tree. The redirect commands take the mount path as their first argument.
+
+```bash
+grok worktree redirect list /path/to/worktree
+grok worktree redirect list /path/to/worktree --json
+grok worktree redirect add /path/to/worktree target bind
+grok worktree redirect del /path/to/worktree target
+grok worktree redirect fixup /path/to/worktree
+grok worktree redirect unmount /path/to/worktree target
+```
+
+`list` prints `repo_path`, `type`, `mechanism`, `target`, `source`, and `state`. Run `unmount` without a repo-relative path to take down every redirect on the mount. Use `fixup --force` to replace Grove-owned residue. Use `fixup --strict` to refuse a populated plain directory.
+
+
+```bash
+grok clone https://example.com/org/repo.git --redirect-ignored
+grok clone https://example.com/org/repo.git \
+  --redirect-ignored --redirect-dir build --redirect-dir '**/node_modules'
+grok clone https://example.com/org/repo.git --no-redirects
+```
+
+`GROVE_REDIRECTS=0` remains a runtime kill switch. Grok does not save the kill switch as the clone's redirect choice.
+
 ### Checking Disk Usage
 
 `cook du` (alias: `cook disk-usage`) reports how much disk space Cook's home (`~/.cook`) uses. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.

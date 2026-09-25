@@ -684,7 +684,6 @@ pub fn default_settings() -> Vec<SettingMeta> {
             restart_required: false,
             hidden_in_minimal: false,
         },
-        // --- theme and auto themes -------------------------------------------
         SettingMeta {
             key: "theme",
             category: SettingCategory::Appearance,

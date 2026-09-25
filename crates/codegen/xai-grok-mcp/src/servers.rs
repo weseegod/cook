@@ -17,7 +17,7 @@ use tokio::{
 use rmcp::{
     ClientHandler, ClientLifecycleMode, ClientServiceExt,
     model::{
-        CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation,
+        CallToolRequestParams, ClientCapabilities, ClientConfig, Implementation,
         PaginatedRequestParams,
     },
     service::{
@@ -1643,6 +1643,8 @@ impl xai_tool_runtime::Tool for McpErasedTool {
                     success: reauth_ok,
                 });
                 if reauth_ok {
+                    // `try_call_tool` only sets the flag; telemetry must describe the retry.
+                    is_timeout = false;
                     self.try_call_tool(
                         &client,
                         &raw,
@@ -4021,7 +4023,7 @@ impl McpClient {
         Ok(mcp_http_client)
     }
 
-    fn make_client_info(server_name: &str, advertise_elicitation: bool) -> ClientInfo {
+    fn make_client_info(server_name: &str, advertise_elicitation: bool) -> ClientConfig {
         use rmcp::model::{
             ElicitationCapability, FormElicitationCapability, UrlElicitationCapability,
         };
@@ -4043,7 +4045,7 @@ impl McpClient {
                     .with_url(UrlElicitationCapability::new()),
             );
         }
-        ClientInfo::new(
+        ClientConfig::new(
             capabilities,
             Implementation::new(
                 format!("grok-shell-{server_name}"),
@@ -5035,8 +5037,8 @@ impl McpClient {
 /// rmcp must not see an error from a notification handler or the service loop tears down.
 #[derive(Debug)]
 pub struct GrokClientHandler {
-    /// Static `ClientInfo` returned by [`Self::get_info`]; built once at handshake time and stored to avoid re-allocating per call.
-    info: ClientInfo,
+    /// Static [`ClientConfig`] returned by [`Self::get_info`]; built once at handshake time and stored to avoid re-allocating per call.
+    info: ClientConfig,
     /// MCP server name this handler is bound to.
     /// Cloned into emitted events so the dispatcher can route per-server.
     server_name: McpServerName,
@@ -5144,7 +5146,7 @@ impl ClientHandler for GrokClientHandler {
         });
     }
 
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> ClientConfig {
         self.info.clone()
     }
 }

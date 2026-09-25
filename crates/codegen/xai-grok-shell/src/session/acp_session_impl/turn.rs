@@ -525,6 +525,8 @@ impl SessionActor {
         } = request;
         let prompt_id = prompt_id.as_str();
         let handle_prompt_start = std::time::Instant::now();
+        self.chat_state_handle
+            .record_turn_start(chrono::Utc::now().timestamp_millis());
         *self.active_skill.lock() = None;
         xai_grok_telemetry::unified_log::info(
             "shell.handle_prompt.start",
@@ -2465,22 +2467,28 @@ impl SessionActor {
         if signals.turn_count == 0 {
             return;
         }
-        match self.chat_state_handle.try_get_session_usage().await {
-            Ok(ledger) => {
-                let _ = self
-                    .notifications
-                    .persistence_tx
-                    .send(PersistenceMsg::UsageTurn {
-                        turn_number: signals.turn_count,
-                        live: crate::session::usage_file::UsageSummary::from_ledger(&ledger),
-                    });
-            }
-            Err(()) => {
-                tracing::warn!(
-                    turn_number = signals.turn_count,
-                    "failed to snapshot session usage for persist"
-                );
-            }
+        let Ok(ledger) = self.chat_state_handle.try_get_session_usage().await else {
+            tracing::warn!(
+                turn_number = signals.turn_count,
+                "failed to snapshot session usage for persist"
+            );
+            return;
+        };
+        let (respond_to, ack) = oneshot::channel();
+        if self
+            .notifications
+            .persistence_tx
+            .send(PersistenceMsg::UsageTurn {
+                turn_number: signals.turn_count,
+                live: crate::session::usage_file::UsageSummary::from_ledger(&ledger),
+                respond_to,
+            })
+            .is_err()
+        {
+            return;
+        }
+        if let Ok(Err(e)) = ack.await {
+            tracing::warn!(?e, "session usage persist failed");
         }
     }
     /// Shared round-completion bookkeeping (plan cleanup, cancel-streak reset, token sums, feedback prompt).

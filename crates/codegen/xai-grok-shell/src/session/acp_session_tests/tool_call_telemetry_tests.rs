@@ -176,6 +176,13 @@ fn init_product(server: &xai_grok_test_support::MockInferenceServer, mode: Telem
         mixpanel_token: None,
         ..xai_grok_telemetry::config::TelemetryConfig::default()
     };
+    // `shared_client` keeps idle sockets process-wide. `TcpListener::bind` can
+    // recycle a loopback port onto a dead connection, and `track` drops that error.
+    let client = reqwest::Client::builder()
+        .http1_only()
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("telemetry test client");
     xai_grok_telemetry::init(
         config,
         mode,
@@ -185,7 +192,7 @@ fn init_product(server: &xai_grok_test_support::MockInferenceServer, mode: Telem
         None,
         "test".into(),
         None,
-        crate::http::shared_client(),
+        client,
     );
 }
 
