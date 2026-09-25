@@ -146,6 +146,10 @@ Pass:
 
 The four tools flakes on mimo26-9b (`kill_and_wait`, `monitor_short`, `scheduler_roundtrip`, `search_replace`) stay on the suite handoff. They are not a v3 phase.
 
+**Result (2026-09-25, spark25-4b on port 8080, `OUT_ROOT` under the goal scratch dir).** `safeguard.offset_walk` no longer has a 16-call ceiling and passed (`min_tool_success` 4, `read_file` walk, file unchanged). `safeguard.large_read` reported both `-HEAD` and `-TAIL`. `safeguard.terminal_fanout` kept its score checks and passed with five parallel inspects; no fanout-reminder oracle. `safeguard.identical_reread` scored `measured-nothing`: the model burned `max_tokens` after one successful `read_file` and never emitted the identical loop. That cell stays a measurement gap. `safeguard.pin_failure` failed `text_contains_marker`; it is not a v3 phase. The 16-round stop message appears in no case log.
+
+Session first pass was 10/12. `session.compaction` then passed on retry (`compact_single` present, marker in text); the first attempt hit `max_tokens` before the answer. `session.streaming_json` scored `final record lacks marker` on every attempt: the model's answer is in `chat_history` and in the streaming `data` chunks, while the terminal `end` line's `text` is empty. That gap is in `xai-grok-pager` `headless.rs` `on_text_chunk` (`StreamingJson` emits `AgentMessage` without filling `text_buffer`), present before this experiment and outside v3's phases. `runner.isolated` failed while the work tree held the uncommitted phase 3/4 files.
+
 ## 8. Phase 4 — correct section 6.6 of the core design
 
 Edit only that subsection of [core-agent-flow-and-token-optimization.md](core-agent-flow-and-token-optimization.md). Replace the paragraph that begins `Extend stationarity beyond "same tool + args"` with:
