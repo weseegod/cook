@@ -20,6 +20,7 @@ not here.
 | [`desktop-app-implement.md`](desktop-app-implement.md) | Production product work (providers, Claude Desktop–class, packaging) |
 | [`desktop-release.md`](desktop-release.md) | Self-build installers, minisign, `latest.json` |
 | [`tui-presentation.md`](tui-presentation.md) | How the TUI paints — Desktop copies this, does not invent chrome |
+| [`let-cook-color-contrast.md`](let-cook-color-contrast.md) | Workbench color contrast: floors, token roles, checks |
 | [`byok-models.md`](byok-models.md) | BYOK TOML |
 | [`ARCHITECTURE.md`](../ARCHITECTURE.md) | Repo runtime map |
 | [`UPSTREAM-MERGE.md`](../UPSTREAM-MERGE.md) | Desktop is a fork-owned leaf |
