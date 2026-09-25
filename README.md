@@ -119,7 +119,8 @@ pnpm tauri dev
 ## Documentation
 
 - [Architecture](ARCHITECTURE.md) — workspace layout and runtime boundaries
-- [Desktop app](docs/desktop-app.md) — Let Cook architecture
+- [Let Cook module map](frontend/apps/let-cook/ARCHITECTURE.md) — where to edit the desktop app
+- [Desktop contract](docs/desktop-app.md) — product boundary, capability honesty, host roles
 - [Desktop ↔ TUI capability map](docs/desktop-tui-capability-map.md) — what the
   desktop covers of the TUI, and what it deliberately does not
 - [Desktop production plan](docs/desktop-app-implement.md) and

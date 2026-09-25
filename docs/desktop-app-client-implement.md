@@ -9,6 +9,7 @@ and cites capability-map row ids. Do not invent method names.
 
 | Doc | Role |
 |---|---|
+| [`../frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md) | Live module map. Where this plan disagrees with it or with `src/acp/handshake.ts`, those win |
 | [`desktop-app.md`](desktop-app.md) | Architecture contract (honesty, router, host roles) |
 | [`desktop-tui-capability-map.md`](desktop-tui-capability-map.md) | Live wire status; row ids |
 | This file | How to fold live code onto the contract |
@@ -19,32 +20,29 @@ and cites capability-map row ids. Do not invent method names.
 
 ## 1. Why this track exists
 
-The process model is right (Tauri host + `cook agent stdio`). The running
-client is a partial ACP client of the same agent the TUI speaks fluently:
+The process model is right (Tauri host + `cook agent stdio`). The client used
+to advertise `terminal` and `mcpApps` without handlers, answer unknown reverse
+requests with `-32601`, and drop extension notifications. The contract forbids
+that. Caps, the reverse registry, and the notification registry have landed;
+what is still open is §2.
 
-- `initialize` advertises `terminal: true` and `mcpApps: true`, then stubs
-  or omits the matching reverse (map `H-term`, `H-mcp` — class C / F / A).
-- Unknown reverse requests with an `id` return `-32601` (`client.ts`
-  `handleMessage`) and can fail the turn (class A).
-- Most extension notifications `console.debug` away, so Settings/Chat go
-  stale (class B: `N-mcp-*`, `N-queue`, `N-pcomplete`, `N-tdone`).
-- Inbound dispatch is a linear if-chain. Adding rewind, tasks, or `sdk_call`
-  without a registry repeats those classes.
-
-The architecture contract already forbids those. This doc is the fold.
+Live dispatch and file layout: the module map. Do not re-open a row §2 marks
+as live.
 
 ---
 
 ## 2. Current vs target
 
-| Piece | Live | Target ([`desktop-app.md`](desktop-app.md) §4–§6) |
+Live files are the module map. This table is only the gap that map still has.
+
+| Piece | Live (module map) | Still open |
 |---|---|---|
-| Caps | `client.ts` `CLIENT_META` + hardcoded `terminal: true`, `mcpApps: true` | One `CAPABILITIES` table; `initialize` is a function of it |
-| A→C reverse | `handleMessage` if-chain; unknown → `-32601` | Layer 2 registry; typed decline unless advertised-required |
-| A→C notifs | `session/update` + `x.ai/session_notification` + `models/update`; rest ignored | Layer 3 registry; unknown → log |
-| Host reverse | `acp_host.rs` `handle_host_request`: fs + **terminal stub** | Layer 1: fs only until PTY; no stub while `terminal: false` |
-| C→A wrappers | `xai.ts` / `extensions.ts` / `providers.ts` | `acp/methods/` grouped the same way; no behavior change required in C1–C3 |
-| Host roles | mux + TOML writer + workspace sidecar in one crate, undocumented | Same files, documented isolation; no dual-write in production |
+| Caps | `src/acp/handshake.ts` `CAPABILITIES` (`terminal: false`, `mcpApps: false`) | — |
+| A→C reverse | `src/acp/reverse/` via `client/messages.ts` | — |
+| A→C notifs | `src/acp/notifications/` via `client/messages.ts` | — |
+| Host reverse | `acp_host.rs`: `fs/*` only | A real PTY before `terminal: true` |
+| C→A wrappers | `xai.ts`, `extensions.ts`, `providers.ts`, `turn-ops.ts`, `session-ops.ts`, `settings-ext.ts` | Optional grouping under `acp/methods/` (C4) |
+| Host roles | `acp_host.rs`, `provider_config.rs`, `workspace.rs` | — |
 
 Do not move `ui/`. Chat UI rebuild is a separate track.
 
@@ -84,6 +82,8 @@ of those PRs **must add a registry entry** (or this track has failed).
 
 ### C1 — Honest `initialize` caps
 
+Landed in `src/acp/handshake.ts`. The steps below are the original plan.
+
 **Do**
 
 - Introduce a single `CAPABILITIES` object used by `initialize`.
@@ -122,6 +122,8 @@ of those PRs **must add a registry entry** (or this track has failed).
 
 ### C2 — Reverse-request policy + request registry
 
+Landed in `src/acp/reverse/`, dispatched from `src/acp/client/messages.ts`. The steps below are the original plan.
+
 **Do**
 
 - Replace `handleMessage`’s unknown-with-id `-32601` with the §5.5 policy:
@@ -155,6 +157,8 @@ of those PRs **must add a registry entry** (or this track has failed).
 
 ### C3 — Notification registry (Chat/Settings consumers)
 
+Landed in `src/acp/notifications/`, dispatched from `src/acp/client/messages.ts`. The table below is the original consumer list.
+
 Ignored notifs do not crash; they stale the UI. C3 consumes the ones
 Settings and Chat already have surfaces for.
 
@@ -186,8 +190,9 @@ Settings and Chat already have surfaces for.
 
 **Files**
 
-- `src/acp/client.ts` `handleMessages` / `handleMessage`
-- `src/state/catalog.ts`, `src/state/session.ts`
+- `src/acp/client/messages.ts` `handleInboundMessages` / `handleMessage`
+- `src/acp/notifications/`
+- `src/state/catalog.ts`, `src/state/session/`
 - `src/ui/settings/connectors.tsx` (read from store; no extra ACP poll
   required if the notif lands)
 
@@ -200,16 +205,12 @@ Settings and Chat already have surfaces for.
 
 ### C4 — Module split (thin move)
 
-No wire changes. Move the C1–C3 pieces onto the layout in
-[`desktop-app.md`](desktop-app.md) §6:
-
-```
-src/acp/handshake.ts
-src/acp/reverse/
-src/acp/notifications/
-src/acp/methods/          # optional in C4: xai.ts / extensions.ts can wait
-src/acp/client.ts         # lifecycle + dispatch only
-```
+`handshake.ts`, `reverse/`, `notifications/`, and inbound dispatch in
+`client/messages.ts` have landed. See the module map. The remaining move is
+optional and has no wire change: group the flat C→A wrappers
+(`xai.ts`, `extensions.ts`, `providers.ts`, `turn-ops.ts`, `session-ops.ts`,
+`settings-ext.ts`) under `src/acp/methods/`. `client.ts` stays the lifecycle
+object the UI calls.
 
 **Do not** restyle Chat, rewrite the transcript reducer, or merge
 `tui-presentation.md` into the client.

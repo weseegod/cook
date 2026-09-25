@@ -22,10 +22,9 @@ The product runs in four modes, all sharing one agent runtime:
   [Agent Client Protocol](https://agentclientprotocol.com) server used by
   editor integrations.
 - **Desktop ACP client** — Tauri 2 + React application in
-  `frontend/apps/let-cook/`. Architecture contract:
-  [`docs/desktop-app.md`](docs/desktop-app.md). Client-layering fold:
-  [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md).
-  Production plan: [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md).
+  `frontend/apps/let-cook/`. Module map (where to edit):
+  [`frontend/apps/let-cook/ARCHITECTURE.md`](frontend/apps/let-cook/ARCHITECTURE.md).
+  Contract: [`docs/desktop-app.md`](docs/desktop-app.md).
   Wire status: [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md).
   Uses the same shell agent runtime as the TUI; does not reimplement tools or
   sampling.
@@ -45,7 +44,7 @@ System context (arrows = data flow):
 ┌──────────────────────────┐  ┌───────┴────────────────┐  tool calls     │ LLM requests
 │ xai-grok-pager-render    │  │ let-cook (Tauri)  │         ▼       ▼
 │ theme · render · terminal│  │ React ACP client       │  ┌────────────┐ ┌──────────────┐
-│ (draw primitives)        │  │ docs/desktop-app.md    │  │ xai-grok-  │ │ xai-grok-    │
+│ (draw primitives)        │  │ let-cook/ARCHITECTURE  │  │ xai-grok-  │ │ xai-grok-    │
 └──────────────────────────┘  └────────────────────────┘  │ tools      │ │ sampler      │
                                                           └─────┬──────┘ └──────────────┘
                                                                 ▼
@@ -412,24 +411,10 @@ effects spawn tasks → `Presenter` coalesces draws → `render::draw::draw_fram
 
 ### 5.5 Desktop prompt queue and Send now
 
-`frontend/apps/let-cook/` is an ACP client. Its Tauri host
-(`src-tauri/src/acp_host.rs`) forwards concurrent `session/prompt` requests and
-`x.ai/queue/*` notifications to `cook agent stdio`. The React composer
-(`src/ui/chat/composer.tsx`) submits a second `session/prompt` while a turn is
-running; `src/acp/client.ts` assigns its prompt ID and sends
-`_meta.clientIdentifier: grok-desktop`. The shell uses that identifier as the
-queue row owner. The agent's `x.ai/queue/changed` notification is the source
-of truth for row ID, version, and order in the Desktop queue bar.
-
-Empty Enter selects the first queued row; the queue bar's **Send now** button
-selects its own row. Both go through `CookAcpClient.sendQueueEntryNow`, which
-sends `x.ai/queue/interject` with the row ID and version. If Enter arrives
-before the queue notification, the client waits for confirmation of that
-prompt ID and sends once. The shell's queue actor promotes the row and cancels
-the running turn when appropriate. The promotion notification's `runningText`
-paints the queued user message in chat; Desktop also opts into live
-`user_message_chunk` echoes and reconciles one against the painted message.
-The TUI follows the same queue notification path in
+Desktop queue behavior and the files that implement it are in
+[`frontend/apps/let-cook/ARCHITECTURE.md`](frontend/apps/let-cook/ARCHITECTURE.md)
+(Prompt queue). The shell uses `clientIdentifier: grok-desktop` as the queue
+row owner. The TUI follows the same notification in
 `xai-grok-pager/src/app/dispatch/queue.rs`.
 
 ---
@@ -474,8 +459,8 @@ separate workspace config and is unchanged.
 | Change the event loop / app startup | `pager/src/app/event_loop.rs`, `app/mod.rs` |
 | Change headless / external protocol | `pager/src/headless/` (`cli.rs`, `ext_protocol.rs`) |
 | Read the TUI presentation catalog (screens, realtime, timers, tool rows, folds, cards) | [`docs/tui-presentation.md`](docs/tui-presentation.md) |
-| Change / start the desktop app | `frontend/apps/let-cook/`; architecture [`docs/desktop-app.md`](docs/desktop-app.md); client fold [`docs/desktop-app-client-implement.md`](docs/desktop-app-client-implement.md); production plan [`docs/desktop-app-implement.md`](docs/desktop-app-implement.md); wire map [`docs/desktop-tui-capability-map.md`](docs/desktop-tui-capability-map.md). Keep model/tool execution in `cook agent stdio`. TUI chrome to copy: [`docs/tui-presentation.md`](docs/tui-presentation.md). Do not add `src-tauri` to the Cargo workspace. |
-| Change Desktop queue or Send now | `frontend/apps/let-cook/src/acp/client.ts` owns prompt IDs, confirmation, and sending; `src/ui/chat/composer.tsx` and `queue-bar.tsx` provide Enter and button input; `src/acp/notifications/handlers.ts` applies the agent queue snapshot. See §5.5. |
+| Change / start the desktop app | [`frontend/apps/let-cook/ARCHITECTURE.md`](frontend/apps/let-cook/ARCHITECTURE.md). Contract: [`docs/desktop-app.md`](docs/desktop-app.md). Keep model/tool execution in `cook agent stdio`. |
+| Change Desktop queue or Send now | [`frontend/apps/let-cook/ARCHITECTURE.md`](frontend/apps/let-cook/ARCHITECTURE.md) (Prompt queue). Shell side: `xai-grok-pager/src/app/dispatch/queue.rs`. |
 
 ### Agent / shell
 
@@ -555,7 +540,8 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
 - Build/release: `build.sh` (local CLI build), `scripts/publish_release.sh`
   (version/tag/push; tag-triggered release workflow) and
   `scripts/desktop_release.sh` for Let Cook installers, `docs/byok-models.md`, `docs/post-merge-core-fix.md`,
-  `docs/desktop-app.md` + `docs/desktop-app-client-implement.md` +
+  `frontend/apps/let-cook/ARCHITECTURE.md` (module map) +
+  `docs/desktop-app.md` (contract) + `docs/desktop-app-client-implement.md` +
   `docs/desktop-app-implement.md` + `docs/desktop-tui-capability-map.md` +
   `docs/desktop-release.md`
   (desktop ACP client; code in `frontend/apps/let-cook/`, not a
@@ -582,8 +568,9 @@ Frequently touched fork-owned files (also the upstream-merge inventory in
 - The tool RPC stack is branded "xAI Computer Hub" (`xai-computer-hub-*`,
   `xai-tool-*`): the unified `Tool` trait and dispatch live in
   `xai-tool-runtime`, wire types in `xai-tool-protocol`.
-- **Desktop is a leaf ACP client.** Architecture:
-  [`docs/desktop-app.md`](docs/desktop-app.md). Never link
+- **Desktop is a leaf ACP client.** Module map:
+  [`frontend/apps/let-cook/ARCHITECTURE.md`](frontend/apps/let-cook/ARCHITECTURE.md).
+  Contract: [`docs/desktop-app.md`](docs/desktop-app.md). Never link
   `frontend/apps/let-cook/src-tauri` into the generated root workspace,
   never path-depend it on `xai-grok-shell` / pager / tools, and never patch
   those crates for Desktop-only behaviour (BYOK `providers/*` and

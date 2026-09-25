@@ -4,6 +4,7 @@ Bring v1 (`feat: implement Let Cook v1`) to a **Claude Desktop–class**
 product: first-run provider connect, attachments, MCP connectors, memory,
 skills, polish, and shippable installers.
 
+Module map: [`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md).  
 Architecture and invariants: [`docs/desktop-app.md`](desktop-app.md).  
 Do not violate them. The renderer still never calls models or tools.
 

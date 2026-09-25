@@ -28,7 +28,8 @@ Everything else is taken from upstream exactly as shipped.
   product telemetry (`xai-grok-telemetry` — Mixpanel, Sentry, OTel). Hide at
   chokepoints after each sync — do not delete whole upstream modules.
 - **LEAF (fork-owned, no upstream equivalent today):** entire
-  `frontend/apps/let-cook/` and the Desktop docs
+  `frontend/apps/let-cook/` (module map `frontend/apps/let-cook/ARCHITECTURE.md`)
+  and the Desktop docs
   (`docs/desktop-app.md`, `docs/desktop-app-client-implement.md`,
   `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md`).
   A sync must not rewrite this tree. Never patch `xai-grok-shell` / pager
@@ -47,8 +48,9 @@ Everything else is taken from upstream exactly as shipped.
 3. A trim — hide/remove grok.com product chrome this fork doesn't need
    (billing, Privacy, usage limits, announcements, telemetry, …) — or a
    genuine bug fix that upstream hasn't accepted yet.
-4. Desktop client work under `frontend/apps/let-cook/` (leaf; see
-   [`docs/desktop-app.md`](docs/desktop-app.md)). Not an upstream-crate
+4. Desktop client work under `frontend/apps/let-cook/` (leaf; module map
+   [`frontend/apps/let-cook/ARCHITECTURE.md`](frontend/apps/let-cook/ARCHITECTURE.md),
+   contract [`docs/desktop-app.md`](docs/desktop-app.md)). Not an upstream-crate
    change.
 
 Anything else belongs upstream, not here.

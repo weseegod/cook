@@ -1,12 +1,13 @@
-# Let Cook — Architecture
+# Let Cook — Architecture contract
 
 Let Cook is a **chat-first ACP client** for the existing `cook` agent.
 It does not reimplement sampling, tools, or session storage.
 
-This file is the **architecture source of truth**: product boundary, process
-model, capability honesty, inbound routing, and host roles. Live wire status
-(which methods the running app actually speaks) lives in the capability map,
-not here.
+This file is the **contract**: product boundary, process model, capability
+honesty, inbound routing, and host roles. Where to edit the app is
+[`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md).
+Live wire status (which methods the running app actually speaks) lives in
+the capability map.
 
 **Code:** `frontend/apps/let-cook/` (Tauri 2 + React, shipped as v1).
 **Agent:** `cook agent stdio` (`xai-grok-shell` / `MvpAgent`).
@@ -15,6 +16,7 @@ not here.
 | Doc | Role |
 |---|---|
 | This file | Architecture contract |
+| [`../frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md) | Module map — where to edit |
 | [`desktop-tui-capability-map.md`](desktop-tui-capability-map.md) | Method-level TUI ↔ Desktop status (cite row ids) |
 | [`desktop-app-client-implement.md`](desktop-app-client-implement.md) | Fold live client onto this contract (honesty, registry, host roles) |
 | [`desktop-app-implement.md`](desktop-app-implement.md) | Production product work (providers, Claude Desktop–class, packaging) |
@@ -71,35 +73,9 @@ for no user value.
 
 ## 3. Process model
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  let-cook (Tauri 2)                                         │
-│                                                                  │
-│  ┌─────────────────────────────┐   IPC (typed commands/events)  │
-│  │ Renderer (React, no Node)   │ ◄────────────────────────────► │
-│  │  chat · sessions · settings │                                │
-│  │  permissions · diffs · mcp  │   ┌─────────────────────────┐  │
-│  └─────────────────────────────┘   │ Rust host (src-tauri)   │  │
-│                                    │  (1) ACP stdio mux      │  │
-│                                    │  (2) secret TOML writer │  │
-│                                    │  (3) read-only workspace│  │
-│                                    │  window · dialog        │  │
-│                                    │  updater · deep link    │  │
-│                                    └────────────┬────────────┘  │
-└─────────────────────────────────────────────────┼───────────────┘
-                                                  │ stdin/stdout
-                                                  │ JSON-RPC ACP
-                                                  ▼
-                                   ┌──────────────────────────────┐
-                                   │ cook agent stdio             │
-                                   │ xai-grok-shell · MvpAgent    │
-                                   │ clientIdentifier:            │
-                                   │   grok-desktop               │
-                                   └──────────────┬───────────────┘
-                                                  │
-                                   ~/.cook  (config, auth, sessions,
-                                    models, memory, logs) — shared CLI
-```
+The picture — renderer, host roles, and which file is which — is the module
+map, [`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md) §1.
+This section is the lifecycle that picture has to keep.
 
 **Lifecycle**
 
@@ -285,9 +261,11 @@ Agent stdout
 Each registry entry cites a map row id. A protocol PR is one row + one test,
 not a new `if` in `handleMessage`.
 
-Live code is still a linear if-chain in `client.ts` `handleMessage` plus
-`acp_host.rs` `handle_host_request` (fs + terminal stub). Fold in
-[`desktop-app-client-implement.md`](desktop-app-client-implement.md).
+Live dispatch is `src/acp/client/messages.ts`: a message with an id goes to
+the reverse registry, and the rest to the notification registry. Host
+`fs/*` is `acp_host.rs` (no terminal stub while `terminal: false`). Which
+file owns which layer: the module map. Remaining C→A file grouping is
+[`desktop-app-client-implement.md`](desktop-app-client-implement.md) C4.
 
 ### 5.5 Reverse-request policy (class A)
 
@@ -310,39 +288,19 @@ Reverse requests block the agent until the client answers.
 
 ## 6. Client layering
 
-Target renderer layout. Live tree is still the god-object (`client.ts` +
-`xai.ts` / `extensions.ts` / `providers.ts`); the client-implement doc is
-the move, not a rewrite of `ui/`.
+The live tree is the module map,
+[`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md).
+This section is the rule that tree has to keep.
 
-```
-frontend/apps/let-cook/
-  src/
-    acp/
-      host.ts              # IPC + wireMethod (unchanged)
-      handshake.ts         # CAPABILITIES table + initialize / session meta
-      reverse/             # A→C requests, one file per method family
-      notifications/       # A→C notifs → catalog / session / settings stores
-      methods/             # C→A grouped (session, models, mcp, skills, memory, …)
-      client.ts            # lifecycle only: connect, crash-restart, dispatch
-    state/                 # transcript machine (session, goal, plan-review, catalog)
-    ui/                    # presentation; Chat UI rebuild is a separate track
-    theme/
-  src-tauri/src/
-    acp_host.rs            # mux + fs only
-    provider_config.rs     # fork-owned secrets
-    workspace.rs           # read-only sidecar
-    bin_resolve.rs
-  scripts/install.sh
-```
+Zustand holds the transcript. TanStack Query (or the catalog store) holds
+MCP, skills, and model lists. Catalogs subscribe to the notification
+registry (`N-mcp-*`, `x.ai/models/update`, and the other rows in the
+capability map) or they go stale (class B).
 
-Zustand holds the transcript; TanStack Query (or equivalent catalog store)
-holds MCP/skills/models lists. Catalogs must subscribe to the notification
-registry (`N-mcp-*`, `x.ai/models/update`, …) or they go stale (class B).
-
-Announcements and updater tests already target this path:
-
-- `crates/codegen/xai-grok-announcements/generate.sh`
-- `crates/codegen/xai-grok-update/tests/test_install_sh.rs`
+A new reverse method or notification is a registry entry that cites a
+capability-map row id. Inbound dispatch is `src/acp/client/messages.ts`.
+Grouping the remaining flat C→A wrappers under `acp/methods/` is optional
+C4 in [`desktop-app-client-implement.md`](desktop-app-client-implement.md).
 
 ---
 
@@ -350,36 +308,31 @@ Announcements and updater tests already target this path:
 
 Desktop copies the TUI's presentation, catalogued in
 [`tui-presentation.md`](tui-presentation.md). That catalog is the source of
-truth for strings, clocks, folds, and flows. This architecture file does not
-duplicate them.
+truth for strings, clocks, folds, and flows. Which file paints which surface
+is the module map.
 
-The transcript machine lives in `src/state/session.ts` (`reduceTranscript` /
-`reduceNotifications`) plus `goal.ts` / `plan-review.ts`. Replay and live
-updates use the same reducer.
+Replay and live updates use the same reducer.
 
 One surface reads a transcript that is not the open conversation's: a subagent
 runs its own ACP session, so its updates arrive under the child's session id and
-are routed to `childTranscripts` instead of the parent's scrollback
-(`acp/client/state.ts` `routeChildUpdate`), ahead of the parent's prompt
-correlation — a child's updates carry the child's own `promptId`, which no
-prompt this window sent would match. The tasks list row's `[view]` then replaces
-the chat column with that child's own view (`ui/chat/subagent-takeover.tsx`,
-`app/agent_view/subagent_takeover.rs`): the same `TranscriptPane` rows and a
-turn-status row derived from the child's blocks. The takeover has no prompt of
-its own — the TUI's does not either, and a child is addressed by the parent's
+are routed to that child's transcript ahead of the parent's prompt correlation.
+A child's updates carry the child's own `promptId`, which no prompt this window
+sent would match. The tasks list row's `[view]` then replaces the chat column
+with that child's own view: the same transcript rows and a turn-status row
+derived from the child's blocks. The takeover has no prompt of its own — the
+TUI's does not either, and a child is addressed by the parent's
 `send_subagent_message` row, not from inside its view. A long prompt, in either
-transcript, folds to three lines (`scrollback/blocks/user.rs`
-`COLLAPSED_MAX_LINES`). A background command is not a conversation and keeps the
-stdout viewer (`ui/activity/task-viewer.tsx`, `show_bg_task_viewer`).
+transcript, folds to three lines. A background command is not a conversation
+and keeps the stdout viewer.
 
-Plan files are the one part of plan state that is not in the transcript: a
-session's history of them comes from the agent (`x.ai/session/plans`), is held
-in `planFiles`, and is painted by the header chip (`plan-chip.tsx`) as a list —
-newest first by the UTC token in the filename, each row labeled with the plan
-H1 (`title`), current episode marked, each row's three-dot menu offering Copy,
-Copy file path and Delete (`x.ai/session/plans/delete`). The chip belongs to the
-conversation rather than to a plan: it sits in the header from the moment a
-workspace is open and reports an empty list before the first episode is written.
+Plan files are the one part of plan state that is not in the transcript. A
+session's history of them comes from the agent (`x.ai/session/plans`) and the
+header chip paints them as a list — newest first by the UTC token in the
+filename, each row labeled with the plan H1 (`title`), current episode marked,
+each row's three-dot menu offering Copy, Copy file path and Delete
+(`x.ai/session/plans/delete`). The chip belongs to the conversation rather
+than to a plan: it sits in the header from the moment a workspace is open and
+reports an empty list before the first episode is written.
 `/goal` planner output and `--plan` seeds use the same episode list without
 turning on plan mode; `--from-plan` and approve-as-goal reuse an inactive
 published episode. The private verifier snapshot at `goal/plan.baseline.md` is
@@ -388,8 +341,8 @@ An agent that predates those methods leaves the list empty too, and keeps its
 older single-plan behavior for a parked review, so the feature degrades instead
 of erroring.
 
-Erasing conversations is a Settings surface, not a sidebar action: **Data
-Controls** (`ui/settings/data-controls.tsx`) holds "Delete all conversations",
+Erasing conversations is Settings → Data Controls, not a sidebar action. **Data
+Controls** holds "Delete all conversations",
 which confirms first and then calls `x.ai/sessions/delete_all`. The agent walks
 its own session store and deletes each session through the same path as
 `x.ai/session/delete`, so a wipe takes the transcripts, the search-index rows,
@@ -436,23 +389,9 @@ change the product boundary.
 
 ---
 
-## 9. Dev loop
+## 9. Develop
 
-```sh
-cd frontend/apps/let-cook
-pnpm install
-pnpm test
-pnpm tauri dev
-```
-
-| Var | Meaning |
-|---|---|
-| `COOK_BIN` | Override path to `cook` |
-| Home resolution | Must stay `~/.cook`, never `~/.grok` |
-
-Linux build deps: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`,
-`patchelf`, `libssl-dev`.
-
-Release packages (AppImage / deb / dmg + updater `latest.json`) are built on
-this machine by `scripts/publish_release.sh` → `scripts/desktop_release.sh`.
-See [`desktop-release.md`](desktop-release.md).
+Commands, binary resolution, tracing, and the updater gate are in
+[`frontend/apps/let-cook/README.md`](../frontend/apps/let-cook/README.md).
+Where tests live is the module map §6. Release packages:
+[`desktop-release.md`](desktop-release.md).

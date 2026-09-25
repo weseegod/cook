@@ -6,17 +6,16 @@ tools from the renderer.
 
 Product website: [letcook.dev](https://letcook.dev).
 
-Architecture: [`docs/desktop-app.md`](../../../docs/desktop-app.md).  
-Client-layering fold: [`docs/desktop-app-client-implement.md`](../../../docs/desktop-app-client-implement.md).  
-Production plan (providers, Claude Desktop–class features):
-[`docs/desktop-app-implement.md`](../../../docs/desktop-app-implement.md).  
+Module map (where to edit): [`ARCHITECTURE.md`](ARCHITECTURE.md).  
+Contract: [`docs/desktop-app.md`](../../../docs/desktop-app.md).  
 Wire map: [`docs/desktop-tui-capability-map.md`](../../../docs/desktop-tui-capability-map.md).  
 Self-build / updater artifacts: [`docs/desktop-release.md`](../../../docs/desktop-release.md).
 
 ## Develop
 
-Prerequisites: pnpm, Rust, an installed `~/.cook/bin/cook` (or
-`COOK_BIN`), and the Tauri Linux packages listed in the architecture doc.
+Prerequisites: pnpm, Rust, and an installed `~/.cook/bin/cook` (or
+`COOK_BIN`). On Linux also install `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+`librsvg2-dev`, `patchelf`, and `libssl-dev`.
 
 ```sh
 pnpm install

@@ -1,6 +1,6 @@
 # Desktop ↔ TUI capability map
 
-Method-level inventory of what the TUI (pager + agent) actually uses, and the live Desktop status of each. This is the protocol track. Presentation (how a tool row *looks*) stays in [`tui-presentation.md`](tui-presentation.md). Architecture contract stays in [`desktop-app.md`](desktop-app.md). Folding the live client onto that contract: [`desktop-app-client-implement.md`](desktop-app-client-implement.md). Production sequencing after honesty/registry: [`desktop-app-implement.md`](desktop-app-implement.md).
+Method-level inventory of what the TUI (pager + agent) actually uses, and the live Desktop status of each. This is the protocol track. Where a Desktop file lives: [`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md). Presentation (how a tool row *looks*) stays in [`tui-presentation.md`](tui-presentation.md). Architecture contract stays in [`desktop-app.md`](desktop-app.md). Folding the live client onto that contract: [`desktop-app-client-implement.md`](desktop-app-client-implement.md). Production sequencing after honesty/registry: [`desktop-app-implement.md`](desktop-app-implement.md).
 
 **This file does not implement any `gap` / `stub` row.**
 
@@ -49,16 +49,18 @@ Harvested 2026-09-18 from git `705f3572`. A string is in this map only if it app
 | TUI initialize caps | `crates/codegen/xai-grok-pager/src/acp/mod.rs` `client_capabilities_meta` |
 | TUI slash registry | `crates/codegen/xai-grok-pager/src/slash/commands/mod.rs` `builtin_commands` |
 | Agent slash builtins | `crates/codegen/xai-grok-shell/src/session/slash_commands.rs` `BUILTIN_COMMANDS` |
-| Desktop reverse | `frontend/apps/let-cook/src/acp/client.ts` `handleMessage`; `src-tauri/src/acp_host.rs` `handle_host_request` |
-| Desktop forward | `frontend/apps/let-cook/src/acp/{xai,extensions,providers,client,host,wire-params}.ts` |
-| Desktop settings surfaces | `frontend/apps/let-cook/src/ui/settings/{connectors,context-panels,hooks-panel}.tsx`; group headers `…/settings/group-header.tsx`; grouping `…/settings/{skills-groups,connectors-groups}.ts` |
-| Desktop transcript | `frontend/apps/let-cook/src/state/session.ts` `reduceNotifications` / `reduceTranscript` |
+| Desktop module map | [`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md) |
+| Desktop reverse | `frontend/apps/let-cook/src/acp/client/messages.ts` `handleMessage` → `src/acp/reverse/`; host `fs/*` in `src-tauri/src/acp_host.rs` |
+| Desktop forward | `frontend/apps/let-cook/src/acp/{xai,extensions,providers,turn-ops,session-ops,settings-ext,host}.ts` |
+| Desktop settings surfaces | `frontend/apps/let-cook/src/ui/settings/` — tab → file table in the module map |
+| Desktop transcript | `frontend/apps/let-cook/src/state/session/transcript.ts` `reduceTranscript` / `reduceNotifications` |
 | Tools | `crates/codegen/xai-grok-tools/src/types/tool.rs` `ToolKind`; pager `scrollback/blocks/tool/*`; Desktop `ui/chat/tool-card.tsx` |
 | User-facing names | `~/.cook/docs/user-guide/` (`04-slash-commands`, `07-mcp-servers`, `08-skills`, `09-plugins`, `10-hooks`, `13-memory`, `16-subagents`, `19-plan-mode`, `20-background-tasks`, `21-terminal-support`, `23-dashboard`) |
 
 Related, do not merge:
 
 - [`tui-presentation.md`](tui-presentation.md) — how the TUI paints
+- [`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md) — where Desktop code lives
 - [`desktop-app.md`](desktop-app.md) — Desktop architecture contract; §5.3 points here
 - [`desktop-app-client-implement.md`](desktop-app-client-implement.md) — honesty / reverse policy / notification registry fold; cite row ids
 - [`desktop-app-implement.md`](desktop-app-implement.md) — production roadmap; cite row ids; registry entry required
@@ -71,9 +73,9 @@ Related, do not merge:
 
 | Field | TUI | Desktop | Status | Must |
 |---|---|---|---|---|
-| `protocolVersion` | ACP v1 (`acp/mod.rs` `initialize`) | `PROTOCOL_VERSION` (`client.ts` `initialize`) | `ok` | protocol |
+| `protocolVersion` | ACP v1 (`acp/mod.rs` `initialize`) | `PROTOCOL_VERSION` (`client/initialize.ts`) | `ok` | protocol |
 | `clientInfo` | pager `clientType` / `clientVersion` in request `_meta` | `{ name, title: "Let Cook", version }` | `ok` | protocol |
-| `_meta.clientIdentifier` | pager default `PAGER_CLIENT_TYPE`; optional `--client-identifier` | `grok-desktop` (`CLIENT_META`) | `ok` | protocol |
+| `_meta.clientIdentifier` | pager default `PAGER_CLIENT_TYPE`; optional `--client-identifier` | `grok-desktop` (`handshake.ts` `CAPABILITIES`) | `ok` | protocol |
 | `_meta.clientType` | pager product string | `grok_desktop` | `ok` | protocol |
 | `_meta.mcpApps` | not set by pager | `false` | `ok` — honest; SDK MCP stays off until R-sdk (see H-mcp) | protocol |
 | `_meta.bufferingSettings` | — | `{ minDelayMs: 16, maxDelayMs: 64, maxBytes: 65536 }` | `ok` | chrome |
@@ -141,7 +143,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-cancel | `session/cancel` | C→A | pager | `client.ts` `cancel` (`notify`) | `ok` | protocol |
 | ACP-model | `session/set_model` | C→A | `/model` | `client.ts` `setModel` | `ok` | protocol |
 | ACP-mode | `session/set_mode` | C→A | `/plan` | `xai.ts` `setMode` (`plan` / `default`) | `ok` | protocol |
-| ACP-upd | `session/update` | A→C notif | `acp_handler` + `tracker.rs` | `client.ts` `handleMessages` → `session.ts` | `partial` (several tags dropped; §4) | protocol |
+| ACP-upd | `session/update` | A→C notif | `acp_handler` + `tracker.rs` | `client/messages.ts` → `state/session/transcript.ts` | `partial` (several tags dropped; §4) | protocol |
 | ACP-perm | `session/request_permission` | A→C | `handle_permission_request` | `client.ts` parks `pendingPermission` | `ok` | protocol |
 | ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (Always approve off: cwd + `~/.cook/sessions`; on: TUI `LocalFs`; ignores line/limit) | `ok` | protocol |
 | ACP-fs-w | `fs/write_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `write_text_file` (same conditional policy; **plan.md allow-path** when off) | `ok` | protocol |
@@ -750,9 +752,9 @@ Two channels:
 
 | Class | Symptom | Typical cause | Example |
 |---|---|---|---|
-| **A** | Turn fails / tool error `Method not found` | reverse request `-32601` | `client.ts` `handleMessage` L429–432; R-sdk if SDK MCP is enabled |
-| **B** | UI stale (MCP tools, tasks, queue) | ignored notif | `console.debug("Ignored ACP notification: …")`; Connectors without `servers_updated` |
-| **C** | Agent behaves as if a feature exists | advertised cap + stub | `terminal: true` + `acp_host.rs` fake `exitCode: 0` |
+| **A** | Turn fails / tool error `Method not found` | reverse request `-32601` | `reverse/policy.ts` returns `-32601` only for an advertised-required method; R-sdk if SDK MCP is enabled |
+| **B** | UI stale (MCP tools, tasks, queue) | ignored notif | notification registry has no consumer; Connectors without `servers_updated` |
+| **C** | Agent behaves as if a feature exists | advertised cap + stub | `handshake.ts` `terminal: true` or `mcpApps: true` without the matching handler |
 | **D** | Feature missing from menu | pager-only slash, no Desktop surface | `/dashboard`, `/rewind`, `/memory` browser |
 | **E** | Envelope miss | `x.ai/` vs `_x.ai/` | `host.ts` `wireMethod` — **already handled**; do not “fix” twice |
 | **F** | Empty `mcpServers` | SDK MCP never attached | `client.ts` `newSession` / `loadSession` `mcpServers: []` |

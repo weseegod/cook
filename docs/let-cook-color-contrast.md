@@ -21,7 +21,7 @@ Let Cook is workbench chrome, not an editor. VS Code's accessibility guideline a
 | `frontend/apps/let-cook/tests/ui-layout.spec.ts` | Composer text, placeholder, border, and focus, in both themes |
 | `frontend/apps/let-cook/tests/data-controls.spec.ts` | Destructive label contrast, translucency included, in both themes |
 
-Import order is cascade order. Do not reorder the barrel imports. Indexed from [`desktop-app.md`](desktop-app.md).
+Import order is cascade order. Do not reorder the barrel imports. The desktop module map points here for colors; the contract indexes this file from [`desktop-app.md`](desktop-app.md).
 
 ## Floors
 

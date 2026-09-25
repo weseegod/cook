@@ -2,7 +2,7 @@
 
 Source of truth for **how the current Thanh TUI looks and behaves**. This is a presentation map of `xai-grok-pager`, not a Desktop spec and not an agent-runtime spec.
 
-Desktop is a separate ACP client (`frontend/apps/let-cook/`). Architecture: [`desktop-app.md`](desktop-app.md) §7 (forbidden chrome + pointer here). This catalog is what the TUI actually paints — Desktop copies it and does not invent chrome.
+Desktop is a separate ACP client (`frontend/apps/let-cook/`). Where Desktop paints each surface: [`frontend/apps/let-cook/ARCHITECTURE.md`](../frontend/apps/let-cook/ARCHITECTURE.md). Forbidden chrome and the copy rule: [`desktop-app.md`](desktop-app.md) §7. This catalog is what the TUI actually paints.
 
 **Runtime map:** [`ARCHITECTURE.md`](../ARCHITECTURE.md).  
 **User-facing TUI docs:** `~/.cook/docs/user-guide/` (shortcuts, status line, dashboard, plan mode, …).
