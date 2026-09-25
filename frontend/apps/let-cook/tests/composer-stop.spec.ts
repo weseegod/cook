@@ -73,6 +73,36 @@ test("keeps Stop in the question card while the composer is hidden", async ({ pa
   await waitForCalls(page, "session/cancel");
 });
 
+test("walks multi-question tabs and submits answers in index order", async ({ page }) => {
+  const mock = api(page);
+  await openWorkspace(page, CONNECTED_SEED);
+  const requestId = await page.evaluate(() => window.__cookMock!.question());
+  const card = page.getByTestId("inline-interaction");
+  await expect(card.getByTestId("question-tab-counter")).toHaveText(/1\s*\/\s*3/);
+  await expect(card.getByTestId("question-label")).toContainText("Which approach should I use?");
+
+  await card.getByTestId("question-option-0-safe").click();
+  await card.getByTestId("question-tab-2").click();
+  await expect(card.getByTestId("question-tab-counter")).toHaveText(/2\s*\/\s*3/);
+  await card.getByTestId("question-option-1-tests").click();
+  await card.getByTestId("question-option-1-docs").click();
+  await card.getByTestId("question-tab-3").click();
+  await expect(card.getByTestId("question-tab-counter")).toHaveText(/3\s*\/\s*3/);
+  await card.getByTestId("question-option-2-staging").click();
+  await expect(card.getByTestId("question-answered-hint")).toHaveText(/3\s*\/\s*3 answered/);
+  await card.getByTestId("question-submit").click();
+
+  await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({
+    outcome: "accepted",
+    answers: {
+      "Which approach should I use?\n\nPick the strategy for this change. Prefer the safer path unless speed is mandatory.": ["Safe change"],
+      "Which approach should I use?": ["Add tests", "Update docs"],
+      "Where should we deploy?": ["Staging"],
+    },
+  });
+  await expect(page.getByTestId("inline-interaction")).toHaveCount(0);
+});
+
 test("keeps special composer actions available alongside Stop", async ({ page }) => {
   await openWorkspace(page, delayedTurn);
   const input = page.getByTestId("composer-input");

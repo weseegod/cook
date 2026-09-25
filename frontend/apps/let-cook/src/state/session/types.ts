@@ -83,7 +83,14 @@ export interface PendingQuestion {
   title?: string;
   kind: "question" | "plan" | "trust" | "elicit";
   questions: Array<{
+    /** Full question text — wire answers are keyed by this string. */
     question: string;
+    /** First paragraph of `question` (TUI label). */
+    label: string;
+    /** Remainder after a blank line, if any (TUI description). */
+    description?: string;
+    /** 0-based position in the ask payload (index-keyed selection state). */
+    index: number;
     multiSelect?: boolean;
     options: Array<{ id: string; label: string; description?: string }>;
   }>;

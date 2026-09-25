@@ -1,25 +1,72 @@
 import { HelpCircle, ShieldCheck, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { acpClient } from "../../acp/client";
-import { useSessionStore } from "../../state/session";
+import { useSessionStore, type PendingQuestion } from "../../state/session";
+import { Markdown } from "../chat/markdown";
 import { InfoTip } from "../components/info-tip";
 import { StopTurnButton } from "../chat/stop-turn-button";
 import { elicitContent, elicitFields, elicitFormComplete } from "./elicit-fields";
 
+/** TUI option jump keys: `1`–`9` then `a`–`f` (`option_index_for_key`). */
+function optionKeyLabel(index: number): string {
+  if (index < 9) return String(index + 1);
+  if (index < 15) return String.fromCharCode("a".charCodeAt(0) + (index - 9));
+  return String(index + 1);
+}
+
+function optionIndexForKey(key: string): number | null {
+  if (key.length !== 1) return null;
+  if (key >= "1" && key <= "9") return key.charCodeAt(0) - "1".charCodeAt(0);
+  if (key >= "a" && key <= "f") return 9 + (key.charCodeAt(0) - "a".charCodeAt(0));
+  if (key >= "A" && key <= "F") return 9 + (key.charCodeAt(0) - "A".charCodeAt(0));
+  return null;
+}
+
+function questionAnswered(answers: (string[] | undefined)[], notes: (string | undefined)[], index: number): boolean {
+  return (answers[index]?.length ?? 0) > 0 || (notes[index]?.trim() ?? "") !== "";
+}
+
+/** Wire payload matching TUI `build_accepted_response`. */
+function buildAcceptedPayload(
+  questions: PendingQuestion["questions"],
+  answers: (string[] | undefined)[],
+  notes: (string | undefined)[],
+): { outcome: "accepted"; answers: Record<string, string[]>; annotations?: Record<string, { notes: string }> } {
+  const wireAnswers: Record<string, string[]> = {};
+  const annotations: Record<string, { notes: string }> = {};
+  for (let i = 0; i < questions.length; i++) {
+    const labels = answers[i] ?? [];
+    const freeform = notes[i]?.trim() ?? "";
+    const hasFreeform = freeform.length > 0;
+    if (labels.length === 0 && !hasFreeform) continue;
+    const key = questions[i].question;
+    wireAnswers[key] = labels.length === 0 && hasFreeform ? ["Other"] : labels;
+    if (hasFreeform) annotations[key] = { notes: freeform };
+  }
+  return {
+    outcome: "accepted",
+    answers: wireAnswers,
+    ...(Object.keys(annotations).length ? { annotations } : {}),
+  };
+}
+
 export function InteractionModal() {
   const pending = useSessionStore((state) => state.pendingQuestion);
   const turnRunning = useSessionStore((state) => state.turnRunning);
-  const [answers, setAnswers] = useState<Record<string, string[]>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [answers, setAnswers] = useState<(string[] | undefined)[]>([]);
+  const [notes, setNotes] = useState<(string | undefined)[]>([]);
+  const [activeTab, setActiveTab] = useState(0);
   const [values, setValues] = useState<Record<string, string>>({});
   const elicitSchema = pending?.kind === "elicit" ? pending.raw.requestedSchema : undefined;
   const fields = useMemo(() => elicitFields(elicitSchema), [elicitSchema]);
 
   useEffect(() => {
-    setAnswers({});
-    setNotes({});
+    const n = pending?.questions.length ?? 0;
+    setAnswers(Array.from({ length: n }, () => undefined));
+    setNotes(Array.from({ length: n }, () => undefined));
+    setActiveTab(0);
     setValues(Object.fromEntries(elicitFields(pending?.raw.requestedSchema).map((field) => [field.name, field.default ?? ""])));
-  }, [pending?.rpcId, pending?.raw.requestedSchema]);
+  }, [pending?.rpcId, pending?.raw.requestedSchema, pending?.questions.length]);
 
   useEffect(() => {
     if (!pending || pending.kind === "plan") return;
@@ -27,39 +74,68 @@ export function InteractionModal() {
       if (event.key === "Escape" || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "w")) {
         event.preventDefault();
         void cancelPending(pending.kind);
+        return;
       }
+      if (pending.kind !== "question") return;
+      const target = event.target as HTMLElement | null;
+      const inFreeform = target?.closest?.(".other-option") != null || target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+
+      if (event.key === "ArrowLeft" || event.key === "[" || event.key.toLowerCase() === "h") {
+        if (inFreeform) return;
+        event.preventDefault();
+        setActiveTab((tab) => Math.max(0, tab - 1));
+        return;
+      }
+      if (event.key === "ArrowRight" || event.key === "]" || event.key.toLowerCase() === "l") {
+        if (inFreeform) return;
+        event.preventDefault();
+        setActiveTab((tab) => Math.min(pending.questions.length - 1, tab + 1));
+        return;
+      }
+      if (inFreeform) return;
+      const optionIdx = optionIndexForKey(event.key);
+      if (optionIdx == null) return;
+      const question = pending.questions[activeTab];
+      if (!question || optionIdx >= question.options.length) return;
+      event.preventDefault();
+      choose(activeTab, question.options[optionIdx].label, question.multiSelect ?? false);
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [pending]);
+  }, [pending, activeTab]);
 
   // Plan review verdicts live on the transcript pane + shared composer — no second inline card.
   if (!pending || pending.kind === "plan") return null;
   const activePending = pending;
+  const questionCount = pending.questions.length;
+  const answeredCount = pending.kind === "question"
+    ? pending.questions.reduce((count, _, index) => count + (questionAnswered(answers, notes, index) ? 1 : 0), 0)
+    : 0;
+  const canSubmitQuestions = pending.kind === "question" && questionCount > 0 && answeredCount === questionCount;
 
-  function choose(question: string, label: string, multi: boolean) {
+  function choose(questionIndex: number, label: string, multi: boolean) {
     setAnswers((current) => {
-      const existing = current[question] ?? [];
-      return {
-        ...current,
-        [question]: multi
-          ? existing.includes(label) ? existing.filter((item) => item !== label) : [...existing, label]
-          : [label],
-      };
+      const next = current.slice();
+      while (next.length <= questionIndex) next.push(undefined);
+      const existing = next[questionIndex] ?? [];
+      if (multi) {
+        next[questionIndex] = existing.includes(label)
+          ? existing.filter((item) => item !== label)
+          : [...existing, label];
+      } else {
+        // Single-select allows deselect (TUI parity).
+        next[questionIndex] = existing.length === 1 && existing[0] === label ? [] : [label];
+      }
+      return next;
     });
   }
 
   async function submitQuestions() {
-    const annotations = Object.fromEntries(
-      Object.entries(notes).filter(([, note]) => note.trim()).map(([question, note]) => [question, { notes: note.trim() }]),
-    );
-    await acpClient.answerQuestion({
-      outcome: "accepted",
-      answers,
-      ...(Object.keys(annotations).length ? { annotations } : {}),
-    });
-    setAnswers({});
-    setNotes({});
+    if (activePending.kind !== "question") return;
+    await acpClient.answerQuestion(buildAcceptedPayload(activePending.questions, answers, notes));
+    setAnswers([]);
+    setNotes([]);
+    setActiveTab(0);
   }
 
   async function pickSpecial(id: string) {
@@ -73,6 +149,8 @@ export function InteractionModal() {
     }
   }
 
+  const activeQuestion = pending.kind === "question" ? pending.questions[Math.min(activeTab, Math.max(0, questionCount - 1))] : null;
+
   return (
     <section className={`inline-interaction interaction-${pending.kind}`} data-testid="inline-interaction" aria-live="polite">
       {pending.title && (
@@ -82,45 +160,107 @@ export function InteractionModal() {
           </div>
           <div>
             <strong>{pending.title}</strong>
-            <span>Waiting for your input</span>
+            <span>
+              Waiting for your input
+              {pending.kind === "question" && questionCount > 1 && (
+                <span className="question-tab-counter" data-testid="question-tab-counter"> {activeTab + 1} / {questionCount}</span>
+              )}
+            </span>
           </div>
           <button className="icon-button" data-testid="interaction-close" onClick={() => void cancelPending(pending.kind)} aria-label="Cancel interaction"><X size={15} /></button>
         </header>
       )}
-      {pending.questions.map((question) => (
-        <fieldset key={question.question} className="question-fieldset">
-          <legend>{question.question}</legend>
-          <div className="question-options">
-            {question.options.map((option, index) => {
-              const selected = (answers[question.question] ?? []).includes(option.label);
-              return (
+
+      {pending.kind === "question" && activeQuestion && (
+        <div className="question-body" data-testid="question-body">
+          {questionCount > 1 && (
+            <div className="question-tabs" role="tablist" aria-label="Questions" data-testid="question-tabs">
+              {pending.questions.map((question, index) => (
                 <button
-                  key={option.id}
-                  className={selected ? "selected" : ""}
-                  onClick={() => pending.kind === "question" ? choose(question.question, option.label, question.multiSelect ?? false) : void pickSpecial(option.id)}
+                  key={question.index}
+                  type="button"
+                  role="tab"
+                  aria-selected={index === activeTab}
+                  className={index === activeTab ? "active" : ""}
+                  data-testid={`question-tab-${index + 1}`}
+                  onClick={() => setActiveTab(index)}
                 >
-                  <kbd>{index + 1}</kbd>
-                  <strong>{option.label}</strong>
-                  {option.description && <InfoTip label={option.label}>{option.description}</InfoTip>}
+                  {index + 1}
                 </button>
-              );
-            })}
-            {pending.kind === "question" && (
+              ))}
+            </div>
+          )}
+          <div className="question-fieldset" data-testid={`question-panel-${activeQuestion.index + 1}`}>
+            <div className="question-label" data-testid="question-label">
+              <Markdown text={activeQuestion.label} />
+            </div>
+            {activeQuestion.description && (
+              <div className="question-description" data-testid="question-description">
+                <Markdown text={activeQuestion.description} />
+              </div>
+            )}
+            <div className="question-options">
+              {activeQuestion.options.map((option, index) => {
+                const selected = (answers[activeQuestion.index] ?? []).includes(option.label);
+                const multi = activeQuestion.multiSelect ?? false;
+                return (
+                  <button
+                    key={option.id}
+                    type="button"
+                    className={selected ? "selected" : ""}
+                    data-testid={`question-option-${activeQuestion.index}-${option.id}`}
+                    onClick={() => choose(activeQuestion.index, option.label, multi)}
+                  >
+                    <span className="question-option-top">
+                      <kbd>{optionKeyLabel(index)}</kbd>
+                      <span className="question-option-marker" aria-hidden="true">{multi ? (selected ? "[✓]" : "[ ]") : (selected ? "(●)" : "( )")}</span>
+                      <strong>{option.label}</strong>
+                    </span>
+                    {option.description && <span className="question-option-desc">{option.description}</span>}
+                  </button>
+                );
+              })}
               <label className="other-option">
                 <span>Other</span>
                 <input
-                  value={notes[question.question] ?? ""}
+                  data-testid={`question-other-${activeQuestion.index}`}
+                  value={notes[activeQuestion.index] ?? ""}
                   placeholder="Type your answer"
                   onChange={(event) => {
-                    setNotes((current) => ({ ...current, [question.question]: event.target.value }));
-                    if (event.target.value) choose(question.question, "Other", question.multiSelect ?? false);
+                    const value = event.target.value;
+                    setNotes((current) => {
+                      const next = current.slice();
+                      while (next.length <= activeQuestion.index) next.push(undefined);
+                      next[activeQuestion.index] = value;
+                      return next;
+                    });
                   }}
                 />
               </label>
-            )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pending.kind !== "question" && pending.questions.map((question) => (
+        <fieldset key={question.index} className="question-fieldset">
+          <legend>{question.question}</legend>
+          <div className="question-options">
+            {question.options.map((option, index) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => void pickSpecial(option.id)}
+              >
+                <kbd>{index + 1}</kbd>
+                <strong>{option.label}</strong>
+                {option.description && <InfoTip label={option.label}>{option.description}</InfoTip>}
+              </button>
+            ))}
           </div>
         </fieldset>
       ))}
+
       {pending.kind === "elicit" && fields.length > 0 && (
         <div className="elicit-fields" data-testid="elicit-fields">
           {fields.map((field) => (
@@ -152,8 +292,11 @@ export function InteractionModal() {
           )}
           {pending.kind === "question" && (
             <>
+              {questionCount > 1 && (
+                <span className="question-answered-hint" data-testid="question-answered-hint">{answeredCount} / {questionCount} answered</span>
+              )}
               <button className="ghost-button" onClick={() => void cancelPending(pending.kind)}>Cancel</button>
-              <button className="primary-button" onClick={() => void submitQuestions()} disabled={Object.keys(answers).length === 0}>Submit answers</button>
+              <button className="primary-button" data-testid="question-submit" onClick={() => void submitQuestions()} disabled={!canSubmitQuestions}>Submit answers</button>
             </>
           )}
           {turnRunning && <StopTurnButton />}

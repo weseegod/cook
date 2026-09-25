@@ -19,22 +19,6 @@
   object-fit: contain;
 }
 
-.welcome-notes {
-  margin-top: 25px;
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 16px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.welcome-notes span {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
 .chat-main {
   position: relative;
   display: flex;
@@ -82,12 +66,6 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--code-bg);
-}
-
-.thought-block .markdown {
-  margin-top: 8px;
-  padding-left: 10px;
-  border-left: 2px solid var(--border);
 }
 
 .thinking {
@@ -196,6 +174,83 @@
   font-size: 13px;
   line-height: 1.5;
   font-weight: 650;
+}
+
+.question-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.question-tabs > button {
+  min-width: 28px;
+  min-height: 26px;
+  padding: 2px 8px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.question-tabs > button.active {
+  color: var(--accent-text);
+  border-bottom-color: var(--accent-text);
+}
+
+.question-tab-counter {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.question-label {
+  margin-bottom: 4px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.question-label .markdown > :first-child,
+.question-description .markdown > :first-child {
+  margin-top: 0;
+}
+
+.question-description {
+  margin-bottom: 12px;
+  color: var(--text-soft);
+}
+
+.question-option-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+}
+
+.question-option-marker {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.question-option-desc {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding-left: 42px;
+  color: var(--text-soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.question-answered-hint {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .question-options > button span {
@@ -619,29 +674,53 @@
   margin-top: 0;
 }
 
+.question-body .question-options {
+  max-height: min(280px, 40vh);
+  overflow: auto;
+  padding-bottom: 2px;
+}
+
 .question-options {
   display: grid;
   gap: 4px;
+  position: relative;
 }
 
 .question-options > button {
   flex-direction: column;
   cursor: pointer;
   display: flex;
-  gap: 7px;
-  padding: 5px 7px;
-  border: 1px solid var(--border);
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--control-border);
   border-radius: 2px;
   background: var(--panel);
   text-align: left;
-  align-items: center;
+  align-items: flex-start;
   min-height: 30px;
   color: var(--text);
 }
 
-.question-options > button:hover, .question-options > button.selected {
+.question-options > button:hover {
   border-color: var(--accent);
   background: var(--accent-plate);
+}
+
+.question-options > button.selected {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.question-options > button.selected .question-option-marker,
+.question-options > button.selected .question-option-desc,
+.question-options > button.selected kbd {
+  color: var(--on-accent);
+}
+
+.question-options > button:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: 1px;
 }
 
 .question-options > button kbd, .permission-actions kbd {
@@ -652,7 +731,45 @@
 }
 
 .question-options > button strong {
-  font-weight: 500;
+  font-weight: 600;
+}
+
+.inline-interaction .other-option {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--control-border);
+  border-radius: 2px;
+  background: var(--panel-elevated);
+  color: var(--muted);
+  font-size: 12px;
+  display: grid;
+  align-items: center;
+  gap: 7px;
+  grid-template-columns: 50px minmax(0, 1fr);
+}
+
+.inline-interaction .other-option input {
+  flex: 1;
+  border: 1px solid var(--control-border);
+  border-radius: 2px;
+  outline: 0;
+  background: var(--panel);
+  color: var(--text);
+  min-height: 29px;
+  padding: 4px 8px;
+}
+
+.inline-interaction .other-option input::placeholder {
+  color: var(--input-placeholder);
+  opacity: 1;
+}
+
+.inline-interaction .other-option input:focus {
+  border-color: var(--focus-border);
+  outline: 2px solid var(--focus-border);
 }
 
 .inline-interaction-actions {

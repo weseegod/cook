@@ -159,11 +159,40 @@ export function mockPermission(overrides: Record<string, unknown> = {}): number 
   return id;
 }
 
+/** Default multi-question ask: mixed multi/single select, identical texts, and a long description. */
+export const MOCK_MULTI_QUESTIONS = [
+  {
+    question: "Which approach should I use?\n\nPick the strategy for this change. Prefer the safer path unless speed is mandatory.",
+    multiSelect: false,
+    options: [
+      { id: "safe", label: "Safe change", description: "Smallest diff that preserves behavior" },
+      { id: "fast", label: "Fast change", description: "Ship quickly; accept follow-up cleanup" },
+    ],
+  },
+  {
+    question: "Which approach should I use?",
+    multiSelect: true,
+    options: [
+      { id: "tests", label: "Add tests", description: "Cover the new paths" },
+      { id: "docs", label: "Update docs", description: "Mention the behavior change" },
+      { id: "skip", label: "Skip extras", description: "Merge without tests or docs" },
+    ],
+  },
+  {
+    question: "Where should we deploy?",
+    multiSelect: false,
+    options: [
+      { id: "staging", label: "Staging" },
+      { id: "prod", label: "Production", description: "Only after staging is green" },
+    ],
+  },
+];
+
 export function mockQuestion(overrides: Record<string, unknown> = {}): number {
   const id = nextRequestId();
   request("x.ai/ask_user_question", {
     sessionId: "mock-session",
-    questions: [{ question: "Which approach should I use?", options: [{ id: "safe", label: "Safe change" }, { id: "fast", label: "Fast change" }] }],
+    questions: MOCK_MULTI_QUESTIONS,
     ...overrides,
   }, id);
   return id;
