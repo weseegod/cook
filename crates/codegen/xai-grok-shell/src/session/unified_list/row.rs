@@ -12,6 +12,8 @@ use crate::session::merge::MergedSession;
 pub struct UnifiedRow {
     pub kind: SessionKind,
     pub archived: bool,
+    /// Resident session whose turn is running or waiting on plan/permission.
+    pub live: bool,
     pub legacy: MergedSession,
     pub title: String,
     pub updated_at: Option<String>,
@@ -19,20 +21,27 @@ pub struct UnifiedRow {
 }
 
 impl UnifiedRow {
-    fn envelope(kind: SessionKind, archived: bool, facets: FacetMap) -> RowMeta {
+    fn envelope(kind: SessionKind, archived: bool, live: bool, facets: FacetMap) -> RowMeta {
         RowMeta {
             session: SessionMetaEnvelope {
                 kind,
                 archived,
+                live,
                 facets,
             },
         }
+    }
+
+    pub(crate) fn with_live(mut self, live: bool) -> Self {
+        self.live = live;
+        self
     }
 
     pub(crate) fn into_ext_superset(self) -> ExtSupersetRow {
         let UnifiedRow {
             kind,
             archived,
+            live,
             legacy,
             title,
             facets,
@@ -41,7 +50,7 @@ impl UnifiedRow {
         ExtSupersetRow {
             legacy,
             title,
-            meta: Self::envelope(kind, archived, facets),
+            meta: Self::envelope(kind, archived, live, facets),
         }
     }
 
@@ -49,6 +58,7 @@ impl UnifiedRow {
         let UnifiedRow {
             kind,
             archived,
+            live,
             legacy,
             title,
             updated_at,
@@ -59,7 +69,7 @@ impl UnifiedRow {
             cwd: legacy.cwd,
             title: (!title.is_empty()).then_some(title),
             updated_at,
-            meta: Self::envelope(kind, archived, facets),
+            meta: Self::envelope(kind, archived, live, facets),
         }
     }
 
@@ -78,6 +88,7 @@ pub fn merged_session_to_row(m: MergedSession, reg: &FacetRegistry) -> UnifiedRo
     UnifiedRow {
         kind: SessionKind::Build,
         archived,
+        live: false,
         legacy: m,
         title,
         updated_at,
@@ -121,6 +132,7 @@ pub fn conversation_to_row(c: Conversation, reg: &FacetRegistry) -> UnifiedRow {
     UnifiedRow {
         kind: SessionKind::Chat,
         archived,
+        live: false,
         legacy,
         title,
         updated_at: modify_time,

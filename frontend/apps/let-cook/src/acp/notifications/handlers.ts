@@ -198,16 +198,18 @@ export const notificationEntries: NotificationEntry[] = [
       const store = useSessionStore.getState();
       const sessionId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : null;
       const completedPromptId = typeof ctx.params.promptId === "string" ? ctx.params.promptId : undefined;
-      // Background turn finished while another conversation is open — release that prompt only.
+      // Always release the prompt from the conversation list, even for the open session.
+      if (sessionId) trackWorking(sessionId, null, completedPromptId);
+      // Background turn finished while another conversation is open — leave the composer alone.
       if (sessionId && store.sessionId && sessionId !== store.sessionId) {
-        trackWorking(sessionId, null, completedPromptId);
         return;
       }
       if (!store.turnRunning && store.turnStartedAt === null) return;
       if (completedPromptId && store.currentPromptId && completedPromptId !== store.currentPromptId) return;
       const outcome = outcomeFromPromptComplete(ctx.params);
       store.finishTurn(outcome);
-      store.set({ turnRunning: false });
+      const stillRunning = (useSessionStore.getState().workingSessions[sessionId ?? ""]?.promptIds.length ?? 0) > 0;
+      store.set({ turnRunning: stillRunning });
       if (shouldNotifyTurnComplete()) {
         const { title, body } = turnCompleteNotifyCopy(outcome);
         void notifyTurnComplete(title, body);
@@ -284,7 +286,7 @@ export const notificationEntries: NotificationEntry[] = [
     mapId: "N-queue",
     method: "x.ai/queue/changed",
     handle: (ctx) => {
-      if (ctx.params.sessionId !== useSessionStore.getState().sessionId) return;
+      const sessionId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : null;
       const entries = Array.isArray(ctx.params.entries) ? ctx.params.entries : null;
       if (!entries) return;
       const queuedEntries = entries.filter(isRecord).map((entry) => ({
@@ -294,6 +296,16 @@ export const notificationEntries: NotificationEntry[] = [
         kind: typeof entry.kind === "string" ? entry.kind : undefined,
         position: typeof entry.position === "number" ? entry.position : undefined,
       })).filter((entry) => entry.id);
+      // Remember every conversation's queue so switching back does not drop waiting prompts.
+      if (sessionId) {
+        useSessionStore.setState((state) => ({
+          queuesBySession: {
+            ...state.queuesBySession,
+            [sessionId]: queuedEntries,
+          },
+        }));
+      }
+      if (sessionId !== useSessionStore.getState().sessionId) return;
       useSessionStore.getState().set({
         queuedPromptCount: queuedEntries.length,
         queuedEntries,

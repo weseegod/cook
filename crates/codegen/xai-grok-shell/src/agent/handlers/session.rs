@@ -262,14 +262,19 @@ async fn handle_session_list(
         "session/list"
     );
 
+    let include_resident = req.include_resident;
     let registry_client = agent.session_registry_client();
     let conversations_client = agent.conversations_client();
-    let result = unified_list::build_unified_list(
+    let mut result = unified_list::build_unified_list(
         registry_client.as_ref(),
         conversations_client.as_ref(),
         req,
     )
     .await;
+    if include_resident {
+        // Desktop wants the process's live conversations even when they are still unnamed empty husks.
+        unified_list::inject_resident_entries(&mut result, agent.resident_list_entries());
+    }
 
     ExtMethodResult::success(unified_list::ext_list_response(result))
         .to_ext_response()

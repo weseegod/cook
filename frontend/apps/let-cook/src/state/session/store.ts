@@ -43,6 +43,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   pendingQuestion: null,
   queuedPromptCount: 0,
   queuedEntries: [],
+  queuesBySession: {},
   editingQueueEntry: null,
   followUps: null,
   composerDraft: "",
@@ -174,7 +175,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   removePlanComment: (id) =>
     set((state) => ({ planComments: state.planComments.filter((comment) => comment.id !== id) })),
   resetConversation: (sessionId = null) =>
-    set({
+    set((state) => ({
       sessionId,
       blocks: [],
       activity: null,
@@ -204,14 +205,14 @@ export const useSessionStore = create<SessionState>((set) => ({
       recapError: null,
       pendingPermission: null,
       pendingQuestion: null,
-      queuedPromptCount: 0,
-      queuedEntries: [],
+      queuedPromptCount: (sessionId && state.queuesBySession[sessionId]?.length) || 0,
+      queuedEntries: (sessionId && state.queuesBySession[sessionId]) || [],
       editingQueueEntry: null,
       followUps: null,
       composerDraft: "",
       notice: null,
       error: null,
-    }),
+    })),
   appendOptimisticUser: (text, images = [], promptId) =>
     set((state) => {
       const localId = `local-${crypto.randomUUID()}`;

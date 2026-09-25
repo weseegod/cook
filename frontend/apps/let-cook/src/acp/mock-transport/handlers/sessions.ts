@@ -24,6 +24,17 @@ export const sessionHandlers: Record<string, MethodHandler> = {
       state.defaultModel = meta.modelId;
     }
     openWorkspaceAt(p.cwd);
+    // Unnamed empty husk: listed only when the client asks for resident sessions.
+    state.sessions = [
+      {
+        id: sessionId,
+        title: "",
+        cwd: String(p.cwd ?? "/tmp/cook-demo"),
+        updatedAt: new Date().toISOString(),
+        numMessages: 0,
+      },
+      ...state.sessions,
+    ];
     notify("session/update", availableCommandsUpdate());
     return respond({
       sessionId,
@@ -130,7 +141,14 @@ export const sessionHandlers: Record<string, MethodHandler> = {
   },
   "x.ai/session/list": ({ p, respond }) => {
     const archived = p.archived === true;
-    return respond({ sessions: state.sessions.filter((session) => (session.archived === true) === archived) });
+    const includeResident = p.includeResident === true;
+    // Mirror the agent: named/saved rows always list; resident husks only when asked.
+    const sessions = state.sessions.filter((session) => {
+      if ((session.archived === true) !== archived) return false;
+      const husk = !session.title && (session.numMessages ?? 0) === 0;
+      return includeResident || !husk;
+    });
+    return respond({ sessions });
   },
   "x.ai/session/archive": ({ p, respond }) => {
     const id = String(p.sessionId ?? "");

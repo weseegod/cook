@@ -111,6 +111,10 @@ pub struct ListReq {
     /// Whether the conversations lane should return archived conversations instead of active ones.
     #[serde(default)]
     pub archived: bool,
+    /// Desktop-only: surface resident sessions (including unnamed empty husks) the husk filter would drop.
+    /// TUI listing leaves this off so `/resume` keeps hiding unforked empty sessions.
+    #[serde(default, rename = "includeResident")]
+    pub include_resident: bool,
     #[serde(default, rename = "_meta")]
     pub meta: Option<serde_json::Value>,
 }
@@ -140,6 +144,43 @@ pub struct UnifiedListResult {
     pub conversations_partial: Option<PartialReason>,
     /// Directory scope `rows` were drawn from; see [`ListReq::allow_relax`].
     pub scope: ListScope,
+}
+
+/// A resident session the desktop list should surface even when the husk filter would drop it.
+#[derive(Debug, Clone)]
+pub struct ResidentListEntry {
+    pub legacy: crate::session::merge::MergedSession,
+    /// Turn running, or waiting on plan/permission.
+    pub live: bool,
+}
+
+/// Upsert resident sessions into a finished page.
+///
+/// Rows already listed only pick up `live`. Missing rows are prepended: they are current in this
+/// process and the page's on-disk walk may have dropped them as unnamed empty husks.
+pub fn inject_resident_entries(
+    result: &mut UnifiedListResult,
+    residents: impl IntoIterator<Item = ResidentListEntry>,
+) {
+    let mut extras: Vec<UnifiedRow> = Vec::new();
+    for entry in residents {
+        if let Some(row) = result
+            .rows
+            .iter_mut()
+            .find(|row| row.legacy.session_id == entry.legacy.session_id)
+        {
+            if entry.live {
+                row.live = true;
+            }
+            continue;
+        }
+        extras.push(merged_session_to_row(entry.legacy, facet_registry()).with_live(entry.live));
+    }
+    if extras.is_empty() {
+        return;
+    }
+    extras.append(&mut result.rows);
+    result.rows = extras;
 }
 #[derive(Debug, Default)]
 struct ParsedMeta {
@@ -1355,6 +1396,94 @@ mod tests {
             without
                 .get("_meta")
                 .and_then(|m| m.get("x.ai/listScope"))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn parse_list_req_reads_include_resident() {
+        let on = parse_list_req(r#"{"includeResident":true}"#).expect("parse");
+        assert!(on.include_resident);
+        let off = parse_list_req(r#"{}"#).expect("parse");
+        assert!(!off.include_resident);
+    }
+
+    fn empty_page() -> UnifiedListResult {
+        UnifiedListResult {
+            rows: Vec::new(),
+            next_cursor: None,
+            facets: facet_registry().summarize_window(&[]),
+            conversations_partial: None,
+            scope: ListScope::Cwd,
+        }
+    }
+
+    fn empty_husk(id: &str) -> MergedSession {
+        let mut m = local(id, "2026-09-25T10:00:00Z");
+        m.summary = String::new();
+        m.first_prompt = None;
+        m.num_messages = 0;
+        m
+    }
+
+    #[test]
+    fn inject_resident_adds_unnamed_empty_husk() {
+        let mut result = empty_page();
+        inject_resident_entries(
+            &mut result,
+            [ResidentListEntry {
+                legacy: empty_husk("husk-1"),
+                live: true,
+            }],
+        );
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0].legacy.session_id, "husk-1");
+        assert!(result.rows[0].live);
+        let value = serde_json::to_value(result.rows[0].clone().into_ext_superset()).expect("serialize");
+        assert_eq!(
+            value
+                .get("_meta")
+                .and_then(|m| m.get("x.ai/session"))
+                .and_then(|s| s.get("live")),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    #[test]
+    fn inject_resident_marks_live_on_existing_row_without_duplicating() {
+        let mut result = empty_page();
+        result
+            .rows
+            .push(merged_session_to_row(local("s1", "2026-06-18T20:10:00Z"), facet_registry()));
+        inject_resident_entries(
+            &mut result,
+            [ResidentListEntry {
+                legacy: empty_husk("s1"),
+                live: true,
+            }],
+        );
+        assert_eq!(result.rows.len(), 1);
+        assert!(result.rows[0].live);
+    }
+
+    #[test]
+    fn inject_resident_leaves_idle_rows_unmarked() {
+        let mut result = empty_page();
+        inject_resident_entries(
+            &mut result,
+            [ResidentListEntry {
+                legacy: empty_husk("idle"),
+                live: false,
+            }],
+        );
+        assert_eq!(result.rows.len(), 1);
+        assert!(!result.rows[0].live);
+        let value = serde_json::to_value(result.rows[0].clone().into_ext_superset()).expect("serialize");
+        assert!(
+            value
+                .get("_meta")
+                .and_then(|m| m.get("x.ai/session"))
+                .and_then(|s| s.get("live"))
                 .is_none()
         );
     }

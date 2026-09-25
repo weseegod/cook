@@ -10,6 +10,11 @@ export interface SessionSummary {
   model?: string;
   kind?: "build" | "chat";
   archived?: boolean;
+  /**
+   * Agent reports this session is resident with a turn running or waiting on plan/permission.
+   * Used only so a row does not fall back to a date line before `workingSessions` catches up.
+   */
+  live?: boolean;
 }
 
 export type SessionListView = "conversations" | "archives";
@@ -120,6 +125,8 @@ export class XaiClient {
     const params = {
       ...(query ? { query } : {}),
       ...(view === "archives" ? { archived: true } : {}),
+      // Desktop paints whatever the process is holding, including husks TUI would hide.
+      includeResident: true,
     };
     const value = await this.call<unknown>("x.ai/session/list", params);
     return extractArray(value, ["sessions", "items"]).map(normalizeSession);
@@ -229,6 +236,7 @@ function normalizeSession(item: UnknownRecord): SessionSummary {
     model: stringValue(item.model ?? item.modelId),
     kind,
     archived: item.archived === true || sessionMeta.archived === true,
+    live: item.live === true || sessionMeta.live === true,
   };
 }
 

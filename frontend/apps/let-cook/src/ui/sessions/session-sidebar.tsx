@@ -30,6 +30,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
   const activeTitle = useSessionStore((state) => state.sessionTitle);
   const workspace = useSessionStore((state) => state.cwd);
   const notice = useSessionStore((state) => state.notice);
+  const workingSessions = useSessionStore((state) => state.workingSessions);
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
   const [target, setTarget] = useState<SessionSummary | null>(null);
@@ -66,21 +67,47 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
 
   /**
    * The agent lists a conversation only once it has saved one, so the conversation the window has
-   * open is shown from the start. That is where a brand-new chat reports its running turn, and it
-   * disappears from the list on its own once the agent reports the real row.
+   * open is shown from the start. Working conversations stay listed the same way until the agent
+   * reports their real row — creating a new chat must not hide a turn that is still running.
    */
   const rows = useMemo(() => {
-    if (!activeId || listedActive) return list;
-    // Keep the open row on the matching view only — never re-inject an archived chat into Conversations.
-    if (view === "archives" ? !activeArchived : activeArchived) return list;
-    // An unnamed conversation keeps the list's own fallback title, which also stops the row from
-    // reading exactly like the "New chat" button beside it.
-    const title = activeTitle === DEFAULT_SESSION_TITLE ? "" : activeTitle;
-    return [
-      { id: activeId, title, cwd: workspace ?? undefined, updatedAt: Date.now(), archived: activeArchived, kind: "build" as const },
-      ...list,
-    ];
-  }, [activeArchived, activeId, activeTitle, list, listedActive, view, workspace]);
+    const known = new Map(list.map((session) => [session.id, session]));
+    const extras: SessionSummary[] = [];
+    const missing = (id: string | null | undefined): boolean =>
+      Boolean(id) && !known.has(id as string) && !extras.some((row) => row.id === id);
+
+    if (activeId && missing(activeId)) {
+      // An unnamed conversation keeps the list's own fallback title, which also stops the row from
+      // reading exactly like the "New chat" button beside it.
+      const title = activeTitle === DEFAULT_SESSION_TITLE ? "" : activeTitle;
+      if (view === "archives" ? activeArchived : !activeArchived) {
+        extras.push({
+          id: activeId,
+          title,
+          cwd: workspace ?? undefined,
+          updatedAt: Date.now(),
+          archived: activeArchived,
+          kind: "build" as const,
+        });
+      }
+    }
+
+    for (const id of Object.keys(workingSessions)) {
+      if (!missing(id)) continue;
+      if (view !== "conversations") continue;
+      const title = id === activeId && activeTitle !== DEFAULT_SESSION_TITLE ? activeTitle : "";
+      extras.push({
+        id,
+        title,
+        cwd: workspace ?? undefined,
+        updatedAt: Date.now(),
+        archived: false,
+        kind: "build" as const,
+      });
+    }
+
+    return extras.length > 0 ? [...extras, ...list] : list;
+  }, [activeArchived, activeId, activeTitle, list, view, workspace, workingSessions]);
   const groups = useMemo(() => groupConversations(rows, prefs), [rows, prefs]);
   const groupKeyOf = useMemo(() => {
     const lookup = new Map<string, string>();

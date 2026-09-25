@@ -88,6 +88,10 @@ export interface MockSession {
   updatedAt: string;
   kind?: "build" | "chat";
   archived?: boolean;
+  /** Message count the agent's husk filter reads; 0 + empty title is an unnamed empty session. */
+  numMessages?: number;
+  /** Resident session with a turn running or waiting on plan/permission. */
+  live?: boolean;
 }
 
 /** One plan file as `x.ai/session/plans` reports it, in the agent's camelCase wire shape. */

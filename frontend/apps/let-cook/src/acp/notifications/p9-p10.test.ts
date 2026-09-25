@@ -6,6 +6,8 @@ import { dispatchNotification } from "./index";
 describe("P9/P10 notification handlers", () => {
   beforeEach(() => {
     useCatalogStore.getState().setSessions([]);
+    // Per-session queues survive `resetConversation` on purpose; clear them so cases stay isolated.
+    useSessionStore.setState({ queuesBySession: {} });
     useSessionStore.getState().resetConversation("s1");
   });
 

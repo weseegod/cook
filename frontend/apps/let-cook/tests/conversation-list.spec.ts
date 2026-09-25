@@ -324,6 +324,49 @@ test.describe("conversation list", () => {
     await expect(page.getByTestId("session-row-s-beta").getByTestId("session-turn-status")).toBeVisible();
   });
 
+  test("Stop on one conversation does not cancel the other", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, { ...LIST_SEED, promptDelayMs: 20_000 });
+
+    await page.getByTestId("session-row-s-alpha-new").locator(".session-open").click();
+    await waitForCalls(page, "session/load");
+    await page.getByPlaceholder("Ask Cook anything…").fill("hold this turn open");
+    await page.getByTestId("send-button").click();
+    await waitForCalls(page, "session/prompt");
+
+    await page.getByTestId("session-row-s-beta").locator(".session-open").click();
+    await waitForCalls(page, "session/load", 2);
+    await page.getByPlaceholder("Ask Cook anything…").fill("stop only me");
+    await page.getByTestId("send-button").click();
+    await waitForCalls(page, "session/prompt", 2);
+
+    await page.getByTestId("stop-button").click();
+    await waitForCalls(page, "session/cancel");
+    const cancels = callsTo(await mock.requests(), "session/cancel");
+    expect(cancels).toHaveLength(1);
+    expect(cancels[0].params.sessionId).toBe("s-beta");
+
+    // The other conversation keeps its live turn and phase.
+    await expect(page.getByTestId("session-row-s-alpha-new").getByTestId("session-turn-status")).toBeVisible();
+    await expect(page.getByTestId("session-row-s-beta").getByTestId("session-turn-status")).toHaveCount(0);
+  });
+
+  test("lists a new chat the agent reports as resident even before its first message", async ({ page }) => {
+    await openWorkspace(page, { ...LIST_SEED, promptDelayMs: 1000 });
+    expect(await rowTitles(page)).toEqual(["Alpha newest", "Beta task", "Alpha oldest"]);
+
+    await page.getByRole("button", { name: "New chat" }).click();
+    await waitForCalls(page, "session/new");
+
+    // `includeResident` surfaces the husk from the list itself, so the row is not a window-only extra.
+    await expect(page.getByTestId("session-row-mock-session")).toBeVisible();
+    await expect(page.locator(".session-row.active .session-open strong")).toHaveText("Untitled conversation");
+    expect(await rowTitles(page)).toHaveLength(4);
+    for (const id of ["s-alpha-new", "s-beta", "s-alpha-old"]) {
+      await expect(page.getByTestId(`session-row-${id}`)).toBeVisible();
+    }
+  });
+
   test("keeps a background conversation's phase moving as its updates arrive", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

@@ -465,10 +465,56 @@ impl MvpAgent {
         })
     }
     /// Snapshot all resident sessions as roster entries (synchronous; no disk).
-    pub(super) fn resident_roster_entries(&self) -> Vec<crate::agent::roster::RosterEntry> {
+    pub(crate) fn resident_roster_entries(&self) -> Vec<crate::agent::roster::RosterEntry> {
         let ids: Vec<acp::SessionId> = self.resident_ids();
         ids.iter()
             .filter_map(|id| self.resident_roster_entry(id))
+            .collect()
+    }
+
+    /// Resident sessions as desktop list extras, including unnamed empty husks.
+    pub(crate) fn resident_list_entries(&self) -> Vec<crate::session::unified_list::ResidentListEntry> {
+        use crate::agent::roster::RosterActivity;
+        use crate::session::unified_list::ResidentListEntry;
+
+        self.resident_roster_entries()
+            .into_iter()
+            .map(|entry| {
+                let live = matches!(
+                    entry.activity,
+                    RosterActivity::Working | RosterActivity::NeedsInput
+                );
+                let updated_at = chrono::DateTime::from_timestamp_millis(entry.last_change_unix_ms)
+                    .filter(|_| entry.last_change_unix_ms > 0)
+                    .map(|t| t.to_rfc3339())
+                    .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
+                ResidentListEntry {
+                    legacy: crate::session::merge::MergedSession {
+                        session_id: entry.session_id,
+                        summary: entry.title.unwrap_or_default(),
+                        first_prompt: None,
+                        updated_at: updated_at.clone(),
+                        created_at: updated_at.clone(),
+                        cwd: entry.cwd,
+                        hostname: None,
+                        source: "local".into(),
+                        model_id: entry.model_id,
+                        num_messages: 0,
+                        last_active_at: Some(updated_at),
+                        branch: None,
+                        repo_name: None,
+                        worktree_label: None,
+                        git_root_dir: None,
+                        git_remotes: Vec::new(),
+                        source_workspace_dir: None,
+                        last_turn_summary: entry.last_turn_summary,
+                        last_recap: None,
+                        session_kind: entry.session_kind,
+                        archived: false,
+                    },
+                    live,
+                }
+            })
             .collect()
     }
     /// Full roster: resident actors plus recent on-disk sessions; resident wins an id collision.

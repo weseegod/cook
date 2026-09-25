@@ -51,6 +51,9 @@ pub struct SessionMetaEnvelope {
     /// Remote chat and local build conversations; omitted when false so unarchived rows stay wire-compatible.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub archived: bool,
+    /// Resident session with a turn running or waiting on plan/permission. Omitted when idle.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub live: bool,
     #[serde(default, skip_serializing_if = "FacetMap::is_empty")]
     pub facets: FacetMap,
 }

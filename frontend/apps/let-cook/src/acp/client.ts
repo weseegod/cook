@@ -64,7 +64,6 @@ export class CookAcpClient {
   private restartCount = 0;
   private restartInFlight: Promise<void> | null = null;
   private startup: Promise<void> | null = null;
-  private pendingPromptRequests = 0;
   private readonly pendingQueuedIds = new Map<string, string[]>();
   private readonly queuedImagesById = new Map<string, string[]>();
   private readonly paintedPromptIds = new Set<string>();
@@ -167,10 +166,7 @@ export class CookAcpClient {
 
   async newSession(): Promise<string> {
     if (!this.cwd) throw new Error("Choose a workspace first");
-    this.sendNowAwaitingConfirmation = null;
-    this.sendNowInFlight.clear();
-    this.queuedImagesById.clear();
-    this.paintedPromptIds.clear();
+    // Bookkeeping for other conversations stays. Only the new session starts clean.
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: NewSessionRequest = {
@@ -186,7 +182,6 @@ export class CookAcpClient {
       },
     };
     const response = await request<NewSessionResponse>("session/new", params);
-    this.promptCorrelation.clear();
     useSessionStore.getState().resetConversation(response.sessionId);
     // `session/new` reports the catalog it spawned with, which is authoritative for this session.
     const catalog = await hydrateModelCatalog(modelCatalog((response as unknown as { models?: unknown }).models));
@@ -210,9 +205,6 @@ export class CookAcpClient {
     const activeCwd = cwd ?? this.cwd;
     if (!activeCwd) throw new Error("Session has no workspace");
     this.sendNowAwaitingConfirmation = null;
-    this.sendNowInFlight.clear();
-    this.queuedImagesById.clear();
-    this.paintedPromptIds.clear();
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: LoadSessionRequest = {
@@ -235,7 +227,6 @@ export class CookAcpClient {
     // state, so the composer queues instead of sending and both status rows agree on the clock.
     const working = useSessionStore.getState().workingSessions[sessionId];
     if (working) useSessionStore.getState().set({ turnRunning: true, turnStartedAt: working.startedAt });
-    this.promptCorrelation.clear();
     const response = await request<{ models?: unknown }>("session/load", params);
     await this.inboundMessages;
     this.sessionUpdates.flushNow();
@@ -415,7 +406,6 @@ export class CookAcpClient {
       prompt: parts,
       _meta: { promptId, clientIdentifier: CAPABILITIES.clientIdentifier },
     };
-    this.pendingPromptRequests += 1;
     trackWorking(sessionId, Date.now(), promptId);
     useSessionStore.getState().set({ turnRunning: true, error: null });
     let outcome: TurnOutcome = { kind: "completed" };
@@ -437,7 +427,6 @@ export class CookAcpClient {
       if (this.sendNowAwaitingConfirmation?.id === promptId) this.sendNowAwaitingConfirmation = null;
       this.queuedImagesById.delete(promptId);
       this.sessionUpdates.flushNow();
-      this.pendingPromptRequests = Math.max(0, this.pendingPromptRequests - 1);
       this.promptCorrelation.end(promptId);
       trackWorking(sessionId, null, promptId);
       const store = useSessionStore.getState();
@@ -448,8 +437,10 @@ export class CookAcpClient {
         if (store.turnStartedAt !== null && (!store.currentPromptId || store.currentPromptId === promptId)) {
           store.finishTurn(outcome);
         }
+        // Only this session's remaining prompts keep the composer in turn state.
+        const stillRunning = (useSessionStore.getState().workingSessions[sessionId]?.promptIds.length ?? 0) > 0;
         store.set({
-          turnRunning: this.pendingPromptRequests > 0,
+          turnRunning: stillRunning,
           queuedPromptCount: Math.max(0, store.queuedPromptCount - 1),
         });
       }

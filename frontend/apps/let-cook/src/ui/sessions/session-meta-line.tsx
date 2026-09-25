@@ -15,14 +15,40 @@ const UNKNOWN_PHASE: TurnActivity = { kind: "waiting", reason: { kind: "model" }
 /**
  * The second line of a conversation row: `children` (workspace and date) normally, or the live turn
  * on the right when a prompt is in flight for that conversation — whether or not it is the one the
- * window has open, since `workingSessions` tracks turns per session.
+ * window has open, since `workingSessions` tracks turns per session. A list `live` flag covers the
+ * gap before that map has the turn: the row still shows "Working…" instead of a date.
  */
 export function SessionMetaLine(
-  { sessionId, active, children }: { sessionId: string; active: boolean; children: ReactNode },
+  { sessionId, active, live = false, children }: {
+    sessionId: string;
+    active: boolean;
+    live?: boolean;
+    children: ReactNode;
+  },
 ) {
   const turn = useSessionStore((state) => state.workingSessions[sessionId]);
-  if (!turn) return <>{children}</>;
+  if (!turn) {
+    if (!live) return <>{children}</>;
+    return <LiveWithoutPhase />;
+  }
   return <TurnStatusLine turn={turn} active={active} />;
+}
+
+function LiveWithoutPhase() {
+  const frame = useSpinFrame(true);
+  return (
+    <span
+      className="session-turn"
+      data-testid="session-turn-status"
+      data-live="false"
+      title="Working…"
+    >
+      <span className="session-turn-spinner" aria-hidden="true">
+        {BRAILLE_FRAMES[frame % BRAILLE_FRAMES.length]}
+      </span>
+      <span className="session-turn-label">Working…</span>
+    </span>
+  );
 }
 
 function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }) {

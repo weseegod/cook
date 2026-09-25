@@ -65,6 +65,29 @@ describe("session conversation reset", () => {
       expect(useSessionStore.getState().planMode).toBe(false);
       expect(useSessionStore.getState().editingQueueEntry).toBeNull();
     });
+
+  it("restores that session's queue on reset and leaves other sessions' queues alone", () => {
+    useSessionStore.setState({
+      sessionId: "sess-a",
+      queuesBySession: {
+        "sess-a": [{ id: "qa", version: 0, text: "queued on A", kind: "prompt", position: 0 }],
+        "sess-b": [{ id: "qb", version: 1, text: "queued on B", kind: "prompt", position: 0 }],
+      },
+      queuedEntries: [{ id: "qa", version: 0, text: "queued on A", kind: "prompt", position: 0 }],
+      queuedPromptCount: 1,
+    });
+    useSessionStore.getState().resetConversation("sess-b");
+    expect(useSessionStore.getState().queuedEntries).toEqual([
+      { id: "qb", version: 1, text: "queued on B", kind: "prompt", position: 0 },
+    ]);
+    expect(useSessionStore.getState().queuedPromptCount).toBe(1);
+    expect(useSessionStore.getState().queuesBySession["sess-a"]).toHaveLength(1);
+    useSessionStore.getState().resetConversation("sess-c");
+    expect(useSessionStore.getState().queuedEntries).toEqual([]);
+    expect(useSessionStore.getState().queuedPromptCount).toBe(0);
+    expect(useSessionStore.getState().queuesBySession["sess-a"]).toHaveLength(1);
+    expect(useSessionStore.getState().queuesBySession["sess-b"]).toHaveLength(1);
+  });
 });
 
 describe("session transcript reducer", () => {

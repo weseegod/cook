@@ -180,6 +180,8 @@ export interface SessionState {
   queuedPromptCount: number;
   /** Full queue rows from `x.ai/queue/changed` (N-queue) for the queue bar. */
   queuedEntries: QueuedPromptEntry[];
+  /** Queue rows kept per conversation so switching back does not drop waiting prompts. */
+  queuesBySession: Record<string, QueuedPromptEntry[]>;
   /**
    * Queue row currently loaded into the composer for edit (`hold_edit` active).
    * Null when the composer is composing a normal / queued send.

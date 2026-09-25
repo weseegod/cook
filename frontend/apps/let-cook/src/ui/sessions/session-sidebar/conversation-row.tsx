@@ -64,7 +64,7 @@ export function ConversationRow({
             <span className="session-workspace-name">{session.cwd ? basename(session.cwd) : "Workspace unavailable"}</span>
             {session.cwd && <span className="sr-only">{session.cwd}</span>}
           </span>
-          <SessionMetaLine sessionId={session.id} active={active}>
+          <SessionMetaLine sessionId={session.id} active={active} live={session.live}>
             <span className="session-meta-separator" aria-hidden="true">·</span>
             <span className="session-date">{formatDate(session.updatedAt)}</span>
           </SessionMetaLine>
