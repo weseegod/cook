@@ -79,34 +79,67 @@ for (const theme of ["dark", "light"] as const) {
   });
 }
 
-test("assistant reply uses the chat width for prose and code", async ({ page }) => {
+test("transcript messages and activity rows use the chat width", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openConversation(page, shellSeed({
-    reply: "## A wider reply\n\nA short explanation of the change.\n\n- First item\n- Second item\n\n```ts\nexport const answer = 42;\n```",
+    promptUpdates: [
+      { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Checking the example." } },
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "width-tool",
+        kind: "execute",
+        title: "Execute",
+        status: "pending",
+        rawInput: { command: "pnpm test" },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "width-tool",
+        kind: "execute",
+        title: "Execute",
+        status: "completed",
+      },
+      {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "## A wider reply\n\nA short explanation of the change.\n\n- First item\n- Second item\n\n```ts\nexport const answer = 42;\n```",
+        },
+      },
+    ],
   }));
+  const documentWidths = new Map<number, number>();
+  for (const width of [1440, 420]) {
+    await page.setViewportSize({ width, height: 900 });
+    documentWidths.set(width, await page.evaluate(() => document.documentElement.scrollWidth));
+  }
   await page.getByTestId("composer-input").fill("Show a code example");
   await page.getByTestId("composer-input").press("Enter");
   await expect(page.locator(".message-assistant .code-block")).toBeVisible();
+  await expect(page.locator(".thinking-row")).toBeVisible();
+  await expect(page.locator(".tool-row")).toBeVisible();
 
-  for (const width of [1440, 840]) {
+  for (const width of [1440, 420]) {
     await page.setViewportSize({ width, height: 900 });
-    if (width === 840) {
-      await page.getByRole("button", { name: "Open tools panel" }).click();
-      await expect(page.locator(".sidebar")).toHaveCount(0);
-    }
     const bounds = await page.evaluate(() => {
       const rect = (selector: string) => document.querySelector(selector)?.getBoundingClientRect();
       const markdown = rect(".message-assistant .markdown");
+      const transcriptRow = document.querySelector(".message-user")?.closest(".transcript-row")?.getBoundingClientRect().width ?? 0;
       return {
+        transcriptRow,
+        messages: [".message-user", ".message-assistant", ".thinking-row", ".tool-row"]
+          .map((selector) => rect(selector)?.width ?? 0),
         markdown: markdown?.width ?? 0,
         children: ["h2", "p", "ul"].map((selector) => rect(`.message-assistant .markdown > ${selector}`)?.width ?? 0),
         code: rect(".message-assistant .markdown > pre")?.width ?? 0,
-        overflow: document.body.scrollWidth - window.innerWidth,
+        documentWidth: document.documentElement.scrollWidth,
       };
     });
+    expect(bounds.transcriptRow).toBeGreaterThan(0);
+    for (const row of bounds.messages) expect(Math.abs(row - bounds.transcriptRow)).toBeLessThanOrEqual(1);
     expect(bounds.markdown).toBeGreaterThan(0);
     for (const child of bounds.children) expect(Math.abs(child - bounds.markdown)).toBeLessThanOrEqual(1);
     expect(Math.abs(bounds.code - bounds.markdown)).toBeLessThanOrEqual(1);
-    expect(bounds.overflow).toBeLessThanOrEqual(0);
+    expect(bounds.documentWidth).toBe(documentWidths.get(width));
   }
 });

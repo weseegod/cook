@@ -968,7 +968,6 @@
   padding: 8px 10px;
   border-left: 2px solid var(--accent);
   background: var(--panel-elevated);
-  max-width: 78ch;
 }
 
 .message-body, .markdown, .tool-detail {

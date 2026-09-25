@@ -256,6 +256,10 @@ test.describe("subagent view", () => {
     await launch(page);
     await spawn(page, "Explore the repository", "explore");
     await childChunk(page, {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "Explore the repository." },
+    });
+    await childChunk(page, {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "A long enough line of prose that the transcript has something to paint." },
     });
@@ -263,6 +267,21 @@ test.describe("subagent view", () => {
     // to avoid adding overflow of its own.
     const before = await page.evaluate(() => document.documentElement.scrollWidth);
     await openSubagent(page);
+    const expectMessagesFillTranscript = async () => {
+      const widths = await page.evaluate(() => {
+        const user = document.querySelector<HTMLElement>(".subagent-takeover .message-user");
+        const transcriptRow = user?.closest<HTMLElement>(".transcript-row");
+        return {
+          transcriptRow: transcriptRow?.getBoundingClientRect().width ?? 0,
+          user: user?.getBoundingClientRect().width ?? 0,
+          assistant: document.querySelector<HTMLElement>(".subagent-takeover .message-assistant")?.getBoundingClientRect().width ?? 0,
+        };
+      });
+      expect(widths.transcriptRow).toBeGreaterThan(0);
+      expect(Math.abs(widths.user - widths.transcriptRow)).toBeLessThanOrEqual(1);
+      expect(Math.abs(widths.assistant - widths.transcriptRow)).toBeLessThanOrEqual(1);
+    };
+    await expectMessagesFillTranscript();
 
     // The takeover replaces the chat column rather than floating over it: it starts at the chat's
     // own edge and never runs past it.
@@ -280,6 +299,7 @@ test.describe("subagent view", () => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await expect(page.getByTestId("subagent-frame")).toBeVisible();
     await expectNoHorizontalOverflow(page);
+    await expectMessagesFillTranscript();
     const wide = (await page.getByTestId("subagent-takeover").boundingBox())!;
     expect(wide.width).toBeGreaterThan(takeover.width);
 
