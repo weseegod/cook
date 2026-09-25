@@ -14,6 +14,24 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
+# First-match regex replace. Python avoids BSD vs GNU `sed -i` divergence:
+# macOS `sed -i -E` treats `-E` as the backup suffix and leaves the file
+# unchanged; it also lacks GNU `0,/re/`.
+replace_first() {
+  local file="$1" pattern="$2" repl="$3"
+  python3 - "$file" "$pattern" "$repl" <<'PY'
+import re, sys
+path, pattern, repl = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path, encoding="utf-8") as f:
+    text = f.read()
+new_text, count = re.subn(pattern, lambda _m: repl, text, count=1, flags=re.M)
+if count != 1:
+    sys.exit(f"error: no match for /{pattern}/ in {path}")
+with open(path, "w", encoding="utf-8", newline="") as f:
+    f.write(new_text)
+PY
+}
+
 VERSION_FILE="crates/codegen/xai-grok-version/Cargo.toml"
 PAGER_FILE="crates/codegen/xai-grok-pager-bin/Cargo.toml"
 LOCK_FILE="Cargo.lock"
@@ -51,14 +69,22 @@ fi
 
 # Bump the two lockstepped version crates.
 for f in "$VERSION_FILE" "$PAGER_FILE"; do
-  sed -i -E "s/^version = \"[^\"]+\"/version = \"$new\"/" "$f"
+  replace_first "$f" '^version = "[^"]+"' "version = \"$new\""
 done
 
 # Keep the desktop shell in the same major/version train as the CLI gate.
-sed -i -E "0,/\"version\": \"[^\"]+\"/s//\"version\": \"$new\"/" "$DESKTOP_PACKAGE"
-sed -i -E "0,/^version = \"[^\"]+\"/s//version = \"$new\"/" "$DESKTOP_CARGO"
-sed -i -E "0,/\"version\": \"[^\"]+\"/s//\"version\": \"$new\"/" "$DESKTOP_CONFIG"
+replace_first "$DESKTOP_PACKAGE" '"version": "[^"]+"' "\"version\": \"$new\""
+replace_first "$DESKTOP_CARGO" '^version = "[^"]+"' "version = \"$new\""
+replace_first "$DESKTOP_CONFIG" '"version": "[^"]+"' "\"version\": \"$new\""
 cargo metadata --manifest-path "$DESKTOP_CARGO" --format-version 1 --no-deps >/dev/null
+
+# Refuse to tag unless every lockstepped file actually carries the new version.
+for f in "$VERSION_FILE" "$PAGER_FILE" "$DESKTOP_PACKAGE" "$DESKTOP_CARGO" "$DESKTOP_CONFIG"; do
+  if ! grep -qF "$new" "$f"; then
+    echo "ERROR: $f does not contain version $new" >&2
+    exit 1
+  fi
+done
 
 # Bump the same two entries in Cargo.lock (portable via awk).
 awk -v new="$new" '
