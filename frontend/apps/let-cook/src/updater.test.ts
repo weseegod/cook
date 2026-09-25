@@ -22,10 +22,14 @@ describe("updater", () => {
     vi.unstubAllEnvs();
   });
 
-  it("stays disabled when VITE_COOK_UPDATER is unset", async () => {
-    const { UPDATER_CONFIGURED, checkForAppUpdates, installAppUpdate } = await loadUpdater();
+  it("shows a local update preview without installing when the updater is unset", async () => {
+    const { UPDATER_CONFIGURED, UPDATER_PREVIEW, checkForAppUpdates, installAppUpdate } = await loadUpdater();
     expect(UPDATER_CONFIGURED).toBe(false);
-    await expect(checkForAppUpdates()).resolves.toEqual({ status: "disabled" });
+    expect(UPDATER_PREVIEW).toBe(true);
+    await expect(checkForAppUpdates()).resolves.toEqual({
+      status: "available",
+      version: `${__APP_VERSION__}-local`,
+    });
     await expect(installAppUpdate()).resolves.toEqual({ status: "disabled" });
     expect(check).not.toHaveBeenCalled();
   });

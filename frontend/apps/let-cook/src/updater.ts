@@ -2,13 +2,9 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { normalizeError } from "./acp/errors";
 
-/**
- * Release builds set `VITE_COOK_UPDATER=1` (see `scripts/desktop_release.sh`).
- * Dev/`pnpm tauri dev` keeps this false so empty endpoints in `tauri.conf.json`
- * never produce a confusing error. The updater refreshes the app binary only —
- * never `~/.cook/bin/cook`.
- */
+/** Release builds set `VITE_COOK_UPDATER=1`; local dev displays a non-installable preview. */
 export const UPDATER_CONFIGURED = import.meta.env.VITE_COOK_UPDATER === "1";
+export const UPDATER_PREVIEW = import.meta.env.DEV && !UPDATER_CONFIGURED;
 
 export type UpdateCheckResult =
   | { status: "disabled" }
@@ -24,7 +20,11 @@ export type UpdateInstallResult =
 
 /** Call Tauri `check()`; graceful when unconfigured or the endpoint is missing. */
 export async function checkForAppUpdates(): Promise<UpdateCheckResult> {
-  if (!UPDATER_CONFIGURED) return { status: "disabled" };
+  if (!UPDATER_CONFIGURED) {
+    return UPDATER_PREVIEW
+      ? { status: "available", version: `${__APP_VERSION__}-local` }
+      : { status: "disabled" };
+  }
   try {
     const update = await check();
     if (!update) return { status: "up-to-date" };

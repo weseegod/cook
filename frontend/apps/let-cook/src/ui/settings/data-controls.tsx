@@ -48,11 +48,6 @@ export function DataControlsPanel({ connected }: { connected: boolean }) {
 
   return (
     <div className="data-controls">
-      <p className="settings-note">
-        Conversations and their plan files are stored on this machine, under{" "}
-        <code>~/.cook/sessions</code>. Each conversation keeps its transcript, and a planning
-        conversation also keeps one file per plan it produced.
-      </p>
       <div className="data-control-danger">
         <div className="data-control-copy">
           <strong>Delete all conversations</strong>

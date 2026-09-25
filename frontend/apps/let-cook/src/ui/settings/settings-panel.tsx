@@ -9,6 +9,7 @@ import {
   checkForAppUpdates,
   installAppUpdate,
   UPDATER_CONFIGURED,
+  UPDATER_PREVIEW,
   type UpdateCheckResult,
 } from "../../updater";
 import { ConnectorsPanel } from "./connectors";
@@ -209,13 +210,6 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
                 <span><kbd>⌘W</kbd> Close current panel</span>
                 <span><kbd>Esc</kbd> Cancel</span>
               </div>
-              <div className="settings-note">
-                macOS builds for this fork ship unsigned (same as the CLI). The app updater
-                refreshes the desktop shell only and never writes <code>~/.cook/bin/cook</code>.
-                An optional bundled <code>cook</code> sidecar may appear in stable packages;
-                otherwise install the CLI or set <code>COOK_BIN</code>.
-                Site: <a href="https://letcook.dev" target="_blank" rel="noreferrer">letcook.dev</a>.
-              </div>
               {configSecurity.data?.worldReadable && (
                 <div className="settings-note security-warning">
                   Config permissions need attention: <code>chmod 600 {configSecurity.data.path}</code>
@@ -254,7 +248,14 @@ function Section({ title, description, icon, children }: { title: string; descri
 
 function AboutUpdates() {
   const [busy, setBusy] = useState<"check" | "install" | null>(null);
-  const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [result, setResult] = useState<UpdateCheckResult | null>(() =>
+    UPDATER_PREVIEW ? { status: "available", version: `${__APP_VERSION__}-local` } : null,
+  );
+  const installButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (result?.status === "available" && busy === null) installButtonRef.current?.focus();
+  }, [busy, result]);
 
   async function onCheck() {
     setBusy("check");
@@ -280,42 +281,27 @@ function AboutUpdates() {
   return (
     <div className="about-updates">
       <button
+        ref={installButtonRef}
         type="button"
         className="ghost-button"
-        disabled={!UPDATER_CONFIGURED || busy !== null}
-        title={
-          UPDATER_CONFIGURED
-            ? "Check for Let Cook shell updates"
-            : "Updater endpoints are not configured for this build"
-        }
-        onClick={() => void onCheck()}
+        disabled={(!UPDATER_CONFIGURED && !UPDATER_PREVIEW) || busy !== null}
+        onClick={() => void (result?.status === "available" ? onInstall() : onCheck())}
       >
-        <RefreshCw size={15} /> {busy === "check" ? "Checking…" : "Check for updates"}
+        <RefreshCw size={15} />
+        {busy === "check"
+          ? "Checking…"
+          : busy === "install"
+            ? "Installing…"
+            : result?.status === "available"
+              ? "Install and update"
+              : "Check for updates"}
       </button>
-      {!UPDATER_CONFIGURED && (
-        <p className="settings-note">
-          Auto-update is inactive in dev builds. Release packages from{" "}
-          <code>scripts/publish_release.sh</code> bake the GitHub Releases endpoint
-          and minisign pubkey; they never write <code>~/.cook/bin/cook</code>.
-        </p>
-      )}
       {result?.status === "up-to-date" && <p className="settings-note">You are on the latest desktop build.</p>}
       {result?.status === "available" && (
-        <>
-          <p className="settings-note">
-            Update available: <strong>{result.version}</strong>
-            {result.notes ? ` — ${result.notes}` : ""}. This updates the desktop shell
-            only, never the CLI binary.
-          </p>
-          <button
-            type="button"
-            className="ghost-button"
-            disabled={busy !== null}
-            onClick={() => void onInstall()}
-          >
-            {busy === "install" ? "Installing…" : "Install and restart"}
-          </button>
-        </>
+        <p className="settings-note">
+          Update available: <strong>{result.version}</strong>
+          {result.notes ? ` — ${result.notes}` : ""}.
+        </p>
       )}
       {result?.status === "error" && <p className="settings-note">{result.message}</p>}
     </div>
