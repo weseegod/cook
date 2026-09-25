@@ -159,6 +159,10 @@ export interface MockState {
   /** What the agent is holding, as `x.ai/session/info` reports it. */
   context: { used: number; turns: number; messageCount: number };
   providers: MockProvider[];
+  /** User-added models routed through the built-in xAI account rather than a BYOK provider. */
+  xaiModels: MockSeedModel[];
+  /** Whether the simulated host has an xAI Platform API key for /models. */
+  xaiApiKeyPresent: boolean;
   discoverable: MockSeedModel[];
   sessions: MockSession[];
   /** Plan files of the loaded session, newest first, as `x.ai/session/plans` reports them. */

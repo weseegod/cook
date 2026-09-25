@@ -6,7 +6,8 @@
  */
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { desktopCommand, isTauriRuntime, request } from "./host";
-import type { ReasoningEffortOption } from "./xai";
+import { modelCatalog, type ReasoningEffortOption } from "./xai";
+import { useCatalogStore } from "../state/catalog";
 
 export interface ProviderModelLink {
   id: string;
@@ -189,6 +190,24 @@ export function upsertModel(params: ModelUpsertRequest) {
     request("x.ai/models/upsert", { ...params }),
   ).then(async (response) => {
     await reloadDesktopModels();
+    const catalog = useCatalogStore.getState();
+    const previous = catalog.models.find((model) => model.id === params.id);
+    const saved = {
+      ...previous,
+      id: params.id,
+      apiModel: params.model ?? previous?.apiModel ?? params.id,
+      provider: params.providerId ?? previous?.provider ?? "xai",
+      name: params.name ?? previous?.name ?? params.id,
+      inputModalities: params.input,
+      contextWindow: params.contextWindow ?? previous?.contextWindow,
+      maxCompletionTokens: params.maxCompletionTokens ?? previous?.maxCompletionTokens,
+      supportsReasoningEffort: params.supportsReasoningEffort ?? previous?.supportsReasoningEffort,
+      configured: true,
+    };
+    catalog.setModelCatalog({
+      currentModelId: catalog.currentModelId,
+      models: [...catalog.models.filter((model) => model.id !== params.id), saved],
+    });
     return response;
   });
 }
@@ -226,10 +245,22 @@ export function discoverProviderModels(params: {
 /**
  * Read what a provider's `/models` offers without writing `config.toml`.
  *
- * The agent's `discover_models` merges every id it finds as a `[model.*]` row, which is the wrong
- * shape for a picker: the native host probes instead, so a listing stays a listing.
+ * Grok OAuth uses the agent's session-authenticated model catalog. Other connections use the
+ * native read-only provider probe; neither path writes models until the user selects one.
  */
-export function probeProviderModels(id: string) {
+export async function probeProviderModels(id: string, grokOauth = false): Promise<ProviderProbeResult> {
+  if (id === "xai" && grokOauth) {
+    const catalog = modelCatalog(await request<unknown>("x.ai/models/list", {}));
+    const models = catalog.models.filter((model) => model.provider === "xai" && model.id).map((model) => ({
+      id: model.id,
+      name: model.name,
+      contextWindow: model.contextWindow,
+      maxCompletionTokens: model.maxCompletionTokens,
+    }));
+    return models.length
+      ? { ok: true, id, models }
+      : { ok: false, id, models: [], error: "Grok did not list any models for this account" };
+  }
   return desktopCommand<ProviderProbeResult>("desktop_provider_models", { id }, () =>
     request<ProviderProbeResult>("x.ai/providers/probe_models", { id }),
   );

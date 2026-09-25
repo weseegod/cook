@@ -42,7 +42,12 @@ export function ProvidersPanel({
   const [editing, setEditing] = useState<ProviderPreset | null>(null);
   const [editingProvider, setEditingProvider] = useState<ProviderSummary | null>(null);
   const [adding, setAdding] = useState(false);
-  const [modelTarget, setModelTarget] = useState<{ provider: ProviderSummary; model?: ModelSummary } | null>(null);
+  const [modelTarget, setModelTarget] = useState<{
+    provider: { id: string; name?: string | null };
+    canDiscoverModels: boolean;
+    grokOauth: boolean;
+    model?: ModelSummary;
+  } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [deletingProvider, setDeletingProvider] = useState<ProviderRow | null>(null);
   const [deletingModel, setDeletingModel] = useState<ModelSummary | null>(null);
@@ -217,6 +222,18 @@ export function ProvidersPanel({
     }
   }
 
+  function openModelTarget(row: ProviderRow, model?: ModelSummary) {
+    const provider = row.provider ?? (row.preset.id === "xai" ? { id: "xai", name: row.preset.label } : null);
+    if (!provider) return;
+    setNotice(null);
+    setModelTarget({
+      provider,
+      canDiscoverModels: Boolean(row.provider) || row.preset.id === "xai",
+      grokOauth: row.preset.id === "xai" && row.oauthConnected,
+      ...(model ? { model } : {}),
+    });
+  }
+
   const modelsBusy = catalogLoading || presetsFetching || providers.isFetching;
   const hasAnyModels = rows.some((row) => row.models.length > 0);
   // Hide the preset shells while the first catalog load is in flight — otherwise the panel
@@ -248,12 +265,13 @@ export function ProvidersPanel({
                 key={row.preset.id}
                 row={row}
                 selectedModel={selectedModel}
-                onAddModel={() => { setNotice(null); setModelTarget({ provider: row.provider! }); }}
+                canAddModel={Boolean(row.provider || (row.preset.id === "xai" && row.oauthConnected))}
+                onAddModel={() => openModelTarget(row)}
                 onEdit={() => openEditor(row.preset, row.provider)}
                 onConnect={() => openConnect(row.preset, row.provider)}
                 onSignOut={row.oauthConnected ? () => void signOut(row.preset) : undefined}
                 onRemove={() => { setNotice(null); setDeletingProvider(row); }}
-                onEditModel={(model) => { if (row.provider) setModelTarget({ provider: row.provider, model }); }}
+                onEditModel={(model) => openModelTarget(row, model)}
                 onRemoveModel={(model) => { setNotice(null); setDeletingModel(model); }}
               />
             ))}
@@ -295,8 +313,10 @@ export function ProvidersPanel({
       {modelTarget && (
         <ModelDialog
           provider={modelTarget.provider}
+          canDiscoverModels={modelTarget.canDiscoverModels}
+          grokOauth={modelTarget.grokOauth}
           model={modelTarget.model}
-          existingIds={rows.find((row) => row.provider?.id === modelTarget.provider.id)?.models.map((model) => model.id) ?? []}
+          existingIds={rows.find((row) => row.preset.id === modelTarget.provider.id)?.models.map((model) => model.id) ?? []}
           onSaved={() => { setModelTarget(null); refresh(); }}
           onClose={() => setModelTarget(null)}
         />

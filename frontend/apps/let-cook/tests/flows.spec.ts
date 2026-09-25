@@ -251,6 +251,15 @@ test.describe("chat, attachments and the model picker", () => {
     expect(upserts.at(-1)?.params).toMatchObject({ id: "gpt-custom", providerId: "openai", contextWindow: 300000, maxCompletionTokens: 64000, input: ["text"], supportsReasoningEffort: true });
     await expect(page.getByTestId("model-row-gpt-custom")).toContainText("GPT Custom");
     await expect(page.getByTestId("model-row-gpt-custom")).toContainText("gpt-custom");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.getByRole("menu", { name: "Models" }).getByRole("menuitem", { name: "GPT Custom" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "GPT Custom" }).click();
+    await expect(page.getByRole("button", { name: "Model" })).toContainText("GPT Custom");
+    await page.getByRole("button", { name: "Model" }).click();
+    await page.getByRole("menuitem", { name: "GPT-5" }).click();
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
 
     // Removing it deletes the `[model.*]` row, so it leaves the panel for good.
     await page.getByTestId("model-remove-gpt-custom").click();
@@ -285,6 +294,8 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(page.getByTestId("provider-row-xiaomi")).toContainText("Xiaomi MiMo");
     await expect(page.getByTestId("provider-row-anthropic").locator(".provider-logo-claude")).toBeVisible();
     await expect(page.getByTestId("provider-row-xai").locator(".provider-logo-grok")).toBeVisible();
+    await expect(page.getByTestId("provider-connect-xai")).toBeVisible();
+    await expect(page.getByTestId("provider-add-model-xai")).toHaveCount(0);
     await expect(page.getByTestId("provider-row-deepseek").locator(".provider-logo-deepseek")).toBeVisible();
     await expect(page.getByTestId("provider-row-openrouter").locator(".provider-logo-openrouter")).toBeVisible();
     await expect(page.getByTestId("provider-row-xiaomi").locator(".provider-logo-xiaomi")).toBeVisible();
@@ -324,7 +335,7 @@ test.describe("chat, attachments and the model picker", () => {
     await expect(page.getByTestId("provider-row-anthropic")).toContainText("Connected · OAuth");
   });
 
-  test("Connect on Grok starts device login and records Connected · OAuth", async ({ page }) => {
+  test("Connect on Grok starts device login and lets OAuth users add a model", async ({ page }) => {
     const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
     await page.getByLabel("Settings").click();
@@ -337,8 +348,122 @@ test.describe("chat, attachments and the model picker", () => {
     await copyCode.click();
     await expect(copyCode).toHaveText("Copied");
     await mock.completeOAuth("xai");
-    await expect(page.getByTestId("provider-row-xai")).toContainText("Connected · OAuth");
+    const row = page.getByTestId("provider-row-xai");
+    await expect(row).toContainText("Connected · OAuth");
     await expect(page.getByTestId("provider-signout-xai")).toBeVisible();
+
+    // The native Grok account has no `[model_providers.xai]` BYOK table.
+    expect((await mock.state()).providers).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "xai" })]));
+    await expect(page.getByTestId("provider-add-model-xai")).toBeVisible();
+    await page.getByTestId("provider-add-model-xai").click();
+    const dialog = page.getByRole("dialog", { name: "Add model to xAI" });
+    await expect(dialog.getByTestId("model-get-models")).toBeVisible();
+    await dialog.getByTestId("model-get-models").click();
+    await expect(dialog.getByTestId("model-candidates")).toContainText("Grok 4.5");
+    await expect(dialog.getByTestId("model-error")).toHaveCount(0);
+    await dialog.getByLabel("Model ID for xai").fill("grok-custom");
+    await dialog.getByLabel("Model display name").fill("Grok Custom");
+    await dialog.getByTestId("model-save").click();
+
+    const upsert = await waitForCalls(page, "x.ai/models/upsert");
+    expect(upsert.at(-1)?.params).toMatchObject({ id: "grok-custom", providerId: "xai", name: "Grok Custom" });
+    await expect(row.getByTestId("model-row-grok-custom")).toContainText("Grok Custom");
+    expect((await mock.state()).xaiModels).toEqual(expect.arrayContaining([expect.objectContaining({ id: "grok-custom" })]));
+
+    await page.getByLabel("Edit model grok-custom").click();
+    const editor = page.getByRole("dialog", { name: "Edit Grok Custom" });
+    await editor.getByLabel("Model context window").fill("256000");
+    await editor.getByTestId("model-save").click();
+    await expect(row.getByTestId("model-row-grok-custom")).toContainText("Context 256K");
+    expect((await waitForCalls(page, "x.ai/models/upsert")).at(-1)?.params).toMatchObject({
+      id: "grok-custom",
+      providerId: "xai",
+      contextWindow: 256000,
+    });
+
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.getByRole("menu", { name: "Models" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "Grok Custom" }).click();
+    await expect(page.getByRole("button", { name: "Model" })).toContainText("Grok Custom");
+  });
+
+  test("Get models reads the Grok OAuth catalog without an API key", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, { ...CONNECTED_SEED, authMethodId: "grok.com" });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-add-model-xai").click();
+
+    const dialog = page.getByRole("dialog", { name: "Add model to xAI" });
+    await dialog.getByTestId("model-get-models").click();
+    await waitForCalls(page, "x.ai/models/list");
+    expect(callsTo(await mock.requests(), "x.ai/providers/probe_models")).toHaveLength(0);
+    const candidates = dialog.getByTestId("model-candidates");
+    await expect(candidates).toContainText("Grok 4.5");
+    await expect(candidates).not.toContainText("GPT-5");
+    await candidates.getByRole("button").first().click();
+    await expect(dialog.getByLabel("Model ID for xai")).toHaveValue("grok-4.5");
+    await expect(dialog.getByLabel("Model display name")).toHaveValue("Grok 4.5");
+    await expect(dialog.getByLabel("Model context window")).toHaveValue("300000");
+    await dialog.getByTestId("model-save").click();
+    expect((await waitForCalls(page, "x.ai/models/upsert")).at(-1)?.params).toMatchObject({
+      id: "grok-4.5",
+      providerId: "xai",
+      name: "Grok 4.5",
+    });
+    expect((await mock.state()).xaiModels).toEqual(expect.arrayContaining([expect.objectContaining({ id: "grok-4.5" })]));
+
+    await page.getByTestId("provider-add-model-xai").click();
+    await page.getByTestId("model-get-models").click();
+    await expect(page.getByTestId("model-candidates-empty")).toBeVisible();
+    await page.getByRole("dialog", { name: "Add model to xAI" }).getByRole("button", { name: "Cancel" }).click();
+    await page.getByTestId("provider-signout-xai").click();
+    await expect(page.getByTestId("provider-add-model-xai")).toHaveCount(0);
+  });
+
+  test("Get models keeps the provider probe for xAI API-key connections", async ({ page }) => {
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      providers: [...CONNECTED_SEED.providers, {
+        id: "xai", baseUrl: "https://api.x.ai/v1", apiBackend: "chat_completions", apiKey: "mock-xai-key", models: [],
+      }],
+      discoverable: [{ id: "grok-4.7", name: "Grok 4.7" }],
+    });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await page.getByTestId("provider-add-model-xai").click();
+    await page.getByTestId("model-get-models").click();
+    expect((await waitForCalls(page, "x.ai/providers/probe_models")).at(-1)?.params).toEqual({ id: "xai" });
+    await expect(page.getByTestId("model-candidates")).toContainText("Grok 4.7");
+  });
+
+  test("keeps Grok Add model usable on a narrow viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkspace(page, { ...CONNECTED_SEED, authMethodId: "grok.com" });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+
+    const row = page.getByTestId("provider-row-xai");
+    const addModel = page.getByTestId("provider-add-model-xai");
+    await expect(addModel).toBeVisible();
+    const buttonBox = await addModel.boundingBox();
+    expect(buttonBox?.x).toBeGreaterThanOrEqual(0);
+    expect((buttonBox?.x ?? 0) + (buttonBox?.width ?? 0)).toBeLessThanOrEqual(390);
+    await addModel.click();
+    const dialog = page.getByRole("dialog", { name: "Add model to xAI" });
+    await expect(dialog.getByTestId("model-save")).toBeVisible();
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox?.x).toBeGreaterThanOrEqual(0);
+    expect((dialogBox?.x ?? 0) + (dialogBox?.width ?? 0)).toBeLessThanOrEqual(390);
+    await dialog.getByLabel("Model ID for xai").fill("grok-narrow-test");
+    await dialog.getByTestId("model-save").click();
+    await expect(row.getByTestId("model-row-grok-narrow-test")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Model" }).click();
+    await expect(page.getByRole("menu", { name: "Models" }).getByRole("menuitem", { name: "grok-narrow-test" })).toBeVisible();
+    await page.getByRole("menuitem", { name: "grok-narrow-test" }).click();
+    await expect(page.getByRole("button", { name: "Model" })).toContainText("grok-narrow-test");
   });
 
   test("edits a provider's name, then removes it and its models from config", async ({ page }) => {

@@ -24,6 +24,7 @@ const PROBE_MODEL_LIMIT: usize = 200;
 /// ChatGPT OAuth tokens are scoped to the Codex backend, not the public Platform API.
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
+const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
 
 fn models_list_url(base_url: &str) -> String {
     let base_url = base_url.trim_end_matches('/');
@@ -310,24 +311,48 @@ fn migrate_oauth_provider_routes() -> Result<(), String> {
 pub fn probe_target(id: &str) -> Result<ProbeTarget, String> {
     let id = checked_id(id, "provider id")?.to_owned();
     let doc = load()?;
+    let xai_key = if id == "xai" {
+        env_value("XAI_API_KEY")
+    } else {
+        None
+    };
+    probe_target_from_document(id, &doc, xai_key)
+}
+
+fn probe_target_from_document(
+    id: String,
+    doc: &DocumentMut,
+    xai_key: Option<String>,
+) -> Result<ProbeTarget, String> {
     let table = doc
         .get("model_providers")
         .and_then(Item::as_table)
         .and_then(|providers| providers.get(&id))
-        .and_then(Item::as_table)
-        .ok_or_else(|| format!("provider `{id}` is not configured"))?;
+        .and_then(Item::as_table);
+    let Some(table) = table else {
+        if id != "xai" {
+            return Err(format!("provider `{id}` is not configured"));
+        }
+        return Ok(ProbeTarget {
+            id,
+            url: models_list_url(XAI_API_BASE_URL),
+            api_backend: "chat_completions".to_owned(),
+            key: xai_key,
+            extra_headers: Vec::new(),
+        });
+    };
     let base_url = string(table, "base_url")
         .filter(|value| !value.trim().is_empty())
+        .or_else(|| (id == "xai").then(|| XAI_API_BASE_URL.to_owned()))
         .ok_or_else(|| format!("provider `{id}` has no base URL"))?;
     let key = string(table, "api_key")
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             string(table, "env_key")
                 .filter(|name| !name.trim().is_empty())
-                .and_then(|name| std::env::var(name).ok())
-                .map(|value| value.trim().to_owned())
-                .filter(|value| !value.is_empty())
-        });
+                .and_then(|name| env_value(&name))
+        })
+        .or(xai_key);
     let extra_headers = table
         .get("extra_headers")
         .and_then(Item::as_table)
@@ -349,6 +374,13 @@ pub fn probe_target(id: &str) -> Result<ProbeTarget, String> {
         key,
         extra_headers,
     })
+}
+
+fn env_value(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 /// Read a provider's `/models` listing without touching `config.toml`.
@@ -384,6 +416,11 @@ pub async fn probe_models(target: ProbeTarget) -> Result<ProviderModels, String>
         models: Vec::new(),
         error: Some(redact(&error, key.as_deref())),
     };
+    if id == "xai" && key.is_none() {
+        return Ok(failure(
+            "Set XAI_API_KEY to list models from the xAI API".to_owned(),
+        ));
+    }
     let response = match request.send().await {
         Ok(response) => response,
         Err(error) => return Ok(failure(error.to_string())),
@@ -1109,7 +1146,10 @@ fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table,
 
 #[cfg(test)]
 mod tests {
-    use super::{child_table, list_document, models_list_url, parse_models_listing, redact, write_model};
+    use super::{
+        child_table, list_document, models_list_url, parse_models_listing,
+        probe_target_from_document, redact, write_model,
+    };
 
     #[test]
     fn codex_models_listing_uses_client_version_and_slug_metadata() {
@@ -1127,6 +1167,31 @@ mod tests {
         assert_eq!(models[0].id, "gpt-5.6-luna");
         assert_eq!(models[0].name.as_deref(), Some("GPT-5.6-Luna"));
         assert_eq!(models[0].context_window, Some(272000));
+    }
+
+    #[test]
+    fn xai_probe_uses_platform_models_endpoint_without_a_provider_table() {
+        let doc = toml_edit::DocumentMut::new();
+        let target = probe_target_from_document(
+            "xai".to_owned(),
+            &doc,
+            Some("unit-test-xai-key".to_owned()),
+        )
+        .expect("xAI probe target");
+        assert_eq!(target.url, "https://api.x.ai/v1/models");
+        assert_eq!(target.key.as_deref(), Some("unit-test-xai-key"));
+    }
+
+    #[test]
+    fn xai_models_listing_reads_ids_and_context_limits() {
+        let listing = serde_json::json!({
+            "object": "list",
+            "data": [{"id": "grok-4.7", "context_length": 500_000}]
+        });
+        let models = parse_models_listing(&listing);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "grok-4.7");
+        assert_eq!(models[0].context_window, Some(500_000));
     }
 
     #[test]

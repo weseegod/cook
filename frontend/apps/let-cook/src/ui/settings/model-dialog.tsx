@@ -39,12 +39,16 @@ interface Candidate {
  */
 export function ModelDialog({
   provider,
+  canDiscoverModels,
+  grokOauth,
   existingIds,
   model,
   onSaved,
   onClose,
 }: {
-  provider: ProviderSummary;
+  provider: Pick<ProviderSummary, "id" | "name">;
+  canDiscoverModels: boolean;
+  grokOauth: boolean;
   /** Every id already configured for this provider, so a quick pick is never a duplicate. */
   existingIds: string[];
   /** Present when editing an already-configured model. */
@@ -77,7 +81,7 @@ export function ModelDialog({
     setProbing(true);
     setError(null);
     try {
-      const result = await probeProviderModels(provider.id);
+      const result = await probeProviderModels(provider.id, grokOauth);
       if (!result.ok) {
         setCandidates([]);
         setError(normalizeError(result.error, `${provider.name ?? provider.id} did not list any models`));
@@ -156,9 +160,11 @@ export function ModelDialog({
                 onChange={(event) => setId(event.target.value)}
               />
             </label>
-            <button type="button" className="ghost-button" disabled={probing} onClick={() => void loadCandidates()} data-testid="model-get-models">
-              {probing ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />} Get models
-            </button>
+            {canDiscoverModels && (
+              <button type="button" className="ghost-button" disabled={probing} onClick={() => void loadCandidates()} data-testid="model-get-models">
+                {probing ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />} Get models
+              </button>
+            )}
           </div>
         )}
 

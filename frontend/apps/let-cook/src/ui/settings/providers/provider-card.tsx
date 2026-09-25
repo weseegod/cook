@@ -7,6 +7,7 @@ import { formatTokens, type ProviderRow } from "./provider-rows";
 interface ProviderCardProps {
   row: ProviderRow;
   selectedModel: string;
+  canAddModel: boolean;
   onAddModel: () => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -20,6 +21,7 @@ interface ProviderCardProps {
 export function ProviderCard({
   row,
   selectedModel,
+  canAddModel,
   onAddModel,
   onEdit,
   onRemove,
@@ -47,7 +49,7 @@ export function ProviderCard({
         <div className="provider-header-actions">
           {connected ? (
             <>
-              {row.provider && (
+              {canAddModel && (
                 <button
                   className="ghost-button provider-header-model-button"
                   aria-label={`Add model to ${row.preset.id}`}

@@ -26,7 +26,10 @@ export function providerList() {
       oauth: provider.oauth === true,
       models: linkedModels(provider),
     })),
-    models: state.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.id }))),
+    models: [
+      ...state.providers.flatMap((provider) => provider.models.map((model) => ({ ...model, provider: provider.id }))),
+      ...state.xaiModels.map((model) => ({ ...model, provider: "xai" })),
+    ],
     defaultModel: state.defaultModel,
   };
 }
@@ -35,6 +38,22 @@ export function modelCatalog() {
   const models: Array<Record<string, unknown>> = [];
   if (state.authMethodId) {
     models.push({ id: "grok-4.5", name: "Grok 4.5", provider: "xai", inputModalities: ["text", "image"], _meta: { totalContextTokens: 500_000 } });
+  }
+  for (const model of state.xaiModels) {
+    models.push({
+      id: model.id,
+      name: model.name ?? model.id,
+      provider: "xai",
+      inputModalities: model.input ?? ["text"],
+      _meta: {
+        totalContextTokens: model.contextWindow ?? 300_000,
+        maxCompletionTokens: model.maxCompletionTokens ?? 64_000,
+        apiModel: model.model ?? model.id,
+        ...(model.supportsReasoningEffort ? { supportsReasoningEffort: true } : {}),
+        ...(model.reasoningEffort ? { reasoningEffort: model.reasoningEffort } : {}),
+        ...(model.reasoningEfforts ? { reasoningEfforts: model.reasoningEfforts } : {}),
+      },
+    });
   }
   for (const provider of state.providers) {
     for (const model of provider.models) {

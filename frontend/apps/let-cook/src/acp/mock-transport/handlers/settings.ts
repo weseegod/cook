@@ -223,8 +223,13 @@ export const settingsHandlers: Record<string, MethodHandler> = {
     if (!modelId) return respond({ error: "modelId must not be empty" });
     if (state.defaultModel === modelId) return respond({ error: `refusing to delete \`${modelId}\`: it is the default model; select another default first` });
     const provider = state.providers.find((entry) => entry.models.some((model) => model.id === modelId));
-    if (!provider) return respond({ error: `no model \`${modelId}\` is configured` });
-    provider.models = provider.models.filter((model) => model.id !== modelId);
+    if (provider) {
+      provider.models = provider.models.filter((model) => model.id !== modelId);
+    } else if (state.xaiModels.some((model) => model.id === modelId)) {
+      state.xaiModels = state.xaiModels.filter((model) => model.id !== modelId);
+    } else {
+      return respond({ error: `no model \`${modelId}\` is configured` });
+    }
     notify("x.ai/models/update", modelCatalog());
     return respond({ ok: true, modelId });
   },
@@ -232,7 +237,9 @@ export const settingsHandlers: Record<string, MethodHandler> = {
     const modelId = String(p.id ?? "");
     const providerId = String(p.providerId ?? "xai");
     const provider = state.providers.find((entry) => entry.id === providerId);
-    if (!provider) return respond({ error: `no provider \`${providerId}\` is configured` });
+    if (!provider && !(providerId === "xai" && state.authMethodId)) {
+      return respond({ error: `no provider \`${providerId}\` is configured` });
+    }
     const next: MockSeedModel = {
       id: modelId,
       model: typeof p.model === "string" ? p.model : modelId,
@@ -242,7 +249,11 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       maxCompletionTokens: typeof p.maxCompletionTokens === "number" ? p.maxCompletionTokens : undefined,
       supportsReasoningEffort: p.supportsReasoningEffort === true,
     };
-    provider.models = [...provider.models.filter((model) => model.id !== modelId), next];
+    if (provider) {
+      provider.models = [...provider.models.filter((model) => model.id !== modelId), next];
+    } else {
+      state.xaiModels = [...state.xaiModels.filter((model) => model.id !== modelId), next];
+    }
     notify("x.ai/models/update", modelCatalog());
     return respond({ ok: true, modelId });
   },
@@ -265,9 +276,11 @@ export const settingsHandlers: Record<string, MethodHandler> = {
     // Read-only listing: unlike `discover_models` this must not merge anything into the catalog.
     const id = String(p.id ?? "");
     const provider = state.providers.find((entry) => entry.id === id);
-    if (!provider) return respond({ error: `no provider \`${id}\` is configured` });
-    if (!provider.apiKey && !provider.apiKeyPresent && !provider.envKey) {
-      return respond({ ok: false, id, models: [], error: "this provider has no credential" });
+    const hasXaiApiKey = id === "xai" && state.xaiApiKeyPresent;
+    if (!provider && id !== "xai") return respond({ error: `no provider \`${id}\` is configured` });
+    if (!hasXaiApiKey && !provider?.apiKey && !provider?.apiKeyPresent && !provider?.envKey) {
+      const error = id === "xai" ? "XAI_API_KEY is required to list xAI models" : "this provider has no credential";
+      return respond({ ok: false, id, models: [], error });
     }
     if (state.probeFails) return respond({ ok: false, id, models: [], error: "401 unauthorized: invalid api key" });
     return respond({
