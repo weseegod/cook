@@ -90,6 +90,8 @@ pub struct HeadlessOptions {
     pub background_wait_timeout: Duration,
     /// After the prompt (or instead of one when resuming), run `x.ai/memory/flush`.
     pub memory_flush: bool,
+    /// `--no-subagents`; force-disable subagents for the headless agent.
+    pub no_subagents: bool,
     /// CLI `--experimental-memory` / `--no-memory` override for the headless agent.
     pub memory_enabled_override: Option<bool>,
 }
@@ -837,7 +839,7 @@ pub async fn run_single_turn(
         raw_config: &raw_config,
         remote_settings: None,
         is_headless: true,
-        cli_subagents: None,
+        cli_subagents: options.no_subagents.then_some(false),
         cli_web_search_model: None,
         cli_session_summary_model: None,
         memory_enabled_override: options.memory_enabled_override,
