@@ -67,7 +67,7 @@ Startup paints from `src/main.tsx`: QueryClient, theme, then `AppShell`.
 
 ```
 src/main.tsx                 boot
-src/updater.ts               app-shell updater used by Settings → About
+src/updater.ts               app-shell updater used by the open-app banner + Settings → About
 src/invariants.test.ts       renderer must not call models, tools, or HTTP
 src/acp/                     protocol client (see §3)
 src/state/                   transcript, catalogs, activity, goal, plan review
@@ -254,7 +254,7 @@ The TUI follows the same notification in
 | Skills | `context-panels.tsx` `SkillsPanel`, grouping `skills-groups.ts` |
 | Hooks | `hooks-panel.tsx` |
 | Data Controls | `data-controls.tsx` — delete all conversations (`x.ai/sessions/delete_all`). Rules: desktop-app §7 |
-| About | `settings-panel.tsx` `AboutUpdates`, backed by `src/updater.ts` |
+| About | `settings-panel.tsx` `AboutUpdates`, backed by `src/updater.ts` (also drives the open-app banner in `update-banner.tsx`) |
 
 Provider logos: SVG at `public/providers/{id}.svg`, registered in
 `ui/settings/providers/provider-logo.tsx` (`PROVIDER_LOGO_IDS`, and
@@ -331,7 +331,7 @@ The updater plugin updates this app binary. It does not write
 | Change which `cook` binary starts | `src-tauri/src/bin_resolve.rs` |
 | Change desktop logging | `src-tauri/src/logging.rs` |
 | Add a Tauri command | Implement it in `src-tauri/src/`, register it in `lib.rs`, call it from `src/acp/host.ts` |
-| Change the app updater | `src/updater.ts`, Settings → About in `settings-panel.tsx`, `tauri.release.conf.json`. Publish path: [`docs/desktop-release.md`](../../../docs/desktop-release.md) |
+| Change the app updater | `src/updater.ts`, open-app banner in `update-banner.tsx` (outside sidebar), Settings → About in `settings-panel.tsx`, `tauri.release.conf.json`. Publish path: [`docs/desktop-release.md`](../../../docs/desktop-release.md) |
 | Change a model, a tool, or session storage | The agent. Repo map: [`ARCHITECTURE.md`](../../../ARCHITECTURE.md) |
 
 ### Tests

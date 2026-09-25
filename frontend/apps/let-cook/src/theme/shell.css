@@ -1,12 +1,53 @@
 /* shell.css — app frame, titlebar, sidebar, session list, header controls */
 
 .main-column {
+  position: relative;
   display: flex;
   flex: 1;
   min-width: 0;
   flex-direction: column;
   container-name: main-shell;
   container-type: inline-size;
+}
+
+.update-banner {
+  position: absolute;
+  z-index: 5;
+  top: 48px;
+  left: 12px;
+  max-width: min(360px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--panel-elevated);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.update-banner-copy,
+.update-banner-error {
+  margin: 0;
+}
+
+.update-banner-error {
+  color: var(--danger);
+}
+
+.update-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.update-banner-actions .ghost-button {
+  padding: 4px 8px;
+  font-size: 12px;
 }
 
 .icon-button {

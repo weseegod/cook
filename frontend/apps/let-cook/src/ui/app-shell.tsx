@@ -21,6 +21,7 @@ import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
 import type { SettingsTab } from "./settings/settings-panel";
 import { ShortcutsSheet } from "./shortcuts/shortcuts-sheet";
+import { UpdateBanner } from "./update-banner";
 import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
@@ -273,6 +274,7 @@ export function AppShell() {
           utilityPanelOpen={utilityPanelOpen}
           onOpenTools={() => setUtilityPanelOpen(true)}
         />
+        <UpdateBanner />
         {!cwd ? (
           <Welcome onChooseWorkspace={chooseWorkspace} />
         ) : needsConnect ? (

@@ -71,7 +71,8 @@ write `~/.cook/bin/cook`. Dev/`pnpm tauri dev` keeps
 `endpoints`. Release builds (tag `v*` → `.github/workflows/release.yml`) overlay
 `src-tauri/tauri.release.conf.json` with the committed minisign pubkey,
 `https://download.letcook.dev/latest.json`, and `VITE_COOK_UPDATER=1` so
-Settings → About can check / install.
+Settings → About can check / install. Opening the app checks once and may show
+an update banner in the chat column; local/dev remains a non-installable preview.
 
 First-time key (private key stays at `~/.tauri/let-cook.key`, never git):
 
