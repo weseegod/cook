@@ -73,7 +73,7 @@ function PlanFileActions({
     <div className="plan-file-actions" data-testid="plan-file-view-actions">
       <button
         type="button"
-        className="ghost-button"
+        className="chat-action-button"
         data-testid="plan-file-view-copy"
         disabled={file.content === null}
         title={file.content === null ? `${file.name} is too large to copy from here` : `Copy ${file.name}`}
@@ -84,7 +84,7 @@ function PlanFileActions({
       </button>
       <button
         type="button"
-        className="ghost-button"
+        className="chat-action-button"
         data-testid="plan-file-view-copy-path"
         title={`Copy path for ${file.name}`}
         onClick={onCopyPath}

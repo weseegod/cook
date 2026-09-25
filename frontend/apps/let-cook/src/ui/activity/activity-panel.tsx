@@ -64,7 +64,7 @@ export function ActivityPanel() {
         <span><Activity size={13} /> Background activity</span>
         <button
           type="button"
-          className="text-button utility-refresh"
+          className="chat-action-button utility-refresh"
           onClick={() => void refresh()}
           disabled={loading || !sessionId}
           aria-label="Refresh activity"

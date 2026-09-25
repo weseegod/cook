@@ -139,11 +139,11 @@ function CodeBlock({
         <span>{language ?? "text"}</span>
         <div className="code-toolbar-actions">
           {openPreview && (
-            <button type="button" className="text-button" onClick={openPreview}>
+            <button type="button" className="chat-action-button" onClick={openPreview}>
               <Eye size={12} /> Preview
             </button>
           )}
-          <button type="button" className="text-button" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}</button>
+          <button type="button" className="chat-action-button" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}</button>
         </div>
       </div>
       {streaming ? <pre className="streaming-code"><code>{code}</code></pre> : <HighlightedCode code={code} language={language ?? "text"} />}
@@ -239,7 +239,7 @@ function Mermaid({ source }: { source: string }) {
         <span>mermaid</span>
         <button
           type="button"
-          className="text-button"
+          className="chat-action-button"
           onClick={() => useArtifactStore.getState().openArtifact({ kind: "mermaid", title: "Mermaid diagram", content: source })}
         >
           <Eye size={12} /> Open

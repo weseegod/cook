@@ -57,7 +57,7 @@ export const Message = memo(function Message({ block }: { block: MessageBlock })
     <article className={`message message-${block.role}`}>
       {block.role === "assistant" && block.text && (
         <div className="message-actions">
-          <button type="button" className="text-button" onClick={() => void copyMessage()}>
+          <button type="button" className="chat-action-button" onClick={() => void copyMessage()}>
             <Copy size={12} /> {copied ? "Copied" : "Copy"}
           </button>
         </div>

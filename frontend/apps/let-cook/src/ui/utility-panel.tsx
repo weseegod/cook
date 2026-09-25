@@ -160,7 +160,7 @@ function ReviewView() {
     <section className="review-view" data-testid="review-view">
       <div className="utility-view-actions">
         <span>{snapshot?.branch ? `${snapshot.branch} · ${snapshot.base}` : snapshot?.base ?? "HEAD"}</span>
-        <button type="button" className="text-button utility-refresh" onClick={() => setRefresh((value) => value + 1)} disabled={loading} aria-label="Refresh review"><RefreshCw size={12} /> Refresh</button>
+        <button type="button" className="chat-action-button utility-refresh" onClick={() => setRefresh((value) => value + 1)} disabled={loading} aria-label="Refresh review"><RefreshCw size={12} /> Refresh</button>
       </div>
       {loading && <div className="utility-state" role="status">Loading changes…</div>}
       {error && <div className="utility-state utility-state-error" role="alert">{error}</div>}
@@ -201,7 +201,7 @@ function DiffPreview({ file }: { file: ReviewFile }) {
   }
   return (
     <div className="utility-preview diff-preview" data-testid="diff-preview">
-      <div className="utility-preview-header"><strong>{file.path}</strong><button type="button" className="text-button" onClick={() => void copy()}><Copy size={12} /> {copied ? "Copied" : "Copy"}</button></div>
+      <div className="utility-preview-header"><strong>{file.path}</strong><button type="button" className="chat-action-button" onClick={() => void copy()}><Copy size={12} /> {copied ? "Copied" : "Copy"}</button></div>
       <pre>{file.diff.split("\n").map((line, index) => <span key={`${index}-${line}`} className={line.startsWith("+") && !line.startsWith("+++") ? "diff-add" : line.startsWith("-") && !line.startsWith("---") ? "diff-remove" : ""}>{line}{"\n"}</span>)}</pre>
     </div>
   );
@@ -262,7 +262,7 @@ function FilesView() {
   const rootEntries = entries[""] ?? [];
   return (
     <section className="files-view" data-testid="files-view">
-      <div className="utility-view-actions"><span><FolderTree size={13} /> Workspace</span><button type="button" className="text-button utility-refresh" onClick={() => setRefresh((value) => value + 1)} disabled={loadingPaths.size > 0} aria-label="Refresh files"><RefreshCw size={12} /> Refresh</button></div>
+      <div className="utility-view-actions"><span><FolderTree size={13} /> Workspace</span><button type="button" className="chat-action-button utility-refresh" onClick={() => setRefresh((value) => value + 1)} disabled={loadingPaths.size > 0} aria-label="Refresh files"><RefreshCw size={12} /> Refresh</button></div>
       {error && <div className="utility-state utility-state-error" role="alert">{error}</div>}
       <div className="file-tree" role="tree" aria-label="Workspace files">
         {loadingPaths.has("") && <div className="utility-state">Loading files…</div>}
@@ -297,7 +297,7 @@ function FilePreviewView({ preview }: { preview: FilePreview }) {
       <div className="utility-preview-header"><strong>{preview.path}</strong><span>{label}</span></div>
       {preview.binary ? <div className="utility-state">Binary file preview is unavailable.</div> : <pre><code>{preview.content}</code></pre>}
       {preview.truncated && <div className="utility-preview-note">Preview truncated at 512 KB.</div>}
-      {!preview.binary && <button type="button" className="text-button" onClick={() => void openWorkspacePath(preview.path).catch(() => undefined)}><FolderOpen size={12} /> Open externally</button>}
+      {!preview.binary && <button type="button" className="chat-action-button" onClick={() => void openWorkspacePath(preview.path).catch(() => undefined)}><FolderOpen size={12} /> Open externally</button>}
     </div>
   );
 }

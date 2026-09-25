@@ -98,7 +98,7 @@
 
 .composer:focus-within {
   border-color: var(--focus-border);
-  outline: 2px solid var(--focus-border);
+  outline: 2px solid color-mix(in srgb, var(--focus-border) 50%, transparent);
   outline-offset: 1px;
 }
 

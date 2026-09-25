@@ -115,7 +115,9 @@ test.describe("subagent view", () => {
     await expect(edit).toHaveAttribute("open", "");
     await expect(edit.locator(".diff-remove")).toContainText("-before");
     await expect(edit.locator(".diff-add")).toContainText("+after");
+    await expect(edit.locator(".row-diffstat")).toHaveText("+1/-1");
     await edit.locator("summary").click();
+    await expect(edit.locator(".row-diffstat")).toHaveText("+1/-1");
     await expect(edit.locator(".tool-detail")).toBeHidden();
   });
 

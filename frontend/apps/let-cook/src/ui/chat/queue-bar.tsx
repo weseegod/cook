@@ -37,7 +37,7 @@ export function QueueBar() {
         <strong>{entries.length} queued</strong>
         <button
           type="button"
-          className="text-button"
+          className="chat-action-button"
           data-testid="queue-clear"
           onClick={() => void clearQueuedPrompts(sessionId).catch(reportError)}
         >

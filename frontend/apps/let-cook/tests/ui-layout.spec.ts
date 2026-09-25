@@ -67,7 +67,7 @@ for (const theme of ["dark", "light"] as const) {
         text: ratio(field.color, surface.backgroundColor),
         placeholder: ratio(placeholder.color, surface.backgroundColor),
         border: ratio(surface.borderColor, surface.backgroundColor),
-        focus: ratio(surface.outlineColor, surface.backgroundColor),
+        focus: ratio(surface.borderColor, surface.backgroundColor),
         focusWidth: Number.parseFloat(surface.outlineWidth),
       };
     });

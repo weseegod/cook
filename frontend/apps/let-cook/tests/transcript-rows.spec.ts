@@ -70,11 +70,12 @@ test.describe("transcript rows", () => {
     await expect(row.locator(".diff-add").first()).toContainText("+X");
     await expect(row.locator(".diff-meta")).toHaveCount(2);
     await expect(row.locator(".tool-locations")).toHaveCount(0);
+    await expect(row.locator(".row-diffstat")).toHaveText("+3/-1");
     await row.locator("summary").click();
-    await expect(row.locator(".row-diffstat")).toHaveCount(0);
+    await expect(row.locator(".row-diffstat")).toHaveText("+3/-1");
     await expect(row.locator("summary strong")).toHaveText("Edit src/main.tsx");
     await row.locator("summary").click();
-    await expect(row.locator(".row-diffstat")).toHaveCount(0);
+    await expect(row.locator(".row-diffstat")).toHaveText("+3/-1");
   });
 
   test("opens the entire Write with line counts in its title", async ({ page }) => {
@@ -150,6 +151,49 @@ test.describe("transcript rows", () => {
     await page.keyboard.press("Tab");
     await expect(actions.locator("button").first()).toBeFocused();
     await expect(actions).toHaveCSS("opacity", "1");
+  });
+
+  test("keeps HTML Preview and Copy actions aligned at desktop and mobile sizes", async ({ page }) => {
+    const html = "<!doctype html><html><body><button>Preview</button></body></html>";
+    const markdown = ["```html", html, "```"].join("\n");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await launch(page, {
+      promptUpdates: [{
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: markdown },
+      }],
+    });
+    await page.getByTestId("composer-input").fill("Show an HTML example.");
+    await page.getByTestId("send-button").click();
+
+    const block = page.locator(".code-block");
+    const actions = block.locator(".code-toolbar-actions");
+    await expect(actions.getByRole("button", { name: "Preview" })).toBeVisible();
+    await expect(actions.getByRole("button", { name: "Copy", exact: true })).toBeVisible();
+    for (const width of [1440, 420]) {
+      await page.setViewportSize({ width, height: 900 });
+      const sizes = await actions.locator(".chat-action-button").evaluateAll((buttons) => buttons.map((button) => {
+        const rect = button.getBoundingClientRect();
+        return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      }));
+      expect(sizes).toHaveLength(2);
+      expect(Math.abs(sizes[0].width - sizes[1].width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(sizes[0].height - sizes[1].height)).toBeLessThanOrEqual(1);
+      expect(Math.abs(sizes[0].y - sizes[1].y)).toBeLessThanOrEqual(1);
+      const bounds = await block.boundingBox();
+      expect(bounds).not.toBeNull();
+      expect(sizes[0].x).toBeGreaterThanOrEqual(bounds!.x - 1);
+      expect(sizes[1].x + sizes[1].width).toBeLessThanOrEqual(bounds!.x + bounds!.width + 1);
+    }
+
+    await actions.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(html);
+    await actions.getByRole("button", { name: "Preview" }).click();
+    const preview = page.getByTestId("artifacts-view");
+    await expect(page.getByTestId("artifact-html")).toBeVisible();
+    await expect(preview.locator(".chat-action-button")).toBeVisible();
+    await preview.getByRole("button", { name: "Clear preview" }).click();
+    await expect(page.getByTestId("artifact-html")).toHaveCount(0);
   });
 
   test.describe("touch viewport", () => {

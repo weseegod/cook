@@ -106,9 +106,8 @@ export const VerbGroupRow = memo(function VerbGroupRow({ tools }: { tools: ToolB
 export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
   const header = toolHeader(tool);
   const running = isLiveTool(tool);
-  const write = isWriteTool(tool.kind);
   const edit = EDIT_KINDS.includes((tool.kind ?? "").toLowerCase());
-  const writeCounts = write && tool.paths.length <= 1 ? toolLineCounts(tool.content) : null;
+  const lineCounts = edit && tool.paths.length <= 1 ? toolLineCounts(tool.content) : null;
   const [open, setOpen] = useState(false);
   const [pinned, setPinned] = useState(false);
   const openRef = useRef(false);
@@ -143,11 +142,11 @@ export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
           {header.prefix && <span className="row-prefix">{header.prefix}</span>}
           {header.text}
         </strong>
-        {writeCounts && (writeCounts.added > 0 || writeCounts.removed > 0) && (
+        {lineCounts && (lineCounts.added > 0 || lineCounts.removed > 0) && (
           <span className="row-suffix row-diffstat">
-            <span className="row-diff-add">+{writeCounts.added}</span>
+            <span className="row-diff-add">+{lineCounts.added}</span>
             <span className="row-diff-sep">/</span>
-            <span className="row-diff-del">-{writeCounts.removed}</span>
+            <span className="row-diff-del">-{lineCounts.removed}</span>
           </span>
         )}
       </summary>
@@ -244,10 +243,10 @@ export function ToolDetail({ tool }: { tool: ToolBlock }) {
     <div className={`tool-detail${diff ? " tool-detail-diff" : ""}`}>
       {(tool.command || pathText || text) && (
         <div className="tool-actions" aria-label="Tool actions">
-          {tool.command && <button type="button" onClick={() => void copy("command", tool.command!)}><Copy size={12} /> {copied === "command" ? "Copied" : "Copy command"}</button>}
-          {pathText && <button type="button" onClick={() => void copy("path", pathText)}><Clipboard size={12} /> {copied === "path" ? "Copied" : "Copy path"}</button>}
-          {text && <button type="button" onClick={() => void copy("output", text)}><Files size={12} /> {copied === "output" ? "Copied" : "Copy output"}</button>}
-          {tool.paths[0] && <button type="button" onClick={() => void openPath(displayPath(tool.paths[0])).catch(reportError)}><FolderOpen size={12} /> Open</button>}
+          {tool.command && <button type="button" className="chat-action-button" onClick={() => void copy("command", tool.command!)}><Copy size={12} /> {copied === "command" ? "Copied" : "Copy command"}</button>}
+          {pathText && <button type="button" className="chat-action-button" onClick={() => void copy("path", pathText)}><Clipboard size={12} /> {copied === "path" ? "Copied" : "Copy path"}</button>}
+          {text && <button type="button" className="chat-action-button" onClick={() => void copy("output", text)}><Files size={12} /> {copied === "output" ? "Copied" : "Copy output"}</button>}
+          {tool.paths[0] && <button type="button" className="chat-action-button" onClick={() => void openPath(displayPath(tool.paths[0])).catch(reportError)}><FolderOpen size={12} /> Open</button>}
         </div>
       )}
       {tool.command && <pre className="tool-command"><span className="shell-prefix">$ </span>{tool.command}</pre>}

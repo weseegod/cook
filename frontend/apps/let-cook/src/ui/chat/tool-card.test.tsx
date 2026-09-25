@@ -80,10 +80,11 @@ describe("edit and write rows", () => {
     expect(row.querySelector(".diff-remove")?.textContent).toContain("-b");
     expect(row.querySelector(".diff-add")?.textContent).toContain("+X");
     expect(row.querySelector(".tool-locations")).toBeNull();
+    expect(row.querySelector(".row-diffstat")?.textContent).toBe("+3/-1");
     row.open = false;
     fireEvent(row, new Event("toggle"));
     expect(row.open).toBe(false);
-    expect(row.querySelector(".row-diffstat")).toBeNull();
+    expect(row.querySelector(".row-diffstat")?.textContent).toBe("+3/-1");
     rerender(<ToolRow tool={{ ...editTool, content: [...editTool.content] }} />);
     expect(row.open).toBe(false);
   });

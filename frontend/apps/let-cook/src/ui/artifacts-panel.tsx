@@ -20,7 +20,7 @@ export function ArtifactsPanel() {
     <section className="artifacts-view" data-testid="artifacts-view">
       <div className="utility-view-actions">
         <strong className="utility-path">{artifact.title}</strong>
-        <button type="button" className="text-button" onClick={clearArtifact} aria-label="Clear preview">
+        <button type="button" className="chat-action-button" onClick={clearArtifact} aria-label="Clear preview">
           <PanelRightClose size={12} /> Close
         </button>
       </div>
@@ -69,7 +69,7 @@ function DiffBody({ title, diff }: { title: string; diff: string }) {
     <div className="utility-preview diff-preview" data-testid="artifact-diff">
       <div className="utility-preview-header">
         <strong>{title}</strong>
-        <button type="button" className="text-button" onClick={() => void copy()}>
+        <button type="button" className="chat-action-button" onClick={() => void copy()}>
           <Copy size={12} /> {copied ? "Copied" : "Copy"}
         </button>
       </div>
