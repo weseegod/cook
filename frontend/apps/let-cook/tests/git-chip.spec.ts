@@ -90,9 +90,11 @@ test.describe("header git chip", () => {
     expect(branchWidth.content).toBeGreaterThan(branchWidth.client);
 
     await chip.click();
-    for (const action of ["git-commit", "git-commit-and-push"]) {
-      const description = page.getByTestId(action).locator("small");
-      await expect(description).toContainText(`Branch: ${LONG_BRANCH}`);
+    const commitDescription = page.getByTestId("git-commit").locator("small");
+    const pushDescription = page.getByTestId("git-commit-and-push").locator("small");
+    await expect(commitDescription).toHaveText(`Commit to ${LONG_BRANCH}`);
+    await expect(pushDescription).toContainText(`Branch: ${LONG_BRANCH}`);
+    for (const description of [commitDescription, pushDescription]) {
       const width = await description.evaluate((element) => ({
         client: element.clientWidth,
         content: element.scrollWidth,
