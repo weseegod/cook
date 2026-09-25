@@ -5,10 +5,10 @@ import { SessionNotificationCoalescer } from "../client-coalesce";
 import type { RpcMessage } from "../host";
 import { dispatchNotification } from "../notifications";
 import { dispatchReverseRequest } from "../reverse";
-import type { PromptCorrelation, SessionEventDedupe } from "../session-events";
+import { promptIdFromParams, type PromptCorrelation, type SessionEventDedupe } from "../session-events";
 import { commandsFromUpdate } from "../xai";
 import { noteBackgroundActivity, routeChildUpdate, shouldApplyToActiveSession } from "./state";
-import { planModeIsOn, unwrapMethod, unwrapParams } from "./wire";
+import { isRecord, planModeIsOn, unwrapMethod, unwrapParams } from "./wire";
 
 /** The live client's ordering state, read and driven by the inbound message pipeline. */
 export interface InboundPipeline {
@@ -18,6 +18,7 @@ export interface InboundPipeline {
   readonly refreshPlanFiles: () => void;
   readonly refreshModels: () => Promise<void>;
   readonly onQueueChanged?: (params: Record<string, unknown>, previousEntries: QueuedPromptEntry[]) => void;
+  readonly hasPaintedPrompt?: (sessionId: string, promptId: string) => boolean;
 }
 
 // The store is frame-coalesced, so two goal updates in one wire batch cannot reliably compare
@@ -52,6 +53,18 @@ export async function handleInboundMessages(pipeline: InboundPipeline, messages:
       }
       if (!pipeline.promptCorrelation.accept(params)) continue;
       if (!pipeline.sessionEvents.accept(rail, params)) continue;
+      // Direct Send and queue promotion already paint the whole user prompt. The agent echoes
+      // its content parts later (sometimes after turn completion), so rendering those again
+      // would duplicate text or create a second bubble. Replay and other clients still render.
+      const meta = isRecord(params._meta) ? params._meta : isRecord(params.meta) ? params.meta : null;
+      const promptId = promptIdFromParams(params);
+      if (
+        update?.sessionUpdate === "user_message_chunk"
+        && meta?.isReplay !== true
+        && typeof params.sessionId === "string"
+        && promptId
+        && pipeline.hasPaintedPrompt?.(params.sessionId, promptId)
+      ) continue;
       if (update?.sessionUpdate === "available_commands_update") {
         useCatalogStore.getState().setCommands(commandsFromUpdate(update.availableCommands));
       }

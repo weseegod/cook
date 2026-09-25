@@ -44,7 +44,7 @@ export class PromptCorrelation {
   accept(params: JsonRecord): boolean {
     const meta = asRecord(params._meta) ?? asRecord(params.meta);
     if (meta?.isReplay === true) return true;
-    const promptId = stringValue(params.promptId ?? params.prompt_id ?? meta?.promptId ?? meta?.prompt_id);
+    const promptId = promptIdFromParams(params);
     if (!promptId || this.inFlight.size === 0) return true;
     return this.inFlight.has(promptId);
   }
@@ -52,6 +52,12 @@ export class PromptCorrelation {
   clear(): void {
     this.inFlight.clear();
   }
+}
+
+/** Prompt identity is carried by the notification envelope, not its update payload. */
+export function promptIdFromParams(params: JsonRecord): string | null {
+  const meta = asRecord(params._meta) ?? asRecord(params.meta);
+  return stringValue(params.promptId ?? params.prompt_id ?? meta?.promptId ?? meta?.prompt_id);
 }
 
 export function eventSequence(meta: JsonRecord | null): number | null {

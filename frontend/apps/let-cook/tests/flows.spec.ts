@@ -157,6 +157,26 @@ test.describe("chat, attachments and the model picker", () => {
       .toBe(1);
   });
 
+  test("keeps a normal Send prompt once when its live echo arrives after completion", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    await page.getByPlaceholder("Ask Cook anything…").fill("Send once");
+    await page.getByTestId("send-button").click();
+    const [request] = await waitForCalls(page, "session/prompt");
+    const promptId = (request.params._meta as { promptId: string }).promptId;
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await page.evaluate((id) => {
+      const update = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "Send once" } };
+      window.__cookMock!.sessionUpdate("mock-session", update, { promptId: id });
+      window.__cookMock!.sessionUpdate("mock-session", update, { promptId: id });
+    }, promptId);
+    await page.waitForTimeout(100);
+
+    await expect(page.locator(".message-user")).toHaveCount(1);
+    await expect(page.locator(".message-user")).toHaveText("Send once");
+    expect((await api(page).requests()).filter((entry) => entry.method === "session/prompt")).toHaveLength(1);
+  });
+
   test("renders streamed assistant text and groups the model picker by provider", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

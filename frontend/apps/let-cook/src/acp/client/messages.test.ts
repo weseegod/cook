@@ -146,3 +146,27 @@ describe("a spawned agent's own session while this window's turn is open", () =>
     expect(enqueue.mock.calls[0][0]).toMatchObject({ sessionId: "parent-s1" });
   });
 });
+
+describe("optimistic user prompts", () => {
+  beforeEach(() => useSessionStore.getState().resetConversation("parent-s1"));
+
+  it("ignores live echoes of a painted prompt across notification rails", async () => {
+    const enqueue = vi.fn();
+    const inbound = pipeline({
+      hasPaintedPrompt: (sessionId, promptId) => sessionId === "parent-s1" && promptId === "ours",
+      sessionUpdates: { enqueue, flushNow: vi.fn() } as unknown as InboundPipeline["sessionUpdates"],
+    });
+    const update = { sessionUpdate: "user_message_chunk", content: { type: "text", text: "hello" } };
+
+    await handleInboundMessages(inbound, [
+      { method: "session/update", params: { sessionId: "parent-s1", update, _meta: { promptId: "ours" } } },
+      { method: "_x.ai/session/update", params: { params: { sessionId: "parent-s1", update, _meta: { promptId: "ours" } } } },
+      { method: "session/update", params: { sessionId: "parent-s1", update, _meta: { promptId: "theirs" } } },
+      { method: "session/update", params: { sessionId: "parent-s1", update, _meta: { promptId: "ours", isReplay: true } } },
+    ]);
+
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls[0][0]._meta.promptId).toBe("theirs");
+    expect(enqueue.mock.calls[1][0]._meta.isReplay).toBe(true);
+  });
+});

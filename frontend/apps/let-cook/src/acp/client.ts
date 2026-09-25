@@ -88,6 +88,7 @@ export class CookAcpClient {
       refreshPlanFiles: () => { void this.refreshPlanFiles(); },
       refreshModels: () => this.refreshModels(),
       onQueueChanged: (params, previousEntries) => this.onQueueChanged(params, previousEntries),
+      hasPaintedPrompt: (sessionId, promptId) => this.paintedPromptIds.has(`${sessionId}:${promptId}`),
     };
   }
 

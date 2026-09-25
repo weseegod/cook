@@ -195,6 +195,11 @@ test.describe("goal and plan presentation", () => {
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "send now once" },
     }, { promptId: id }), promptId);
+    await page.evaluate((id) => window.__cookMock!.sessionUpdate("mock-session", {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "send now once" },
+    }, { promptId: id }), promptId);
+    await page.waitForTimeout(100);
     await expect(page.locator(".message-user").filter({ hasText: "send now once" })).toHaveCount(1);
   });
 
