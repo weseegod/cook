@@ -22,6 +22,22 @@ fn plan_path_from_prompt(prompt: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+const VALID_PLAN_BODY: &str = "# Plan: Build a complete reusable thing here now\n\n\
+## Goal kind\ncode-change\n\n\
+## Decisions\n- Use one file.\n\n\
+## Context\n- First fact.\n- Second fact.\n- Third fact.\n\n\
+## Acceptance criteria\n1. A checkable result.\n\n\
+## Verification plan\n1. gating: run `cargo test` and observe success.\n\n\
+## Non-goals\n- Extra features.\n\n\
+## Assumed scope\n- `src/file.rs`\n\n\
+## Implementation approach\nUse a pure function.\n\n\
+## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n\
+## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n\
+### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n\
+### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n\
+## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n- [ ] `src/file.rs` — connect. Done when: call works.\n- [ ] `tests/file.rs` — test. Done when: test passes.\n\n\
+## Deviations\n(none yet)\n";
+
 /// Spawn behaviour knobs for the planner-coordinator stub.
 enum SpawnBehaviour {
     /// Parse `{PLAN_FILE}` out of the prompt, write `body` there, then respond `Done`.
@@ -264,7 +280,7 @@ async fn send_now_restarts_planner_with_all_steering() {
                     cancels: 2,
                     started: started_tx,
                     objectives: StdArc::clone(&objectives),
-                    body: b"# Plan\n",
+                    body: VALID_PLAN_BODY.as_bytes(),
                 });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             {
@@ -387,7 +403,7 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
     local
         .run_until(async {
             let (tx, spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: b"# Plan\n" });
+                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
             let baseline_path = actor.goal_tracker.lock().plan_baseline_path();
@@ -406,8 +422,8 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
                 snap.plan_baseline_file.as_deref(),
                 Some(baseline_path.as_path())
             );
-            assert_eq!(std::fs::read_to_string(plan_path).unwrap(), "# Plan\n");
-            assert_eq!(std::fs::read_to_string(baseline_path).unwrap(), "# Plan\n");
+            assert_eq!(std::fs::read_to_string(plan_path).unwrap(), VALID_PLAN_BODY);
+            assert_eq!(std::fs::read_to_string(baseline_path).unwrap(), VALID_PLAN_BODY);
             assert!(
                 !actor
                     .goal_tracker
@@ -433,7 +449,7 @@ async fn planner_spawn_sets_harness_only_fork_context() {
         .run_until(async {
             let (tx, spawn_count, capture) =
                 spawn_planner_coordinator_capturing(SpawnBehaviour::WritePlanThenDone {
-                    body: b"# Plan\n",
+                    body: VALID_PLAN_BODY.as_bytes(),
                 });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
@@ -460,7 +476,7 @@ async fn planner_fork_inherits_parent_model() {
         .run_until(async {
             let (tx, spawn_count, capture) =
                 spawn_planner_coordinator_capturing(SpawnBehaviour::WritePlanThenDone {
-                    body: b"# Plan\n",
+                    body: VALID_PLAN_BODY.as_bytes(),
                 });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             // Configure an EXPLICIT planner role model different from the parent.
@@ -506,7 +522,7 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
     local
         .run_until(async {
             let (tx, _spawn_count) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
-                body: b"# Plan v1\n",
+                body: VALID_PLAN_BODY.as_bytes(),
             });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
@@ -529,7 +545,7 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
             );
             assert_eq!(
                 std::fs::read_to_string(&baseline_path).unwrap(),
-                "# Plan v1\n",
+                VALID_PLAN_BODY,
                 "baseline must hold the planner's ORIGINAL plan body",
             );
 
@@ -540,7 +556,7 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
 
             assert_eq!(
                 std::fs::read_to_string(&baseline_path).unwrap(),
-                "# Plan v1\n",
+                VALID_PLAN_BODY,
                 "baseline must remain the ORIGINAL plan, never overwritten",
             );
         })
@@ -556,7 +572,7 @@ async fn planner_records_own_harness_trace_turn_with_footer() {
     local
         .run_until(async {
             let (tx, _spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: b"# Plan\n" });
+                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
 
@@ -615,7 +631,7 @@ async fn planner_success_sets_then_clears_planning_flag() {
     local
         .run_until(async {
             let (tx, _spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: b"# Plan\n" });
+                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
             let (actor, _tmp, mut persistence_rx) =
                 make_planner_actor_capturing(Some(tx), true).await;
             create_test_goal(&actor);
@@ -646,7 +662,7 @@ async fn planner_clears_planning_latch_before_publishing_the_plan() {
     local
         .run_until(async {
             let (tx, _spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: b"# Plan\n" });
+                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
             let (actor, _tmp, mut persistence_rx) =
                 make_planner_actor_capturing(Some(tx), true).await;
             create_test_goal(&actor);
@@ -1051,7 +1067,7 @@ async fn planner_subagent_tokens_fold_into_goal_total() {
     local
         .run_until(async {
             let (tx, spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: b"# Plan\n" });
+                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
             let goal_id = actor
@@ -1158,7 +1174,7 @@ async fn lifecycle_fail_pause_resume_retry_success() {
                                 let _ = std::fs::create_dir_all(
                                     std::path::Path::new(p).parent().unwrap(),
                                 );
-                                let _ = std::fs::write(p, b"# Plan\n");
+                                let _ = std::fs::write(p, VALID_PLAN_BODY.as_bytes());
                             }
                             SubagentResult {
                                 success: true,
@@ -1450,7 +1466,7 @@ async fn setup_goal_reminder_is_plan_aware_when_planner_enabled() {
     local
         .run_until(async {
             let (tx, _c) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
-                body: b"# Plan\n\n1. do it\n",
+                body: VALID_PLAN_BODY.as_bytes(),
             });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
 
@@ -1637,7 +1653,7 @@ async fn resume_after_planner_failure_succeeds_without_infra_recap() {
             let (tx, spawn_count) =
                 spawn_planner_coordinator(SpawnBehaviour::RuntimeThenWritePlan {
                     message: "planner crashed".into(),
-                    body: b"# Plan\n",
+                    body: VALID_PLAN_BODY.as_bytes(),
                 });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);

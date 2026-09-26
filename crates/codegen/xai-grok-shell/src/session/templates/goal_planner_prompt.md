@@ -19,7 +19,7 @@ Do not map one criterion per mechanic. Identify the defining mechanics, then FOL
 
 ## Specify OUTCOMES, not architecture
 
-The frozen plan is a contract on the OBSERVABLE OUTCOME the objective asks for, NOT on how to build it. You MUST NOT prescribe the module/file layout, class or function names, or exact signatures — freezing the HOW pins one solution and lets the verifier refute correct work for diverging from it. State each criterion as an outcome the objective implies ("the core parse→normalize transform can be exercised directly on representative inputs" — GOOD), never as a named artifact ("a `parser.py` exporting `normalize(record, opts)`" — BAD).
+The frozen plan is a contract on the OBSERVABLE OUTCOME the objective asks for, NOT on how to build it. You MUST NOT prescribe the module/file layout, class or function names, or exact signatures in `## Acceptance criteria` — freezing the HOW pins one solution and lets the verifier refute correct work for diverging from it. State each criterion as an outcome the objective implies ("the core parse→normalize transform can be exercised directly on representative inputs" — GOOD), never as a named artifact ("a `parser.py` exporting `normalize(record, opts)`" — BAD). Symbols and layout details belong in `## Current anchors` and `## Edit brief`, not in acceptance criteria.
 
 ## Visual / interactive objectives
 
@@ -67,6 +67,12 @@ Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these secti
 ## Implementation approach
 <code-change only: how to structure the code so it is easy to test>
 
+## Current anchors
+<code-change only: 2–12 bullets; each has a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read>
+
+## Edit brief
+<code-change only: one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof>
+
 ## Task checklist
 - [ ] `<path or symbol>` — <first concrete implementation step>. Done when: <observable result>.
 - [ ] `<path or symbol>` — <next step>. Done when: <observable result>.
@@ -96,6 +102,10 @@ The plan also tells the IMPLEMENTER what evidence to PRODUCE, because the verifi
 **Assumed scope** — specific files/modules/deps you expect to touch; do not restate OBJECTIVE.
 
 **Implementation approach** (`code-change` only) — structure the work so it is easy to test: separate pure logic from I/O and prefer small testable units. Design guidance, NOT an acceptance criterion — do not refute working code for diverging from it, and do not restate it as a criterion.
+
+**Current anchors** (`code-change` only) — 2–12 bullets grounding the plan in what you actually read. Each bullet has a backticked path, then a backticked symbol (an identifier you saw) or `new:Identifier` (a symbol the code does not have yet), then `observed:` and one sentence about what you read: what a function does, what a file contains, or that the file does not exist. At least one anchor must describe real current state even when every symbol is `new:`. Only name symbols you have actually read.
+
+**Edit brief** (`code-change` only) — one `###` block per Task checklist line, same path and same order. Two steps on one file become two blocks. Each block has exactly four bullets in order: `Now:` (current state of the exact place about to change), `Change:` (what to change), `Keep:` (invariant not to break), `Proof:` (a backticked command or test path).
 
 **Task checklist** (`code-change` only) — 3-8 ordered `- [ ] `<path>` — change. Done when: observation.` checkbox steps the implementer executes and checks off as it goes; the harness mines the first unchecked box as the per-turn "next step" nudge. Steps are HOW guidance like the approach, never part of the judged contract — keep each small, concrete, and completable in one sitting (end with a testing/evidence step). Do not put checkboxes in any other section.
 

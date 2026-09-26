@@ -444,11 +444,15 @@ Use this exact section order: `## Goal kind` (code-change, analysis, or research
 `## Decisions` (at least one bullet), `## Context` (3–8 bullets), \
 `## Acceptance criteria` (numbered outcomes), `## Verification plan` (numbered actions), \
 `## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
-then for code-change `## Implementation approach` (nonempty) and `## Task checklist` \
-(3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
+then for code-change `## Implementation approach` (nonempty), `## Current anchors` \
+(2–12 bullets: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
+`## Edit brief` (one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof), \
+and `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
 and finally `## Deviations` containing exactly `(none yet)`. \
 Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
-Only Task checklist may contain checkboxes. The file must stand alone without this conversation.
+Only Task checklist may contain checkboxes. The file must stand alone without this conversation. \
+Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
+do not put layout or signature details in acceptance criteria.
 
 You should build your plan by writing to or editing this file. \
 Note that this is the only file you are allowed to edit.
@@ -474,10 +478,15 @@ for this planning session and it starts empty. \
 Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 
 Use the same complete plan contract: Goal kind, Decisions, Context, Acceptance criteria, \
-Verification plan, Non-goals, Assumed scope, then Implementation approach and Task checklist \
-for code-change, then Deviations with `(none yet)`. Context needs 3–8 bullets. \
+Verification plan, Non-goals, Assumed scope, then Implementation approach, Current anchors, \
+Edit brief, and Task checklist for code-change, then Deviations with `(none yet)`. \
+Context needs 3–8 bullets. Current anchors needs 2–12 bullets with a backticked path, \
+a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
+block per Task checklist line with `Now:`, `Change:`, `Keep:`, `Proof:` bullets. \
 Code-change checklist needs 3–8 `- [ ] `<path>` — change. Done when: observation.` lines, \
-ending with test or evidence. Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist.
+ending with test or evidence. Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
+Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
+do not put layout or signature details in acceptance criteria.
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
 }

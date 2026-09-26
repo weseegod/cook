@@ -8,7 +8,7 @@
 use super::support::*;
 use super::*;
 
-const VALID_REVIEW_PLAN: &str = "# Plan: Ship a complete reusable widget\n\n## Goal kind\ncode-change\n\n## Decisions\n- Keep the existing API.\n\n## Context\n- The widget exists.\n- The API has callers.\n- The tests are local.\n\n## Acceptance criteria\n1. The widget works.\n\n## Verification plan\n1. gating: run `cargo test` and observe success.\n\n## Non-goals\n- New APIs.\n\n## Assumed scope\n- `src/widget.rs`\n\n## Implementation approach\nUse the existing module.\n\n## Task checklist\n- [ ] `src/widget.rs` — update behavior. Done when: output changes.\n- [ ] `src/widget.rs` — integrate behavior. Done when: callers work.\n- [ ] `tests/widget.rs` — test the behavior. Done when: tests pass.\n\n## Deviations\n(none yet)\n";
+const VALID_REVIEW_PLAN: &str = "# Plan: Ship a complete reusable widget\n\n## Goal kind\ncode-change\n\n## Decisions\n- Keep the existing API.\n\n## Context\n- The widget exists.\n- The API has callers.\n- The tests are local.\n\n## Acceptance criteria\n1. The widget works.\n\n## Verification plan\n1. gating: run `cargo test` and observe success.\n\n## Non-goals\n- New APIs.\n\n## Assumed scope\n- `src/widget.rs`\n\n## Implementation approach\nUse the existing module.\n\n## Current anchors\n- `src/widget.rs` `render_widget` observed: renders the widget and returns a string.\n- `tests/widget.rs` `new:widget_tests` observed: test file does not exist yet.\n\n## Edit brief\n### `src/widget.rs`\n- Now: `render_widget` returns a fixed string.\n- Change: Update the return value to match the new behavior.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test widget`\n\n### `src/widget.rs`\n- Now: Callers use the old output.\n- Change: Integrate the new behavior with callers.\n- Keep: No caller breaks.\n- Proof: `cargo test widget`\n\n### `tests/widget.rs`\n- Now: No widget tests exist.\n- Change: Add tests for the new behavior.\n- Keep: Tests drive the real widget.\n- Proof: `cargo test widget`\n\n## Task checklist\n- [ ] `src/widget.rs` — update behavior. Done when: output changes.\n- [ ] `src/widget.rs` — integrate behavior. Done when: callers work.\n- [ ] `tests/widget.rs` — test the behavior. Done when: tests pass.\n\n## Deviations\n(none yet)\n";
 
 #[tokio::test(flavor = "current_thread")]
 async fn clean_handoff_keeps_one_plan_anchor_in_model_history() {
@@ -26,6 +26,14 @@ async fn clean_handoff_keeps_one_plan_anchor_in_model_history() {
                 history[0]
                     .text_content()
                     .contains("Implement the approved plan at")
+            );
+            assert!(
+                history[0].text_content().contains("Current anchors"),
+                "anchor must name ## Current anchors"
+            );
+            assert!(
+                history[0].text_content().contains("Edit brief"),
+                "anchor must name ## Edit brief"
             );
             assert!(!history[0].text_content().contains("old exploration"));
         })
