@@ -96,8 +96,8 @@ def cell(value):
     return "unreported" if value is None else str(value)
 
 
-def render(run_dir, model, wire, task, agents):
-    lines = [f"# Local agent comparison: {model}", "", f"Wire model: `{wire}`", "",
+def render(run_dir, model, wire, task, agents, thinking):
+    lines = [f"# Local agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", "",
              "Task:", "", "> " + task.replace("|", "\\|").replace("\n", "\n> "), "",
              "| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Files | Bytes | Output tokens/s |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
@@ -152,6 +152,7 @@ if __name__ == "__main__":
     parser.add_argument("--wire")
     parser.add_argument("--task")
     parser.add_argument("--agents")
+    parser.add_argument("--thinking", choices=("true", "false"), default="false")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.self_test:
@@ -159,7 +160,7 @@ if __name__ == "__main__":
     else:
         if not all((args.run_dir, args.model, args.wire, args.task, args.agents, args.report)):
             parser.error("report arguments are required")
-        report = render(args.run_dir, args.model, args.wire, args.task, args.agents.split(","))
+        report = render(args.run_dir, args.model, args.wire, args.task, args.agents.split(","), args.thinking)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(report)
         (args.run_dir / "report.md").write_text(report)

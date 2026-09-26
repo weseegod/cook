@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: ./scripts/evaluate.sh --model NAME --task TEXT [--timeout SECONDS] [--agents cook,opencode,pi]
+Usage: ./scripts/evaluate.sh --model NAME --task TEXT [--timeout SECONDS] [--agents cook,opencode,pi] [--thinking true|false]
 
 Compare installed agents sequentially against the local llama-server on port 8080.
 Results: temp/evaluate/ (workdirs and logs), docs/audits/ (markdown report).
@@ -11,16 +11,17 @@ Results: temp/evaluate/ (workdirs and logs), docs/audits/ (markdown report).
 --task     identical task text sent to each agent (required)
 --timeout  seconds allowed per agent (default: 1800)
 --agents   comma-separated subset in execution order (default: cook,opencode,pi)
+--thinking enable model reasoning for every agent (default: false)
 EOF
 }
 
-MODEL= TASK= TIMEOUT=1800 AGENTS=cook,opencode,pi
+MODEL= TASK= TIMEOUT=1800 AGENTS=cook,opencode,pi THINKING=false
 while (($#)); do
   case "$1" in
-    --model|--task|--timeout|--agents)
+    --model|--task|--timeout|--agents|--thinking)
       (($# >= 2)) || { echo "missing value for $1" >&2; exit 2; }
       case "$1" in
-        --model) MODEL=$2 ;; --task) TASK=$2 ;; --timeout) TIMEOUT=$2 ;; --agents) AGENTS=$2 ;;
+        --model) MODEL=$2 ;; --task) TASK=$2 ;; --timeout) TIMEOUT=$2 ;; --agents) AGENTS=$2 ;; --thinking) THINKING=$2 ;;
       esac
       shift 2 ;;
     -h|--help) usage; exit 0 ;;
@@ -30,6 +31,7 @@ done
 [[ -n "$MODEL" && -n "$TASK" ]] || { usage >&2; exit 2; }
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { echo "--timeout must be positive seconds" >&2; exit 2; }
 [[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "invalid model name" >&2; exit 2; }
+[[ "$THINKING" == true || "$THINKING" == false ]] || { echo "--thinking must be true or false" >&2; exit 2; }
 IFS=, read -r -a SELECTED <<<"$AGENTS"
 ((${#SELECTED[@]} > 0)) || { echo "--agents is empty" >&2; exit 2; }
 declare -A SEEN=()
@@ -75,4 +77,4 @@ if [[ -e "$REPORT" ]]; then
     ((suffix += 1))
   done
 fi
-python3 "$ROOT/scripts/evaluate/summarize.py" --run-dir "$RUN_DIR" --model "$MODEL" --wire "$WIRE" --task "$TASK" --agents "$AGENTS" --report "$REPORT"
+python3 "$ROOT/scripts/evaluate/summarize.py" --run-dir "$RUN_DIR" --model "$MODEL" --wire "$WIRE" --task "$TASK" --agents "$AGENTS" --thinking "$THINKING" --report "$REPORT"

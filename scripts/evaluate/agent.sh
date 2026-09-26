@@ -2,7 +2,8 @@
 # Per-agent configuration, invocation, and artifacts.
 
 run_agent() {
-  local agent=$1 dir="$RUN_DIR/$1" start end rc
+  local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking
+  if [[ "$THINKING" == true ]]; then effort=medium; pi_thinking=medium; else effort=none; pi_thinking=off; fi
   mkdir -p "$dir/workdir" "$dir/home"
   git -C "$dir/workdir" init -q
   case "$agent" in
@@ -20,7 +21,8 @@ name = "local evaluation"
 input = ["text"]
 context_window = {os.environ["CONTEXT_WINDOW"]}
 max_completion_tokens = 8192
-supports_reasoning_effort = false
+supports_reasoning_effort = true
+reasoning_efforts = ["none", "medium"]
 
 [model_providers.local]
 base_url = "{os.environ["BASE_URL"]}"
@@ -40,16 +42,16 @@ PY
       chmod 600 "$dir/home/cook/config.toml"
       local -a cook_flags=()
       if "$COOK_BIN" --help 2>/dev/null | grep -q -- '--no-auto-update'; then cook_flags+=(--no-auto-update); fi
-      cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 "${cook_flags[@]}")
+      cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 --reasoning-effort "$effort" "${cook_flags[@]}")
       ;;
     opencode)
       mkdir -p "$dir/home/xdg-data" "$dir/home/xdg-state" "$dir/home/xdg-cache"
-      OPENCODE_CONFIG_CONTENT=$(python3 - "$WIRE" "$BASE_URL" <<'PY'
+      OPENCODE_CONFIG_CONTENT=$(python3 - "$WIRE" "$BASE_URL" "$effort" <<'PY'
 import json,sys
-wire, base=sys.argv[1:]
+wire, base, effort=sys.argv[1:]
 print(json.dumps({"$schema":"https://opencode.ai/config.json", "provider":{"llama.cpp":{
   "npm":"@ai-sdk/openai-compatible", "name":"Local llama.cpp", "options":{"baseURL":base,"apiKey":"{env:LLAMA_API_KEY}"},
-  "models":{wire:{"name":wire}}}}}))
+  "models":{wire:{"name":wire,"options":{"reasoningEffort":effort}}}}}}))
 PY
 )
       export OPENCODE_CONFIG_CONTENT OPENCODE_DISABLE_AUTOUPDATE=1
@@ -64,10 +66,11 @@ PY
 import json,sys
 wire,base=sys.argv[1:]
 print(json.dumps({"providers":{"local":{"baseUrl":base,"api":"openai-completions","apiKey":"$LLAMA_API_KEY",
-  "models":[{"id":wire,"name":wire,"contextWindow":32768,"maxTokens":8192}]}}}))
+  "models":[{"id":wire,"name":wire,"reasoning":True,"thinkingLevelMap":{"off":"none"},
+    "compat":{"supportsReasoningEffort":True},"contextWindow":32768,"maxTokens":8192}]}}}))
 PY
       chmod 600 "$PI_CODING_AGENT_DIR/models.json"
-      cmd=("$PI_BIN" --mode json -p --provider local --model "$WIRE" "$PROMPT")
+      cmd=("$PI_BIN" --mode json -p --provider local --model "$WIRE" --thinking "$pi_thinking" "$PROMPT")
       ;;
   esac
   echo "Running $agent" >&2
