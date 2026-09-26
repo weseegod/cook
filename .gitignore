@@ -12,3 +12,4 @@ __pycache__/
 
 # Local release artifacts produced by scripts/publish_release.sh
 /dist/
+/temp/
