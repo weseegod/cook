@@ -52,8 +52,20 @@ import json,sys
 try:
     data=json.load(open('/home/thanh/models/config.json'))
     model=data['models'][sys.argv[1]]
-    print(int(model.get('context',data.get('context_default',32768))))
+    slots=max(1,int(model.get('parallel',data.get('parallel_default',1))))
+    print(int(model.get('context',data.get('context_default',32768)))//slots)
 except (OSError,KeyError,ValueError,TypeError):
     print(32768)
+PY
+}
+
+model_parallel_slots() {
+python3 - "$MODEL" <<'PY'
+import json,sys
+try:
+    data=json.load(open('/home/thanh/models/config.json'))
+    print(max(1,int(data['models'][sys.argv[1]].get('parallel',data.get('parallel_default',1)))))
+except (OSError,KeyError,ValueError,TypeError):
+    print(1)
 PY
 }

@@ -62,12 +62,12 @@ PY
       mkdir -p "$dir/home/pi"
       PI_CODING_AGENT_DIR="$dir/home/pi"
       export PI_CODING_AGENT_DIR
-      python3 - "$WIRE" "$BASE_URL" <<'PY' >"$PI_CODING_AGENT_DIR/models.json"
+      python3 - "$WIRE" "$BASE_URL" "$CONTEXT_WINDOW" <<'PY' >"$PI_CODING_AGENT_DIR/models.json"
 import json,sys
-wire,base=sys.argv[1:]
+wire,base,window=sys.argv[1:]
 print(json.dumps({"providers":{"local":{"baseUrl":base,"api":"openai-completions","apiKey":"$LLAMA_API_KEY",
   "models":[{"id":wire,"name":wire,"reasoning":True,"thinkingLevelMap":{"off":"none"},
-    "compat":{"supportsReasoningEffort":True},"contextWindow":32768,"maxTokens":8192}]}}}))
+    "compat":{"supportsReasoningEffort":True},"contextWindow":int(window),"maxTokens":8192}]}}}))
 PY
       chmod 600 "$PI_CODING_AGENT_DIR/models.json"
       cmd=("$PI_BIN" --mode json -p --provider local --model "$WIRE" --thinking "$pi_thinking" "$PROMPT")

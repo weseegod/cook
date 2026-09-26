@@ -84,27 +84,28 @@ def usage_pi(path):
 
 def files_and_bytes(workdir):
     if not workdir.is_dir():
-        return 0, 0
+        return 0, 0, []
     found = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                            cwd=workdir, stdout=subprocess.PIPE, check=True).stdout
     paths = [workdir / name.decode(errors="surrogateescape") for name in found.split(b"\0") if name]
     files = [p for p in paths if p.is_file() and not p.is_symlink()]
-    return len(files), sum(p.stat().st_size for p in files)
+    return len(files), sum(p.stat().st_size for p in files), files
 
 
 def cell(value):
     return "unreported" if value is None else str(value)
 
 
-def render(run_dir, model, wire, task, agents, thinking):
-    lines = [f"# Local agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", "",
+def render(run_dir, model, wire, task, agents, thinking, parallel):
+    lines = [f"# Local agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", f"Parallel: `{parallel}`", "",
              "Task:", "", "> " + task.replace("|", "\\|").replace("\n", "\n> "), "",
              "| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Files | Bytes | Output tokens/s |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
+    output_lines = ["", "## Outputs", ""]
     for agent in agents:
         directory = run_dir / agent
         metrics = {"cook": usage_cook, "opencode": usage_opencode, "pi": usage_pi}[agent](directory / "stdout.json")
-        count, size = files_and_bytes(directory / "workdir")
+        count, size, files = files_and_bytes(directory / "workdir")
         try:
             seconds = float((directory / "elapsed-seconds.txt").read_text().strip())
         except (OSError, ValueError):
@@ -119,8 +120,11 @@ def render(run_dir, model, wire, task, agents, thinking):
                   metrics["calls"], metrics["tools"], metrics["input"], metrics["output"],
                   metrics["read"], metrics["write"], cache_presence, count, size, rate]
         lines.append("| " + " | ".join(cell(v) for v in values) + " |")
+        file_list = ", ".join(f"`{path}`" for path in files) if files else "none"
+        output_lines.append(f"- **{agent}**: files {file_list}; workdir `{directory / 'workdir'}`; "
+                            f"raw output `{directory / 'stdout.json'}`; errors `{directory / 'stderr.log'}`.")
     lines += ["", "Metrics come from each agent's JSON output. `unreported` means the field was absent.",
-              "Files and bytes count git-visible regular files in each workdir.", ""]
+              "Files and bytes count git-visible regular files in each workdir.", *output_lines, ""]
     return "\n".join(lines)
 
 
@@ -153,6 +157,7 @@ if __name__ == "__main__":
     parser.add_argument("--task")
     parser.add_argument("--agents")
     parser.add_argument("--thinking", choices=("true", "false"), default="false")
+    parser.add_argument("--parallel", choices=("true", "false"), default="false")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.self_test:
@@ -160,7 +165,7 @@ if __name__ == "__main__":
     else:
         if not all((args.run_dir, args.model, args.wire, args.task, args.agents, args.report)):
             parser.error("report arguments are required")
-        report = render(args.run_dir, args.model, args.wire, args.task, args.agents.split(","), args.thinking)
+        report = render(args.run_dir, args.model, args.wire, args.task, args.agents.split(","), args.thinking, args.parallel)
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(report)
         (args.run_dir / "report.md").write_text(report)
