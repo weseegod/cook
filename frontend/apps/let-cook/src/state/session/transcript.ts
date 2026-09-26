@@ -27,6 +27,12 @@ import {
   toolMetadata,
 } from "./values";
 
+/**
+ * The agent's clean-run / run-as-goal marker (`send_plan_context_cleared_marker`). Model history
+ * was just replaced; the chip must drop and the transcript should show a session-event, not prose.
+ */
+const CONTEXT_CLEARED_MARKER = "context cleared";
+
 export function reduceTranscript(
   transcript: TranscriptState,
   update: SessionUpdate | Record<string, unknown>,
@@ -77,6 +83,13 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
   let recapDialogOpen = state.recapDialogOpen;
 
   for (const notification of notifications) {
+    // TUI `confirm_context_used`: every `session/update` stamps `_meta.totalTokens` from the
+    // shell's live estimate. The chip used to wait for `usage_update` / `pullUsage`, so a clean
+    // run never showed the drop until the implement turn ended.
+    const stamped = stampedTotalTokens(notification);
+    if (stamped !== null) {
+      usage = usage ? { ...usage, used: stamped } : { used: stamped };
+    }
     const raw = notification.update as SessionUpdate & Record<string, unknown>;
     const kind = String(raw.sessionUpdate ?? "");
     if (kind === "retry_state" && raw.type === "retrying") {
@@ -85,6 +98,21 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
     }
     if (kind === "agent_message_chunk" || kind === "agent_thought_chunk") retrying = false;
     if (isTurnActivity(kind) && turnStartedAt === null) turnStartedAt = Date.now();
+    if (kind === "agent_message_chunk" && isContextClearedChunk(raw)) {
+      const turnId = cursor.turnId ?? `turn-context-${blocks.length}`;
+      blocks = [
+        ...finishStreamingBlocks(blocks),
+        {
+          type: "session-event",
+          id: `context-cleared-${blocks.length}`,
+          turnId,
+          kind: "context",
+          text: "Context cleared — implementing plan.",
+        },
+      ];
+      cursor = { ...cursor, turnId, assistantId: null, thoughtId: null };
+      continue;
+    }
     if (kind === "usage_update") {
       usage = asRecord(raw.usage) ?? asRecord(raw);
       continue;
@@ -400,6 +428,20 @@ function reducePlan(transcript: TranscriptState, raw: Record<string, unknown>): 
   };
 }
 
+/** `_meta.totalTokens` on a session/update envelope (TUI `NotificationMeta::total_tokens`). */
+function stampedTotalTokens(notification: SessionNotification): number | null {
+  const envelope = notification as unknown as Record<string, unknown>;
+  const meta = asRecord(envelope._meta) ?? asRecord(envelope.meta);
+  return numberOr(meta?.totalTokens ?? meta?.total_tokens, null);
+}
+
+/** The agent's clean-run marker text, streamed as one `agent_message_chunk`. */
+function isContextClearedChunk(raw: Record<string, unknown>): boolean {
+  const content = asRecord(raw.content);
+  const text = content?.type === "text" && typeof content.text === "string" ? content.text : "";
+  return text.toLowerCase().includes(CONTEXT_CLEARED_MARKER);
+}
+
 /**
  * The TUI writes one marker row per turn (`blocks/session_event.rs`): `Worked for {duration}` on
  * success, cancel/fail variants otherwise. Returns the transcript untouched when no turn was open
@@ -414,9 +456,9 @@ export function appendTurnMarker(
   if (!turnId) return blocks;
   const last = blocks.at(-1);
   if (!last || last.turnId !== turnId) return blocks;
-  // Idempotent when the agent already closed the turn. A goal-complete row is not a turn marker:
-  // the goal finishes while its own turn is still running, so the turn marker still belongs there.
-  if (last.type === "session-event" && last.kind !== "goal") return blocks;
+  // Idempotent when the agent already closed the turn. Goal-complete and context-cleared rows are
+  // not turn markers: they land while their own turn is still open, so the turn marker still belongs there.
+  if (last.type === "session-event" && last.kind !== "goal" && last.kind !== "context") return blocks;
   const text = turnMarkerText(outcome, turnElapsedMs(state));
   return [...blocks, { type: "session-event", id: `event-${turnId}`, turnId, kind: "turn", text }];
 }

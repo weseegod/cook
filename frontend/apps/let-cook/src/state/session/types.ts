@@ -23,8 +23,8 @@ export interface SessionEventBlock {
   id: string;
   turnId: string;
   text: string;
-  /** `goal` rows never close a turn: the goal completes while its own turn is still open. */
-  kind?: "turn" | "goal";
+  /** `goal` and `context` rows never close a turn: the goal/clear lands while its own turn is still open. */
+  kind?: "turn" | "goal" | "context";
 }
 
 export interface ToolBlock {

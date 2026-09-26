@@ -649,3 +649,66 @@ describe("activity session updates (P4)", () => {
     expect(useActivityStore.getState().subagents["child-1"]?.status).toBe("running");
   });
 });
+
+describe("live context usage from _meta.totalTokens", () => {
+  const stamped = (totalTokens: number, update: Record<string, unknown> = { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "…" } }) =>
+    ({ sessionId: "s-usage", update, _meta: { totalTokens } }) as never;
+
+  it("feeds usage.used from every session/update so the chip moves mid-turn", () => {
+    useSessionStore.getState().resetConversation("s-usage");
+    useSessionStore.getState().set({ usage: { used: 0, size: 300_000 } });
+
+    useSessionStore.getState().applyNotifications([stamped(42_000), stamped(85_500)]);
+
+    expect(useSessionStore.getState().usage).toMatchObject({ used: 85_500, size: 300_000 });
+  });
+
+  it("writes a session-event for the clean-run marker instead of prose", () => {
+    useSessionStore.getState().resetConversation("s-usage");
+    useSessionStore.getState().set({ usage: { used: 420_000, size: 1_000_000 } });
+    useSessionStore.getState().appendOptimisticUser("approve the plan");
+
+    useSessionStore.getState().applyNotifications([
+      stamped(2_100, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "context cleared — implementing plan" },
+      }),
+    ]);
+
+    const events = useSessionStore.getState().blocks.filter((block) => block.type === "session-event");
+    expect(events.at(-1)).toMatchObject({ kind: "context", text: "Context cleared — implementing plan." });
+    expect(useSessionStore.getState().blocks.some((block) => block.type === "message" && block.text.includes("context cleared"))).toBe(false);
+    expect(useSessionStore.getState().usage).toMatchObject({ used: 2_100, size: 1_000_000 });
+  });
+
+  it("drops the chip when the clear marker carries the reseeded totalTokens", () => {
+    useSessionStore.getState().resetConversation("s-usage");
+    useSessionStore.getState().set({ usage: { used: 420_000, size: 1_000_000 } });
+
+    useSessionStore.getState().applyNotifications([
+      stamped(2_100, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "context cleared — implementing plan" },
+      }),
+    ]);
+
+    expect(useSessionStore.getState().usage).toMatchObject({ used: 2_100, size: 1_000_000 });
+    expect(useSessionStore.getState().blocks.at(-1)).toMatchObject({ type: "session-event", kind: "context" });
+  });
+
+  it("still closes the turn after a context-cleared row", () => {
+    useSessionStore.getState().resetConversation("s-usage");
+    useSessionStore.getState().appendOptimisticUser("run clean");
+    useSessionStore.getState().set({ turnStartedAt: Date.now() - 2_000 });
+    useSessionStore.getState().applyNotifications([
+      stamped(1_200, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "context cleared — implementing plan" },
+      }),
+    ]);
+    useSessionStore.getState().finishTurn();
+
+    const kinds = useSessionStore.getState().blocks.map((block) => (block.type === "session-event" ? block.kind : block.type));
+    expect(kinds).toEqual(["message", "context", "turn"]);
+  });
+});

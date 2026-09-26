@@ -118,6 +118,35 @@ test.describe("goal and plan presentation", () => {
       .toEqual({ outcome: "approved_clean" });
   });
 
+  test("drops the context chip and writes a session-event on a clean-run marker", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+    const chip = page.getByTestId("context-chip");
+
+    // Seed a full window the way `usage_update` / `pullUsage` would, then stream a live total.
+    await page.evaluate(() => window.__cookMock!.sessionUpdate("mock-session", {
+      sessionUpdate: "usage_update",
+      used: 420_000,
+      size: 1_000_000,
+    }));
+    await expect(chip).toContainText("420K");
+    await page.evaluate(() => window.__cookMock!.sessionUpdate("mock-session", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "Working through the plan." },
+    }, { totalTokens: 480_000 }));
+    await expect(chip).toContainText("480K");
+
+    // The shell's `send_plan_context_cleared_marker` after run clean / run as goal.
+    await page.evaluate(() => window.__cookMock!.sessionUpdate("mock-session", {
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "context cleared — implementing plan" },
+    }, { totalTokens: 2_100 }));
+
+    await expect(chip).toContainText("2.1K");
+    await expect(page.locator(".session-event", { hasText: "Context cleared — implementing plan." })).toBeVisible();
+    // The marker is a session-event row, not streamed assistant prose.
+    await expect(page.locator(".message", { hasText: "context cleared" })).toHaveCount(0);
+  });
+
   test("queues a follow-up while a turn is running", async ({ page }) => {
     await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 1500 });
     const input = page.getByTestId("composer-input");

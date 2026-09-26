@@ -226,6 +226,19 @@ function emit(message: unknown): void {
 }
 
 export function notify(method: string, params: unknown): void {
+  // Stamp `_meta.totalTokens` like the shell's `send_update_full`, so the desktop chip is live
+  // without waiting for `usage_update` / `x.ai/session/info`.
+  if (method === "session/update" && params && typeof params === "object") {
+    const p = params as Record<string, unknown>;
+    const existing = p._meta && typeof p._meta === "object" && !Array.isArray(p._meta)
+      ? { ...(p._meta as Record<string, unknown>) }
+      : {};
+    if (typeof existing.totalTokens !== "number") {
+      existing.totalTokens = state.context.used;
+    }
+    emit({ jsonrpc: "2.0", method, params: { ...p, _meta: existing } });
+    return;
+  }
   emit({ jsonrpc: "2.0", method, params });
 }
 

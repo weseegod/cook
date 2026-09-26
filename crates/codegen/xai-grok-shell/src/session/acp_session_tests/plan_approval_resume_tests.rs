@@ -32,6 +32,31 @@ async fn clean_handoff_keeps_one_plan_anchor_in_model_history() {
         .await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn clean_handoff_resets_context_tokens_used() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
+            actor.signals_handle().update_context_usage(250_000, 256_000);
+            let before = actor.signals_handle().snapshot().await.unwrap();
+            assert_eq!(before.context_tokens_used, 250_000);
+
+            actor
+                .chat_state_handle
+                .push_user_message(ConversationItem::user("old exploration"));
+            actor.handoff_plan_context(None).await;
+
+            let after = actor.signals_handle().snapshot().await.unwrap();
+            assert!(
+                after.context_tokens_used < 250_000,
+                "clean handoff must drop context_tokens_used, got {}",
+                after.context_tokens_used
+            );
+        })
+        .await;
+}
+
 /// Build the typed approval response the pager would send back.
 fn ext_response(outcome: &str) -> Arc<serde_json::value::RawValue> {
     serde_json::value::to_raw_value(&serde_json::json!({ "outcome": outcome }))

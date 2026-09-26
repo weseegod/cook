@@ -2717,6 +2717,7 @@ impl SessionActor {
         self.send_plan_context_cleared_marker().await;
     }
     async fn send_plan_context_cleared_marker(&self) {
+        self.sync_context_usage_after_replace().await;
         self.send_update(
             acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
                 acp::TextContent::new("context cleared — implementing plan"),
@@ -2724,6 +2725,19 @@ impl SessionActor {
             None,
         )
         .await;
+    }
+    /// Plan handoff replaces model history and reseeds chat-state tokens; keep
+    /// `SessionSignals.context_tokens_used` in step so `/context` and goal accounting drop too.
+    async fn sync_context_usage_after_replace(&self) {
+        let Some(config) = self.chat_state_handle.get_sampling_config().await else {
+            return;
+        };
+        let cw = config.context_window.get();
+        if cw == 0 {
+            return;
+        }
+        let estimated = self.chat_state_handle.get_estimated_total_tokens().await;
+        self.signals_handle().update_context_usage(estimated, cw);
     }
     /// Leave plan mode (approved/abandoned) and tell the client to show the Default mode.
     /// Mirrors the mid-turn exit so the resume re-park drives the mode change through the same path.
