@@ -2,8 +2,8 @@ import type { MessageBlock, SessionEventBlock, ToolBlock, TranscriptBlock } from
 import { verbKind } from "./verb-group";
 
 /**
- * Transcript rows as the TUI paints them (`scrollback/` blocks). A verb-group row stands in for a
- * run of consecutive foldable collapsed tools (`scrollback/state/groups.rs::VerbRun`).
+ * Transcript rows as the TUI paints them (`scrollback/` blocks). Verb groups stand in for
+ * consecutive foldable tools; thought groups compact consecutive finished thinking blocks.
  * ACP `Plan` blocks stay in session state for GoalDetail / the todo overlay — they are not
  * scrollback rows (catalog §9.8).
  */
@@ -11,7 +11,8 @@ export type DisplayBlock =
   | MessageBlock
   | SessionEventBlock
   | { type: "tool"; id: string; tool: ToolBlock }
-  | { type: "verb-group"; id: string; tools: ToolBlock[] };
+  | { type: "verb-group"; id: string; tools: ToolBlock[] }
+  | { type: "thought-group"; id: string; thoughts: MessageBlock[] };
 
 export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBlock[] {
   const output: DisplayBlock[] = [];
@@ -25,7 +26,10 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
       output.push({ type: "verb-group", id: `verb-${current.tools[0].id}`, tools: current.tools });
       return;
     }
-    // A run anchored only by finished thoughts never folds: those rows render normally.
+    if (current.thoughts.length > 1) {
+      output.push({ type: "thought-group", id: `thought-${current.thoughts[0].id}`, thoughts: current.thoughts });
+      return;
+    }
     for (const thought of current.thoughts) output.push(thought);
   };
 

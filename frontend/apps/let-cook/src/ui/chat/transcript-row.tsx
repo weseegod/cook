@@ -10,7 +10,7 @@ import { Copy } from "lucide-react";
 import type { MessageBlock, SessionEventBlock } from "../../state/session";
 import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
-import { ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
+import { ThinkingGroupRow, ThinkingRow, ToolRow, VerbGroupRow } from "./tool-card";
 import type { DisplayBlock } from "./transcript-projection";
 
 export function TranscriptRow({ block }: { block: DisplayBlock }) {
@@ -18,6 +18,7 @@ export function TranscriptRow({ block }: { block: DisplayBlock }) {
     return block.role === "thought" ? <ThinkingRow block={block} /> : <Message block={block} />;
   }
   if (block.type === "verb-group") return <VerbGroupRow tools={block.tools} />;
+  if (block.type === "thought-group") return <ThinkingGroupRow id={block.id} thoughts={block.thoughts} />;
   if (block.type === "tool") return <ToolRow tool={block.tool} />;
   if (block.type === "session-event") return <SessionEvent block={block} />;
   return null;

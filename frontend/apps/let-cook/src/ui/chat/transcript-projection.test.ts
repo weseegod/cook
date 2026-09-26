@@ -67,8 +67,35 @@ describe("verb runs", () => {
     expect(rows([thought("t1", true), tool("read-1", "Read a.ts")])).toEqual(["message", "verb-group"]);
   });
 
-  it("renders a thought-only run as a normal row", () => {
+  it("renders one finished thought as its existing message row", () => {
     expect(rows([thought("t1")])).toEqual(["message"]);
+  });
+
+  it("groups consecutive finished thoughts and keeps their source blocks in order", () => {
+    const thoughts = [
+      { ...thought("t1"), text: "Inspect index.js", elapsedMs: 1000 },
+      { ...thought("t2"), text: "Inspect app.js", elapsedMs: 1000 },
+      { ...thought("t3"), text: "Inspect component.js", elapsedMs: 3000 },
+    ];
+    const projected = projectTranscript(thoughts);
+
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({
+      type: "thought-group",
+      id: "thought-t1",
+      thoughts: [{ id: "t1" }, { id: "t2" }, { id: "t3" }],
+    });
+  });
+
+  it("keeps prose as a boundary between thought groups", () => {
+    const answer: MessageBlock = { ...thought("answer"), role: "assistant", text: "Done." };
+    expect(rows([thought("t1"), thought("t2"), answer, thought("t3"), thought("t4")]))
+      .toEqual(["thought-group", "message", "thought-group"]);
+  });
+
+  it("keeps a streaming thought on its live row", () => {
+    const projected = projectTranscript([thought("t1"), thought("t2", true)]);
+    expect(projected.map((row) => row.type)).toEqual(["message", "message"]);
   });
 });
 

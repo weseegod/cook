@@ -1,4 +1,5 @@
 import type { FilePreview, ReviewSnapshot, WorkspaceEntry } from "../workspace";
+import type { TranscriptBlock } from "../../state/session";
 
 export interface RecordedRequest {
   method: string;
@@ -252,6 +253,8 @@ export interface MockControl {
   ): void;
   /** A plain `session/update` under any session, with `_meta` — how a child session streams. */
   sessionUpdate(sessionId: string, update: Record<string, unknown>, meta?: Record<string, unknown>): void;
+  /** Seed transcript blocks for browser tests that need persisted block sequences. */
+  seedTranscript(blocks: TranscriptBlock[], childSessionId?: string): Promise<void>;
   /** Patch the mocked working tree so a running turn's diffstat can be seen to move. */
   workspaceReview(overrides: Partial<ReviewSnapshot>): void;
   taskBackgrounded(overrides?: Record<string, unknown>): void;

@@ -37,6 +37,34 @@ function writeUpdates(lines: string[]) {
 }
 
 test.describe("transcript rows", () => {
+  test("stacks consecutive thoughts and expands them in order at desktop and mobile widths", async ({ page }) => {
+    await launch(page);
+    await page.evaluate(async () => {
+      const turnId = "thought-turn";
+      await window.__cookMock!.seedTranscript([
+        { type: "message", id: "thought-1", turnId, role: "thought", text: "I considered index.js", images: [], streaming: false, elapsedMs: 1000 },
+        { type: "message", id: "thought-2", turnId, role: "thought", text: "I considered app.js", images: [], streaming: false, elapsedMs: 1000 },
+        { type: "message", id: "thought-3", turnId, role: "thought", text: "I considered component.js", images: [], streaming: false, elapsedMs: 3000 },
+      ]);
+    });
+
+    const group = page.locator(".thinking-group");
+    for (const width of [1440, 420]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(group).toHaveCount(1);
+      const toggle = group.getByRole("button", { name: "Thought for 5.0s" });
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await toggle.click();
+      await expect(group.locator(".thinking-group-item")).toHaveCount(3);
+      expect(await group.locator(".thinking-group-item").evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim())))
+        .toEqual(["I considered index.js", "I considered app.js", "I considered component.js"]);
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+      await toggle.click();
+      await expect(group.locator(".thinking-group-item")).toHaveCount(0);
+    }
+  });
+
   test("opens an edit on its changed code and keeps its compact header when collapsed", async ({ page }) => {
     await launch(page, {
       promptUpdates: [

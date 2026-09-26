@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../../acp/host", () => ({ openPath: vi.fn(async () => undefined) }));
 
 import type { MessageBlock, ToolBlock } from "../../state/session";
-import { ThinkingRow, ToolRow } from "./tool-card";
+import { ThinkingGroupRow, ThinkingRow, ToolRow } from "./tool-card";
 
 const thought = (patch: Partial<MessageBlock> = {}): MessageBlock => ({
   type: "message",
@@ -30,6 +30,34 @@ const editTool: ToolBlock = {
   elapsedMs: 100,
   paths: ["src/a.ts"],
 };
+
+describe("ThinkingGroupRow", () => {
+  it("shows the combined duration and expands thoughts in order", () => {
+    const thoughts = [
+      thought({ id: "thought-1", text: "I considered index.js", streaming: false, elapsedMs: 1000 }),
+      thought({ id: "thought-2", text: "I considered app.js", streaming: false, elapsedMs: 1000 }),
+      thought({ id: "thought-3", text: "I considered component.js", streaming: false, elapsedMs: 3000 }),
+    ];
+    render(<ThinkingGroupRow id="thought-thought-1" thoughts={thoughts} />);
+
+    const toggle = screen.getByRole("button", { name: "Thought for 5.0s" });
+    expect(screen.queryByText("I considered index.js")).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByText("I considered index.js")).toBeInTheDocument();
+    expect(screen.getByText("I considered app.js")).toBeInTheDocument();
+    expect(screen.getByText("I considered component.js")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(toggle);
+    expect(screen.queryByText("I considered index.js")).toBeNull();
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("uses a plural label if one thought has no recorded duration", () => {
+    render(<ThinkingGroupRow id="thoughts" thoughts={[thought({ streaming: false }), thought({ id: "thought-2", streaming: false, elapsedMs: 1000 })]} />);
+    expect(screen.getByRole("button", { name: "Thoughts" })).toBeInTheDocument();
+  });
+});
 
 describe("ThinkingRow", () => {
   it("truncates a running block to its last lines", () => {

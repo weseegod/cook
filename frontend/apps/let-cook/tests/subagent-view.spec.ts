@@ -91,6 +91,34 @@ test.describe("subagent view", () => {
     await expect(page.getByLabel("Message this agent")).toHaveCount(0);
   });
 
+  test("stacks consecutive child thoughts and expands them in order", async ({ page }) => {
+    await launch(page);
+    await spawn(page, "Explore the repository", "explore");
+    await openSubagent(page);
+    await page.evaluate(async () => {
+      const turnId = "child-thought-turn";
+      await window.__cookMock!.seedTranscript([
+        { type: "message", id: "child-thought-1", turnId, role: "thought", text: "I considered index.js", images: [], streaming: false, elapsedMs: 1000 },
+        { type: "message", id: "child-thought-2", turnId, role: "thought", text: "I considered app.js", images: [], streaming: false, elapsedMs: 1000 },
+        { type: "message", id: "child-thought-3", turnId, role: "thought", text: "I considered component.js", images: [], streaming: false, elapsedMs: 3000 },
+      ], "child-1");
+    });
+
+    const group = page.locator(".subagent-takeover .thinking-group");
+    for (const width of [1280, 420]) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(group).toHaveCount(1);
+      const toggle = group.getByRole("button", { name: "Thought for 5.0s" });
+      await toggle.click();
+      expect(await group.locator(".thinking-group-item").evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim())))
+        .toEqual(["I considered index.js", "I considered app.js", "I considered component.js"]);
+      await expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+      await toggle.click();
+      await expect(group.locator(".thinking-group-item")).toHaveCount(0);
+    }
+  });
+
   test("opens edits in the subagent transcript with the same row behavior", async ({ page }) => {
     await launch(page);
     await spawn(page, "Edit the workspace", "general-purpose");

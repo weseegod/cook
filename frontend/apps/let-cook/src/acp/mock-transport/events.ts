@@ -1,5 +1,6 @@
 import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry, WorkspaceIndexEntry } from "../workspace";
 import { nextRequestId, notify, request, responses, state } from "./state";
+import type { TranscriptBlock } from "../../state/session";
 import type { MockPlanFile } from "./types";
 
 const MOCK_PLAN_DIR = "/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/mock-session/plans";
@@ -260,6 +261,20 @@ export function mockSessionUpdate(
   meta: Record<string, unknown> = {},
 ): void {
   notify("session/update", { sessionId, update, ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}) });
+}
+
+/** Seed consecutive transcript blocks for browser tests that the ACP reducer cannot produce. */
+export async function mockSeedTranscript(blocks: TranscriptBlock[], childSessionId?: string): Promise<void> {
+  if (childSessionId) {
+    const { useActivityStore } = await import("../../state/activity/store");
+    useActivityStore.getState().setChildTranscript(childSessionId, {
+      blocks,
+      cursor: { turnId: null, assistantId: null, thoughtId: null, optimisticUserId: null },
+    });
+    return;
+  }
+  const { useSessionStore } = await import("../../state/session/store");
+  useSessionStore.getState().set({ blocks });
 }
 
 /** Ext notif helpers for activity panel tests (SessionNotification envelope). */

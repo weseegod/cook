@@ -13,7 +13,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { openPath } from "../../acp/host";
 import { normalizeError } from "../../acp/errors";
 import { useArtifactStore } from "../../state/artifacts";
-import { useSessionStore, type ToolBlock } from "../../state/session";
+import { useSessionStore, type MessageBlock, type ToolBlock } from "../../state/session";
 import { Markdown } from "./markdown";
 import { copyText, displayPath } from "./clipboard";
 import { formatThinkingDuration } from "./format-duration";
@@ -190,6 +190,58 @@ export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: s
   && previous.block.text === next.block.text
   && previous.block.streaming === next.block.streaming
   && previous.block.elapsedMs === next.block.elapsedMs
+));
+
+export const ThinkingGroupRow = memo(function ThinkingGroupRow({
+  id,
+  thoughts,
+}: {
+  id: string;
+  thoughts: MessageBlock[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hasDurations = thoughts.every((thought) => typeof thought.elapsedMs === "number" && Number.isFinite(thought.elapsedMs));
+  const duration = hasDurations
+    ? thoughts.reduce((total, thought) => total + (thought.elapsedMs ?? 0), 0)
+    : null;
+  const header = duration === null ? "Thoughts" : `Thought for ${formatThinkingDuration(duration)}`;
+
+  return (
+    <div
+      className="thinking-group"
+      data-testid={`thinking-group-${id}`}
+      data-expanded={expanded ? "true" : "false"}
+    >
+      <button
+        type="button"
+        className="thinking-summary"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span className="row-chevron"><ChevronRight size={13} /></span>
+        <span className="row-bullet" aria-hidden="true" />
+        <strong>{header}</strong>
+      </button>
+      {expanded && (
+        <div className="thinking-group-body">
+          {thoughts.map((thought) => (
+            <div className="thinking-group-item" key={thought.id}>
+              <Markdown text={thought.text} streaming={false} />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}, (previous, next) => (
+  previous.id === next.id
+  && previous.thoughts.length === next.thoughts.length
+  && previous.thoughts.every((thought, index) => {
+    const nextThought = next.thoughts[index];
+    return thought.id === nextThought.id
+      && thought.text === nextThought.text
+      && thought.elapsedMs === nextThought.elapsedMs;
+  })
 ));
 
 /**
