@@ -161,6 +161,7 @@ async fn push_mcp(
             model_id: "test-model",
             tool_parsed_args: parsed_args,
             model_output_override: None,
+            stub_identical_observation_result: false,
         })
         .await
         .expect("bridge success");

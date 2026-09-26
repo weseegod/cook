@@ -320,6 +320,8 @@ The goal verifier should receive explicit evidence: requirements, diff, and test
 
 The shipped loop stop is grok-build's identical-call stationarity: the same tool and the same arguments, nudged at 4 (`Read` / `Plan`) or 8 (anything else), halted at 8 or 12, with a `true` keepalive halted at 4. A read of a different file, or of the same file at a new offset, is progress, and it must not end the turn. A fingerprint stop (same path, same range, same content hash, or the same failing test with no edit) is out of scope until grok-build ships one. Do not add a counter of read-only rounds in this fork.
 
+When a step is entirely Search, Read, or List and repeats with identical arguments, the first tool-result body stays verbatim in history and each later append is replaced with a short stub that points the model at `read_file`. Shell, monitor, and `get_task_output` results stay full even when the text matches the previous poll. The Search/Read stationarity nudge tells the model to open a matched line; the shell nudge keeps the polling wording. Already-sent history is never rewritten, so the cached prefix stays byte-stable. `keep_last_n_tool_rounds` stays opt-in and off.
+
 Polling a live job is an exception: use actual process/session state, notifications, or a timed wait; unchanged output does not prove a stall. Do not hard-stop a long build merely because `get_task_output` repeats.
 
 ## 7. Implementation plan by change map

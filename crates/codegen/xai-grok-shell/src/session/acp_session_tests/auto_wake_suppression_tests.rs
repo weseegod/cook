@@ -1321,6 +1321,7 @@ async fn handle_bridge_tool_success_runs_consumed_completion_sweep() {
                     model_id: "test-model",
                     tool_parsed_args: &parsed_args,
                     model_output_override: None,
+                    stub_identical_observation_result: false,
                 })
                 .await;
             let state = actor.state.lock().await;

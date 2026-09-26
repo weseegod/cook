@@ -196,7 +196,7 @@ async fn reported_execution_counts_schema_errors_and_keeps_tool_result_pairing()
             };
 
             let (control, report) = actor
-                .execute_tool_calls_reported(vec![malformed], None)
+                .execute_tool_calls_reported(vec![malformed], None, false)
                 .await
                 .expect("malformed tool call should be reported, not fail the session");
 

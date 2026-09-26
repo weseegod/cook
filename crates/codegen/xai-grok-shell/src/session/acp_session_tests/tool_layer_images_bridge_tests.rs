@@ -85,6 +85,7 @@ async fn handle_bridge_tool_success_multimodal_mcp_image_deferred_followup() {
                     model_id: "test-model",
                     tool_parsed_args: &parsed_args,
                     model_output_override: None,
+                    stub_identical_observation_result: false,
                 })
                 .await
                 .expect("bridge success");
@@ -168,6 +169,7 @@ async fn handle_bridge_tool_success_text_only_model_skips_image_followup() {
                     model_id: "text-only-model",
                     tool_parsed_args: &parsed_args,
                     model_output_override: None,
+                    stub_identical_observation_result: false,
                 })
                 .await
                 .expect("bridge success");
@@ -225,6 +227,7 @@ async fn handle_bridge_tool_success_replacement_drops_images_and_keeps_reminders
                     model_id: "test-model",
                     tool_parsed_args: &parsed_args,
                     model_output_override: Some("[redacted]".to_string()),
+                    stub_identical_observation_result: false,
                 })
                 .await
                 .expect("bridge success");
@@ -351,6 +354,7 @@ async fn post_tool_use_replacement_reaches_model_original_stays_on_record() {
                     model_id: "test-model",
                     tool_parsed_args: &serde_json::json!({}),
                     model_output_override,
+                    stub_identical_observation_result: false,
                 })
                 .await
                 .expect("bridge success");

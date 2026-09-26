@@ -564,6 +564,9 @@ pub(super) struct BridgeToolSuccess<'a> {
     pub model_id: &'a str,
     pub tool_parsed_args: &'a serde_json::Value,
     pub model_output_override: Option<String>,
+    /// When true, persist [`super::turn::IDENTICAL_OBSERVATION_RESULT_STUB`] instead of the full body.
+    /// ACP UI updates still carry the real output; already-sent history is not rewritten.
+    pub stub_identical_observation_result: bool,
 }
 impl SessionActor {
     /// Merge the canonical `x.ai/tool` identity envelope into a tool-call event's `_meta`, resolving the tool from the live toolset by wire name.
@@ -597,7 +600,7 @@ impl SessionActor {
         requested_model: Option<String>,
     ) -> Result<ToolLoop, acp::Error> {
         let (control, _) = self
-            .execute_tool_calls_reported(tool_calls, requested_model)
+            .execute_tool_calls_reported(tool_calls, requested_model, false)
             .await?;
         Ok(control)
     }
@@ -605,10 +608,14 @@ impl SessionActor {
     /// Execute a tool batch and also report preparation failures to the owning turn loop.
     /// The ordinary wrapper above intentionally keeps the long-standing control-flow API used by
     /// tests and callers that do not need loop-stationarity accounting.
+    ///
+    /// `stub_identical_observation_results`: when the turn loop has already committed one identical
+    /// Search/Read/List body, append only a short stub for this duplicate step (first body stays).
     pub(super) async fn execute_tool_calls_reported(
         &self,
         tool_calls: Vec<crate::sampling::types::ToolCallResponse>,
         requested_model: Option<String>,
+        stub_identical_observation_results: bool,
     ) -> Result<(ToolLoop, ToolExecutionReport), acp::Error> {
         if let Some(model) = requested_model.as_deref() {
             tracing::Span::current().record("model_id", model);
@@ -628,6 +635,7 @@ impl SessionActor {
                         &mut final_result,
                         &mut execution_report,
                         requested_model.as_deref(),
+                        stub_identical_observation_results,
                     )
                     .await?;
                 }
@@ -638,6 +646,7 @@ impl SessionActor {
                         &mut final_result,
                         &mut execution_report,
                         requested_model.as_deref(),
+                        stub_identical_observation_results,
                     )
                     .await?;
                 }
@@ -648,6 +657,7 @@ impl SessionActor {
                     &mut final_result,
                     &mut execution_report,
                     requested_model.as_deref(),
+                    stub_identical_observation_results,
                 )
                 .await?;
             }
@@ -797,6 +807,7 @@ impl SessionActor {
         final_result: &mut Option<ToolLoop>,
         execution_report: &mut ToolExecutionReport,
         requested_model: Option<&str>,
+        stub_identical_observation_results: bool,
     ) -> Result<(), acp::Error> {
         if self.permissions.is_auto_mode() {
             let conversation = self.chat_state_handle.get_conversation().await;
@@ -1433,6 +1444,7 @@ impl SessionActor {
                             model_id: prepared.model_id.as_deref().unwrap_or(""),
                             tool_parsed_args: prepared.authored_arguments(),
                             model_output_override,
+                            stub_identical_observation_result: stub_identical_observation_results,
                         })
                         .await;
                     if let Some(scrollback) = deferred_hook_scrollback {
@@ -3583,6 +3595,7 @@ impl SessionActor {
             model_id,
             tool_parsed_args,
             model_output_override,
+            stub_identical_observation_result,
         } = args;
         let (mut result, mut tool_layer_images) = drained.into_parts();
         let consumed_ids =
@@ -3684,7 +3697,13 @@ impl SessionActor {
         } else {
             result.prompt_text
         };
-        let (prompt_text, inline_images, extracted_images) = if output_replaced {
+        let (prompt_text, inline_images, extracted_images) = if stub_identical_observation_result {
+            (
+                super::turn::IDENTICAL_OBSERVATION_RESULT_STUB.to_string(),
+                Vec::new(),
+                Vec::new(),
+            )
+        } else if output_replaced {
             (
                 maybe_rewrite(path_rewriter.as_ref(), prompt_text),
                 Vec::new(),

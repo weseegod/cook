@@ -2810,6 +2810,7 @@ impl SessionActor {
                 let run_len = identical_tool_calls.run_len;
                 let tool_name = identical_tool_calls.tool_name.clone();
                 let problematically_repeating = identical_tool_calls.is_problematically_repeating();
+                let observation_repeating = identical_tool_calls.is_observation_repeating();
                 tracing::warn!(
                     session_id = %self.session_info.id,
                     tool_name = %tool_name,
@@ -2824,6 +2825,7 @@ impl SessionActor {
                         "tool_name": tool_name,
                         "run_len": run_len,
                         "problematically_repeating": problematically_repeating,
+                        "observation_repeating": observation_repeating,
                     })),
                 );
                 xai_grok_telemetry::session_ctx::log_event(
@@ -2833,17 +2835,18 @@ impl SessionActor {
                         tool_name: tool_name.clone(),
                     },
                 );
+                let nudge_template = action_stationarity_nudge_template(observation_repeating);
                 let reminder = self
                     .tool_bridge_handle()
                     .render_prompt(
-                        ACTION_STATIONARITY_NUDGE_TEMPLATE,
+                        nudge_template,
                         &serde_json::json!({
                             "tool_name": tool_name,
                             "run_len": run_len,
                         }),
                     )
                     .await
-                    .unwrap_or_else(|| ACTION_STATIONARITY_NUDGE_TEMPLATE.to_string());
+                    .unwrap_or_else(|| nudge_template.to_string());
                 self.push_system_reminder(&reminder);
             }
             if !salvage.awaiting_continuation() {
@@ -3891,11 +3894,13 @@ impl SessionActor {
                 .map(|tc| tool_bridge.tool_kind(&tc.name))
                 .collect::<Vec<_>>();
             let step_problematic = step_is_problematically_repeating(&step_tool_kinds);
+            let step_observation = step_is_observation_repeat(&step_tool_kinds);
             let is_true_noop = self.is_run_true_step(&tool_calls).await;
             identical_tool_calls.observe(
                 &step_signature,
                 &step_tool_name,
                 step_problematic,
+                step_observation,
                 is_true_noop,
             );
             if is_true_noop {
@@ -3905,6 +3910,8 @@ impl SessionActor {
                     },
                 );
             }
+            let stub_identical_observation_results =
+                should_stub_identical_observation_result(identical_tool_calls.run_len, step_observation);
             let tool_call_responses: Vec<_> = tool_calls
                 .into_iter()
                 .map(|tc| ToolCallResponse {
@@ -3928,8 +3935,12 @@ impl SessionActor {
                 .await;
             let execute_tool_calls_result = {
                 let _tool_phase = turn_phases.begin_tool_blocking();
-                self.execute_tool_calls_reported(tool_call_responses, requested_model)
-                    .await
+                self.execute_tool_calls_reported(
+                    tool_call_responses,
+                    requested_model,
+                    stub_identical_observation_results,
+                )
+                .await
             };
             match execute_tool_calls_result {
                 Ok((ToolLoop::PermissionReject { tool_name, reason }, _)) => {
@@ -4004,6 +4015,29 @@ fn step_is_problematically_repeating(kinds: &[Option<ToolKind>]) -> bool {
             .iter()
             .all(|kind| is_problematically_repeating_kind(*kind))
 }
+/// Search / Read / List kinds whose identical re-runs produce the same static body, so the second append can be stubbed.
+/// `ListDir` is included with `List` (Codex vs grok-build naming). Shell, monitor, and task-output polls are excluded.
+fn is_observation_kind(kind: Option<ToolKind>) -> bool {
+    matches!(
+        kind,
+        Some(ToolKind::Search | ToolKind::Read | ToolKind::List | ToolKind::ListDir)
+    )
+}
+/// Whether every call in the step is a static observation kind (see [`is_observation_kind`]).
+fn step_is_observation_repeat(kinds: &[Option<ToolKind>]) -> bool {
+    !kinds.is_empty() && kinds.iter().all(|kind| is_observation_kind(*kind))
+}
+/// Append-only: the first identical Search/Read/List body stays verbatim; duplicates from run_len >= 2 are stubbed.
+pub(super) fn should_stub_identical_observation_result(
+    run_len: u32,
+    observation_repeating_step: bool,
+) -> bool {
+    observation_repeating_step && run_len >= 2
+}
+/// Model-visible stub for a newly appended duplicate observation result. Already-sent history is not rewritten.
+pub(super) const IDENTICAL_OBSERVATION_RESULT_STUB: &str = "Identical Search/Read/List result \
+     omitted — same call as the previous step; the full output remains above. Open a matched \
+     hit with `read_file` instead of repeating this call.";
 
 pub(super) const NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS: u32 = 4;
 pub(super) const NUDGE_AFTER_IDENTICAL_TOOL_CALLS: u32 = 8;
@@ -4014,7 +4048,14 @@ const _: () = assert!(
     NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS < MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS
 );
 const _: () = assert!(NUDGE_AFTER_IDENTICAL_TOOL_CALLS < MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS);
-const ACTION_STATIONARITY_NUDGE_TEMPLATE: &str = "You have called the same tool \
+/// Nudge for Search/Read/List loops: tell the model to open a hit instead of describing a polling wait.
+const ACTION_STATIONARITY_OBSERVATION_NUDGE_TEMPLATE: &str = "You have called the same tool \
+     (`${{ tool_name }}`) with the exact same arguments ${{ run_len }} times in a row. Stop \
+     repeating this call. Open a matched line with `${%- if tools.by_kind.read %}${{ tools.by_kind.read }}${%- else %}read_file${%- endif %}` \
+     and continue from there — do not re-run the same search or read. This turn will be halted \
+     automatically if the identical call keeps repeating.";
+/// Nudge for shell / monitor / task-output style repeats: keep the polling wording.
+const ACTION_STATIONARITY_POLLING_NUDGE_TEMPLATE: &str = "You have called the same tool \
      (`${{ tool_name }}`) with the exact same arguments ${{ run_len }} times in a row — \
      you appear to be stuck in a polling loop. Stop repeating this call. If you are \
      waiting on a long-running job or command, use a background task${%- if tools.by_kind.monitor %} \
@@ -4022,6 +4063,13 @@ const ACTION_STATIONARITY_NUDGE_TEMPLATE: &str = "You have called the same tool 
      then check once — do not poll in a tight loop. If you cannot make progress, stop and \
      tell the user what you are waiting for. This turn will be halted automatically if the \
      identical call keeps repeating.";
+pub(super) fn action_stationarity_nudge_template(observation_repeating: bool) -> &'static str {
+    if observation_repeating {
+        ACTION_STATIONARITY_OBSERVATION_NUDGE_TEMPLATE
+    } else {
+        ACTION_STATIONARITY_POLLING_NUDGE_TEMPLATE
+    }
+}
 fn hash_step_signature(signature: &str) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -4075,6 +4123,8 @@ struct IdenticalToolCallRun {
     /// Whether the repeated step is in the tight threshold tier.
     /// Decided by the registered kinds of every call in it (see [`step_is_problematically_repeating`]).
     problematically_repeating_step: bool,
+    /// Whether the repeated step is all Search/Read/List (see [`step_is_observation_repeat`]).
+    observation_repeating_step: bool,
     run_len: u32,
     is_true_noop_run: bool,
     nudged: bool,
@@ -4085,6 +4135,7 @@ impl IdenticalToolCallRun {
         signature: &str,
         tool_name: &str,
         problematically_repeating_step: bool,
+        observation_repeating_step: bool,
         is_true_noop: bool,
     ) -> u32 {
         let hash = hash_step_signature(if is_true_noop {
@@ -4102,11 +4153,16 @@ impl IdenticalToolCallRun {
         }
         self.tool_name = tool_name.to_string();
         self.problematically_repeating_step = problematically_repeating_step;
+        self.observation_repeating_step = observation_repeating_step;
         self.run_len
     }
     /// Whether this run gets the tighter nudge and hard-stop thresholds (see [`step_is_problematically_repeating`]).
     fn is_problematically_repeating(&self) -> bool {
         !self.is_true_noop_run && self.problematically_repeating_step
+    }
+    /// Whether this run uses the Search/Read observation nudge (see [`step_is_observation_repeat`]).
+    fn is_observation_repeating(&self) -> bool {
+        !self.is_true_noop_run && self.observation_repeating_step
     }
     fn nudge_threshold(&self) -> u32 {
         if self.is_problematically_repeating() {
@@ -4139,17 +4195,18 @@ mod identical_tool_call_run_tests {
         IdenticalToolCallRun, MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
         MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS, MAX_CONSECUTIVE_TRUE_NOOPS,
         NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS, NUDGE_AFTER_IDENTICAL_TOOL_CALLS, ToolKind,
-        command_is_true, step_is_problematically_repeating, step_signature,
+        action_stationarity_nudge_template, command_is_true, should_stub_identical_observation_result,
+        step_is_observation_repeat, step_is_problematically_repeating, step_signature,
     };
     #[test]
     fn identical_non_true_resets_and_caps_at_the_hard_limit() {
         let mut run = IdenticalToolCallRun::default();
-        assert_eq!(run.observe("a", "a", false, false), 1);
-        assert_eq!(run.observe("a", "a", false, false), 2);
-        assert_eq!(run.observe("b", "b", false, false), 1);
+        assert_eq!(run.observe("a", "a", false, false, false), 1);
+        assert_eq!(run.observe("a", "a", false, false, false), 2);
+        assert_eq!(run.observe("b", "b", false, false, false), 1);
         let mut last = 0;
         for _ in 0..MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS {
-            last = run.observe("same", "same", false, false);
+            last = run.observe("same", "same", false, false, false);
         }
         assert_eq!(last, MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS);
         assert_eq!(
@@ -4161,11 +4218,14 @@ mod identical_tool_call_run_tests {
     fn true_noops_chain_across_args_and_stop_at_4() {
         let mut run = IdenticalToolCallRun::default();
         for i in 1..=4 {
-            assert_eq!(run.observe(&format!("sig{i}"), "bash", false, true), i);
+            assert_eq!(
+                run.observe(&format!("sig{i}"), "bash", false, false, true),
+                i
+            );
         }
         assert!(run.is_true_noop_run);
         assert_eq!(run.hard_stop_threshold(), MAX_CONSECUTIVE_TRUE_NOOPS);
-        assert_eq!(run.observe("squeue", "bash", false, false), 1);
+        assert_eq!(run.observe("squeue", "bash", false, false, false), 1);
         assert!(!run.is_true_noop_run);
     }
     /// Reordering argument keys, or reordering the calls within one step, is the same step.
@@ -4218,24 +4278,27 @@ mod identical_tool_call_run_tests {
     fn nudge_latch_fires_once_per_run_after_threshold() {
         let mut run = IdenticalToolCallRun::default();
         for i in 1..NUDGE_AFTER_IDENTICAL_TOOL_CALLS {
-            assert_eq!(run.observe("poll", "get_task_output", false, false), i);
+            assert_eq!(
+                run.observe("poll", "get_task_output", false, false, false),
+                i
+            );
             assert!(
                 !run.take_nudge(),
                 "must not nudge before threshold; run_len={i}"
             );
         }
         assert_eq!(
-            run.observe("poll", "get_task_output", false, false),
+            run.observe("poll", "get_task_output", false, false, false),
             NUDGE_AFTER_IDENTICAL_TOOL_CALLS
         );
         assert!(run.take_nudge());
         assert!(!run.take_nudge());
         assert_eq!(
-            run.observe("poll", "get_task_output", false, false),
+            run.observe("poll", "get_task_output", false, false, false),
             NUDGE_AFTER_IDENTICAL_TOOL_CALLS + 1
         );
         assert!(!run.take_nudge());
-        assert_eq!(run.observe("other", "bash", false, false), 1);
+        assert_eq!(run.observe("other", "bash", false, false, false), 1);
         assert!(!run.nudged);
         assert!(!run.take_nudge());
     }
@@ -4244,13 +4307,14 @@ mod identical_tool_call_run_tests {
     #[test]
     fn problematically_repeating_tools_use_the_tighter_thresholds() {
         for tool in ["read_file", "todo_write"] {
+            let observation = tool == "read_file";
             let mut run = IdenticalToolCallRun::default();
             for i in 1..NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS {
-                assert_eq!(run.observe("same", tool, true, false), i);
+                assert_eq!(run.observe("same", tool, true, observation, false), i);
                 assert!(!run.take_nudge(), "{tool} must not nudge at run_len={i}");
             }
             assert_eq!(
-                run.observe("same", tool, true, false),
+                run.observe("same", tool, true, observation, false),
                 NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS
             );
             assert!(run.take_nudge(), "{tool} must nudge at its own threshold");
@@ -4262,14 +4326,17 @@ mod identical_tool_call_run_tests {
         }
         let mut run = IdenticalToolCallRun::default();
         for i in 1..NUDGE_AFTER_IDENTICAL_TOOL_CALLS {
-            assert_eq!(run.observe("same", "run_terminal_command", false, false), i);
+            assert_eq!(
+                run.observe("same", "run_terminal_command", false, false, false),
+                i
+            );
             assert!(
                 !run.take_nudge(),
                 "loose tier must not nudge at run_len={i}"
             );
         }
         assert_eq!(
-            run.observe("same", "run_terminal_command", false, false),
+            run.observe("same", "run_terminal_command", false, false, false),
             NUDGE_AFTER_IDENTICAL_TOOL_CALLS
         );
         assert!(run.take_nudge());
@@ -4301,7 +4368,10 @@ mod identical_tool_call_run_tests {
     fn true_noop_runs_are_never_nudged() {
         let mut run = IdenticalToolCallRun::default();
         for i in 1..=MAX_CONSECUTIVE_TRUE_NOOPS {
-            assert_eq!(run.observe(&format!("sig{i}"), "bash", false, true), i);
+            assert_eq!(
+                run.observe(&format!("sig{i}"), "bash", false, false, true),
+                i
+            );
             assert!(
                 !run.take_nudge(),
                 "keepalive run must not nudge; run_len={i}"
@@ -4310,7 +4380,7 @@ mod identical_tool_call_run_tests {
         assert_eq!(run.hard_stop_threshold(), MAX_CONSECUTIVE_TRUE_NOOPS);
         let mut last = 0;
         for _ in 0..NUDGE_AFTER_IDENTICAL_TOOL_CALLS {
-            last = run.observe("poll", "get_task_output", false, false);
+            last = run.observe("poll", "get_task_output", false, false, false);
         }
         assert_eq!(last, NUDGE_AFTER_IDENTICAL_TOOL_CALLS);
         assert!(run.take_nudge());
@@ -4338,8 +4408,9 @@ mod identical_tool_call_run_tests {
             let signature = step_signature(std::slice::from_ref(&call));
             let kinds = [Some(ToolKind::Read)];
             let problematic = step_is_problematically_repeating(&kinds);
+            let observation = step_is_observation_repeat(&kinds);
             assert_eq!(
-                run.observe(&signature, "read_file", problematic, false),
+                run.observe(&signature, "read_file", problematic, observation, false),
                 1,
                 "distinct read {i} ({target_file} offset {offset}) must not extend an identical run"
             );
@@ -4349,6 +4420,46 @@ mod identical_tool_call_run_tests {
                 "distinct read {i} must not reach the halt threshold"
             );
         }
+    }
+
+    #[test]
+    fn observation_step_stubs_from_the_second_identical_result() {
+        let search = Some(ToolKind::Search);
+        let read = Some(ToolKind::Read);
+        let list = Some(ToolKind::List);
+        let exec = Some(ToolKind::Execute);
+        assert!(step_is_observation_repeat(&[search]));
+        assert!(step_is_observation_repeat(&[read, search, list]));
+        assert!(!step_is_observation_repeat(&[exec]));
+        assert!(!step_is_observation_repeat(&[search, exec]));
+        assert!(!step_is_observation_repeat(&[]));
+        assert!(!should_stub_identical_observation_result(1, true));
+        assert!(should_stub_identical_observation_result(2, true));
+        assert!(should_stub_identical_observation_result(8, true));
+        assert!(!should_stub_identical_observation_result(2, false));
+        assert!(!should_stub_identical_observation_result(12, false));
+    }
+
+    #[test]
+    fn observation_nudge_points_at_read_file_shell_nudge_keeps_polling() {
+        let observation = action_stationarity_nudge_template(true);
+        let polling = action_stationarity_nudge_template(false);
+        assert!(
+            observation.contains("read_file") || observation.contains("tools.by_kind.read"),
+            "observation nudge must tell the model to open a hit"
+        );
+        assert!(
+            !observation.contains("polling loop"),
+            "observation nudge must not use the shell polling wording"
+        );
+        assert!(
+            polling.contains("polling loop"),
+            "shell nudge must keep the polling wording"
+        );
+        assert!(
+            !polling.contains("Open a matched line"),
+            "shell nudge must stay distinct from the observation nudge"
+        );
     }
 }
 

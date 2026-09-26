@@ -727,7 +727,7 @@ async fn dependent_edit_then_read_in_one_batch_runs_in_emission_order() {
 
             let (_loop, _report) = tokio::time::timeout(
                 std::time::Duration::from_secs(15),
-                actor.execute_tool_calls_reported(vec![edit, read], None),
+                actor.execute_tool_calls_reported(vec![edit, read], None, false),
             )
             .await
             .expect("edit+read batch must not hang")
