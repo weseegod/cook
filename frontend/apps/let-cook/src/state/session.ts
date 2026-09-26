@@ -11,6 +11,7 @@ export type {
   QueuedPromptEntry,
   SessionEventBlock,
   SessionTurn,
+  StashedPlanReview,
   ToolBlock,
   TranscriptBlock,
   TranscriptCursor,

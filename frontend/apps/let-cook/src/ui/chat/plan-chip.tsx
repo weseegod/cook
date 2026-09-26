@@ -98,11 +98,21 @@ export function PlanChip() {
     if (next) void acpClient.refreshPlanFiles();
   }
 
-  /** A row opens its plan: the review pane owns the current episode while a review is parked. */
+  /**
+   * A row opens its plan: the decision pane owns the waiting review's file; every other open —
+   * earlier files, and this file once a decision was sent — is the read-only viewer.
+   */
   function openPlan(file: PlanFileSummary) {
     const state = useSessionStore.getState();
-    if (file.active && state.planReview) state.setPlanDialogOpen(true);
-    else state.setPlanFileView(file);
+    const waitingName = state.planReview?.pending
+      ? (state.planReview.fileName ?? "plan.md")
+      : null;
+    if (waitingName !== null && file.name === waitingName) {
+      state.setPlanFileView(null);
+      state.setPlanDialogOpen(true);
+    } else {
+      state.setPlanFileView(file);
+    }
     setListOpen(false);
     setRowMenu(null);
   }

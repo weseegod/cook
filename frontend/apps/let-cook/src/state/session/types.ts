@@ -112,6 +112,21 @@ export interface FollowUpsState {
   suggestions: string[];
 }
 
+/**
+ * An unanswered plan review parked beside its conversation, the same way `queuesBySession` keeps
+ * waiting prompts. Restored after `session/load` without opening the pane.
+ */
+export interface StashedPlanReview {
+  planReview: NonNullable<PlanSlice["planReview"]>;
+  planComments: PlanComment[];
+  planNextCommentId: number;
+  planFocus: PlanFocus;
+  planCommentRange: [number, number] | null;
+  planEditingCommentId: number | null;
+  planStashedDraft: string | null;
+  pendingQuestion: PendingQuestion;
+}
+
 export interface SessionState {
   connection: "idle" | "starting" | "ready" | "reconnecting" | "error";
   cwd: string | null;
@@ -183,6 +198,11 @@ export interface SessionState {
   /** Queue rows kept per conversation so switching back does not drop waiting prompts. */
   queuesBySession: Record<string, QueuedPromptEntry[]>;
   /**
+   * Unanswered plan reviews kept per conversation so switching back does not drop the decision.
+   * Keyed by the session id that owned the `x.ai/exit_plan_mode` request.
+   */
+  planReviewsBySession: Record<string, StashedPlanReview>;
+  /**
    * Queue row currently loaded into the composer for edit (`hold_edit` active).
    * Null when the composer is composing a normal / queued send.
    */
@@ -198,6 +218,13 @@ export interface SessionState {
   beginPlanReview: (body: string | null, fileName?: string) => void;
   /** The review was answered: it stops blocking, but the body stays viewable for the session. */
   endPlanReview: () => void;
+  /** Park an unanswered review for a conversation that is not on screen. */
+  stashPlanReview: (sessionId: string, stash: StashedPlanReview) => void;
+  /**
+   * Reinstall a stashed unanswered review after `session/load` replay, leaving the pane closed.
+   * No-op when a newer pending review already landed, or when this conversation has no stash.
+   */
+  restoreStashedPlanReview: () => void;
   setPlanDialogOpen: (open: boolean) => void;
   setPlanFocus: (focus: PlanFocus) => void;
   setPlanCommentRange: (range: [number, number] | null) => void;

@@ -153,6 +153,62 @@ test.describe("plan list", () => {
     await expect(page.getByTestId("plan-pane")).toBeVisible();
   });
 
+  test("hides the review pane then reopens the decision bar from the current plan row", async ({ page }) => {
+    await openWorkspace(page, PLAN_SEED);
+    await startSession(page);
+    await page.evaluate(() => window.__cookMock!.plan());
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
+    await page.getByTestId("dialog-hide").click();
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
+
+    await page.getByTestId("plan-chip").click();
+    await page.getByTestId(`plan-file-open-${NEWEST}`).click();
+    const pane = page.getByTestId("plan-pane");
+    await expect(pane).toBeVisible();
+    await expect(pane.getByTestId("plan-approve")).toBeVisible();
+    await expect(pane.getByTestId("plan-clean")).toBeVisible();
+    await expect(pane.getByTestId("plan-goal")).toBeVisible();
+  });
+
+  test("keeps the parked decision across a conversation switch and answers the original request", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, {
+      ...PLAN_SEED,
+      sessions: [
+        { id: "s-plan", title: "Plan chat", cwd: "/tmp/cook-demo", updatedAt: "2026-09-18T10:00:00Z" },
+        { id: "s-other", title: "Other chat", cwd: "/tmp/cook-demo", updatedAt: "2026-09-17T10:00:00Z" },
+      ],
+    });
+    await page.getByTestId("session-row-s-plan").locator(".session-open").click();
+    await expect(page.getByTestId("session-row-s-plan")).toHaveClass(/active/);
+
+    const requestId = await page.evaluate((path) => window.__cookMock!.plan({
+      sessionId: "s-plan",
+      planFilePath: path,
+    }), `${PLAN_DIR}/${NEWEST}`);
+    await expect(page.getByTestId("plan-pane")).toBeVisible();
+    await page.getByTestId("dialog-hide").click();
+
+    await page.getByTestId("session-row-s-other").locator(".session-open").click();
+    await expect(page.getByTestId("session-row-s-other")).toHaveClass(/active/);
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
+
+    await page.getByTestId("session-row-s-plan").locator(".session-open").click();
+    await expect(page.getByTestId("session-row-s-plan")).toHaveClass(/active/);
+    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
+
+    await page.getByTestId("plan-chip").click();
+    await page.getByTestId(`plan-file-open-${NEWEST}`).click();
+    const pane = page.getByTestId("plan-pane");
+    await expect(pane.getByTestId("plan-approve")).toBeVisible();
+    await expect(pane.getByTestId("plan-clean")).toBeVisible();
+    await expect(pane.getByTestId("plan-goal")).toBeVisible();
+
+    await pane.getByTestId("plan-approve").click();
+    await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result)
+      .toEqual({ outcome: "approved" });
+  });
+
   test("keeps the list readable in both themes and paints Delete differently", async ({ page }) => {
     await openWorkspace(page, PLAN_SEED);
     await startSession(page);

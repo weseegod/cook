@@ -581,6 +581,107 @@ describe("plan review", () => {
     expect(state.planDialogOpen).toBe(false);
   });
 
+  it("stashes a pending plan review on switch and restores it without opening the pane", () => {
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().beginPlanReview("# Plan A", "2026-09-19T14-30-22Z.md");
+    useSessionStore.getState().savePlanComment(null, [1, 2], "tighten this");
+    useSessionStore.getState().set({
+      pendingQuestion: {
+        rpcId: 42,
+        kind: "plan",
+        questions: [],
+        raw: {},
+      },
+    });
+    useSessionStore.getState().setPlanDialogOpen(false);
+
+    useSessionStore.getState().resetConversation("sess-b");
+    expect(useSessionStore.getState().planReview).toBeNull();
+    expect(useSessionStore.getState().pendingQuestion).toBeNull();
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]?.pendingQuestion.rpcId).toBe(42);
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]?.planComments).toEqual([
+      { id: 0, lineRange: [1, 2], text: "tighten this" },
+    ]);
+
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().restoreStashedPlanReview();
+    expect(useSessionStore.getState()).toMatchObject({
+      planReview: { body: "# Plan A", fileName: "2026-09-19T14-30-22Z.md", pending: true },
+      planDialogOpen: false,
+      planFileView: null,
+      pendingQuestion: { rpcId: 42, kind: "plan" },
+    });
+    expect(useSessionStore.getState().planComments).toEqual([
+      { id: 0, lineRange: [1, 2], text: "tighten this" },
+    ]);
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]).toBeUndefined();
+  });
+
+  it("lets a fresh exit_plan_mode win over a stash for the same conversation", () => {
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().beginPlanReview("# Old", "old.md");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 1, kind: "plan", questions: [], raw: {} },
+    });
+    useSessionStore.getState().resetConversation("sess-b");
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]?.pendingQuestion.rpcId).toBe(1);
+
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().beginPlanReview("# New", "new.md");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 2, kind: "plan", questions: [], raw: {} },
+    });
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]).toBeUndefined();
+    expect(useSessionStore.getState().planReview).toEqual({ body: "# New", fileName: "new.md", pending: true });
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(2);
+  });
+
+  it("drops the stash once the review is answered so it cannot come back", () => {
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().beginPlanReview("# Plan");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 7, kind: "plan", questions: [], raw: {} },
+    });
+    useSessionStore.getState().resetConversation("sess-b");
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]).toBeDefined();
+
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().restoreStashedPlanReview();
+    useSessionStore.getState().endPlanReview();
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]).toBeUndefined();
+    expect(useSessionStore.getState().planReview).toEqual({ body: "# Plan", pending: false });
+
+    useSessionStore.getState().resetConversation("sess-b");
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]).toBeUndefined();
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().restoreStashedPlanReview();
+    expect(useSessionStore.getState().planReview).toBeNull();
+    expect(useSessionStore.getState().pendingQuestion).toBeNull();
+  });
+
+  it("does not restore a stash when a newer pending review already landed", () => {
+    useSessionStore.getState().resetConversation("sess-a");
+    useSessionStore.getState().stashPlanReview("sess-a", {
+      planReview: { body: "# Stashed", fileName: "stashed.md", pending: true },
+      planComments: [],
+      planNextCommentId: 0,
+      planFocus: "preview",
+      planCommentRange: null,
+      planEditingCommentId: null,
+      planStashedDraft: null,
+      pendingQuestion: { rpcId: 9, kind: "plan", questions: [], raw: {} },
+    });
+    // Simulate load replay installing a live waiter without clearing the older stash first.
+    useSessionStore.setState({
+      planReview: { body: "# Live", fileName: "live.md", pending: true },
+      pendingQuestion: { rpcId: 10, kind: "plan", questions: [], raw: {} },
+    });
+    useSessionStore.getState().restoreStashedPlanReview();
+    expect(useSessionStore.getState().planReview).toEqual({ body: "# Live", fileName: "live.md", pending: true });
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(10);
+    expect(useSessionStore.getState().planReviewsBySession["sess-a"]?.pendingQuestion.rpcId).toBe(9);
+  });
+
   it("honors turn_completed when the agent emits it (U-turn)", () => {
     useSessionStore.setState({
       turnRunning: true,

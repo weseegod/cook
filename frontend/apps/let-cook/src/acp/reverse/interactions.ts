@@ -146,8 +146,26 @@ export const interactionEntries: ReverseEntry[] = [
           ? ctx.params.planContent
           : null;
         const planPath = typeof ctx.params.planFilePath === "string" ? ctx.params.planFilePath : null;
-        useSessionStore.getState().beginPlanReview(body, planFileName(planPath));
-        useSessionStore.getState().set({ pendingQuestion: planInteraction(rpcId, ctx.params) });
+        const fileName = planFileName(planPath);
+        const question = planInteraction(rpcId, ctx.params);
+        const ownerId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : null;
+        const activeId = useSessionStore.getState().sessionId;
+        // A request for a background conversation must not paint the open conversation's review.
+        if (ownerId && activeId && ownerId !== activeId) {
+          useSessionStore.getState().stashPlanReview(ownerId, {
+            planReview: { body, fileName, pending: true },
+            planComments: [],
+            planNextCommentId: 0,
+            planFocus: "preview",
+            planCommentRange: null,
+            planEditingCommentId: null,
+            planStashedDraft: null,
+            pendingQuestion: question,
+          });
+          return;
+        }
+        useSessionStore.getState().beginPlanReview(body, fileName);
+        useSessionStore.getState().set({ pendingQuestion: question });
       }),
   },
   {

@@ -3,7 +3,17 @@ import { readLocal } from "../../ui/storage";
 import { emptyPlanSlice } from "../plan-review";
 import { emptyCursor } from "./cursor";
 import { appendTurnMarker, finishStreamingBlocks, reduceNotifications } from "./transcript";
-import { DEFAULT_SESSION_TITLE, EMPTY_PLAN_ENTRIES, type SessionState } from "./types";
+import { DEFAULT_SESSION_TITLE, EMPTY_PLAN_ENTRIES, type SessionState, type StashedPlanReview } from "./types";
+
+function dropPlanReviewStash(
+  planReviewsBySession: Record<string, StashedPlanReview>,
+  sessionId: string | null,
+): Record<string, StashedPlanReview> {
+  if (!sessionId || !(sessionId in planReviewsBySession)) return planReviewsBySession;
+  const next = { ...planReviewsBySession };
+  delete next[sessionId];
+  return next;
+}
 
 export const useSessionStore = create<SessionState>((set) => ({
   connection: "idle",
@@ -44,6 +54,7 @@ export const useSessionStore = create<SessionState>((set) => ({
   queuedPromptCount: 0,
   queuedEntries: [],
   queuesBySession: {},
+  planReviewsBySession: {},
   editingQueueEntry: null,
   followUps: null,
   composerDraft: "",
@@ -66,21 +77,25 @@ export const useSessionStore = create<SessionState>((set) => ({
     }),
   setComposerDraft: (composerDraft) => set({ composerDraft }),
   beginPlanReview: (body, fileName) =>
-    set({
+    set((state) => ({
+      // A fresh request replaces any unanswered stash for this conversation.
+      planReviewsBySession: dropPlanReviewStash(state.planReviewsBySession, state.sessionId),
       planReview: { body, fileName, pending: true },
       // A new review owns its own comments: `acp_handler/interactions.rs` resets both on arrival.
       planComments: [],
       planNextCommentId: 0,
       // TUI shows the line viewer immediately on `exit_plan_mode`.
       planDialogOpen: true,
-      planFocus: "preview",
+      planFocus: "preview" as const,
       planCommentRange: null,
       planEditingCommentId: null,
       planStashedDraft: null,
-    }),
+    })),
   endPlanReview: () =>
     set((state) => (state.planReview
       ? {
+          // An answered request must not come back when switching conversations.
+          planReviewsBySession: dropPlanReviewStash(state.planReviewsBySession, state.sessionId),
           planReview: { ...state.planReview, pending: false },
           planFocus: "preview" as const,
           planCommentRange: null,
@@ -88,6 +103,34 @@ export const useSessionStore = create<SessionState>((set) => ({
           planStashedDraft: null,
         }
       : {})),
+  stashPlanReview: (sessionId, stash) =>
+    set((state) => ({
+      planReviewsBySession: { ...state.planReviewsBySession, [sessionId]: stash },
+    })),
+  restoreStashedPlanReview: () =>
+    set((state) => {
+      const id = state.sessionId;
+      if (!id) return {};
+      // Replay already installed a live waiter; that request wins over any older stash.
+      if (state.planReview?.pending) return {};
+      const stash = state.planReviewsBySession[id];
+      if (!stash) return {};
+      return {
+        planReviewsBySession: dropPlanReviewStash(state.planReviewsBySession, id),
+        planReview: stash.planReview,
+        planComments: stash.planComments,
+        planNextCommentId: stash.planNextCommentId,
+        planFocus: stash.planFocus,
+        planCommentRange: stash.planCommentRange,
+        planEditingCommentId: stash.planEditingCommentId,
+        planStashedDraft: stash.planStashedDraft,
+        pendingQuestion: stash.pendingQuestion,
+        // Pane stays closed until the user opens that plan from the header chip.
+        planDialogOpen: false,
+        planFileView: null,
+        questionOpenedAt: Date.now(),
+      };
+    }),
   setPlanDialogOpen: (planDialogOpen) => set({ planDialogOpen }),
   setPlanFocus: (planFocus) => set({ planFocus }),
   setPlanCommentRange: (planCommentRange) => set({ planCommentRange }),
@@ -175,44 +218,69 @@ export const useSessionStore = create<SessionState>((set) => ({
   removePlanComment: (id) =>
     set((state) => ({ planComments: state.planComments.filter((comment) => comment.id !== id) })),
   resetConversation: (sessionId = null) =>
-    set((state) => ({
-      sessionId,
-      blocks: [],
-      activity: null,
-      planEntries: EMPTY_PLAN_ENTRIES,
-      transcriptCursor: emptyCursor(),
-      sessionTitle: DEFAULT_SESSION_TITLE,
-      turnRunning: false,
-      currentPromptId: null,
-      retrying: false,
-      turnStartedAt: null,
-      turnPausedMs: 0,
-      questionOpenedAt: null,
-      reasoningEffort: null,
-      planMode: false,
-      usage: null,
-      goal: null,
-      goalClearedId: null,
-      ...emptyPlanSlice,
-      todoOverlayOpen: false,
-      planFiles: [],
-      planFileView: null,
-      rewindDialogOpen: false,
-      recapDialogOpen: false,
-      recapPending: false,
-      recapStatus: "idle",
-      recapSummary: null,
-      recapError: null,
-      pendingPermission: null,
-      pendingQuestion: null,
-      queuedPromptCount: (sessionId && state.queuesBySession[sessionId]?.length) || 0,
-      queuedEntries: (sessionId && state.queuesBySession[sessionId]) || [],
-      editingQueueEntry: null,
-      followUps: null,
-      composerDraft: "",
-      notice: null,
-      error: null,
-    })),
+    set((state) => {
+      let planReviewsBySession = state.planReviewsBySession;
+      const outgoing = state.sessionId;
+      // Park the unanswered review with the conversation that owned it — same idea as queues.
+      if (
+        outgoing
+        && state.planReview?.pending
+        && state.pendingQuestion?.kind === "plan"
+      ) {
+        planReviewsBySession = {
+          ...planReviewsBySession,
+          [outgoing]: {
+            planReview: state.planReview,
+            planComments: state.planComments,
+            planNextCommentId: state.planNextCommentId,
+            planFocus: state.planFocus,
+            planCommentRange: state.planCommentRange,
+            planEditingCommentId: state.planEditingCommentId,
+            planStashedDraft: state.planStashedDraft,
+            pendingQuestion: state.pendingQuestion,
+          },
+        };
+      }
+      return {
+        sessionId,
+        blocks: [],
+        activity: null,
+        planEntries: EMPTY_PLAN_ENTRIES,
+        transcriptCursor: emptyCursor(),
+        sessionTitle: DEFAULT_SESSION_TITLE,
+        turnRunning: false,
+        currentPromptId: null,
+        retrying: false,
+        turnStartedAt: null,
+        turnPausedMs: 0,
+        questionOpenedAt: null,
+        reasoningEffort: null,
+        planMode: false,
+        usage: null,
+        goal: null,
+        goalClearedId: null,
+        ...emptyPlanSlice,
+        todoOverlayOpen: false,
+        planFiles: [],
+        planFileView: null,
+        rewindDialogOpen: false,
+        recapDialogOpen: false,
+        recapPending: false,
+        recapStatus: "idle",
+        recapSummary: null,
+        recapError: null,
+        pendingPermission: null,
+        pendingQuestion: null,
+        queuedPromptCount: (sessionId && state.queuesBySession[sessionId]?.length) || 0,
+        queuedEntries: (sessionId && state.queuesBySession[sessionId]) || [],
+        planReviewsBySession,
+        editingQueueEntry: null,
+        followUps: null,
+        composerDraft: "",
+        notice: null,
+        error: null,
+      };
+    }),
   appendOptimisticUser: (text, images = [], promptId) =>
     set((state) => {
       const localId = `local-${crypto.randomUUID()}`;

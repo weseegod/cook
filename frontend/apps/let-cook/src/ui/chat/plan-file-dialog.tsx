@@ -7,11 +7,12 @@ import { copyText } from "./clipboard";
 import { Markdown } from "./markdown";
 
 /**
- * Read-only view of a plan file that is not waiting for approve.
+ * Read-only view of a plan file that is not the unanswered waiting review.
  *
- * The review pane owns the current episode while a decision is parked; everything else — earlier
- * plans, and the current episode once answered or with no review open — opens here. Copy and
- * Copy file path mirror the header chip menu so the viewer can share the body or path directly.
+ * The decision pane owns the pending review's file while its `exit_plan_mode` request is parked;
+ * everything else — earlier plans, plans that are not that waiting episode, and the same file once
+ * a decision was sent — opens here. Copy and Copy file path mirror the header chip menu so the
+ * viewer can share the body or path directly.
  */
 export function PlanFileDialog() {
   const file = useSessionStore((state) => state.planFileView);

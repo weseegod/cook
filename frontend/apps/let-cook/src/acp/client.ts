@@ -242,6 +242,8 @@ export class CookAcpClient {
     } else {
       useSessionStore.getState().finishTurn();
     }
+    // Restore a parked plan decision after replay; skip when load already installed a new waiter.
+    useSessionStore.getState().restoreStashedPlanReview();
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
     const catalog = await hydrateModelCatalog(modelCatalog(response?.models));

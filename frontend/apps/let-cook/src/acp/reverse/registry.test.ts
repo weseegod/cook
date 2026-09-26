@@ -103,4 +103,37 @@ describe("reverse-request policy (C2)", () => {
     );
     expect(planDialogTitle(useSessionStore.getState().planReview)).toBe("plan.md (empty)");
   });
+
+  it("parks exit_plan_mode for a background session without painting the open conversation", async () => {
+    const respond = vi.spyOn(host, "respond").mockResolvedValue();
+    useSessionStore.getState().resetConversation("visible");
+    useSessionStore.getState().beginPlanReview("# On screen", "visible.md");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 20, kind: "plan", questions: [], raw: {} },
+    });
+
+    const params = {
+      sessionId: "background",
+      toolCallId: "tc-bg",
+      planContent: "# Background plan",
+      planFilePath: "/plans/background.md",
+    };
+    await dispatchReverseRequest(
+      { id: 21, method: "x.ai/exit_plan_mode", params },
+      "x.ai/exit_plan_mode",
+      params,
+    );
+
+    expect(respond).not.toHaveBeenCalled();
+    expect(useSessionStore.getState().planReview).toEqual({
+      body: "# On screen",
+      fileName: "visible.md",
+      pending: true,
+    });
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(20);
+    expect(useSessionStore.getState().planReviewsBySession.background).toMatchObject({
+      planReview: { body: "# Background plan", fileName: "background.md", pending: true },
+      pendingQuestion: { rpcId: 21, kind: "plan" },
+    });
+  });
 });

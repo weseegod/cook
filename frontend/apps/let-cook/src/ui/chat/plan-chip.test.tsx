@@ -185,6 +185,43 @@ describe("PlanChip", () => {
     expect(useSessionStore.getState().planFileView?.name).toBe(planFile().name);
   });
 
+  it("reopens the decision bar for a hidden pending review while an older file stays read-only", () => {
+    const current = planFile();
+    useSessionStore.setState({
+      planFiles: [current, OLDER],
+      planReview: { body: "# Plan", fileName: current.name, pending: true },
+      planDialogOpen: false,
+      planFileView: null,
+    });
+    render(<PlanChip />);
+
+    fireEvent.click(screen.getByTestId("plan-chip"));
+    fireEvent.click(screen.getByTestId(`plan-file-open-${current.name}`));
+    expect(useSessionStore.getState().planDialogOpen).toBe(true);
+    expect(useSessionStore.getState().planFileView).toBeNull();
+
+    useSessionStore.setState({ planDialogOpen: false });
+    fireEvent.click(screen.getByTestId("plan-chip"));
+    fireEvent.click(screen.getByTestId(`plan-file-open-${OLDER.name}`));
+    expect(useSessionStore.getState().planFileView?.name).toBe(OLDER.name);
+    expect(useSessionStore.getState().planDialogOpen).toBe(false);
+  });
+
+  it("opens the waiting file read-only once a decision was sent", () => {
+    const current = planFile();
+    useSessionStore.setState({
+      planFiles: [current],
+      planReview: { body: "# Plan", fileName: current.name, pending: false },
+      planDialogOpen: false,
+    });
+    render(<PlanChip />);
+
+    fireEvent.click(screen.getByTestId("plan-chip"));
+    fireEvent.click(screen.getByTestId(`plan-file-open-${current.name}`));
+    expect(useSessionStore.getState().planFileView?.name).toBe(current.name);
+    expect(useSessionStore.getState().planDialogOpen).toBe(false);
+  });
+
   it("deletes an earlier plan once the confirmation is accepted", async () => {
     useSessionStore.setState({ planFiles: [planFile(), OLDER], planDialogOpen: false });
     render(<PlanChip />);
