@@ -274,10 +274,10 @@ The full event envelope is POSTed as JSON. Useful for webhooks, analytics, or se
 
 See the built-in examples in the `xai-grok-hooks` crate:
 
-- [Safe Shell Guard](../../../xai-grok-hooks/examples/hooks/safe-shell.json)
-- [No Recursive Grep](../../../xai-grok-hooks/examples/hooks/no-recursive-grep.json): hard-blocks `grep -r`/`grep -R`/`rgrep` (OOM guard)
-- [Session Audit Log](../../../xai-grok-hooks/examples/hooks/session-log.json)
-- [Tool Activity Logger](../../../xai-grok-hooks/examples/hooks/tool-logger.json)
+- [Safe Shell Guard](../../xai-grok-hooks/examples/hooks/safe-shell.json)
+- [No Recursive Grep](../../xai-grok-hooks/examples/hooks/no-recursive-grep.json): hard-blocks `grep -r`/`grep -R`/`rgrep` (OOM guard)
+- [Session Audit Log](../../xai-grok-hooks/examples/hooks/session-log.json)
+- [Tool Activity Logger](../../xai-grok-hooks/examples/hooks/tool-logger.json)
 
 Copy them to `~/.cook/hooks/` and customize.
 

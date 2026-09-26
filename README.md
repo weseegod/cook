@@ -118,21 +118,20 @@ pnpm tauri dev
 
 ## Documentation
 
-- [Architecture](ARCHITECTURE.md) — workspace layout and runtime boundaries
+- [Architecture](ARCHITECTURE.md) — repository structure and runtime boundaries
+- [TUI presentation](docs/tui-presentation.md) — terminal screens, tool rows, and transcript behavior
 - [Let Cook module map](frontend/apps/let-cook/ARCHITECTURE.md) — where to edit the desktop app
-- [Desktop contract](docs/desktop-app.md) — product boundary, capability honesty, host roles
-- [Desktop ↔ TUI capability map](docs/desktop-tui-capability-map.md) — what the
-  desktop covers of the TUI, and what it deliberately does not
-- [Desktop production plan](docs/desktop-app-implement.md) and
-  [client layering](docs/desktop-app-client-implement.md) — providers and the
-  honesty/registry fold
-- [Desktop release](docs/desktop-release.md) — self-build and updater artifacts
+- [Desktop contract](docs/desktop-app.md) and [capability map](docs/desktop-tui-capability-map.md) — product boundaries and current ACP coverage
+- [Desktop release](docs/desktop-release.md) — packaging and release artifacts
 - [BYOK models](docs/byok-models.md) — model and provider configuration
-- [User guide](crates/codegen/xai-grok-pager/docs/user-guide/) — CLI usage,
-  configuration, permissions, MCP, plugins, and integrations
-- [Upstream sync playbook](UPSTREAM-MERGE.md) — maintainer-only merge notes
-- [Restore core surfaces after a sync](docs/post-merge-core-fix.md) — implement
-  and test the fork-only surfaces a sync can drop
+- [CLI user guide](crates/codegen/xai-grok-pager/docs/user-guide/) — configuration, permissions, MCP, plugins, and integrations
+- [Core-agent flow and token analysis](docs/core-agent-flow-and-token-optimization.md) — runtime design and measured behavior
+- [Real-model suite run order](docs/real-model-suite-run-order.md) — verification procedure
+- [Upstream sync playbook](UPSTREAM-MERGE.md) — maintainer merge notes
+- [Restore fork-owned core surfaces after a sync](docs/post-merge-core-fix.md) — implementation and verification guidance
+
+The desktop implementation plans and experiment reports remain linked from
+their relevant design and contract documents under [`docs/`](docs/).
 
 ## Contributing
 

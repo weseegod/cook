@@ -5,13 +5,11 @@ This directory holds **upstream source** vendored into the repository. It is
 
 ## Why vendor
 
-This directory holds in-tree third-party Rust (and similar) sources: the
-mermaid layout stack that renders **untrusted model output**, the
-grove-on-NFS userspace server (`nfsserve`), and grove's FUSE client
-(`fuser`). Vendoring gives a full audit surface, pins exact source, and
-avoids crates.io yanks. Local patches and upgrade checklists live in each
-crate’s `Cargo.toml` header comments — treat those as the source of truth
-when re-vendoring.
+This directory holds in-tree third-party Rust sources, including the Mermaid
+layout stack that renders **untrusted model output**. Vendoring gives a full
+audit surface, pins exact source, and avoids crates.io yanks. Local patches and
+upgrade checklists live in each crate’s `Cargo.toml` header comments; treat
+those as the source of truth when re-vendoring.
 
 ## Vendored crates
 
@@ -21,8 +19,6 @@ when re-vendoring.
 | [`dagre_rust`](./dagre_rust/) | 0.0.5 | Apache-2.0 | [r3alst/dagre-rust](https://github.com/r3alst/dagre-rust) / Warp re-vendor | [`LICENCE`](./dagre_rust/LICENCE) |
 | [`graphlib_rust`](./graphlib_rust/) | 0.0.2 | Apache-2.0 | [r3alst/graphlib-rust](https://github.com/r3alst/graphlib-rust) | [`LICENCE`](./graphlib_rust/LICENCE) |
 | [`ordered_hashmap`](./ordered_hashmap/) | 0.0.3 | Apache-2.0 | [r3alst/ordered-hashmap](https://github.com/r3alst/ordered-hashmap) | [`LICENCE`](./ordered_hashmap/LICENCE) |
-| [`nfsserve`](./nfsserve/) | 0.11.0 | BSD-3-Clause | [huggingface/nfsserve](https://github.com/huggingface/nfsserve) | [`LICENSE`](./nfsserve/LICENSE) |
-| [`fuser`](./fuser/) | 0.18.0 | MIT | [cberner/fuser](https://github.com/cberner/fuser) | [`LICENSE.md`](./fuser/LICENSE.md) |
 
 Mermaid layout stack:
 
