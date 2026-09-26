@@ -111,7 +111,10 @@ async fn install_internal_pinned_version_writes_binary_and_symlink() {
     );
 
     // The fork never touches upstream's bin/grok / bin/agent entry points.
-    assert!(!home.join("bin").join("grok").exists(), "bin/grok untouched");
+    assert!(
+        !home.join("bin").join("grok").exists(),
+        "bin/grok untouched"
+    );
     assert!(
         !home.join("bin").join("agent").exists(),
         "bin/agent untouched"
@@ -170,7 +173,7 @@ async fn install_internal_fails_when_managed_link_is_blocked() {
     let bin_dir = home.join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
 
-    // Block the cook link slot: non-empty directory → read_link fails.
+    // Block the cook link slot: non-empty directory must hard-fail capture.
     let blocker = bin_dir.join("cook");
     std::fs::create_dir(&blocker).unwrap();
     std::fs::write(blocker.join("blocker"), b"x").unwrap();
@@ -178,11 +181,49 @@ async fn install_internal_fails_when_managed_link_is_blocked() {
     let err = install_internal_from_base(Some("0.1.181"), &cfg, &server.uri())
         .await
         .expect_err("install must fail when the cook link slot is blocked");
-    drop(err);
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("directory") || msg.contains("capturing rollback"),
+        "error should mention the blocked slot: {msg}"
+    );
 
     assert!(
         blocker.is_dir(),
         "the blocking directory must be left untouched"
+    );
+}
+
+/// A regular file at `bin/cook` (older curl `install -m 755` layout) is a
+/// valid prior install: the updater moves it aside and installs the symlink.
+#[tokio::test]
+#[serial]
+async fn install_internal_replaces_regular_file_bin_cook() {
+    let _ = test_home();
+    reset_home();
+    let platform = host_platform();
+    let server = mount_gcs("0.1.181", &platform).await;
+    let cfg = make_config("stable");
+
+    let home = test_home();
+    let bin_dir = home.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let cook = bin_dir.join("cook");
+    std::fs::write(&cook, b"old-regular-curl-install").unwrap();
+
+    install_internal_from_base(Some("0.1.181"), &cfg, &server.uri())
+        .await
+        .unwrap();
+
+    assert!(cook.is_symlink(), "bin/cook must become a symlink");
+    let target = std::fs::read_link(&cook).unwrap();
+    assert_eq!(
+        target.file_name().unwrap(),
+        format!("cook-0.1.181-{platform}").as_str(),
+        "symlink must point at the new versioned download"
+    );
+    assert_eq!(
+        target,
+        std::path::PathBuf::from(format!("../downloads/cook-0.1.181-{platform}"))
     );
 }
 

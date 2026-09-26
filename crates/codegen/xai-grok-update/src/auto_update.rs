@@ -11,6 +11,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use tokio::io::AsyncWriteExt;
 
 use crate::cleanup_downloads::cleanup_old_downloads;
+#[cfg(unix)]
+use crate::cleanup_downloads::executable_is_in_use;
 use crate::version::{
     UpdateConfig, fetch_latest_version, get_installed_grok_version, get_latest_version,
     is_stable_channel, is_version_cache_fresh, try_fetch_stable_pointer, write_version_cache,
@@ -44,9 +46,68 @@ fn manual_install_cmd(_channel: &str) -> String {
          https://download.letcook.dev and put it on your PATH"
             .to_string()
     } else {
-        "curl -fsSL https://download.letcook.dev/install.sh | bash".to_string()
+        cli_only_install_cmd()
     }
 }
+
+/// CLI-only curl installer one-liner (macOS/Linux). Always includes `CLI_ONLY=1`
+/// so the script does not also install the desktop app or prompt for sudo.
+fn cli_only_install_cmd() -> String {
+    "curl -fsSL https://download.letcook.dev/install.sh | CLI_ONLY=1 bash".to_string()
+}
+
+/// Whether a failed internal install may fall back to the curl CLI installer.
+fn cli_only_fallback_supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "linux"))
+}
+
+/// Run the official CLI-only curl installer once. Overridable in tests so the
+/// fallback path can be exercised without contacting the network.
+fn run_cli_only_install_fallback() -> Result<()> {
+    if let Ok(guard) = CLI_ONLY_FALLBACK_OVERRIDE.lock()
+        && let Some(hook) = *guard
+    {
+        return hook();
+    }
+    default_cli_only_install_fallback()
+}
+
+fn default_cli_only_install_fallback() -> Result<()> {
+    let mut curl = Command::new("curl")
+        .args(["-fsSL", "https://download.letcook.dev/install.sh"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .context("spawning curl for CLI_ONLY=1 reinstall")?;
+    let curl_stdout = curl
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("curl stdout pipe missing"))?;
+    let status = Command::new("bash")
+        .env("CLI_ONLY", "1")
+        .stdin(curl_stdout)
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .context("running CLI_ONLY=1 install.sh via bash")?;
+    // Reap curl so a non-zero curl exit is not lost behind a successful bash.
+    let curl_status = curl
+        .wait()
+        .context("waiting for curl in CLI_ONLY=1 reinstall")?;
+    if !curl_status.success() {
+        anyhow::bail!("curl for CLI_ONLY=1 reinstall exited with {curl_status}");
+    }
+    if status.success() {
+        Ok(())
+    } else {
+        anyhow::bail!("CLI_ONLY=1 reinstall exited with {status}")
+    }
+}
+
+/// Test seam: when set, [`run_cli_only_install_fallback`] calls this instead of curl.
+static CLI_ONLY_FALLBACK_OVERRIDE: std::sync::Mutex<Option<fn() -> Result<()>>> =
+    std::sync::Mutex::new(None);
 
 fn reinstall_hint(installer: &str, channel: &str) -> String {
     match installer {
@@ -985,7 +1046,18 @@ pub async fn run_install_script(
         .map(|()| None),
         "gh-release" => install_gh_release(target).await.map(|()| None),
         WINGET => Err(anyhow::anyhow!("this install is managed by WinGet")),
-        _ => install_internal(target, update_config).await.map(Some),
+        _ => match install_internal(target, update_config).await {
+            Ok(version) => Ok(Some(version)),
+            Err(internal_err) if cli_only_fallback_supported() => {
+                match run_cli_only_install_fallback() {
+                    Ok(()) => Ok(target.map(str::to_string)),
+                    Err(fallback_err) => Err(internal_err).context(format!(
+                        "CLI_ONLY=1 reinstall also failed: {fallback_err:#}"
+                    )),
+                }
+            }
+            Err(e) => Err(e),
+        },
     };
     // Measured before the success-only cache sweep, so the sweep cannot inflate success durations
     let duration_ms = started.elapsed().as_millis() as u64;
@@ -1824,7 +1896,7 @@ fn relative_symlink_target(target: &std::path::Path, link: &std::path::Path) -> 
 /// bind-mounts of `~/.cook/`). Windows: [`windows_replace_exe`].
 ///
 /// **All-or-nothing.** Each link's prior state is captured before the swap.
-/// The capture is the prior symlink target on Unix, a `.rollback.bak` on Windows, or an `Absent` marker via `symlink_metadata`.
+/// The capture is the prior symlink target or a rename-aside of a regular file on Unix, a `.rollback.bak` on Windows, or an `Absent` marker via `symlink_metadata`.
 /// Any earlier successful swaps are rolled back if a later one fails, including *removing* a link that didn't exist before.
 /// Restore failures go to `tracing::warn!`.
 /// The swap error itself propagates unwrapped so the caller's `reinstall_hint` wrap stays the user-visible message.
@@ -1850,8 +1922,18 @@ async fn replace_managed_bins(pairs: &[(std::path::PathBuf, std::path::PathBuf)]
         match LinkRollback::capture(dest).await {
             Ok(rb) => captured.push(rb),
             Err(e) => {
-                // Nothing swapped yet; drop any Windows .rollback.bak files.
-                for prior in &captured {
+                // A Unix regular-file capture renames the binary aside; put it back.
+                // Windows capture only copies, so restore is unnecessary — cleanup drops the .bak.
+                for prior in captured.iter().rev() {
+                    #[cfg(unix)]
+                    if prior.backup_path().is_some()
+                        && let Err(restore_err) = prior.restore().await
+                    {
+                        tracing::warn!(
+                            "failed to restore aside backup for {}: {restore_err:#}",
+                            prior.link_path().display(),
+                        );
+                    }
                     prior.cleanup().await;
                 }
                 return Err(e)
@@ -1913,19 +1995,44 @@ async fn replace_managed_bins(pairs: &[(std::path::PathBuf, std::path::PathBuf)]
 
 /// Snapshot of a managed-bin link's prior state for rollback in [`replace_managed_bins`].
 /// `Absent` vs `Present` is discriminated up front via `symlink_metadata` so capture errors never get misread as "link was absent".
+#[derive(Debug)]
 enum LinkRollback {
     /// Link was absent before the swap; rollback removes the one we created.
     Absent { link_path: std::path::PathBuf },
     /// Link existed before the swap; rollback restores its prior contents.
     Present {
         link_path: std::path::PathBuf,
-        /// Unix: prior symlink target (relative or absolute).
+        /// Unix: prior symlink target, or a rename-aside of a regular file.
         #[cfg(unix)]
-        prior_target: std::path::PathBuf,
+        prior: UnixPrior,
         /// Windows: `.rollback.bak` copy of the previous binary.
         #[cfg(windows)]
         backup_path: std::path::PathBuf,
     },
+}
+
+/// Prior contents of a Unix managed-bin path.
+#[cfg(unix)]
+#[derive(Debug)]
+enum UnixPrior {
+    /// Path was a symlink; remember its target for restore via [`atomic_symlink_swap`].
+    Symlink { target: std::path::PathBuf },
+    /// Path was a regular file (e.g. curl `install -m 755` layout); renamed aside so the
+    /// running image keeps a directory entry until cleanup.
+    RegularFile { backup_path: std::path::PathBuf },
+}
+
+#[cfg(unix)]
+fn file_type_label(ft: std::fs::FileType) -> &'static str {
+    if ft.is_symlink() {
+        "symlink"
+    } else if ft.is_file() {
+        "regular file"
+    } else if ft.is_dir() {
+        "directory"
+    } else {
+        "special file"
+    }
 }
 
 impl LinkRollback {
@@ -1934,28 +2041,55 @@ impl LinkRollback {
 
         // `symlink_metadata` (lstat) handles valid symlinks, broken symlinks, and regular files alike
         // Any IO error other than NotFound aborts the swap before mutation
-        match tokio::fs::symlink_metadata(&lp).await {
-            Ok(_) => {}
+        let meta = match tokio::fs::symlink_metadata(&lp).await {
+            Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(LinkRollback::Absent { link_path: lp });
             }
             Err(e) => {
                 return Err(e).with_context(|| format!("stat {} before swap", lp.display()));
             }
-        }
+        };
 
         #[cfg(unix)]
         {
-            let prior_target = tokio::fs::read_link(&lp)
-                .await
-                .with_context(|| format!("reading prior symlink target {}", lp.display()))?;
-            Ok(LinkRollback::Present {
-                link_path: lp,
-                prior_target,
-            })
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                let target = tokio::fs::read_link(&lp)
+                    .await
+                    .with_context(|| format!("reading prior symlink target {}", lp.display()))?;
+                return Ok(LinkRollback::Present {
+                    link_path: lp,
+                    prior: UnixPrior::Symlink { target },
+                });
+            }
+            if ft.is_file() {
+                sweep_rollback_backups(&lp).await;
+                // Rename keeps a directory entry so a process executing this inode is not unlinked.
+                let backup_path = unique_temp_sibling(&lp, "rollback");
+                tokio::fs::rename(&lp, &backup_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "moving regular file {} aside to {} before swap",
+                            lp.display(),
+                            backup_path.display(),
+                        )
+                    })?;
+                return Ok(LinkRollback::Present {
+                    link_path: lp,
+                    prior: UnixPrior::RegularFile { backup_path },
+                });
+            }
+            anyhow::bail!(
+                "{} is a {}, expected a symlink or regular file",
+                lp.display(),
+                file_type_label(ft)
+            );
         }
         #[cfg(windows)]
         {
+            let _ = meta;
             // The backup name comes from `unique_temp_sibling` (PID and sequence), so concurrent updaters can't clobber each other's backups
             let backup_path = unique_temp_sibling(&lp, "rollback.bak");
             tokio::fs::copy(&lp, &backup_path).await.with_context(|| {
@@ -1979,17 +2113,18 @@ impl LinkRollback {
         }
     }
 
-    /// Path to the on-disk backup (Windows only; Unix is in-memory).
-    #[cfg(windows)]
+    /// Path to the on-disk backup (Windows copy, or Unix regular-file rename-aside).
     fn backup_path(&self) -> Option<&std::path::Path> {
         match self {
+            #[cfg(windows)]
             LinkRollback::Present { backup_path, .. } => Some(backup_path),
-            LinkRollback::Absent { .. } => None,
+            #[cfg(unix)]
+            LinkRollback::Present {
+                prior: UnixPrior::RegularFile { backup_path },
+                ..
+            } => Some(backup_path),
+            _ => None,
         }
-    }
-    #[cfg(unix)]
-    fn backup_path(&self) -> Option<&std::path::Path> {
-        None
     }
 
     async fn restore(&self) -> Result<()> {
@@ -2008,12 +2143,40 @@ impl LinkRollback {
             #[cfg(unix)]
             LinkRollback::Present {
                 link_path,
-                prior_target,
-            } => atomic_symlink_swap(prior_target, link_path)
+                prior: UnixPrior::Symlink { target },
+            } => atomic_symlink_swap(target, link_path)
                 .await
                 .with_context(|| {
                     format!("restoring prior symlink target for {}", link_path.display())
                 }),
+            #[cfg(unix)]
+            LinkRollback::Present {
+                link_path,
+                prior: UnixPrior::RegularFile { backup_path },
+            } => {
+                // Drop the symlink just installed, then put the regular file back.
+                match tokio::fs::remove_file(link_path).await {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        return Err(e).with_context(|| {
+                            format!(
+                                "removing swapped link {} before restoring regular file",
+                                link_path.display()
+                            )
+                        });
+                    }
+                }
+                tokio::fs::rename(backup_path, link_path)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "restoring regular file {} from {}",
+                            link_path.display(),
+                            backup_path.display()
+                        )
+                    })
+            }
             #[cfg(windows)]
             LinkRollback::Present {
                 link_path,
@@ -2040,7 +2203,47 @@ impl LinkRollback {
             let _ = tokio::fs::remove_file(backup_path).await;
         }
         #[cfg(unix)]
-        let _ = self; // no on-disk backup on Unix
+        if let LinkRollback::Present {
+            link_path,
+            prior: UnixPrior::RegularFile { backup_path },
+        } = self
+        {
+            // Never unlink a backup a live process is still executing (macOS SIGKILL risk).
+            if !executable_is_in_use(backup_path) {
+                let _ = tokio::fs::remove_file(backup_path).await;
+            }
+            sweep_rollback_backups(link_path).await;
+        }
+    }
+}
+
+/// Remove `<name>.*.rollback` siblings left by prior regular-file updates, skipping any
+/// still mapped by a live process.
+#[cfg(unix)]
+async fn sweep_rollback_backups(link_path: &std::path::Path) {
+    let (Some(dir), Some(name)) = (
+        link_path.parent(),
+        link_path.file_name().and_then(|n| n.to_str()),
+    ) else {
+        return;
+    };
+    let prefix = format!("{name}.");
+    let Ok(mut entries) = tokio::fs::read_dir(dir).await else {
+        return;
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let fname = entry.file_name();
+        let Some(fname) = fname.to_str() else {
+            continue;
+        };
+        if !fname.starts_with(&prefix) || !fname.ends_with(".rollback") {
+            continue;
+        }
+        let path = entry.path();
+        if executable_is_in_use(&path) {
+            continue;
+        }
+        let _ = tokio::fs::remove_file(&path).await;
     }
 }
 

@@ -74,9 +74,14 @@ if [[ "$skip_cli" != "1" ]]; then
     fi
     grok_home="${GROK_HOME:-${COOK_HOME:-$HOME/.cook}}"
     bin_dir="$grok_home/bin"
+    downloads_dir="$grok_home/downloads"
     path_dir="${INSTALL_DIR:-$HOME/.local/bin}"
-    mkdir -p "$bin_dir" "$path_dir"
-    install -m 755 "$tmp/cook" "$bin_dir/cook"
+    mkdir -p "$bin_dir" "$downloads_dir" "$path_dir"
+    versioned_name="cook-${version}-${cli_plat}"
+    install -m 755 "$tmp/cook" "$downloads_dir/$versioned_name"
+    # Relative symlink so the managed layout matches the self-updater. `ln -sfn`
+    # also replaces a leftover regular file at bin/cook (older curl installs).
+    ln -sfn "../downloads/$versioned_name" "$bin_dir/cook"
     ln -sfn "$bin_dir/cook" "$path_dir/cook"
     echo "cook ${version} -> $path_dir/cook"
   fi

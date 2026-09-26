@@ -672,3 +672,101 @@ fn install_sh_shell_rc_rewrite_matrix() {
         run_shell_rc_case(case);
     }
 }
+
+/// Fork curl installer (`scripts/install.sh`): CLI-only install must leave
+/// `bin/cook` as a relative symlink into `downloads/`, with `~/.local/bin/cook`
+/// pointing at that managed entry point.
+#[test]
+fn cook_install_sh_cli_only_uses_symlink_layout() {
+    let install_sh = match workspace_file("scripts/install.sh") {
+        Some(p) => p,
+        None => {
+            eprintln!("skipping: scripts/install.sh not found relative to crate");
+            return;
+        }
+    };
+    let platform = host_platform();
+    let fakedir = tempfile::tempdir().unwrap();
+    // Cook's installer fetches `stable` (version text) then the binary; the
+    // shared grok fake curl always writes the script body on -o, so use a
+    // cook-aware stub here.
+    let fake_curl = format!(
+        r#"#!/bin/bash
+out=""; url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) shift; out="$1" ;;
+    -*) : ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
+if [ -n "$out" ]; then
+  case "$url" in
+    */stable|*/stable/) printf '0.1.181' > "$out" ;;
+    *) printf '%s' '{good}' > "$out" ;;
+  esac
+  exit 0
+fi
+printf '0.1.181'
+exit 0
+"#,
+        good = GOOD_SCRIPT,
+    );
+    let curl_path = fakedir.path().join("curl");
+    std::fs::write(&curl_path, fake_curl).unwrap();
+    std::fs::set_permissions(&curl_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let home = tempfile::tempdir().unwrap();
+    let path_dir = home.path().join(".local/bin");
+    std::fs::create_dir_all(&path_dir).unwrap();
+
+    // Leave a regular file where older curl installs put the binary, so the
+    // new layout must replace it with `ln -sfn`.
+    let cook_home = home.path().join(".cook");
+    let bin_dir = cook_home.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    std::fs::write(bin_dir.join("cook"), b"old-regular").unwrap();
+
+    let path_env = format!("{}:/usr/bin:/bin", fakedir.path().display());
+    let status = Command::new("/bin/bash")
+        .arg(&install_sh)
+        .env_clear()
+        .env("HOME", home.path())
+        .env("PATH", path_env)
+        .env("CLI_ONLY", "1")
+        .env("INSTALL_DIR", &path_dir)
+        .status()
+        .expect("spawn scripts/install.sh");
+    assert!(status.success(), "CLI_ONLY install must succeed");
+
+    let managed = bin_dir.join("cook");
+    assert!(
+        managed.is_symlink(),
+        "bin/cook must be a symlink, not a regular file"
+    );
+    let target = std::fs::read_link(&managed).unwrap();
+    assert_eq!(
+        target,
+        std::path::PathBuf::from(format!("../downloads/cook-0.1.181-{platform}")),
+        "bin/cook must be a relative symlink into downloads/"
+    );
+    let versioned = cook_home
+        .join("downloads")
+        .join(format!("cook-0.1.181-{platform}"));
+    assert!(
+        versioned.is_file() && !versioned.is_symlink(),
+        "versioned binary must live under downloads/"
+    );
+
+    let path_link = path_dir.join("cook");
+    assert!(
+        path_link.is_symlink(),
+        "~/.local/bin/cook must be a symlink"
+    );
+    let path_target = std::fs::read_link(&path_link).unwrap();
+    assert_eq!(
+        path_target, managed,
+        "~/.local/bin/cook must point at the managed bin/cook"
+    );
+}

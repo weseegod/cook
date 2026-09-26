@@ -426,7 +426,7 @@ row owner. The TUI follows the same notification in
 | `config.toml` | User config (model, keys, agents, permissions, UI). |
 | `managed_config.toml`, `requirements.toml` | Higher-priority config layers merged by `xai-grok-config` (managed > user > signed requirements > MDM). |
 | `auth.json` / credentials | Auth tokens (`xai-grok-auth`); MCP credentials in `mcp_credentials.json` (`xai-grok-mcp`). |
-| `bin/cook` | The managed binary (updated in place by the self-updater). |
+| `bin/cook` | Managed entry point for the CLI. Normally a symlink to the versioned file in `downloads/` (`../downloads/cook-<version>-<platform>`). If a regular file occupies this path (older curl installs), the self-updater moves it aside and replaces it with that symlink. |
 | `sessions/<session_id>/` | Per-session dirs: `events.jsonl` (canonical record via `xai-grok-session-events`), transcripts, uploads. |
 | `sessions/session_search.sqlite` | **Derived** FTS5 search index (`xai-grok-session-search`). |
 | `memory/` | `MEMORY.md` + per-workspace blake3-hashed dirs (`xai-grok-memory`). |

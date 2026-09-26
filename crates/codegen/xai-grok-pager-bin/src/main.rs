@@ -2549,7 +2549,9 @@ async fn async_main(mut args: PagerArgs) -> Result<()> {
     }
 }
 /// Complete the update after a quit-for-update (Ctrl+U) exit.
-/// Returns `true` when an update path completed without a reported failure.
+/// Returns `true` only when a blocking update reports success (`Ok(true)`), or
+/// when an adopted background child exits 0. `Ok(false)` after a printed
+/// "Update failed" must not be treated as installed.
 ///
 /// Prefers awaiting the parked waiter for the background `cook update` child
 /// spawned at startup — the download is usually already done or in flight.
@@ -2573,7 +2575,7 @@ async fn finish_update_on_exit(
             update_config,
         )
         .await
-        .is_ok()
+        .is_ok_and(|updated| updated)
     };
     match adopted {
         Some(handle) => {

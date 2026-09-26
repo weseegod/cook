@@ -175,6 +175,122 @@ async fn test_atomic_symlink_swap_replaces_regular_file() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn test_link_rollback_regular_file_swap_and_restore() {
+    // A curl-style regular file at bin/cook must activate to a symlink, and a
+    // failed later step must put the original bytes back.
+    let (_dir, bin, downloads) = managed_layout();
+    let cook = bin.join("cook");
+    std::fs::write(&cook, "old-regular-bytes").unwrap();
+
+    let new_bin = downloads.join("cook-1.2.3-linux-x86_64");
+    std::fs::write(&new_bin, "new-version").unwrap();
+
+    replace_managed_bins(&[(new_bin.clone(), cook.clone())])
+        .await
+        .unwrap();
+
+    assert!(cook.is_symlink(), "activation must leave a symlink");
+    assert_eq!(
+        std::fs::read_link(&cook).unwrap(),
+        std::path::PathBuf::from("../downloads/cook-1.2.3-linux-x86_64")
+    );
+    assert_eq!(std::fs::read_to_string(&cook).unwrap(), "new-version");
+
+    // Restore path: capture a fresh regular file, install a symlink, then restore.
+    let cook2 = bin.join("cook2");
+    std::fs::write(&cook2, "restore-me").unwrap();
+    let rb = LinkRollback::capture(&cook2).await.unwrap();
+    assert!(
+        rb.backup_path().is_some(),
+        "regular-file capture must keep a rename-aside backup"
+    );
+    assert!(!cook2.exists(), "capture renames the regular file aside");
+    std::os::unix::fs::symlink("../downloads/cook-1.2.3-linux-x86_64", &cook2).unwrap();
+
+    rb.restore().await.unwrap();
+    assert!(
+        !cook2.is_symlink(),
+        "restore must replace the symlink with the regular file"
+    );
+    assert_eq!(std::fs::read_to_string(&cook2).unwrap(), "restore-me");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_link_rollback_rejects_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let cook = dir.path().join("cook");
+    std::fs::create_dir(&cook).unwrap();
+    std::fs::write(cook.join("blocker"), b"x").unwrap();
+
+    let err = LinkRollback::capture(&cook)
+        .await
+        .expect_err("directory must fail capture");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("directory"),
+        "error must name the file type: {msg}"
+    );
+    assert!(cook.is_dir(), "blocking directory must be left untouched");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_manual_install_cmd_includes_cli_only() {
+    let cmd = manual_install_cmd("stable");
+    assert!(
+        cmd.contains("CLI_ONLY=1"),
+        "manual hint must use CLI_ONLY=1: {cmd}"
+    );
+    assert!(
+        cmd.contains("download.letcook.dev/install.sh"),
+        "manual hint must point at the fork installer: {cmd}"
+    );
+}
+
+#[test]
+fn test_cli_only_fallback_runs_once_on_hook() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static CALLS: AtomicU64 = AtomicU64::new(0);
+    fn counting_ok() -> Result<()> {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+    fn counting_err() -> Result<()> {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        anyhow::bail!("hook failure")
+    }
+
+    {
+        let mut guard = CLI_ONLY_FALLBACK_OVERRIDE.lock().unwrap();
+        *guard = Some(counting_ok);
+    }
+    CALLS.store(0, Ordering::SeqCst);
+    run_cli_only_install_fallback().unwrap();
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1, "success path invokes once");
+
+    {
+        let mut guard = CLI_ONLY_FALLBACK_OVERRIDE.lock().unwrap();
+        *guard = Some(counting_err);
+    }
+    CALLS.store(0, Ordering::SeqCst);
+    let err = run_cli_only_install_fallback().expect_err("hook failure");
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1, "error path invokes once");
+    assert!(format!("{err:#}").contains("hook failure"));
+
+    // Clear so later tests (or a real fallback) are not poisoned.
+    *CLI_ONLY_FALLBACK_OVERRIDE.lock().unwrap() = None;
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn test_cli_only_fallback_supported_on_unix_hosts() {
+    assert!(cli_only_fallback_supported());
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn test_atomic_symlink_swap_succeeds_despite_leftover_tmp_link() {
     // A leftover .tmp-link from a crashed swap must not block a new swap: each swap uses its own unique temp name, so nothing collides
     let dir = tempfile::tempdir().unwrap();
@@ -950,6 +1066,10 @@ fn test_reinstall_hint_internal_mentions_fork_release_page() {
         "should point at the fork release page: {hint}"
     );
     assert!(hint.contains("cook"), "should name the cook binary: {hint}");
+    assert!(
+        hint.contains("CLI_ONLY=1"),
+        "internal hint must use CLI_ONLY=1: {hint}"
+    );
 }
 
 #[test]
