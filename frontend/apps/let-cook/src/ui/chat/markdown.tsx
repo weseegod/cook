@@ -38,6 +38,7 @@ export function Markdown({ text, streaming = false }: { text: string; streaming?
   return (
     <div className="markdown">
       {checkpoint.prefix && <MarkdownCheckpoint key={`checkpoint-${checkpoint.prefix.length}`} text={checkpoint.prefix} />}
+      {/* Tail keeps prose metrics (see `.markdown .streaming-tail`) so checkpoint promotion is not a height cliff. */}
       {checkpoint.tail && <pre className="streaming-tail">{checkpoint.tail}</pre>}
     </div>
   );

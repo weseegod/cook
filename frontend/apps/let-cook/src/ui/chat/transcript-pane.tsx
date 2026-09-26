@@ -12,7 +12,14 @@ import { TranscriptActionsContext } from "./transcript-context";
 import { TranscriptRow } from "./transcript-row";
 import { hasContentBelow, hasResponseTopAbove, responseTopIndex, stickyPromptIndex } from "./transcript-nav";
 import { isLiveTool, projectTranscript, type DisplayBlock } from "./transcript-projection";
-import { rowOffset, windowRange } from "./transcript-window";
+import {
+  captureContentAnchor,
+  contentAnchorScrollTop,
+  estimateRowHeight,
+  rowOffset,
+  windowRange,
+  type ContentAnchor,
+} from "./transcript-window";
 
 const WINDOW_ESTIMATE = 72;
 const WINDOW_OVERSCAN = 8;
@@ -31,6 +38,14 @@ function scheduleFrame(callback: () => void): number {
   return window.setTimeout(callback, 0);
 }
 
+function cancelFrame(handle: number): void {
+  if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+    window.cancelAnimationFrame(handle);
+    return;
+  }
+  window.clearTimeout(handle);
+}
+
 function rowDomId(id: string): string {
   return `transcript-row-${encodeURIComponent(id)}`;
 }
@@ -45,6 +60,17 @@ function isLiveDisplayBlock(block: DisplayBlock): boolean {
 function stickyText(block: { text: string }): string {
   const text = block.text.replace(/\s+/g, " ").trim();
   return text.length > 260 ? `${text.slice(0, 257).trimEnd()}…` : text;
+}
+
+/** Measured height when ResizeObserver has seen the row; per-kind estimate otherwise. */
+function measureHeights(
+  projected: readonly DisplayBlock[],
+  measured: Map<string, number>,
+): number[] {
+  return projected.map((block) => {
+    const height = measured.get(block.id);
+    return height !== undefined && height > 0 ? height : estimateRowHeight(block);
+  });
 }
 
 export function TranscriptPane({
@@ -66,11 +92,15 @@ export function TranscriptPane({
 }) {
   const transcriptRef = useRef<HTMLDivElement>(null);
   const followRef = useRef(true);
-  const scrollFrame = useRef<number | null>(null);
+  /** True for one scroll event after a pin / anchor restore, so follow does not drop on our write. */
+  const programmaticScrollRef = useRef(false);
+  const contentAnchorRef = useRef<ContentAnchor | null>(null);
   const scrollMetricsFrame = useRef<number | null>(null);
   const pendingScrollMetrics = useRef<ScrollMetrics | null>(null);
   const rowHeights = useRef(new Map<string, number>());
   const rowObserver = useRef<ResizeObserver | null>(null);
+  const liveIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const projectedRef = useRef<readonly DisplayBlock[]>([]);
   const [follow, setFollow] = useState(true);
   const [measurementVersion, setMeasurementVersion] = useState(0);
   const [scrollMetrics, setScrollMetrics] = useState<ScrollMetrics>({
@@ -79,10 +109,20 @@ export function TranscriptPane({
     scrollHeight: 0,
   });
   const projected = useMemo(() => projectTranscript(blocks), [blocks]);
+  projectedRef.current = projected;
   const streaming = live || projected.some(isLiveDisplayBlock);
+  const liveIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const block of projected) {
+      if (isLiveDisplayBlock(block)) ids.add(block.id);
+    }
+    return ids;
+  }, [projected]);
+  liveIdsRef.current = liveIds;
   const heights = useMemo(
-    () => projected.map((block) => rowHeights.current.get(block.id) ?? 0),
-    [projected, measurementVersion],
+    // `follow` is a dep so leaving follow picks up tail sizes that were skipped while pinning.
+    () => measureHeights(projected, rowHeights.current),
+    [projected, measurementVersion, follow],
   );
 
   const setFollowMode = useCallback((enabled: boolean) => {
@@ -90,9 +130,24 @@ export function TranscriptPane({
     setFollow(enabled);
   }, []);
 
+  const pinToBottom = useCallback((element: HTMLDivElement) => {
+    const target = Math.max(0, element.scrollHeight - element.clientHeight);
+    if (Math.abs(element.scrollTop - target) < 1) return;
+    programmaticScrollRef.current = true;
+    element.scrollTop = target;
+  }, []);
+
   const updateScrollState = useCallback((element: HTMLDivElement) => {
+    const programmatic = programmaticScrollRef.current;
+    programmaticScrollRef.current = false;
     const nextFollow = !hasContentBelow(element.scrollHeight, element.scrollTop, element.clientHeight);
-    if (nextFollow !== followRef.current) setFollowMode(nextFollow);
+    if (!programmatic && nextFollow !== followRef.current) setFollowMode(nextFollow);
+    contentAnchorRef.current = captureContentAnchor(
+      projectedRef.current,
+      element.scrollTop,
+      measureHeights(projectedRef.current, rowHeights.current),
+      WINDOW_ESTIMATE,
+    );
     pendingScrollMetrics.current = {
       scrollTop: element.scrollTop,
       viewportHeight: element.clientHeight,
@@ -110,9 +165,10 @@ export function TranscriptPane({
     setFollowMode(true);
     const transcript = transcriptRef.current;
     if (!transcript) return;
-    transcript.scrollTop = transcript.scrollHeight;
+    contentAnchorRef.current = null;
+    pinToBottom(transcript);
     updateScrollState(transcript);
-  }, [setFollowMode, updateScrollState]);
+  }, [pinToBottom, setFollowMode, updateScrollState]);
 
   const pageScroll = useCallback((direction: "up" | "down") => {
     const transcript = transcriptRef.current;
@@ -126,17 +182,20 @@ export function TranscriptPane({
     if (!node || typeof ResizeObserver === "undefined") return;
     if (!rowObserver.current) {
       rowObserver.current = new ResizeObserver((entries) => {
-        let changed = false;
+        const changedIds: string[] = [];
         for (const entry of entries) {
           const id = entry.target.getAttribute("data-transcript-row");
           if (!id) continue;
           const height = Math.ceil(entry.contentRect.height);
           if (height > 0 && rowHeights.current.get(id) !== height) {
             rowHeights.current.set(id, height);
-            changed = true;
+            changedIds.push(id);
           }
         }
-        if (changed) setMeasurementVersion((version) => version + 1);
+        if (changedIds.length === 0) return;
+        // Live-tail growth while following does not move the viewport; the pin already tracks scrollHeight.
+        const tailOnly = followRef.current && changedIds.every((id) => liveIdsRef.current.has(id));
+        if (!tailOnly) setMeasurementVersion((version) => version + 1);
       });
     }
     rowObserver.current.observe(node);
@@ -145,11 +204,20 @@ export function TranscriptPane({
 
   useEffect(() => () => {
     rowObserver.current?.disconnect();
-    if (scrollMetricsFrame.current !== null) {
-      if (typeof window.cancelAnimationFrame === "function") window.cancelAnimationFrame(scrollMetricsFrame.current);
-      else window.clearTimeout(scrollMetricsFrame.current);
-    }
+    if (scrollMetricsFrame.current !== null) cancelFrame(scrollMetricsFrame.current);
   }, []);
+
+  // One pin per animation frame while the turn streams: covers async height (shiki, images) without
+  // coupling the snap to every measurement tick.
+  useEffect(() => {
+    if (!follow || !streaming) return;
+    let handle = scheduleFrame(function pin() {
+      const element = transcriptRef.current;
+      if (element && followRef.current) pinToBottom(element);
+      handle = scheduleFrame(pin);
+    });
+    return () => cancelFrame(handle);
+  }, [follow, streaming, pinToBottom]);
 
   const range = useMemo(() => windowRange(projected.length, {
     follow,
@@ -187,7 +255,14 @@ export function TranscriptPane({
       const current = transcriptRef.current;
       if (!current) return;
       const mounted = document.getElementById(rowDomId(row.id));
+      programmaticScrollRef.current = true;
       current.scrollTop = mounted?.offsetTop ?? rowOffset(index, heights, WINDOW_ESTIMATE);
+      contentAnchorRef.current = captureContentAnchor(
+        projectedRef.current,
+        current.scrollTop,
+        measureHeights(projectedRef.current, rowHeights.current),
+        WINDOW_ESTIMATE,
+      );
       updateScrollState(current);
     };
     snap();
@@ -196,23 +271,20 @@ export function TranscriptPane({
 
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
-    if (!transcript || !followRef.current) return;
-    transcript.scrollTop = transcript.scrollHeight;
-    scrollFrame.current = scheduleFrame(() => {
-      scrollFrame.current = null;
-      const current = transcriptRef.current;
-      if (current && followRef.current) {
-        current.scrollTop = current.scrollHeight;
-        updateScrollState(current);
-      }
-    });
-    return () => {
-      if (scrollFrame.current === null) return;
-      if (typeof window.cancelAnimationFrame === "function") window.cancelAnimationFrame(scrollFrame.current);
-      else window.clearTimeout(scrollFrame.current);
-      scrollFrame.current = null;
-    };
-  }, [follow, measurementVersion, projected, range.end, range.padBottom, range.padTop, range.start, range.tailStart, streaming, updateScrollState]);
+    if (!transcript) return;
+    if (followRef.current) {
+      pinToBottom(transcript);
+      return;
+    }
+    const anchor = contentAnchorRef.current;
+    if (!anchor) return;
+    const next = contentAnchorScrollTop(projected, anchor, heights, WINDOW_ESTIMATE);
+    if (next === null) return;
+    if (Math.abs(transcript.scrollTop - next) > 1) {
+      programmaticScrollRef.current = true;
+      transcript.scrollTop = next;
+    }
+  }, [follow, heights, measurementVersion, pinToBottom, projected, range.end, range.padBottom, range.padTop, range.start, range.tailStart, streaming]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;

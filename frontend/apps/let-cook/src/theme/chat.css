@@ -951,6 +951,25 @@
   min-width: 0;
   max-width: 100%;
   overflow-x: hidden;
+  /* The pane pins follow mode and restores a content anchor itself; the browser must not also
+     adjust scrollTop when virtualized spacers or streaming heights change. */
+  overflow-anchor: none;
+}
+
+/**
+ * Streaming tail of a markdown row. Match prose metrics (not `<pre>` code-plate metrics) so
+ * promoting a checkpoint into ReactMarkdown does not cliff the row height.
+ */
+.markdown .streaming-tail {
+  margin: .35em 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .transcript, .tool-detail-diff > pre {

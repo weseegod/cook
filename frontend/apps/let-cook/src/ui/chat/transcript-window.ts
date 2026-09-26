@@ -2,13 +2,73 @@ export interface WindowRangeOptions {
   follow: boolean;
   scrollTop: number;
   viewportHeight: number;
-  /** Measured offsetHeight per row. A non-positive value uses `estimate`. */
+  /** Measured or estimated offsetHeight per row. A non-positive value uses `estimate`. */
   heights: readonly number[];
   estimate?: number;
   overscan?: number;
   minCount?: number;
   /** Keep the live tail mounted while a turn is in flight. */
   turnRunning?: boolean;
+}
+
+/** A projected row identity, enough to restore a scroll position after a height change. */
+export interface RowIdentity {
+  id: string;
+}
+
+/**
+ * Stable pre-measure height for a projected row. Using a flat 72px for every kind made `padTop`
+ * jump whenever the window slid over tools or short markers during a live turn.
+ */
+export function estimateRowHeight(block: { type: string; role?: string }): number {
+  if (block.type === "session-event") return 28;
+  if (block.type === "message" && block.role === "thought") return 48;
+  if (block.type === "tool" || block.type === "verb-group") return 52;
+  return 72;
+}
+
+/** Viewport-top content pin: which row sits under `scrollTop`, and how far into it. */
+export interface ContentAnchor {
+  rowId: string;
+  /** Pixels from the row's top to the previous `scrollTop` (negative when the row starts above). */
+  delta: number;
+}
+
+/**
+ * Capture the row under `scrollTop` so a later height/pad change can put the same content back
+ * under the viewport top (`scrollback/state/mod.rs` `capture_scroll_anchor`).
+ */
+export function captureContentAnchor(
+  rows: readonly RowIdentity[],
+  scrollTop: number,
+  heights: readonly number[],
+  estimate = 72,
+): ContentAnchor | null {
+  const top = Math.max(0, scrollTop);
+  let offset = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    const height = rowHeight(heights[index], estimate);
+    if (offset + height > top) {
+      return { rowId: rows[index].id, delta: top - offset };
+    }
+    offset += height;
+  }
+  return null;
+}
+
+/** `scrollTop` that puts `anchor.rowId` back under the viewport top, or null if the row is gone. */
+export function contentAnchorScrollTop(
+  rows: readonly RowIdentity[],
+  anchor: ContentAnchor,
+  heights: readonly number[],
+  estimate = 72,
+): number | null {
+  let offset = 0;
+  for (let index = 0; index < rows.length; index += 1) {
+    if (rows[index].id === anchor.rowId) return offset + anchor.delta;
+    offset += rowHeight(heights[index], estimate);
+  }
+  return null;
 }
 
 export interface WindowRange {
