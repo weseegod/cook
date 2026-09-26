@@ -33,6 +33,108 @@ async fn clean_handoff_keeps_one_plan_anchor_in_model_history() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn clean_handoff_keeps_system_and_project_instructions_prefix() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
+            let sys = ConversationItem::system("You are Grok.");
+            let mut project = ConversationItem::user("## From: /repo/AGENTS.md\nfollow these rules");
+            if let ConversationItem::User(u) = &mut project {
+                u.synthetic_reason = xai_grok_sampling_types::SyntheticReason::ProjectInstructions;
+            }
+            actor
+                .chat_state_handle
+                .replace_conversation(vec![
+                    sys.clone(),
+                    project.clone(),
+                    ConversationItem::user("plan the feature"),
+                    ConversationItem::assistant("here is a plan"),
+                ]);
+            actor.handoff_plan_context(None).await;
+            let history = actor.chat_state_handle.get_conversation().await;
+            assert_eq!(history.len(), 3, "system + project instructions + anchor");
+            assert!(matches!(history[0], ConversationItem::System(_)));
+            assert!(matches!(
+                history[1],
+                ConversationItem::User(ref u)
+                    if u.synthetic_reason == xai_grok_sampling_types::SyntheticReason::ProjectInstructions
+            ));
+            assert!(
+                history[2]
+                    .text_content()
+                    .contains("Implement the approved plan at")
+            );
+            let joined = history
+                .iter()
+                .map(|i| i.text_content())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!joined.contains("plan the feature"));
+            assert!(!joined.contains("here is a plan"));
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clean_handoff_drops_planning_tail_without_system() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
+            actor
+                .chat_state_handle
+                .replace_conversation(vec![
+                    ConversationItem::user("plan the feature"),
+                    ConversationItem::assistant("here is a plan"),
+                ]);
+            actor.handoff_plan_context(None).await;
+            let history = actor.chat_state_handle.get_conversation().await;
+            assert_eq!(history.len(), 1);
+            assert!(
+                history[0]
+                    .text_content()
+                    .contains("Implement the approved plan at")
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn clean_handoff_anchor_names_published_plan_path() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
+            let dir = tempfile::tempdir().unwrap();
+            {
+                let mut tracker = actor.plan_mode.lock();
+                *tracker =
+                    crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
+                tracker.activate_from_tool();
+                std::fs::write(tracker.plan_file_path(), VALID_REVIEW_PLAN).unwrap();
+                assert!(tracker.deactivate_approved());
+            }
+            let published = actor.plan_mode.lock().plan_file_path().to_path_buf();
+            assert!(
+                published.exists(),
+                "published plan path must exist on disk"
+            );
+            actor.handoff_plan_context(None).await;
+            let history = actor.chat_state_handle.get_conversation().await;
+            let anchor = history
+                .last()
+                .expect("anchor user item")
+                .text_content();
+            assert!(
+                anchor.contains(&published.display().to_string()),
+                "anchor must name the published path, got {anchor}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn clean_handoff_resets_context_tokens_used() {
     let local = tokio::task::LocalSet::new();
     local

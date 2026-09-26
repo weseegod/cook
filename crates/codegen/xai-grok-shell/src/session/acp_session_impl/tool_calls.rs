@@ -2500,6 +2500,7 @@ impl SessionActor {
                         let result = self.complete_exit_plan_intercept(&call, &tool_call_id,
                             "The plan was approved for a clean run. Context cleared — implementing plan.".into()).await;
                         self.handoff_plan_context(parsed.feedback.as_deref()).await;
+                        // Continue so the next sample is the implement turn on the kept prefix + anchor.
                         return result;
                     }
                     PlanApprovalOutcome::ApprovedAsGoal => {
@@ -2524,8 +2525,6 @@ impl SessionActor {
                                 let result = self
                                     .complete_exit_plan_intercept(&call, &tool_call_id, msg)
                                     .await;
-                                self.reset_plan_model_history(parsed.feedback.as_deref())
-                                    .await;
                                 return result;
                             }
                         };
@@ -2534,12 +2533,12 @@ impl SessionActor {
                              Do not implement it in this turn — the goal loop drives \
                              execution.\n\n{reminder}"
                         );
-                        let result = self
+                        let _result = self
                             .complete_exit_plan_intercept(&call, &tool_call_id, message)
                             .await;
-                        self.reset_plan_model_history(parsed.feedback.as_deref())
-                            .await;
-                        return result;
+                        // The goal loop drives execution; stop this turn so the model
+                        // does not sample again on the wiped planning tail.
+                        return Ok(Err(ToolLoop::Cancelled));
                     }
                 },
                 Err(err) => {
@@ -2705,11 +2704,30 @@ impl SessionActor {
         }
         anchor
     }
+    /// Spawn-installed prefix a clean handoff must keep: the leading system prompt and the
+    /// project-instructions item that sits right after it. Everything after that is planning
+    /// conversation and is dropped.
+    fn clean_context_prefix(conversation: &[ConversationItem]) -> Vec<ConversationItem> {
+        let mut kept = Vec::new();
+        let mut iter = conversation.iter();
+        if let Some(first) = iter.next()
+            && matches!(first, ConversationItem::System(_))
+        {
+            kept.push(first.clone());
+            if let Some(second) = iter.next()
+                && super::prompt_build::is_project_instructions(second)
+            {
+                kept.push(second.clone());
+            }
+        }
+        kept
+    }
     async fn reset_plan_model_history(&self, feedback: Option<&str>) {
+        let conversation = self.chat_state_handle.get_conversation().await;
+        let mut items = Self::clean_context_prefix(&conversation);
+        items.push(ConversationItem::user(self.clean_plan_anchor(feedback)));
         self.chat_state_handle
-            .replace_conversation_for_compaction(vec![ConversationItem::user(
-                self.clean_plan_anchor(feedback),
-            )]);
+            .replace_conversation_for_compaction(items);
         let _ = self.chat_state_handle.get_conversation_len().await;
     }
     pub(super) async fn handoff_plan_context(&self, feedback: Option<&str>) {
@@ -2846,8 +2864,10 @@ impl SessionActor {
                 }
                 self.persist_plan_mode_state();
                 let anchor = self.clean_plan_anchor(approval_feedback.as_deref());
+                let conversation = self.chat_state_handle.get_conversation().await;
+                let items = Self::clean_context_prefix(&conversation);
                 self.chat_state_handle
-                    .replace_conversation_for_compaction(Vec::new());
+                    .replace_conversation_for_compaction(items);
                 self.send_plan_context_cleared_marker().await;
                 self.start_resume_turn(anchor, PromptMode::Agent, completion_tx)
                     .await;
@@ -2865,8 +2885,10 @@ impl SessionActor {
                 }
                 self.leave_plan_mode_to_default().await;
                 let objective = plan_title_or_default(&plan_body);
+                let conversation = self.chat_state_handle.get_conversation().await;
+                let items = Self::clean_context_prefix(&conversation);
                 self.chat_state_handle
-                    .replace_conversation_for_compaction(Vec::new());
+                    .replace_conversation_for_compaction(items);
                 self.send_plan_context_cleared_marker().await;
                 let reminder = match self
                     .setup_goal(&objective, None, Some(GoalPlanSource::Content(plan_body)))
