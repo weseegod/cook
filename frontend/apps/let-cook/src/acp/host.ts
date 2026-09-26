@@ -70,6 +70,17 @@ export async function desktopCommand<T>(
   return isTauri() ? invokeDesktop<T>(command, args) : fallback();
 }
 
+/**
+ * Session record directory for a sidebar row (`…/sessions/<encoded-cwd>/<sessionId>`).
+ * Outside Tauri the mock home stands in so Playwright can assert the copied path.
+ */
+export async function sessionRecordPath(sessionId: string, cwd?: string): Promise<string> {
+  return desktopCommand("desktop_session_path", { sessionId, cwd: cwd ?? null }, async () => {
+    const encoded = encodeURIComponent(cwd || "/tmp/cook-demo");
+    return `/tmp/cook-demo/.cook/sessions/${encoded}/${sessionId}`;
+  });
+}
+
 export async function startProcess(cwd: string): Promise<StartInfo> {
   if (!isTauri()) {
     if (isMock()) {

@@ -4,6 +4,8 @@ mod http;
 mod logging;
 mod provider_config;
 mod provider_oauth;
+mod clipboard_host;
+mod session_path;
 mod workspace;
 
 use std::path::PathBuf;
@@ -461,6 +463,25 @@ async fn desktop_model_set_default(model_id: String) -> Result<Value, String> {
     Ok(serde_json::json!({ "ok": true, "defaultModel": response_id }))
 }
 
+/// Session record directory under `{cook home}/sessions/{encoded-cwd}/{sessionId}/`.
+#[tauri::command]
+async fn desktop_session_path(session_id: String, cwd: Option<String>) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        session_path::find_session_dir(&session_id, cwd.as_deref())
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map(|path| path.to_string_lossy().into_owned())
+}
+
+/// OS clipboard write when the webview denies `navigator.clipboard`.
+#[tauri::command]
+async fn clipboard_write(text: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || clipboard_host::write_text(&text))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 pub fn run() {
     logging::init();
     logging::info(
@@ -505,6 +526,8 @@ pub fn run() {
             desktop_model_upsert,
             desktop_model_delete,
             desktop_model_set_default,
+            desktop_session_path,
+            clipboard_write,
             open_url,
             provider_oauth_start,
             provider_oauth_poll,

@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, CopyPlus, Download, Folder, MoreVertical, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Clipboard, CopyPlus, Folder, MoreVertical, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { basename } from "../../../acp/attachments";
 import type { SessionSummary } from "../../../acp/xai";
@@ -20,7 +20,7 @@ interface ConversationRowProps {
   onTogglePin: () => void;
   onRename: () => void;
   onFork: () => void;
-  onExport: () => void;
+  onCopyPath: () => void;
   onArchive: () => void;
   onRemove: () => void;
 }
@@ -41,7 +41,7 @@ export function ConversationRow({
   onTogglePin,
   onRename,
   onFork,
-  onExport,
+  onCopyPath,
   onArchive,
   onRemove,
 }: ConversationRowProps) {
@@ -101,9 +101,9 @@ export function ConversationRow({
             <CopyPlus size={13} />
             <span>Fork</span>
           </button>
-          <button type="button" role="menuitem" data-testid={`session-export-${session.id}`} onClick={onExport}>
-            <Download size={13} />
-            <span>Export</span>
+          <button type="button" role="menuitem" data-testid={`session-copy-path-${session.id}`} onClick={onCopyPath}>
+            <Clipboard size={13} />
+            <span>Copy session path</span>
           </button>
           <button type="button" role="menuitem" data-testid={`session-archive-${session.id}`} onClick={onArchive}>
             {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}

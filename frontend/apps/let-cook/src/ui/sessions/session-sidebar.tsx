@@ -3,9 +3,10 @@ import { CircleHelp, Folder, MessageSquarePlus, Pin, Search, Settings } from "lu
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { normalizeError } from "../../acp/errors";
+import { sessionRecordPath } from "../../acp/host";
 import type { SessionListView, SessionSummary } from "../../acp/xai";
 import { DEFAULT_SESSION_TITLE, useSessionStore } from "../../state/session";
-import { downloadMarkdown, exportFilename, exportTranscriptMarkdown } from "../chat/export-transcript";
+import { copyText } from "../chat/clipboard";
 import {
   MAX_SIDEBAR_WIDTH,
   MIN_SIDEBAR_WIDTH,
@@ -167,21 +168,18 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     }
   }
 
-  /** Map id `/export`: Markdown of the active transcript (user/assistant only). */
-  function exportSession(session: SessionSummary) {
+  /** Copy the conversation's on-disk session directory (`…/sessions/<encoded-cwd>/<id>/`). */
+  async function copySessionPath(session: SessionSummary) {
     setRowMenu(null);
-    const store = useSessionStore.getState();
-    if (store.sessionId !== session.id) {
-      useSessionStore.getState().set({ notice: "Load this conversation before exporting." });
-      return;
+    try {
+      const path = await sessionRecordPath(session.id, session.cwd);
+      await copyText(path);
+      useSessionStore.getState().set({ notice: `Copied ${path}` });
+    } catch (caught) {
+      useSessionStore.getState().set({
+        notice: normalizeError(caught, "Could not copy the session path"),
+      });
     }
-    const markdown = exportTranscriptMarkdown(store.blocks);
-    if (!markdown) {
-      useSessionStore.getState().set({ notice: "Nothing to export yet." });
-      return;
-    }
-    downloadMarkdown(exportFilename(session.title, session.id), markdown);
-    useSessionStore.getState().set({ notice: "Exported conversation as Markdown." });
   }
 
   async function archive(session: SessionSummary) {
@@ -329,7 +327,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                     onTogglePin={() => togglePin(session)}
                     onRename={() => void rename(session)}
                     onFork={() => void fork(session)}
-                    onExport={() => exportSession(session)}
+                    onCopyPath={() => void copySessionPath(session)}
                     onArchive={() => void archive(session)}
                     onRemove={() => void remove(session)}
                   />

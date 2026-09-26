@@ -1,10 +1,31 @@
+import { desktopCommand, isTauriRuntime } from "../../acp/host";
+
 export async function copyText(text: string): Promise<void> {
   if (!text) throw new Error("Nothing to copy");
+
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Tauri/WKWebView often denies clipboard-write (`NotAllowedError`) even on a click.
+      // Fall through to the selection copy and the host command.
+    }
+  }
+
+  if (copyWithSelection(text)) return;
+
+  if (isTauriRuntime()) {
+    await desktopCommand("clipboard_write", { text }, async () => {
+      throw new Error("Clipboard is unavailable");
+    });
     return;
   }
 
+  throw new Error("Clipboard is unavailable");
+}
+
+function copyWithSelection(text: string): boolean {
   const textarea = document.createElement("textarea");
   textarea.value = text;
   textarea.setAttribute("readonly", "true");
@@ -14,7 +35,7 @@ export async function copyText(text: string): Promise<void> {
   textarea.select();
   const copied = document.execCommand("copy");
   textarea.remove();
-  if (!copied) throw new Error("Clipboard is unavailable");
+  return copied;
 }
 
 export function displayPath(value: string): string {

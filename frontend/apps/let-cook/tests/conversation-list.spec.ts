@@ -10,6 +10,9 @@ import { api, callsTo, openWorkspace, waitForCalls } from "./support/harness";
  * UI performs is an ACP request we can read back.
  */
 
+/** The context permission Chromium needs before `navigator.clipboard.readText` resolves. */
+test.use({ permissions: ["clipboard-read", "clipboard-write"] });
+
 test.describe("conversation list", () => {
   /** Three conversations across two workspaces, newest first: alpha-new, beta, alpha-old. */
   const LIST_SEED = {
@@ -111,7 +114,7 @@ test.describe("conversation list", () => {
 
     const row = await openRowMenu(page, "s-alpha-old");
     const menu = row.getByRole("menu");
-    await expect(menu.getByRole("menuitem")).toHaveText(["Pin to top", "Rename", "Fork", "Export", "Archive", "Delete"]);
+    await expect(menu.getByRole("menuitem")).toHaveText(["Pin to top", "Rename", "Fork", "Copy session path", "Archive", "Delete"]);
 
     // Delete reads as the light red danger tone; the other actions stay grey.
     const [danger, plain] = await Promise.all([
@@ -500,7 +503,7 @@ test.describe("conversation list", () => {
 
 });
 
-test.describe("session fork and export", () => {
+test.describe("session fork and copy path", () => {
   test("forks a sidebar session with camelCase params then loads the child", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
@@ -526,6 +529,22 @@ test.describe("session fork and export", () => {
     expect(errors).toEqual([]);
   });
 
+  test("copies the session record directory from the row menu", async ({ page }) => {
+    await openWorkspace(page, CONNECTED_SEED);
+
+    const row = page.locator(".session-row", { hasText: "Fix login bug" });
+    await row.hover();
+    await row.getByTestId("session-menu-session-login").click();
+    await expect(row.getByRole("menuitem", { name: "Copy session path" })).toBeVisible();
+    await row.getByTestId("session-copy-path-session-login").click();
+
+    await expect
+      .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+      .toBe("/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/session-login");
+    await expect(page.getByTestId("notice-banner")).toContainText(
+      "/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/session-login",
+    );
+  });
 });
 
 test.describe("conversation archives", () => {
@@ -561,7 +580,7 @@ test.describe("conversation archives", () => {
       "Pin to top",
       "Rename",
       "Fork",
-      "Export",
+      "Copy session path",
       "Archive",
       "Delete",
     ]);
@@ -574,7 +593,7 @@ test.describe("conversation archives", () => {
       "Pin to top",
       "Rename",
       "Fork",
-      "Export",
+      "Copy session path",
       "Archive",
       "Delete",
     ]);
