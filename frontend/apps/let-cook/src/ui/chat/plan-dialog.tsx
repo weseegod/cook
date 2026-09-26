@@ -73,10 +73,10 @@ function PlanDialogContent() {
       }
 
       if (typing) {
-        // In prompt focus the empty `a`/`g` bindings still approve/run-as-goal. Once text exists,
+        // In prompt focus the empty `a`/`r`/`g` bindings still choose a run mode. Once text exists,
         // the same keys belong to the shared composer and are ordinary characters.
         if (planFocus === "prompt" && useSessionStore.getState().composerDraft.trim() === "") {
-          const decision = event.key === "a" ? "approve" : event.key === "g" ? "goal" : null;
+          const decision = event.key === "a" ? "approve" : event.key === "r" ? "clean" : event.key === "g" ? "goal" : null;
           if (decision) {
             event.preventDefault();
             event.stopPropagation();
@@ -141,7 +141,8 @@ function PlanDialogContent() {
       setOpen(false);
       return;
     }
-    await acpClient.resolvePlan(PLAN_OUTCOMES[id] ?? id, null);
+    const notes = id === "clean" || id === "goal" ? planFeedback(comments, "", body) : "";
+    await acpClient.resolvePlan(PLAN_OUTCOMES[id] ?? id, notes || null);
     setOpen(false);
   }
 

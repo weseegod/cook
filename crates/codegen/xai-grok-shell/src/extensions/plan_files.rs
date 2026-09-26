@@ -26,6 +26,30 @@ const MAX_PLAN_BYTES: u64 = 1024 * 1024;
 /// Only markdown is a plan; anything else in `plans/` is left alone, and cannot be deleted here.
 const PLAN_EXTENSION: &str = "md";
 
+fn is_visible_plan_episode(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == PLAN_EXTENSION)
+        && !path
+            .file_name()
+            .is_some_and(|name| name.to_string_lossy().ends_with(".frozen.md"))
+}
+#[cfg(test)]
+mod frozen_baseline_tests {
+    use super::*;
+    #[test]
+    fn frozen_baseline_is_not_a_second_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let plans = dir.path().join(st::PLANS_DIR);
+        std::fs::create_dir_all(&plans).unwrap();
+        let episode = plans.join("sample-2026-09-26T00-00-00Z.md");
+        let baseline = plans.join("sample-2026-09-26T00-00-00Z.frozen.md");
+        std::fs::write(&episode, "# Plan: Sample\n").unwrap();
+        std::fs::write(&baseline, "# Plan: Sample\n").unwrap();
+        assert_eq!(count_plan_files(dir.path()), 1);
+        assert_eq!(list_plans(dir.path()).len(), 1);
+        assert!(delete_plan(dir.path(), &baseline).is_err());
+    }
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PlanFileEntry {
@@ -115,7 +139,7 @@ pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
     // most recent plan, and deleting it is safe.
     let active_is_held = snapshot
         .as_ref()
-        .is_some_and(|s| s.state != PlanModeState::Inactive);
+        .is_some_and(|s| s.state != PlanModeState::Inactive || s.frozen_plan);
     let goal_plan = held_goal_plan_file(session_dir);
 
     let mut paths: Vec<PathBuf> = std::fs::read_dir(session_dir.join(st::PLANS_DIR))
@@ -123,7 +147,7 @@ pub(crate) fn list_plans(session_dir: &Path) -> Vec<PlanFileEntry> {
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == PLAN_EXTENSION))
+        .filter(|path| path.is_file() && is_visible_plan_episode(path))
         .collect();
 
     let legacy = legacy_plan_file_path(session_dir);
@@ -154,12 +178,7 @@ pub(crate) fn count_plan_files(session_dir: &Path) -> usize {
         .into_iter()
         .flatten()
         .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|ext| ext == PLAN_EXTENSION)
-        })
+        .filter(|entry| is_visible_plan_episode(&entry.path()))
         .count();
     episodes + usize::from(legacy_plan_file_path(session_dir).is_file())
 }
@@ -171,8 +190,8 @@ pub(crate) fn count_plan_files(session_dir: &Path) -> usize {
 /// `exit_plan_mode` and a live planning turn both still read it.
 pub(crate) fn delete_plan(session_dir: &Path, target: &Path) -> Result<(), String> {
     let plans_dir = session_dir.join(st::PLANS_DIR);
-    let is_episode = target.parent() == Some(plans_dir.as_path())
-        && target.extension().is_some_and(|ext| ext == PLAN_EXTENSION);
+    let is_episode =
+        target.parent() == Some(plans_dir.as_path()) && is_visible_plan_episode(target);
     if !is_episode && target != legacy_plan_file_path(session_dir) {
         return Err(format!(
             "{} is not a plan file of this session",
@@ -184,7 +203,7 @@ pub(crate) fn delete_plan(session_dir: &Path, target: &Path) -> Result<(), Strin
     }
     if is_active_held(session_dir, target) {
         return Err(format!(
-            "{} is the current plan and cannot be deleted while plan mode is on",
+            "{} is the current or frozen plan and cannot be deleted during its run",
             target.display()
         ));
     }
@@ -210,7 +229,7 @@ fn is_active_held(session_dir: &Path, target: &Path) -> bool {
     let Some(snapshot) = read_plan_mode_snapshot(session_dir) else {
         return false;
     };
-    snapshot.state != PlanModeState::Inactive
+    (snapshot.state != PlanModeState::Inactive || snapshot.frozen_plan)
         && restore_plan_file_path(session_dir, snapshot.plan_file.as_deref()) == target
 }
 

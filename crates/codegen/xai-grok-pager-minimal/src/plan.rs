@@ -1,7 +1,7 @@
 //! The full TUI renders plan approval as a fullscreen line-viewer plus a live feedback prompt.
 //! Minimal instead commits the whole plan into native scrollback as a normal conversation block (see [`maybe_commit_plan`]).
 //! The plan then reads and scrolls exactly like the rest of the transcript.
-//! The prompt-anchored live region holds only the decision controls (approve / revise / keep planning) plus the feedback input when revising.
+//! The prompt-anchored live region holds only the decision controls (approve / run clean / run as goal / revise / keep planning) plus the feedback input when revising.
 //! Nothing of the plan body is drawn under the prompt.
 //!
 //! Input routing is unchanged: while `line_viewer.is_some()` the agent's input handler already routes keys to the two plan handlers.
@@ -158,9 +158,13 @@ pub fn render(
         PlanApprovalFocus::Prompt if has_content => {
             "enter request changes \u{00b7} tab plan \u{00b7} esc back"
         }
-        PlanApprovalFocus::Prompt => "enter approve \u{00b7} tab plan \u{00b7} esc back",
+        PlanApprovalFocus::Prompt => {
+            "enter approve \u{00b7} r run clean \u{00b7} g run as goal \u{00b7} tab plan"
+        }
         PlanApprovalFocus::Commenting => "enter save comment \u{00b7} esc cancel",
-        PlanApprovalFocus::Preview => "a approve \u{00b7} s revise \u{00b7} q keep planning",
+        PlanApprovalFocus::Preview => {
+            "a approve \u{00b7} r run clean \u{00b7} g run as goal \u{00b7} s revise \u{00b7} q quit plan"
+        }
     };
     let hint_style = theme.dim().bg(Color::Reset);
     let controls_rect = Rect {

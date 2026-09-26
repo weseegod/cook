@@ -137,6 +137,7 @@ describe("planDecisionBar", () => {
   it("offers the full decision set, in the TUI's order, while the review is parked", () => {
     expect(planDecisionBar(parked, 0).map((item) => [item.key, item.label])).toEqual([
       ["a", "approve"],
+      ["r", "run clean"],
       ["g", "run as goal"],
       ["s", "request changes"],
       ["c", "comment"],
@@ -159,6 +160,7 @@ describe("PLAN_OUTCOMES", () => {
   it("maps each verdict to the wire outcome the shell reads", () => {
     expect(PLAN_OUTCOMES).toEqual({
       approve: "approved",
+      clean: "approved_clean",
       goal: "approved_as_goal",
       changes: "cancelled",
       quit: "abandoned",

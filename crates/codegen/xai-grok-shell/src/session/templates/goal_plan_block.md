@@ -1,5 +1,7 @@
 A structured plan for this goal is on disk — the source of truth for "done". Read it first and keep it open.
 
+The approved plan contract is frozen. Only flip Task checklist boxes and append bullets to `## Deviations`; the harness rejects other edits.
+
 Plan: {PLAN_PATH}
 
 - Seed todos from the plan's acceptance criteria via {TODO_TOOL} before executing.

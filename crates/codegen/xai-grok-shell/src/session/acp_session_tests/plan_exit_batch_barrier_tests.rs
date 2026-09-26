@@ -5,8 +5,9 @@ use super::*;
 use agent_client_protocol as acp;
 use xai_grok_tools::implementations::grok_build::exit_plan_mode::ExitPlanModeExtRequest;
 
-const SEED_PLAN: &str = "# OLD mixed-batch plan seed unique-c91e04";
-const NEW_PLAN: &str = "# NEW mixed-batch plan body unique-a7f3c2";
+const OLD_MARKER: &str = "OLD mixed-batch decision unique-c91e04";
+const NEW_MARKER: &str = "NEW mixed-batch decision unique-a7f3c2";
+const SEED_PLAN: &str = "# Plan: Test a complete mixed batch plan\n\n## Goal kind\ncode-change\n\n## Decisions\n- OLD mixed-batch decision unique-c91e04.\n\n## Context\n- The plan is file-backed.\n- Edits run before exit.\n- Approval reads the file.\n\n## Acceptance criteria\n1. The snapshot sees the edit.\n\n## Verification plan\n1. gating: run `cargo test` and observe the snapshot.\n\n## Non-goals\n- Other edits.\n\n## Assumed scope\n- `plan.md`\n\n## Implementation approach\nSerialize the batch.\n\n## Task checklist\n- [ ] `plan.md` — edit the decision. Done when: file changes.\n- [ ] `plan.md` — request review. Done when: snapshot matches.\n- [ ] `tests/plan.rs` — test batch ordering. Done when: tests pass.\n\n## Deviations\n(none yet)\n";
 
 fn ext_response(outcome: &str) -> Arc<serde_json::value::RawValue> {
     serde_json::value::to_raw_value(&serde_json::json!({ "outcome": outcome }))
@@ -22,8 +23,8 @@ fn search_replace_plan(id: &str, plan_path: &str) -> ToolCallResponse {
             "search_replace",
             serde_json::json!({
                 "file_path": plan_path,
-                "old_string": SEED_PLAN,
-                "new_string": NEW_PLAN,
+                "old_string": OLD_MARKER,
+                "new_string": NEW_MARKER,
             })
             .to_string(),
         ),
@@ -157,14 +158,15 @@ async fn assert_mixed_batch_snapshot(write_first: bool) {
     .expect("execute_tool_calls must not hang")
     .expect("execute_tool_calls must not error");
 
-    assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), NEW_PLAN);
+    let expected = SEED_PLAN.replace(OLD_MARKER, NEW_MARKER);
+    assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), expected);
 
     let snapshot = captured
         .lock()
         .unwrap()
         .clone()
         .expect("gateway must receive x.ai/exit_plan_mode with plan content");
-    assert_eq!(snapshot, NEW_PLAN);
+    assert_eq!(snapshot, expected);
 
     responder.abort();
 }

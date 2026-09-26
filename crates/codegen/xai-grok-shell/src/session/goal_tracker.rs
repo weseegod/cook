@@ -506,6 +506,10 @@ pub struct GoalOrchestration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_baseline_file: Option<PathBuf>,
 
+    /// An approved or planner-published plan is an immutable contract during execution.
+    #[serde(default)]
+    pub plan_contract_frozen: bool,
+
     /// True once the harness created and squat-verified the scratch root AND the implementer subdir, so prompts can honestly say the dir exists.
     /// `#[serde(skip)]`: recomputed by `from_snapshot` on every reload (the sole reload path), so a persisted value would never be read.
     /// Same as the recomputed/transient `live_*` fields below.
@@ -598,6 +602,12 @@ impl GoalTracker {
     /// An in-flight `Active` goal becomes `UserPaused`.
     /// Other paused variants (including [`GoalStatus::InfraPaused`]) are preserved so `pause_message` and pause cause stay aligned.
     pub(crate) fn from_snapshot(session_dir: PathBuf, mut snapshot: GoalOrchestration) -> Self {
+        if snapshot.plan_contract_frozen
+            && let (Some(episode), Some(baseline)) =
+                (&snapshot.plan_file, &snapshot.plan_baseline_file)
+        {
+            crate::session::plan_contract::register_frozen_plan(episode, baseline);
+        }
         if matches!(snapshot.phase, GoalPhase::Planning | GoalPhase::Executing) {
             snapshot.phase = GoalPhase::Idle;
             snapshot.current_subagent_id = None;
@@ -815,6 +825,13 @@ impl GoalTracker {
         // Replacing a still-active goal: same rescue-then-remove contract as the terminal transitions
         // The prior goal's details path may already be in user-visible messages
         if self.orchestration.is_some() {
+            if let Some(path) = self
+                .orchestration
+                .as_ref()
+                .and_then(|o| o.plan_file.as_ref())
+            {
+                crate::session::plan_contract::unregister_frozen_plan(path);
+            }
             self.rescue_classifier_details();
             self.remove_scratch_root();
         }
@@ -878,6 +895,7 @@ impl GoalTracker {
             changes_baseline_commit: baseline_commit,
             plan_file: None,
             plan_baseline_file: None,
+            plan_contract_frozen: false,
             scratch_dir_ready,
             live_subagent_tokens: 0,
             live_tokens_by_model: Vec::new(),
@@ -899,15 +917,19 @@ impl GoalTracker {
     /// Publishing `plan_file`
     /// makes this "a goal that has a plan": the planner is skipped ("plan
     /// present" gate in `maybe_run_goal_planner`) and the load-time
-    /// reconciler treats it as planned. Best-effort — on any write failure
-    /// nothing is published, and the planner runs normally instead. Returns
+    /// reconciler treats it as planned. On a write failure nothing is published;
+    /// the caller pauses the seeded goal instead of starting a planner. Returns
     /// `true` when the seed was published.
     pub(crate) fn seed_plan(
         &mut self,
         content: &str,
         episode_path: Option<&std::path::Path>,
     ) -> bool {
-        if self.orchestration.is_none() {
+        if self
+            .orchestration
+            .as_ref()
+            .is_none_or(|o| o.plan_file.is_some() || o.plan_baseline_file.is_some())
+        {
             return false;
         }
         let _ = std::fs::create_dir_all(self.goal_dir());
@@ -951,6 +973,11 @@ impl GoalTracker {
         if let Some(o) = &mut self.orchestration {
             o.plan_file = Some(plan_path);
             o.plan_baseline_file = Some(baseline_path);
+            o.plan_contract_frozen = true;
+            crate::session::plan_contract::register_frozen_plan(
+                o.plan_file.as_ref().unwrap(),
+                o.plan_baseline_file.as_ref().unwrap(),
+            );
         }
         true
     }
@@ -1049,6 +1076,9 @@ impl GoalTracker {
             o.skeptic0_session_id = None;
             // Sibling of skeptic 0: drop the frozen per-index model assignment so a later goal re-resolves its own panel
             o.skeptic_model_assignment.clear();
+            if let Some(path) = &o.plan_file {
+                crate::session::plan_contract::unregister_frozen_plan(path);
+            }
             // Drop the plan baseline alongside skeptic 0: a later goal re-snapshots its own planner's original plan
             o.plan_baseline_file = None;
             // Terminal transition: reset all strategist state so a recreated/reactivated goal never inherits a stale count or note
@@ -1082,6 +1112,9 @@ impl GoalTracker {
             // Symmetric with `complete`: drop the resumed reject-gatekeeper, the frozen per-index model assignment, and the plan baseline
             o.skeptic0_session_id = None;
             o.skeptic_model_assignment.clear();
+            if let Some(path) = &o.plan_file {
+                crate::session::plan_contract::unregister_frozen_plan(path);
+            }
             o.plan_baseline_file = None;
             o.reset_strategist_fields();
             o.reset_evaluator_blocker_fields();
@@ -1098,6 +1131,13 @@ impl GoalTracker {
     /// Dropping the whole orchestration also drops `plan_baseline_file` / `skeptic0_session_id`, so no per-field reset is needed here.
     /// Mirrors the `complete` / `budget_limit` cleanup.
     pub fn clear(&mut self) {
+        if let Some(path) = self
+            .orchestration
+            .as_ref()
+            .and_then(|o| o.plan_file.as_ref())
+        {
+            crate::session::plan_contract::unregister_frozen_plan(path);
+        }
         self.rescue_classifier_details();
         self.remove_scratch_root();
         self.batch_proxy = None;
@@ -1326,6 +1366,7 @@ pub(crate) fn make_base_orchestration() -> GoalOrchestration {
         changes_baseline_commit: None,
         plan_file: None,
         plan_baseline_file: None,
+        plan_contract_frozen: false,
         scratch_dir_ready: false,
         live_subagent_tokens: 0,
         live_tokens_by_model: Vec::new(),

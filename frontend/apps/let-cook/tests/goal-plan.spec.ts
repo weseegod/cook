@@ -99,6 +99,25 @@ test.describe("goal and plan presentation", () => {
     await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result).toEqual({ outcome: "approved" });
   });
 
+  test("shows the three run decisions and sends run clean from an empty composer", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, CONNECTED_SEED);
+    const requestId = await page.evaluate(() => window.__cookMock!.plan());
+    const pane = page.getByTestId("plan-pane");
+    await expect(pane.getByTestId("plan-approve")).toBeVisible();
+    await expect(pane.getByTestId("plan-clean")).toBeVisible();
+    await expect(pane.getByTestId("plan-goal")).toBeVisible();
+    const input = page.getByTestId("composer-input");
+    await input.click();
+    await input.fill("review");
+    await input.press("r");
+    await expect(input).toHaveValue("reviewr");
+    await input.fill("");
+    await input.press("r");
+    await expect.poll(async () => (await mock.responses()).find((entry) => entry.id === requestId)?.result)
+      .toEqual({ outcome: "approved_clean" });
+  });
+
   test("queues a follow-up while a turn is running", async ({ page }) => {
     await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 1500 });
     const input = page.getByTestId("composer-input");

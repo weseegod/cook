@@ -614,14 +614,27 @@ impl AgentView {
             return InputOutcome::Changed;
         };
         // Wire outcome stays `approved_as_goal`; the shell seeds a goal from the plan body.
-        pav.send_approved_as_goal();
+        pav.send_approved_as_goal(review_comments);
         self.close_plan_review_and_forget(PlanReviewOutcome::Approved);
-        if let Some(text) = review_comments {
-            return InputOutcome::Action(Action::Interject {
-                text,
-                images: vec![],
+        InputOutcome::Changed
+    }
+    pub(crate) fn approve_plan_clean(&mut self) -> InputOutcome {
+        let freeform = self.prompt.text_without_image_chips();
+        let review_comments =
+            self.plan_approval_view.as_ref().and_then(|pav| {
+                let formatted = pav.format_feedback(Some(&freeform));
+                (!formatted.trim().is_empty()).then(|| format!(
+                "The user approved the plan with the following review comments:\n\n{formatted}"
+            ))
             });
+        if let Some(pav) = self.plan_approval_view.as_mut() {
+            Self::merge_live_images_into_stash(&mut self.prompt, &mut pav.stashed_prompt);
         }
+        let Some(mut pav) = self.unmount_plan_review() else {
+            return InputOutcome::Changed;
+        };
+        pav.send_approved_clean(review_comments);
+        self.close_plan_review_and_forget(PlanReviewOutcome::Approved);
         InputOutcome::Changed
     }
     /// Fold freeform-only images into the session draft.
@@ -985,6 +998,14 @@ impl AgentView {
             && !self.prompt.file_search_visible()
         {
             return self.approve_plan();
+        }
+        if !is_commenting
+            && key.code == KeyCode::Char('r')
+            && key.modifiers.is_empty()
+            && self.prompt.text_without_image_chips().trim().is_empty()
+            && !self.prompt.file_search_visible()
+        {
+            return self.approve_plan_clean();
         }
         if !is_commenting
             && key.code == KeyCode::Char('g')
@@ -1636,6 +1657,23 @@ mod plan_approval_enter_tests {
         );
     }
     #[test]
+    fn r_on_empty_revise_prompt_runs_clean() {
+        let mut agent = agent_with_revise_prompt();
+        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        let outcome = agent.handle_plan_feedback_key(&r);
+        assert!(matches!(outcome, InputOutcome::Changed));
+        assert!(agent.plan_approval_view.is_none());
+    }
+    #[test]
+    fn r_in_plan_preview_runs_clean() {
+        let mut agent = agent_with_revise_prompt();
+        agent.plan_approval_view.as_mut().unwrap().focus = PlanApprovalFocus::Preview;
+        let r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        let outcome = agent.handle_line_viewer_key(&r);
+        assert!(matches!(outcome, InputOutcome::Changed));
+        assert!(agent.plan_approval_view.is_none());
+    }
+    #[test]
     fn a_with_pending_comments_and_empty_freeform_approves() {
         let mut agent = agent_with_revise_prompt();
         if let Some(ref mut pav) = agent.plan_approval_view {
@@ -1842,11 +1880,7 @@ mod plan_approval_enter_tests {
         }
         agent.prompt.set_text("also cover the auth flow");
         let outcome = agent.approve_plan_as_goal();
-        assert!(matches!(
-            outcome,
-            InputOutcome::Action(Action::Interject { ref text, .. })
-                if text.contains("also cover the auth flow")
-        ));
+        assert!(matches!(outcome, InputOutcome::Changed));
         assert_eq!(
             agent.prompt.text(),
             "session draft",

@@ -638,6 +638,8 @@ pub struct PlanViewerExtras {
     pub approve_hovered: bool,
     pub goal_button_area: Option<Rect>,
     pub goal_hovered: bool,
+    pub clean_button_area: Option<Rect>,
+    pub clean_hovered: bool,
     pub comment_button_area: Option<Rect>,
     pub comment_hovered: bool,
     pub abandon_button_area: Option<Rect>,
@@ -1596,6 +1598,7 @@ pub fn render_line_viewer(
         plan.send_button_area = None;
         plan.approve_button_area = None;
         plan.goal_button_area = None;
+        plan.clean_button_area = None;
         plan.abandon_button_area = None;
         plan.copy_path_button_area = None;
     }
@@ -1659,6 +1662,7 @@ pub fn render_line_viewer(
         let comment_hovered = viewer.plan_ref().is_some_and(|p| p.comment_hovered);
         let approve_hovered = viewer.plan_ref().is_some_and(|p| p.approve_hovered);
         let goal_hovered = viewer.plan_ref().is_some_and(|p| p.goal_hovered);
+        let clean_hovered = viewer.plan_ref().is_some_and(|p| p.clean_hovered);
         let copy_hovered = viewer.plan_ref().is_some_and(|p| p.copy_hovered);
         let copy_path_hovered = viewer.plan_ref().is_some_and(|p| p.copy_path_hovered);
         let is_approval = viewer.feedback_active();
@@ -1691,6 +1695,14 @@ pub fn render_line_viewer(
             ("send", w, Some(spans))
         } else {
             ("", 0, None)
+        };
+
+        let (clean_w, clean_spans): (u16, Option<Vec<Span>>) = if is_approval {
+            let spans = build_shortcut_button('r', "run clean", clean_hovered, theme);
+            let w: u16 = spans.iter().map(|s| s.width() as u16).sum();
+            (w, Some(spans))
+        } else {
+            (0, None)
         };
 
         // `g run as goal` button — approval mode only. Approves the plan
@@ -1745,6 +1757,9 @@ pub fn render_line_viewer(
         if goal_w > 0 {
             base_w = base_w.saturating_add(goal_w).saturating_add(sep_w);
         }
+        if clean_w > 0 {
+            base_w = base_w.saturating_add(clean_w).saturating_add(sep_w);
+        }
         if revise_w > 0 {
             base_w = base_w.saturating_add(revise_w).saturating_add(sep_w);
         }
@@ -1787,7 +1802,23 @@ pub fn render_line_viewer(
                 viewer.plan_mut().approve_button_area = None;
             }
 
-            // Goal button — approval mode only (after approve).
+            // Clean button — approval mode only (after approve).
+            if let Some(spans) = &clean_spans {
+                let clean_x = x;
+                for span in spans {
+                    let w = span.width() as u16;
+                    buf.set_span(x, bottom_y, span, w);
+                    x += w;
+                }
+                viewer.plan_mut().clean_button_area =
+                    Some(Rect::new(clean_x, bottom_y, clean_w, 1));
+                buf.set_string(x, bottom_y, separator, sep_style);
+                x += sep_w;
+            } else {
+                viewer.plan_mut().clean_button_area = None;
+            }
+
+            // Goal button — approval mode only (after run clean).
             if let Some(spans) = &goal_spans {
                 let goal_x = x;
                 for span in spans {
@@ -1883,6 +1914,7 @@ pub fn render_line_viewer(
             let plan = viewer.plan_mut();
             plan.approve_button_area = None;
             plan.goal_button_area = None;
+            plan.clean_button_area = None;
             plan.comment_button_area = None;
             plan.copy_button_area = None;
             plan.copy_path_button_area = None;
@@ -2036,8 +2068,12 @@ mod tests {
         // one (`approve | | run as goal request changes`).
         let row = row_text(&buf, goal_area.y);
         assert!(
-            row.contains("approve  |  g run as goal"),
-            "single separator between approve and run as goal: {row:?}"
+            row.contains("approve  |  r run clean"),
+            "single separator between approve and run clean: {row:?}"
+        );
+        assert!(
+            row.contains("r run clean  |  g run as goal"),
+            "single separator between run clean and run as goal: {row:?}"
         );
         assert!(
             row.contains("g run as goal  |  s request changes"),

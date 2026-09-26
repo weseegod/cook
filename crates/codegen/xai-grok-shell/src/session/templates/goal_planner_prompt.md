@@ -41,10 +41,16 @@ Degradation MUST be honest, never fabricated: if the launch tool itself fails fo
 Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these sections, in order. `## Implementation approach` and `## Task checklist` are `code-change` only; include `## Risks / Contradictions` only when one exists.
 
 ```
-# Plan: <one-sentence headline paraphrasing OBJECTIVE>
+# Plan: <5–10 word headline paraphrasing OBJECTIVE, no paths>
 
 ## Goal kind
 <code-change | analysis | research>
+
+## Decisions
+- <one settled implementation or scope decision>
+
+## Context
+- <fact the implementer would otherwise have to rediscover; 3–8 bullets>
 
 ## Acceptance criteria
 1. <gating, outcome-based criterion>
@@ -56,14 +62,18 @@ Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these secti
 - <out-of-scope item>
 
 ## Assumed scope
-<files / modules / external deps this goal touches>
+- `<file or module>` — <expected role>
 
 ## Implementation approach
 <code-change only: how to structure the code so it is easy to test>
 
 ## Task checklist
-- [ ] <code-change only: first concrete implementation step>
-- [ ] <next step>
+- [ ] `<path or symbol>` — <first concrete implementation step>. Done when: <observable result>.
+- [ ] `<path or symbol>` — <next step>. Done when: <observable result>.
+- [ ] `<test path>` — <test or capture evidence>. Done when: <test result or evidence exists>.
+
+## Deviations
+(none yet)
 
 ## Risks / Contradictions
 - <optional: an internal contradiction or infeasibility in OBJECTIVE>
@@ -87,7 +97,9 @@ The plan also tells the IMPLEMENTER what evidence to PRODUCE, because the verifi
 
 **Implementation approach** (`code-change` only) — structure the work so it is easy to test: separate pure logic from I/O and prefer small testable units. Design guidance, NOT an acceptance criterion — do not refute working code for diverging from it, and do not restate it as a criterion.
 
-**Task checklist** (`code-change` only) — 3-8 ordered `- [ ]` checkbox steps the implementer executes and checks off as it goes; the harness mines the first unchecked box as the per-turn "next step" nudge. Steps are HOW guidance like the approach, never part of the judged contract — keep each small, concrete, and completable in one sitting (end with a testing/evidence step). Do not put checkboxes in any other section.
+**Task checklist** (`code-change` only) — 3-8 ordered `- [ ] `<path>` — change. Done when: observation.` checkbox steps the implementer executes and checks off as it goes; the harness mines the first unchecked box as the per-turn "next step" nudge. Steps are HOW guidance like the approach, never part of the judged contract — keep each small, concrete, and completable in one sitting (end with a testing/evidence step). Do not put checkboxes in any other section.
+
+**Decisions** — at least one bullet with a settled choice. **Context** — 3–8 short bullets with facts needed for a cold run. **Deviations** — exactly `(none yet)` when publishing. Use no code fences or pasted source; put paths in Assumed scope and Task checklist, not the H1.
 
 **Risks / Contradictions** (optional) — one bullet per genuine internal contradiction or environment infeasibility; omit when none.
 

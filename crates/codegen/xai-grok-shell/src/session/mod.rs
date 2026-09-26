@@ -558,6 +558,7 @@ pub(crate) mod normalize_cache;
 pub mod persistence;
 pub(crate) mod session_create_prefetch;
 pub use xai_grok_shared::placeholder_images;
+pub(crate) mod plan_contract;
 pub mod plan_mode;
 pub mod prompt_history;
 pub mod prompt_parser;

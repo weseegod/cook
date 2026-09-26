@@ -167,7 +167,7 @@ export function planFeedback(comments: readonly PlanComment[], freeform: string 
   return parts.join("\n\n");
 }
 
-export type PlanDecisionId = "approve" | "goal" | "changes" | "comment" | "copy" | "quit" | "send";
+export type PlanDecisionId = "approve" | "clean" | "goal" | "changes" | "comment" | "copy" | "quit" | "send";
 
 export interface PlanDecision {
   id: PlanDecisionId;
@@ -177,7 +177,7 @@ export interface PlanDecision {
 }
 
 /**
- * The footer's decision bar (`file_search/line_viewer.rs`) in render order. Approve, run as goal,
+ * The footer's decision bar (`file_search/line_viewer.rs`) in render order. Approve, run clean, run as goal,
  * request changes and quit plan exist only while the review is parked — after the decision the bar
  * drops to the casual set, so no button is a dead end.
  */
@@ -185,6 +185,7 @@ export function planDecisionBar(review: PlanReview | null, commentCount: number)
   const bar: PlanDecision[] = [];
   if (review?.pending) {
     bar.push({ id: "approve", key: "a", label: commentCount > 0 ? "approve w/ comments" : "approve" });
+    bar.push({ id: "clean", key: "r", label: "run clean" });
     bar.push({ id: "goal", key: "g", label: "run as goal" });
     bar.push({ id: "changes", key: "s", label: "request changes" });
   }
@@ -202,6 +203,7 @@ export function planDecisionBar(review: PlanReview | null, commentCount: number)
 /** The wire outcome each decision sends (`ExitPlanModeExtResponse.outcome`). */
 export const PLAN_OUTCOMES: Record<string, string> = {
   approve: "approved",
+  clean: "approved_clean",
   goal: "approved_as_goal",
   changes: "cancelled",
   quit: "abandoned",

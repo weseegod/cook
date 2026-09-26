@@ -1155,6 +1155,14 @@ impl SessionActor {
     }
 
     pub(super) async fn maybe_run_goal_planner(&self, objective: &str) {
+        if self
+            .goal_tracker
+            .lock()
+            .snapshot()
+            .is_some_and(|goal| goal.plan_contract_frozen || goal.plan_file.is_some())
+        {
+            return;
+        }
         let objective = objective.to_owned();
         let mut steering = Vec::new();
         let run_goal_id = self
@@ -1324,6 +1332,11 @@ impl SessionActor {
                                     && let Some(goal) = tracker.snapshot_mut()
                                 {
                                     goal.plan_baseline_file = Some(dst);
+                                    goal.plan_contract_frozen = true;
+                                    crate::session::plan_contract::register_frozen_plan(
+                                        goal.plan_file.as_ref().unwrap(),
+                                        goal.plan_baseline_file.as_ref().unwrap(),
+                                    );
                                 }
                             }
                             Err(err) => tracing::warn!(
@@ -1333,6 +1346,24 @@ impl SessionActor {
                                  PLAN_CHANGES will render (none)",
                             ),
                         }
+                    }
+                    self.goal_notify_sender()
+                        .persist_goal_state(&self.goal_tracker.lock());
+                    let missing_baseline = {
+                        self.goal_tracker.lock().snapshot().is_some_and(|goal| {
+                            goal.goal_id == goal_id
+                                && goal.plan_file.is_some()
+                                && !goal.plan_contract_frozen
+                        })
+                    };
+                    if missing_baseline {
+                        let _ = self
+                            .auto_pause_goal_if_matches_with_message(
+                                &goal_id,
+                                crate::session::goal_tracker::GoalPauseReason::Planner,
+                                "The plan baseline could not be saved; the goal is paused.".into(),
+                            )
+                            .await;
                     }
                 }
                 crate::session::goal_planner::GoalPlannerOutcome::Interrupted => continue,

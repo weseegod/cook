@@ -55,6 +55,14 @@ impl SessionActor {
         if mode.is_plan() {
             let entered = self.plan_mode.lock().enter_pending();
             if entered {
+                if let Some(goal) = self.goal_tracker.lock().snapshot_mut() {
+                    if let Some(path) = &goal.plan_file {
+                        crate::session::plan_contract::unregister_frozen_plan(path);
+                    }
+                    goal.plan_contract_frozen = false;
+                }
+                self.goal_notify_sender()
+                    .persist_goal_state(&self.goal_tracker.lock());
                 self.persist_plan_mode_state();
                 self.enqueue_current_mode_update(acp::SessionModeId::new(
                     SessionMode::Plan.as_id(),
@@ -190,6 +198,14 @@ impl SessionActor {
             PromptMode::Plan => {
                 let entered = self.plan_mode.lock().enter_pending();
                 if entered {
+                    if let Some(goal) = self.goal_tracker.lock().snapshot_mut() {
+                        if let Some(path) = &goal.plan_file {
+                            crate::session::plan_contract::unregister_frozen_plan(path);
+                        }
+                        goal.plan_contract_frozen = false;
+                    }
+                    self.goal_notify_sender()
+                        .persist_goal_state(&self.goal_tracker.lock());
                     self.persist_plan_mode_state();
                     self.enqueue_current_mode_update(session_mode_id_from_prompt_mode(prompt_mode));
                 }

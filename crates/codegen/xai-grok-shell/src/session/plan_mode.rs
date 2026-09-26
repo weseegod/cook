@@ -59,6 +59,12 @@ pub struct PlanModeTracker {
     /// distinct files even before either is written to disk. Not persisted: on resume the restored
     /// `plan_file_path` plus an on-disk exists() check cover the same guarantee.
     episode_files: Vec<PathBuf>,
+    frozen_plan: Option<FrozenPlan>,
+}
+#[derive(Debug, Clone)]
+pub(crate) struct FrozenPlan {
+    pub episode: PathBuf,
+    pub baseline: PathBuf,
 }
 /// A buffered mid-turn activation reminder plus the state needed to roll the activation back if it is withdrawn before delivery.
 struct PendingActivation {
@@ -85,6 +91,8 @@ pub struct PlanModeSnapshot {
     /// `<session_dir>/plan.md` default: both restore to `<session_dir>/plan.md`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_file: Option<String>,
+    #[serde(default)]
+    pub frozen_plan: bool,
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
@@ -100,6 +108,7 @@ impl PlanModeTracker {
             plan_file_path: legacy_plan_file_path(&session_dir),
             session_dir,
             episode_files: Vec::new(),
+            frozen_plan: None,
         }
     }
     /// `session_dir` is used to recompute `plan_file_path`.
@@ -116,6 +125,14 @@ impl PlanModeTracker {
             }
             _ => {}
         }
+        let plan_file_path = restore_plan_file_path(&session_dir, snapshot.plan_file.as_deref());
+        let frozen_plan = snapshot.frozen_plan.then(|| FrozenPlan {
+            baseline: plan_file_path.with_extension("frozen.md"),
+            episode: plan_file_path.clone(),
+        });
+        if let Some(plan) = &frozen_plan {
+            crate::session::plan_contract::register_frozen_plan(&plan.episode, &plan.baseline);
+        }
         Self {
             state: snapshot.state,
             was_previously_active: snapshot.was_previously_active,
@@ -123,9 +140,10 @@ impl PlanModeTracker {
             pending_exit_reminder: snapshot.pending_exit_reminder,
             awaiting_plan_approval: snapshot.awaiting_plan_approval,
             pending_activation: None,
-            plan_file_path: restore_plan_file_path(&session_dir, snapshot.plan_file.as_deref()),
+            plan_file_path,
             session_dir,
             episode_files: Vec::new(),
+            frozen_plan,
         }
     }
     /// Mark that the client is waiting on plan approval (`exit_plan_mode` parked).
@@ -144,6 +162,7 @@ impl PlanModeTracker {
             reminder_count: self.reminder_count,
             pending_exit_reminder: self.pending_exit_reminder,
             plan_file: self.relative_plan_file(),
+            frozen_plan: self.frozen_plan.is_some(),
         }
     }
 
@@ -174,6 +193,10 @@ impl PlanModeTracker {
     /// Inactive, so the path the reminder named stays valid through the planning turn.
     /// Returns the newly installed path.
     pub(crate) fn begin_plan_episode(&mut self) -> PathBuf {
+        if let Some(plan) = &self.frozen_plan {
+            crate::session::plan_contract::unregister_frozen_plan(&plan.episode);
+        }
+        self.frozen_plan = None;
         let path = self.next_episode_path();
         if let Some(dir) = path.parent()
             && let Err(e) = std::fs::create_dir_all(dir)
@@ -214,6 +237,23 @@ impl PlanModeTracker {
     pub fn plan_file_path(&self) -> &Path {
         &self.plan_file_path
     }
+    pub(crate) fn frozen_plan(&self) -> Option<&FrozenPlan> {
+        self.frozen_plan.as_ref()
+    }
+    pub(crate) fn freeze_current_plan(&mut self) -> std::io::Result<()> {
+        let episode = self.plan_file_path.clone();
+        let baseline = episode.with_extension("frozen.md");
+        let body = std::fs::read(&episode)?;
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&baseline)?;
+        file.write_all(&body)?;
+        crate::session::plan_contract::register_frozen_plan(&episode, &baseline);
+        self.frozen_plan = Some(FrozenPlan { episode, baseline });
+        Ok(())
+    }
     /// Used to bypass the permission prompt for plan file edits during plan mode.
     pub(crate) fn should_auto_approve_edit(&self, edit_path: &Path) -> bool {
         self.is_active() && is_plan_file_write(edit_path, &self.plan_file_path)
@@ -234,8 +274,12 @@ impl PlanModeTracker {
     pub(crate) fn enter_pending(&mut self) -> bool {
         match self.state {
             PlanModeState::Inactive => {
+                if let Some(plan) = &self.frozen_plan {
+                    crate::session::plan_contract::unregister_frozen_plan(&plan.episode);
+                }
                 self.state = PlanModeState::Pending;
                 self.pending_exit_reminder = false;
+                self.frozen_plan = None;
                 true
             }
             PlanModeState::ExitPending => {
@@ -396,6 +440,16 @@ using the ${{ tools.by_kind.edit }} tool. \
 Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 ${%- endif %}
 
+Use this exact section order: `## Goal kind` (code-change, analysis, or research), \
+`## Decisions` (at least one bullet), `## Context` (3–8 bullets), \
+`## Acceptance criteria` (numbered outcomes), `## Verification plan` (numbered actions), \
+`## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
+then for code-change `## Implementation approach` (nonempty) and `## Task checklist` \
+(3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
+and finally `## Deviations` containing exactly `(none yet)`. \
+Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
+Only Task checklist may contain checkboxes. The file must stand alone without this conversation.
+
 You should build your plan by writing to or editing this file. \
 Note that this is the only file you are allowed to edit.
 
@@ -418,6 +472,12 @@ pub(crate) fn plan_mode_reentry_reminder_template() -> &'static str {
 You are entering plan mode again. A new plan file has been opened at ${{ plan_path }} \
 for this planning session and it starts empty. \
 Start the file with `# Plan: <short title>` (5–10 words, no file paths).
+
+Use the same complete plan contract: Goal kind, Decisions, Context, Acceptance criteria, \
+Verification plan, Non-goals, Assumed scope, then Implementation approach and Task checklist \
+for code-change, then Deviations with `(none yet)`. Context needs 3–8 bullets. \
+Code-change checklist needs 3–8 `- [ ] `<path>` — change. Done when: observation.` lines, \
+ending with test or evidence. Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist.
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
 }
@@ -974,6 +1034,25 @@ mod tests {
 
         let restored = PlanModeTracker::from_snapshot(t.session_dir.clone(), snap);
         assert_eq!(restored.plan_file_path(), expected);
+    }
+    #[test]
+    fn clean_approval_freezes_episode_until_user_reenters_plan_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = PlanModeTracker::new(dir.path().to_path_buf());
+        tracker.enter_pending();
+        tracker.activate();
+        std::fs::write(tracker.plan_file_path(), "# Plan: Frozen example\n").unwrap();
+        tracker.deactivate_approved();
+        tracker.freeze_current_plan().unwrap();
+        let frozen = tracker.frozen_plan().unwrap().clone();
+        assert_eq!(
+            std::fs::read(&frozen.episode).unwrap(),
+            std::fs::read(&frozen.baseline).unwrap()
+        );
+        let restored = PlanModeTracker::from_snapshot(dir.path().to_path_buf(), tracker.snapshot());
+        assert!(restored.frozen_plan().is_some());
+        tracker.enter_pending();
+        assert!(tracker.frozen_plan().is_none());
     }
     #[test]
     fn snapshot_without_plan_file_restores_the_legacy_path() {

@@ -8,6 +8,30 @@
 use super::support::*;
 use super::*;
 
+const VALID_REVIEW_PLAN: &str = "# Plan: Ship a complete reusable widget\n\n## Goal kind\ncode-change\n\n## Decisions\n- Keep the existing API.\n\n## Context\n- The widget exists.\n- The API has callers.\n- The tests are local.\n\n## Acceptance criteria\n1. The widget works.\n\n## Verification plan\n1. gating: run `cargo test` and observe success.\n\n## Non-goals\n- New APIs.\n\n## Assumed scope\n- `src/widget.rs`\n\n## Implementation approach\nUse the existing module.\n\n## Task checklist\n- [ ] `src/widget.rs` — update behavior. Done when: output changes.\n- [ ] `src/widget.rs` — integrate behavior. Done when: callers work.\n- [ ] `tests/widget.rs` — test the behavior. Done when: tests pass.\n\n## Deviations\n(none yet)\n";
+
+#[tokio::test(flavor = "current_thread")]
+async fn clean_handoff_keeps_one_plan_anchor_in_model_history() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
+            actor
+                .chat_state_handle
+                .push_user_message(ConversationItem::user("old exploration"));
+            actor.handoff_plan_context(None).await;
+            let history = actor.chat_state_handle.get_conversation().await;
+            assert_eq!(history.len(), 1);
+            assert!(
+                history[0]
+                    .text_content()
+                    .contains("Implement the approved plan at")
+            );
+            assert!(!history[0].text_content().contains("old exploration"));
+        })
+        .await;
+}
+
 /// Build the typed approval response the pager would send back.
 fn ext_response(outcome: &str) -> Arc<serde_json::value::RawValue> {
     serde_json::value::to_raw_value(&serde_json::json!({ "outcome": outcome }))
@@ -190,7 +214,7 @@ async fn real_exit_plan_mode_disconnect_keeps_awaiting_persisted() {
             *actor.agent.borrow_mut() = test_agent_with_plan_tools().await;
             // Plan mode Active with a real plan.md at the tracker path.
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("plan.md"), "# Plan\n- step 1\n").unwrap();
+            std::fs::write(dir.path().join("plan.md"), VALID_REVIEW_PLAN).unwrap();
             {
                 let mut tracker = actor.plan_mode.lock();
                 *tracker =
@@ -260,7 +284,7 @@ async fn real_exit_plan_mode_no_client_executes_tool() {
             drop(gateway_rx);
             *actor.agent.borrow_mut() = test_agent_with_plan_tools().await;
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(dir.path().join("plan.md"), "# Plan\n- step 1\n").unwrap();
+            std::fs::write(dir.path().join("plan.md"), VALID_REVIEW_PLAN).unwrap();
             {
                 let mut tracker = actor.plan_mode.lock();
                 *tracker =
@@ -283,6 +307,47 @@ async fn real_exit_plan_mode_no_client_executes_tool() {
                 outcome.is_ok(),
                 "headless exit_plan_mode should fall through to execute the tool"
             );
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn incomplete_plan_does_not_open_review() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, mut gateway_rx, _persistence_rx) = actor_with_channels().await;
+            *actor.agent.borrow_mut() = test_agent_with_plan_tools().await;
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(
+                dir.path().join("plan.md"),
+                "# Plan: Only a title exists here now\n",
+            )
+            .unwrap();
+            {
+                let mut tracker = actor.plan_mode.lock();
+                *tracker =
+                    crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
+                tracker.activate_from_tool();
+            }
+            let call = crate::sampling::types::ToolCallResponse {
+                id: "call-incomplete-plan".into(),
+                kind: "function".into(),
+                function: crate::sampling::types::ToolCallFunction::new("exit_plan_mode", "{}"),
+            };
+            let mut deferred = Vec::new();
+            let outcome = actor
+                .prepare_tool_call(call, &mut deferred, None)
+                .await
+                .unwrap();
+            assert!(matches!(outcome, Err(ToolLoop::Continue)));
+            assert!(actor.plan_mode.lock().is_active());
+            while let Ok(message) = gateway_rx.try_recv() {
+                assert!(!matches!(
+                    message,
+                    xai_acp_lib::AcpClientMessage::ExtMethod(_)
+                ));
+            }
         })
         .await;
 }
@@ -413,7 +478,7 @@ async fn resume_no_plan_md_clears_flag_without_request() {
 /// an implement turn.
 #[tokio::test(flavor = "current_thread")]
 async fn resume_approved_as_goal_seeds_goal_with_plan() {
-    const PLAN_FOR_GOAL: &str = "# Plan: Ship the widget\n\n## Steps\n1. do it\n";
+    const PLAN_FOR_GOAL: &str = VALID_REVIEW_PLAN;
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -470,6 +535,7 @@ async fn resume_approved_as_goal_seeds_goal_with_plan() {
                 "approve-as-goal must clear the awaiting bit like approve"
             );
             let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
+            assert!(snap.plan_contract_frozen);
             let plan_path = actor.goal_tracker.lock().plan_path();
             assert_eq!(
                 snap.plan_file.as_deref(),
@@ -487,10 +553,58 @@ async fn resume_approved_as_goal_seeds_goal_with_plan() {
                 "baseline must snapshot the identical body"
             );
             assert_eq!(
-                snap.objective, "Ship the widget",
+                snap.objective, "Ship a complete reusable widget",
                 "objective derives from the plan title"
             );
 
+            responder.await.unwrap();
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn resume_approved_clean_freezes_plan_and_restarts_from_anchor() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, mut gateway_rx, _persistence_rx) = actor_with_channels().await;
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("plan.md"), VALID_REVIEW_PLAN).unwrap();
+            {
+                let mut tracker = actor.plan_mode.lock();
+                *tracker =
+                    crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
+                tracker.activate_from_tool();
+                tracker.set_awaiting_plan_approval(true);
+            }
+            let responder = tokio::task::spawn_local(async move {
+                while let Some(msg) = gateway_rx.recv().await {
+                    match msg {
+                        xai_acp_lib::AcpClientMessage::ExtMethod(args) => {
+                            let _ = args
+                                .response_tx
+                                .send(Ok(acp::ExtResponse::new(ext_response("approved_clean"))));
+                            break;
+                        }
+                        xai_acp_lib::AcpClientMessage::SessionNotification(args) => {
+                            let _ = args.response_tx.send(Ok(()));
+                        }
+                        _ => {}
+                    }
+                }
+            });
+            let (completion_tx, _completion_rx) = tokio::sync::mpsc::unbounded_channel();
+            actor.clone().resume_plan_approval(completion_tx).await;
+            let frozen = actor.plan_mode.lock().frozen_plan().unwrap().clone();
+            assert_eq!(
+                std::fs::read_to_string(&frozen.episode).unwrap(),
+                VALID_REVIEW_PLAN
+            );
+            assert_eq!(
+                std::fs::read_to_string(&frozen.baseline).unwrap(),
+                VALID_REVIEW_PLAN
+            );
+            assert!(!actor.plan_mode.lock().is_active());
             responder.await.unwrap();
         })
         .await;

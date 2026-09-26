@@ -111,9 +111,7 @@ impl SessionActor {
         let mut last_error = String::new();
         for attempt in 0..2 {
             let requested_model = if attempt == 0 {
-                preferred_model
-                    .as_deref()
-                    .unwrap_or(active_model.as_str())
+                preferred_model.as_deref().unwrap_or(active_model.as_str())
             } else {
                 active_model.as_str()
             };
@@ -936,10 +934,28 @@ impl SessionActor {
             created_at,
             baseline_commit,
         );
+        if plan_seed.is_some() {
+            if let Some(goal) = self.goal_tracker.lock().snapshot_mut() {
+                goal.plan_contract_frozen = true;
+            }
+        }
         if let Some((content, episode_path)) = &plan_seed {
-            self.goal_tracker
-                .lock()
-                .seed_plan(content, episode_path.as_deref());
+            let seeded = {
+                self.goal_tracker
+                    .lock()
+                    .seed_plan(content, episode_path.as_deref())
+            };
+            if !seeded {
+                self.goal_tracker.lock().pause_with_message(
+                    crate::session::goal_tracker::GoalPauseReason::Planner,
+                    "The approved plan could not be seeded; the goal is paused.".into(),
+                );
+                self.goal_notify_sender()
+                    .persist_goal_state(&self.goal_tracker.lock());
+                return GoalSetupOutcome::Message(
+                    "The approved plan could not be seeded; the goal is paused. No planner was started.".into(),
+                );
+            }
         }
         self.goal_turn_task_ids.lock().clear();
         self.clear_pending_classifier_completions();
@@ -958,7 +974,9 @@ impl SessionActor {
             );
         }
 
-        self.maybe_run_goal_planner(objective).await;
+        if plan_seed.is_none() {
+            self.maybe_run_goal_planner(objective).await;
+        }
         if let Some(msg) = self.planner_pause_short_circuit_message("Goal paused.") {
             return GoalSetupOutcome::Message(msg);
         }

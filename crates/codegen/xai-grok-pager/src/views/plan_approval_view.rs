@@ -248,11 +248,15 @@ impl PlanApprovalViewState {
         send_ext_response(self.take_response_tx(), "approved", None)
     }
 
+    pub fn send_approved_clean(&mut self, feedback: Option<String>) -> bool {
+        send_ext_response(self.take_response_tx(), "approved_clean", feedback)
+    }
+
     /// Approve the plan AND run it as an autonomous goal: the shell exits
     /// plan mode and seeds a goal with the approved plan body instead of
     /// starting a normal implement turn.
-    pub fn send_approved_as_goal(&mut self) -> bool {
-        send_ext_response(self.take_response_tx(), "approved_as_goal", None)
+    pub fn send_approved_as_goal(&mut self, feedback: Option<String>) -> bool {
+        send_ext_response(self.take_response_tx(), "approved_as_goal", feedback)
     }
 
     pub fn send_abandoned(&mut self) -> bool {
@@ -412,13 +416,22 @@ mod tests {
     #[test]
     fn test_send_approved_as_goal() {
         let (mut state, mut rx) = make_test_state();
-        assert!(state.send_approved_as_goal());
+        assert!(state.send_approved_as_goal(None));
         let resp = rx.try_recv().expect("should receive response");
         let raw = resp.expect("should be Ok");
         let parsed: serde_json::Value =
             serde_json::from_str(raw.0.get()).expect("should be valid JSON");
         assert_eq!(parsed["outcome"], "approved_as_goal");
         assert!(parsed.get("feedback").is_none());
+    }
+
+    #[test]
+    fn test_send_approved_clean() {
+        let (mut state, mut rx) = make_test_state();
+        assert!(state.send_approved_clean(None));
+        let parsed: serde_json::Value =
+            serde_json::from_str(rx.try_recv().unwrap().unwrap().0.get()).unwrap();
+        assert_eq!(parsed["outcome"], "approved_clean");
     }
 
     #[test]
