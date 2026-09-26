@@ -108,12 +108,13 @@ test.describe("subagent view", () => {
     for (const width of [1280, 420]) {
       await page.setViewportSize({ width, height: 900 });
       await expect(group).toHaveCount(1);
+      const baselineOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
       const toggle = group.getByRole("button", { name: "Thought for 5.0s" });
       await toggle.click();
       expect(await group.locator(".thinking-group-item").evaluateAll((nodes) => nodes.map((node) => node.textContent?.trim())))
         .toEqual(["I considered index.js", "I considered app.js", "I considered component.js"]);
       await expect(toggle).toHaveAttribute("aria-expanded", "true");
-      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBe(baselineOverflow);
       await toggle.click();
       await expect(group.locator(".thinking-group-item")).toHaveCount(0);
     }
