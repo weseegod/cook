@@ -449,6 +449,35 @@ pub(crate) async fn run_goal_planner(
         );
     }
 
+    let plan_body = match tokio::fs::read_to_string(inputs.plan_file).await {
+        Ok(s) => s,
+        Err(_) => {
+            tracing::info!(
+                plan_file = %plan_file_str,
+                "goal planner: plan file unreadable after write; failing closed",
+            );
+            return record_fail_closed(
+                GoalPlannerFailClosedReason::MissingPlan,
+                inputs.attempt,
+                started,
+                emit_event,
+            );
+        }
+    };
+    if let Err(errors) = crate::session::plan_contract::validate_plan_contract(&plan_body) {
+        tracing::warn!(
+            plan_file = %plan_file_str,
+            errors = ?errors,
+            "goal planner: plan contract invalid; failing closed",
+        );
+        return record_fail_closed(
+            GoalPlannerFailClosedReason::MissingPlan,
+            inputs.attempt,
+            started,
+            emit_event,
+        );
+    }
+
     let latency_ms = started.elapsed().as_millis() as u64;
     emit_event(Event::GoalPlannerCompleted {
         attempt: inputs.attempt,
@@ -684,13 +713,26 @@ mod tests {
         tmp.join("plan.md")
     }
 
+    const VALID_PLAN_BODY: &str = "# Plan: Build a complete reusable thing here now\n\n\
+## Goal kind\ncode-change\n\n\
+## Decisions\n- Use one file.\n\n\
+## Context\n- First fact.\n- Second fact.\n- Third fact.\n\n\
+## Acceptance criteria\n1. A checkable result.\n\n\
+## Verification plan\n1. gating: run `cargo test` and observe success.\n\n\
+## Non-goals\n- Extra features.\n\n\
+## Assumed scope\n- `src/file.rs`\n\n\
+## Implementation approach\nUse a pure function.\n\n\
+## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n\
+## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n\
+### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n\
+### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n\
+## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n- [ ] `src/file.rs` — connect. Done when: call works.\n- [ ] `tests/file.rs` — test. Done when: test passes.\n\n\
+## Deviations\n(none yet)\n";
+
     #[tokio::test]
     async fn success_path_emits_fired_and_completed_and_returns_planned() {
         let plan_file = tmp_plan_file("happy");
-        let spawner = Arc::new(MockSpawner::ok_writes(
-            &plan_file,
-            b"# Plan: foo\n\n## Goal kind\n\ncode-change\n",
-        ));
+        let spawner = Arc::new(MockSpawner::ok_writes(&plan_file, VALID_PLAN_BODY.as_bytes()));
         let (log, emit) = collect_events();
 
         let outcome = run_goal_planner(
@@ -873,7 +915,7 @@ mod tests {
     #[tokio::test]
     async fn malformed_terminal_with_file_present_still_succeeds() {
         let plan_file = tmp_plan_file("malformed-but-written");
-        let mut spawner = MockSpawner::ok_writes(&plan_file, b"# Plan: foo\n");
+        let mut spawner = MockSpawner::ok_writes(&plan_file, VALID_PLAN_BODY.as_bytes());
         spawner.response = Ok("done.".to_string());
         let spawner = Arc::new(spawner);
         let (_, emit) = collect_events();
@@ -934,9 +976,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn truncated_plan_body_fails_closed() {
+        let plan_file = tmp_plan_file("truncated");
+        let spawner = Arc::new(MockSpawner::ok_writes(
+            &plan_file,
+            b"# Plan: Truncated body missing sections here now\n\n## Goal kind\ncode-change\n",
+        ));
+        let (log, emit) = collect_events();
+
+        let outcome = run_goal_planner(
+            spawner,
+            GoalPlannerInputs {
+                objective: "do X",
+                context: "",
+                plan_file: &plan_file,
+                attempt: 1,
+                model_id: "grok-test",
+                tool_names: &RoleToolNames::inherit_defaults(),
+                inherit_tool_names: &RoleToolNames::inherit_defaults(),
+            },
+            &emit,
+        )
+        .await;
+
+        assert!(matches!(
+            outcome,
+            GoalPlannerOutcome::FailClosed {
+                reason: GoalPlannerFailClosedReason::MissingPlan,
+                ..
+            }
+        ));
+        assert!(
+            log.lock()
+                .unwrap()
+                .iter()
+                .any(|t| t.starts_with("fail_closed:"))
+        );
+    }
+
+    #[tokio::test]
     async fn prompt_substitutes_plan_file_path_and_carries_objective() {
         let plan_file = tmp_plan_file("prompt");
-        let spawner = Arc::new(MockSpawner::ok_writes(&plan_file, b"# Plan\n"));
+        let spawner = Arc::new(MockSpawner::ok_writes(&plan_file, VALID_PLAN_BODY.as_bytes()));
         let spawner_obs = spawner.clone();
         let (_, emit) = collect_events();
 
@@ -1322,7 +1403,7 @@ mod tests {
                         ..Default::default()
                     });
                 } else {
-                    let _ = tokio::fs::write(&plan_for_coord, b"# Plan\n").await;
+                    let _ = tokio::fs::write(&plan_for_coord, VALID_PLAN_BODY.as_bytes()).await;
                     let _ = req.result_tx.send(SubagentResult {
                         success: true,
                         output: std::sync::Arc::from("Done"),

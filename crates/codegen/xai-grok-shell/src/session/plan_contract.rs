@@ -84,6 +84,126 @@ fn normalize_checkbox(line: &str) -> &str {
     }
 }
 
+/// One `## Current anchors` bullet: backticked path, then a backticked symbol or
+/// `new:Identifier`, then an `observed:` clause with non-empty text.
+fn anchor_shape(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix("- ") else {
+        return false;
+    };
+    // Extract the first backticked run (path).
+    let Some(after_path) = rest.strip_prefix('`') else {
+        return false;
+    };
+    let Some((path, after_path)) = after_path.split_once('`') else {
+        return false;
+    };
+    if path.trim().is_empty() {
+        return false;
+    }
+    let after_path = after_path.trim_start();
+    // Symbol: either `ident` or new:ident.
+    let symbol_ok = if let Some(after_sym) = after_path.strip_prefix('`') {
+        after_sym.split_once('`').is_some_and(|(sym, _)| !sym.trim().is_empty())
+    } else if let Some(after_new) = after_path.strip_prefix("new:") {
+        after_new
+            .split_whitespace()
+            .next()
+            .is_some_and(|sym| !sym.is_empty())
+    } else {
+        false
+    };
+    if !symbol_ok {
+        return false;
+    }
+    // Remaining text must contain `observed:` with non-empty content after it.
+    let Some(idx) = after_path.find("observed:") else {
+        return false;
+    };
+    let after = &after_path[idx + "observed:".len()..];
+    !after.trim().is_empty()
+}
+
+/// Check `## Edit brief` blocks: one `###` heading per checklist line, same path and
+/// order; each block has `Now:`, `Change:`, `Keep:`, `Proof:` bullets in order; `Proof:`
+/// contains a backticked command or test path.
+fn validate_edit_brief(brief: &[&str], tasks: &[&str]) -> Vec<String> {
+    let mut errors = Vec::new();
+    // Collect blocks: each block starts at a `### ` heading.
+    let mut blocks: Vec<(String, Vec<&str>)> = Vec::new();
+    for line in brief {
+        if let Some(heading) = line.strip_prefix("### ") {
+            blocks.push((heading.trim().to_owned(), Vec::new()));
+        } else if let Some(last) = blocks.last_mut() {
+            last.1.push(line);
+        } else {
+            errors.push("## Edit brief must start each block with a `###` heading".into());
+            return errors;
+        }
+    }
+    if blocks.len() != tasks.len() {
+        errors.push(format!(
+            "## Edit brief needs one `###` block per Task checklist item ({} vs {})",
+            blocks.len(),
+            tasks.len()
+        ));
+    }
+    for (i, (heading, items)) in blocks.iter().enumerate() {
+        // Heading must contain a backticked path.
+        let heading_path = heading
+            .strip_prefix('`')
+            .and_then(|s| s.split_once('`'))
+            .map(|(p, _)| p)
+            .unwrap_or("");
+        if heading_path.is_empty() {
+            errors.push(format!(
+                "## Edit brief block {} heading needs a backticked path",
+                i + 1
+            ));
+        }
+        // Path must match the checklist item at the same index.
+        if let Some(task) = tasks.get(i) {
+            let task_path = task
+                .strip_prefix("- [ ] `")
+                .and_then(|s| s.split_once('`'))
+                .map(|(p, _)| p)
+                .unwrap_or("");
+            if !heading_path.is_empty() && heading_path != task_path {
+                errors.push(format!(
+                    "## Edit brief block {} path `{heading_path}` does not match checklist path `{task_path}`",
+                    i + 1
+                ));
+            }
+        }
+        // Four bullets in order: Now:, Change:, Keep:, Proof:.
+        let labels = ["Now:", "Change:", "Keep:", "Proof:"];
+        if items.len() != 4 {
+            errors.push(format!(
+                "## Edit brief block {} needs exactly 4 bullets (Now:, Change:, Keep:, Proof:)",
+                i + 1
+            ));
+            continue;
+        }
+        for (item, label) in items.iter().zip(&labels) {
+            if !item.starts_with("- ") || !item[2..].trim_start().starts_with(label) {
+                errors.push(format!(
+                    "## Edit brief block {} bullet must start with `{label}`",
+                    i + 1
+                ));
+            }
+        }
+        // Proof: must contain a backticked command or test path.
+        if let Some(proof) = items.last()
+            && !proof.contains('`')
+        {
+            errors.push(format!(
+                "## Edit brief block {} Proof: needs a backticked command or test path",
+                i + 1
+            ));
+        }
+    }
+    errors
+}
+
 pub(crate) fn validate_plan_contract(body: &str) -> Result<(), Vec<String>> {
     let sections = sections(body);
     let mut errors = Vec::new();
@@ -101,7 +221,12 @@ pub(crate) fn validate_plan_contract(body: &str) -> Result<(), Vec<String>> {
         "Assumed scope",
     ];
     if content(&sections, "Goal kind") == ["code-change"] {
-        expected.extend(["Implementation approach", "Task checklist"]);
+        expected.extend([
+            "Implementation approach",
+            "Current anchors",
+            "Edit brief",
+            "Task checklist",
+        ]);
     }
     expected.push("Deviations");
     if headings.last() == Some(&"Risks / Contradictions") {
@@ -181,6 +306,25 @@ pub(crate) fn validate_plan_contract(body: &str) -> Result<(), Vec<String>> {
         if content(&sections, "Implementation approach").is_empty() {
             errors.push("## Implementation approach is required for code-change".into());
         }
+        let anchors = content(&sections, "Current anchors");
+        if !(2..=12).contains(&anchors.len()) {
+            errors.push("## Current anchors needs 2–12 bullet(s)".into());
+        }
+        for line in &anchors {
+            if !line.starts_with("- ") {
+                errors.push("## Current anchors items must be bullets".into());
+                break;
+            }
+        }
+        for line in &anchors {
+            if !anchor_shape(line) {
+                errors.push(
+                    "## Current anchors items need a backticked path, a backticked symbol or `new:Symbol`, and an `observed:` clause"
+                        .into(),
+                );
+                break;
+            }
+        }
         let tasks = content(&sections, "Task checklist");
         if !(3..=8).contains(&tasks.len()) || tasks.iter().any(|line| !checklist(line)) {
             errors.push(
@@ -193,6 +337,12 @@ pub(crate) fn validate_plan_contract(body: &str) -> Result<(), Vec<String>> {
                 && !line.to_ascii_lowercase().contains("verify")
         }) {
             errors.push("The last checklist item must be a test or evidence step".into());
+        }
+        let brief_lines = content(&sections, "Edit brief");
+        if brief_lines.is_empty() {
+            errors.push("## Edit brief is required for code-change".into());
+        } else {
+            errors.extend(validate_edit_brief(&brief_lines, &tasks));
         }
     }
     if errors.is_empty() {
@@ -308,6 +458,10 @@ mod tests {
 ## Non-goals\n- Extra features.\n\n\
 ## Assumed scope\n- `src/file.rs`\n\n\
 ## Implementation approach\nUse a pure function.\n\n\
+## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n\
+## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n\
+### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n\
+### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n\
 ## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n- [ ] `src/file.rs` — connect. Done when: call works.\n- [ ] `tests/file.rs` — test. Done when: test passes.\n\n\
 ## Deviations\n(none yet)\n";
 
@@ -372,5 +526,89 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn rejects_code_change_missing_anchors_or_brief() {
+        let no_anchors = PLAN.replace(
+            "## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n",
+            "",
+        );
+        let errors = validate_plan_contract(&no_anchors).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("Current anchors")),
+            "{errors:?}"
+        );
+        let no_brief = PLAN.replace(
+            "## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n",
+            "",
+        );
+        let errors = validate_plan_contract(&no_brief).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("Edit brief")), "{errors:?}");
+    }
+
+    #[test]
+    fn rejects_anchor_missing_observed_clause() {
+        let invalid = PLAN.replace("observed: file currently has no contract validator.", "");
+        assert!(
+            validate_plan_contract(&invalid)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("observed:"))
+        );
+    }
+
+    #[test]
+    fn rejects_brief_path_mismatch() {
+        let invalid = PLAN.replace("### `tests/file.rs`", "### `src/other.rs`");
+        assert!(
+            validate_plan_contract(&invalid)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.contains("does not match"))
+        );
+    }
+
+    #[test]
+    fn rejects_brief_missing_block() {
+        let invalid = PLAN.replace(
+            "### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n",
+            "",
+        );
+        let errors = validate_plan_contract(&invalid).unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("Edit brief")), "{errors:?}");
+    }
+
+    #[test]
+    fn rejects_analysis_plan_with_new_sections() {
+        let analysis = PLAN
+            .replace("code-change", "analysis")
+            .replace("## Implementation approach\nUse a pure function.\n\n", "")
+            .replace(
+                "## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n",
+                "",
+            )
+            .replace(
+                "## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n",
+                "",
+            )
+            .replace(
+                "## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n- [ ] `src/file.rs` — connect. Done when: call works.\n- [ ] `tests/file.rs` — test. Done when: test passes.\n\n",
+                "",
+            );
+        assert!(
+            validate_plan_contract(&analysis).is_ok(),
+            "{:?}",
+            validate_plan_contract(&analysis).unwrap_err()
+        );
+    }
+
+    #[test]
+    fn rejects_edit_to_brief_after_freeze() {
+        let edited = PLAN.replace(
+            "- Change: Add `validate_plan_contract` that checks plan shape.",
+            "- Change: Add `validate_contract` that checks plan shape.",
+        );
+        assert!(progress_only_delta(PLAN, &edited).is_err());
     }
 }

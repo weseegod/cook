@@ -1,76 +1,94 @@
-# BYOK: thêm / xóa custom model trong Grok
+# BYOK: Add or Remove a Custom Model in Cook
 
-Hướng dẫn tự quản lý model mang API key riêng (Bring Your Own Key).  
-Grok **đã hỗ trợ sẵn** — không cần build lại source.
+A guide to configuring models with your own API key (Bring Your Own Key). Cook
+supports this already; no source build is needed.
 
-| Mục | Giá trị |
-|-----|---------|
-| File config | `~/.cook/config.toml` |
-| Xem danh sách | `cook models` hoặc trong TUI: `/model` |
-| Đổi model | `/model <id>` hoặc `/m <id>` |
-| Docs chính thức | `~/.cook/docs/user-guide/11-custom-models.md` |
+| Item | Value |
+|---|---|
+| Config file | `~/.cook/config.toml` |
+| List models | `cook models` or `/model` in the TUI |
+| Change model | `/model <id>` or `/m <id>` |
+| Official guide | `~/.cook/docs/user-guide/11-custom-models.md` |
 
-> **Lưu ý bảo mật:** `config.toml` có thể chứa API key. Không commit file này lên git.  
-> Nên `chmod 600 ~/.cook/config.toml`. Prefer `env_key` thay vì ghi key thẳng vào file.
+> **Security:** `config.toml` may contain API keys. Do not commit it. Set its
+> permissions with `chmod 600 ~/.cook/config.toml`. Prefer `env_key` to storing
+> a key directly in the file.
 
 ---
 
-## 1. Cấu trúc trong `config.toml`
+## 1. `config.toml` structure
 
-Có 2 lớp:
+There are two layers:
 
-1. **`[model_providers.<provider>]`** — URL + key dùng chung cho cả provider  
-2. **`[model.<id>]`** — từng model; trỏ `model_provider` để kế thừa URL/key
+1. **`[model_providers.<provider>]`** — a shared URL and key for a provider.
+2. **`[model.<id>]`** — an individual model that can inherit the provider URL
+   and key through `model_provider`.
 
 ```toml
-# Provider (shared)
+# Shared provider settings
 [model_providers.my-provider]
 base_url = "https://api.example.com/v1"
-api_key = "sk-..."                    # hoặc dùng env_key bên dưới
-# env_key = "MY_PROVIDER_API_KEY"     # an toàn hơn api_key inline
+api_key = "sk-..."                    # or use env_key below
+# env_key = "MY_PROVIDER_API_KEY"     # safer than an inline api_key
 api_backend = "chat_completions"      # chat_completions | responses | messages
 
-# Một model thuộc provider đó
+# A model using that provider
 [model.my-model-id]
-model = "my-model-id"                 # id gửi lên API
-model_provider = "my-provider"        # khớp tên section provider
-name = "Display Name"                 # hiện trong /model
+model = "my-model-id"                 # ID sent to the API
+model_provider = "my-provider"        # must match the provider section name
+name = "Display Name"                 # shown in /model
 context_window = 128000
 max_completion_tokens = 8192
-supports_reasoning_effort = true      # optional
-supports_batch_api = false            # optional: Batch API eligibility, default false
-input = ["text", "image"]             # optional: ["text"] | ["text", "image"]
+supports_reasoning_effort = true       # optional
+supports_batch_api = false             # optional; Batch API eligibility, default false
+input = ["text", "image"]             # optional: ["text"] or ["text", "image"]
 ```
 
-### Field quan trọng
+### Important fields
 
-| Field | Ý nghĩa |
-|-------|---------|
-| Tên section `[model.<id>]` | **Catalog key** — dùng với `/model <id>` |
-| `model` | Id gửi lên API (có thể khác catalog key) |
-| `model_provider` | Kế thừa `base_url` / `api_key` / `api_backend` |
-| `base_url` | Có thể set trực tiếp trên model nếu không dùng provider |
-| `api_key` / `env_key` | Credential; `api_key` thắng `env_key` |
-| `api_backend` | `chat_completions` (OpenAI-compatible, default), `responses`, `messages` (Anthropic) |
-| `name` | Tên hiển thị trong picker |
-| `context_window` | Dùng cho auto-compact; nên set đúng provider |
-| `max_completion_tokens` | Max tokens mỗi response |
-| `supports_batch_api` | Opt-in cho `/goal_batch` trên model có Batch API kiểu OpenAI-compatible. Mặc định `false`; `/goal` và chat thường vẫn realtime |
-| `input` | Input model nhận được: `["text"]` (chỉ text) hoặc `["text", "image"]` (đọc được ảnh). Không khai báo = chưa biết → xử lý như nhận ảnh (an toàn, không regression). Xem mục 2.1 |
+| Field | Meaning |
+|---|---|
+| Section name `[model.<id>]` | **Catalog key** used with `/model <id>` |
+| `model` | ID sent to the API; it can differ from the catalog key |
+| `model_provider` | Inherits `base_url`, `api_key`, and `api_backend` |
+| `base_url` | Can be set directly on a model without a provider section |
+| `api_key` / `env_key` | Credentials; `api_key` takes precedence over `env_key` |
+| `api_backend` | `chat_completions` (OpenAI-compatible, default), `responses`, or `messages` (Anthropic) |
+| `name` | Display name in the model picker |
+| `context_window` | Used for automatic compaction; set it to the provider's actual limit |
+| `max_completion_tokens` | Maximum tokens per response |
+| `supports_batch_api` | Opt in to `/goal_batch` for models that support an OpenAI-compatible Batch API. Defaults to `false`; `/goal` and regular chat remain realtime |
+| `input` | Accepted modalities: `["text"]` or `["text", "image"]`. If omitted, image support is treated as unknown and the model is handled as image-capable for compatibility. See §2.1. |
 
-### `/goal_batch` (thử nghiệm)
+### `/goal_batch` (experimental)
 
-`/goal_batch <objective>` chạy **các lượt model của agent chính** qua Batch API: mỗi lượt gửi một job, đợi kết quả, xử lý tool call rồi gửi job tiếp theo. Planner/verifier và subagent có thể tiếp tục dùng realtime. `/goal <objective>` thông thường không đổi. Chỉ dùng model có `supports_batch_api = true`, `api_backend = "chat_completions"`, API key riêng và Batch API tương thích các endpoint `/v1/files` + `/v1/batches`. OpenAI dùng `https://api.openai.com/v1` tự động; provider khác cần truyền URL chính thức:
+`/goal_batch <objective>` sends **the main agent's model turns** through the
+Batch API. Each turn submits a job, waits for the result, handles tool calls,
+and then submits the next job. The planner, verifier, and subagents may still
+use realtime requests. Regular `/goal <objective>` is unchanged.
+
+Use only a model with `supports_batch_api = true`,
+`api_backend = "chat_completions"`, its own API key, and a compatible Batch
+API with `/v1/files` and `/v1/batches` endpoints. OpenAI uses
+`https://api.openai.com/v1` automatically. Other providers require their
+official Batch API URL:
 
 ```text
-/goal_batch sửa lỗi đăng nhập --base-url https://batch-api-<region>.xiaomimimo.com/v1
+/goal_batch fix the login bug --base-url https://batch-api-<region>.xiaomimimo.com/v1
 ```
 
-Không đưa API key vào lệnh. Với Xiaomi, lấy URL đúng vùng tài khoản từ Batch Inference console; URL realtime không thay thế được. Theo [OpenAI Docs](https://developers.openai.com/api/docs/guides/batch), job có thể mất tới 24 giờ; mỗi lượt phụ thuộc nhau nên tổng thời gian có thể dài hơn nhiều. Giữ session chạy trong lúc đợi. `/goal status`, `/goal pause`, `/goal resume`, `/goal clear` quản lý goal; chưa có khôi phục job batch sau khi thoát ứng dụng. Việc hủy lượt đang chạy sẽ gửi yêu cầu hủy job tới provider khi có thể.
+Never put an API key in the command. For Xiaomi, use the URL for the account's
+region from the Batch Inference console; the realtime URL does not work here.
+According to the [OpenAI Batch API guide](https://developers.openai.com/api/docs/guides/batch),
+a job can take up to 24 hours. Since each turn depends on the previous result,
+the full task can take much longer. Keep the session running while it waits.
+Use `/goal status`, `/goal pause`, `/goal resume`, and `/goal clear` to manage
+the goal. Batch jobs cannot currently be resumed after the application exits.
+Cancelling a running turn asks the provider to cancel the job when possible.
 
-### Key có dấu chấm (`.`)
+### Section names containing a period (`.`)
 
-Bọc tên section bằng quotes:
+Quote the section name:
 
 ```toml
 [model."mimo-v2.5-pro"]
@@ -79,15 +97,15 @@ model_provider = "xiaomi"
 name = "MiMo-V2.5-Pro"
 ```
 
-### API backend
+### API backends
 
 | `api_backend` | Protocol |
-|---------------|----------|
-| `chat_completions` | OpenAI Chat Completions (`/v1/chat/completions`) — đa số third-party |
+|---|---|
+| `chat_completions` | OpenAI Chat Completions (`/v1/chat/completions`), used by most third-party providers |
 | `responses` | OpenAI Responses (`/v1/responses`) |
-| `messages` | Anthropic Messages (`/v1/messages`) — thường kèm `extra_headers` |
+| `messages` | Anthropic Messages (`/v1/messages`), usually with `extra_headers` |
 
-Ví dụ Anthropic:
+Anthropic example:
 
 ```toml
 [model.claude-opus]
@@ -100,35 +118,37 @@ context_window = 200000
 extra_headers = { "anthropic-version" = "2023-06-01" }
 ```
 
-(Anthropic dùng header `x-api-key`; có thể set qua `extra_headers` hoặc theo docs Grok hiện tại.)
+Anthropic uses the `x-api-key` header. It can be set through `extra_headers`
+or configured according to the current Cook guide.
 
 ---
 
-## 2. Thêm model mới
+## 2. Add a model
 
-### 2.1 Model nào đọc được ảnh? (field `input`)
+### 2.1 Does the model accept images? (`input` field)
 
-Mỗi model khai báo input modalities qua field `input` trong `[model.<id>]`:
+Declare each model's input modalities in the `input` field under
+`[model.<id>]`:
 
 ```toml
-[model."mimo-v2.5-pro"]                # vision — đọc được ảnh
+[model."mimo-v2.5-pro"]                # vision model
 model = "mimo-v2.5-pro"
 model_provider = "xiaomi"
 input = ["text", "image"]
 
-[model."deepseek/deepseek-v4-flash"]  # text-only
+[model."deepseek/deepseek-v4-flash"]  # text-only model
 model = "deepseek-v4-flash"
 model_provider = "deepseek"
 input = ["text"]
 ```
 
-| Giá trị | Ý nghĩa |
-|---------|---------|
-| không khai báo | chưa biết → xử lý như nhận ảnh (mặc định an toàn) |
-| `input = ["text", "image"]` | model đọc được text + ảnh |
-| `input = ["text"]` | model chỉ nhận text |
+| Value | Meaning |
+|---|---|
+| Not set | Unknown; treated as image-capable by default |
+| `input = ["text", "image"]` | Accepts text and images |
+| `input = ["text"]` | Accepts text only |
 
-Kiểm tra nhanh bằng `cook models` — mỗi model in kèm modalities, vd.:
+Check with `cook models`; each model is listed with its modalities, for example:
 
 ```text
 Available models:
@@ -136,12 +156,12 @@ Available models:
   - mimo-v2.5-pro [text, image]
 ```
 
-Trong TUI, khi model text-only, gợi ý dán ảnh từ clipboard sẽ không hiện
-(model `inputModalities` thiếu `"image"`).
+For a text-only model, the TUI does not show the clipboard image-paste
+suggestion because the model's `inputModalities` does not include `"image"`.
 
-### Cách A — Thêm vào provider đã có
+### Option A — Add to an existing provider
 
-Ví dụ đã có `[model_providers.deepseek]`, chỉ cần thêm block model:
+If `[model_providers.deepseek]` already exists, add a model block:
 
 ```toml
 [model.deepseek-new-slug]
@@ -151,43 +171,43 @@ name = "DeepSeek New"
 context_window = 1000000
 max_completion_tokens = 64000
 supports_reasoning_effort = true
-supports_batch_api = false            # optional, mặc định false
+supports_batch_api = false             # optional; defaults to false
 ```
 
-### Cách B — Provider hoàn toàn mới
+### Option B — Add a new provider
 
-1. Thêm `[model_providers.<tên>]` (base_url + key).  
-2. Thêm một hoặc nhiều `[model.<id>]` với `model_provider = "<tên>"`.
+1. Add `[model_providers.<name>]` with its `base_url` and key.
+2. Add one or more `[model.<id>]` blocks with
+   `model_provider = "<name>"`.
 
-### Cách C — Model standalone (không dùng provider)
+### Option C — Add a standalone model
 
 ```toml
 [model.local-llama]
 model = "llama-3.1-70b"
 base_url = "http://localhost:11434/v1"
 name = "Local Llama"
-# không cần api_key nếu server local không auth
+# An API key is not required if the local server does not use authentication.
 context_window = 128000
 ```
 
-### Sau khi sửa
+### After editing
 
 ```bash
-# Kiểm tra list
-thanh models
+# List configured models
+cook models
 
-# Trong TUI đang chạy: Grok hot-reload config.toml;
-# nếu model chưa hiện → restart `cook`
+# The TUI hot-reloads config.toml. Restart `cook` if the model does not appear.
 ```
 
-Chọn model:
+Select a model:
 
 ```text
 /model deepseek-new-slug
 /m deepseek-new-slug
 ```
 
-Đặt default khi mở session:
+Set the default for new sessions:
 
 ```toml
 [models]
@@ -196,142 +216,147 @@ default = "deepseek-new-slug"
 
 ---
 
-## 3. Xóa model
+## 3. Remove a model
 
-### Chỉ xóa một model
+### Remove one model
 
-1. Mở `~/.cook/config.toml`.  
-2. Xóa **toàn bộ** block `[model.<id>]` … đến trước section kế tiếp.  
-3. Nếu `[models] default = "<id>"` trỏ model vừa xóa → đổi sang model còn tồn tại (vd. `grok-4.5`).  
-4. Chạy `cook models` để confirm id đã biến mất.
+1. Open `~/.cook/config.toml`.
+2. Remove the entire `[model.<id>]` block, through the line before the next section.
+3. If `[models] default = "<id>"` points to the removed model, change it to an existing model (for example, `grok-4.5`).
+4. Run `cook models` to confirm that the ID is gone.
 
-### Xóa cả provider
+### Remove a provider
 
-1. Xóa mọi `[model.*]` có `model_provider = "xxx"`.  
-2. Xóa `[model_providers.xxx]`.  
-3. Kiểm tra `default` không còn trỏ model đã xóa.
+1. Remove every `[model.*]` block whose `model_provider` is `"xxx"`.
+2. Remove `[model_providers.xxx]`.
+3. Check that `default` does not point to a removed model.
 
-### Không đụng
+### Leave these alone
 
-- `[cli]`, `[ui]`, `[marketplace]`, … — không liên quan model list.  
-- `~/.cook/models_cache.json` — cache model xAI remote, **không** phải nơi thêm BYOK.
-
----
-
-## 4. Checklist nhanh
-
-### Thêm
-
-- [ ] Biết `base_url` + model id API  
-- [ ] Chọn `api_backend` đúng protocol  
-- [ ] Thêm/reuse `[model_providers.*]` hoặc set `base_url` trên model  
-- [ ] Thêm `[model.<id>]` (quote nếu id có `.`)  
-- [ ] `cook models` thấy id mới  
-- [ ] `/model <id>` + gửi 1 tin nhắn test  
-
-### Xóa
-
-- [ ] Xóa block `[model.<id>]`  
-- [ ] Sửa `[models] default` nếu cần  
-- [ ] Xóa provider orphan nếu không còn model nào dùng  
-- [ ] `cook models` không còn id đó  
+- `[cli]`, `[ui]`, `[marketplace]`, and unrelated sections do not control the model list.
+- `~/.cook/models_cache.json` is the remote xAI model cache, **not** where BYOK models are added.
 
 ---
 
-## 5. Snapshot hiện tại (tham chiếu)
+## 4. Quick checklist
 
-Import từ `~/.pi/agent/models.json` (2026-07-31).  
-Chỉ liệt kê **id** — key nằm trong `config.toml`, không copy vào doc này.
+### Add
 
-| Provider section | Model catalog id | Ghi chú |
-|------------------|------------------|---------|
+- [ ] Know the provider `base_url` and API model ID.
+- [ ] Choose the correct `api_backend` protocol.
+- [ ] Add or reuse `[model_providers.*]`, or set `base_url` on the model.
+- [ ] Add `[model.<id>]`; quote the section name if the ID contains `.`.
+- [ ] Confirm the ID appears in `cook models`.
+- [ ] Select `/model <id>` and send a test message.
+
+### Remove
+
+- [ ] Remove the `[model.<id>]` block.
+- [ ] Update `[models] default` if needed.
+- [ ] Remove the provider if no models use it.
+- [ ] Confirm the ID no longer appears in `cook models`.
+
+---
+
+## 5. Current snapshot (reference)
+
+Imported from `~/.pi/agent/models.json` on 2026-07-31. Only model **IDs** are
+listed here; keys belong in `config.toml` and must not be copied into this
+document.
+
+| Provider section | Model catalog ID | Notes |
+|---|---|---|
 | `deepseek` | `deepseek-v4-flash` | OpenAI-compatible |
 | `deepseek` | `deepseek-v4-pro` | |
-| `xiaomi` | `mimo-v2.5-pro` | section: `[model."mimo-v2.5-pro"]` |
-| `xiaomi` | `mimo-v2.5` | section: `[model."mimo-v2.5"]` |
-| `moonshot` | `kimi-k2.6` | section: `[model."kimi-k2.6"]` |
+| `xiaomi` | `mimo-v2.5-pro` | Section: `[model."mimo-v2.5-pro"]` |
+| `xiaomi` | `mimo-v2.5` | Section: `[model."mimo-v2.5"]` |
+| `moonshot` | `kimi-k2.6` | Section: `[model."kimi-k2.6"]` |
 | `moonshot` | `kimi-k3` | |
 
-Provider URLs (không secret):
+Provider URLs (no secrets):
 
 | Provider | `base_url` |
-|----------|------------|
+|---|---|
 | deepseek | `https://api.deepseek.com` |
 | xiaomi | `https://api.xiaomimimo.com/v1` |
 | moonshot | `https://api.moonshot.ai/v1` |
 
-Model dùng `model_provider = "xiaomi"` tự gửi request theo định dạng MiMo: `thinking`,
-`max_completion_tokens`, và `reasoning_content` trong lịch sử assistant. Không cần
-`chat_completions_adapter`; nếu cấu hình cũ còn khóa đó, xóa nó. Với provider
-tùy chỉnh trỏ tới MiMo, có thể đặt
-`chat_completions_request_format = "deepseek_thinking"` trong `[model_providers.<id>]`.
+Models using `model_provider = "xiaomi"` automatically send requests in MiMo's
+format: `thinking`, `max_completion_tokens`, and `reasoning_content` in
+assistant history. `chat_completions_adapter` is not needed; remove it if an
+older config still has that key. For a custom provider pointing to MiMo, set
+`chat_completions_request_format = "deepseek_thinking"` in
+`[model_providers.<id>]` if needed.
 
-Backup lúc import: `~/.cook/config.toml.bak-20260731-221150`
+Backup created during import: `~/.cook/config.toml.bak-20260731-221150`
 
 ---
 
 ## 6. Override native Grok models
 
-Native xAI models (`grok-4.5`, v.v.) có sẵn trong catalog (từ `default_models.json`
-hoặc remote `/models-v2`). Bạn có thể **ghi đè** `context_window` và `input` mà
-không cần khai báo `base_url` / `api_key` — các field khác giữ nguyên từ catalog.
+Native xAI models such as `grok-4.5` are already in the catalog (from
+`default_models.json` or remote `/models-v2`). You can override
+`context_window` and `input` without setting `base_url` or `api_key`; all
+other fields retain their catalog values.
 
 ```toml
-# Catalog key phải khớp id dùng với /model (quote nếu có dấu chấm)
+# The catalog key must match the ID used with /model (quote IDs containing a period).
 [model."grok-4.5"]
 context_window = 300000
-input = ["text", "image"]   # hoặc ["text"] cho text-only
+input = ["text", "image"]   # or ["text"] for a text-only model
 
-# Tùy chọn: đặt làm default
+# Optional: make this the default
 [models]
 default = "grok-4.5"
 ```
 
-| Field | Ý nghĩa |
-|-------|---------|
-| `context_window` | Ngưỡng auto-compact (tokens). Ghi đè giá trị từ catalog/remote. |
-| `input` | Modalities model nhận: `["text"]` hoặc `["text", "image"]`. Alias: `input_modalities`. |
+| Field | Meaning |
+|---|---|
+| `context_window` | Automatic compaction threshold, in tokens; overrides the catalog or remote value. |
+| `input` | Accepted modalities: `["text"]` or `["text", "image"]`. Alias: `input_modalities`. |
 
-**Catalog key vs routing slug:** Tên section `[model.<id>]` là catalog key (dùng với
-`/model <id>`). Field `model = "..."` chỉ cần khi routing slug khác catalog key.
-Nếu managed config dùng key khác (vd. `[model.grok-build]` với `model = "grok-4.5"`),
-`context_window` có thể propagate sang entry cùng slug — nhưng an toàn nhất là override
-đúng catalog key bạn chọn trong `/model`.
+**Catalog key vs. routing slug:** The section name `[model.<id>]` is the
+catalog key used with `/model <id>`. Set `model = "..."` only when the routing
+slug differs from the catalog key. If managed config uses another key (for
+example, `[model.grok-build]` with `model = "grok-4.5"`), `context_window` may
+propagate to the entry with the same slug. The safest option is to override
+the exact catalog key selected in `/model`.
 
-**Kiểm tra:**
+**Check:**
 
 ```bash
-thanh models    # mỗi model in kèm modalities, vd. grok-4.5 [text, image]
+cook models    # Each model includes modalities, e.g. grok-4.5 [text, image]
 ```
 
-Trong TUI: `/model grok-4.5`. Sau khi sửa `config.toml`, catalog hot-reload khi file
-đổi; nếu model list chưa cập nhật, restart `cook`.
+In the TUI, select `/model grok-4.5`. The catalog hot-reloads after
+`config.toml` changes; restart `cook` if the list does not update.
 
-Danh sách field đầy đủ: `~/.cook/docs/user-guide/11-custom-models.md`.
+For the complete field list, see `~/.cook/docs/user-guide/11-custom-models.md`.
 
 ---
 
-## 7. Dual provider: native Grok + BYOK
+## 7. Native Grok and BYOK providers
 
-Grok is built for native xAI models first, but BYOK entries (DeepSeek, OpenAI-compatible, etc.) get automatic tuning:
+Cook is designed first for native xAI models. BYOK entries (DeepSeek,
+OpenAI-compatible providers, and others) receive automatic tuning:
 
-| Feature | Native Grok | BYOK (auto) |
-|---------|-------------|-------------|
-| `/goal` role models | Multi-model skeptics (default 3) | Same model for all roles; 1 skeptic |
-| Aux models (summary, evaluator) | May use internal slugs | Falls back to active session model (no 404 on BYOK URL) |
-| Images | Full vision | Undeclared custom `base_url` → text-only; set `input = ["text", "image"]` to opt in |
+| Feature | Native Grok | BYOK (automatic) |
+|---|---|---|
+| `/goal` role models | Multi-model skeptics (3 by default) | Same model for every role; 1 skeptic |
+| Auxiliary models (summary, evaluator) | May use internal slugs | Falls back to the active session model, avoiding a 404 from the BYOK URL |
+| Images | Full vision support | An undeclared custom `base_url` is treated as text-only; set `input = ["text", "image"]` to opt in |
 | Web search | Hosted backend search | Client tool only; configure `[model.<web_search>]` or use native Grok |
-| Compaction | Uses session model | Optional `[compactions] model = "<catalog-id>"` |
+| Compaction | Uses the session model | Optional `[compactions] model = "<catalog-id>"` |
 
 Override BYOK `/goal` defaults explicitly:
 
 ```toml
 [goal]
-use_current_model_only = false   # allow multi-model goal roles
+use_current_model_only = false   # Allow multiple models for goal roles.
 verifier_count = 3
 ```
 
-Or force single-model mode on native Grok:
+Or force single-model mode with native Grok:
 
 ```toml
 [goal]
@@ -339,7 +364,7 @@ use_current_model_only = true
 verifier_count = 1
 ```
 
-Optional cheaper compaction model:
+Optional lower-cost compaction model:
 
 ```toml
 [compactions]
@@ -350,52 +375,53 @@ model = "deepseek-v4-flash"
 
 ## 8. Troubleshooting
 
-| Triệu chứng | Việc kiểm tra |
-|-------------|----------------|
-| `cook models` không thấy model | Typo section TOML? Id có `.` đã quote chưa? Restart `cook` |
-| 401 / unauthorized | Sai `api_key` / `env_key`; env đã export chưa |
-| 404 model | Field `model` phải khớp id API của provider |
-| Request đi nhầm xAI | Model cần `base_url` hoặc `model_provider` trỏ provider đúng |
-| Tool / reasoning lỗi | Provider có thể cần header/compat đặc biệt — xem `11-custom-models.md` |
-| `400 unknown variant image_url, expected text` | Model khai báo `input = ["text"]` nhưng request vẫn kèm ảnh (ảnh dán cũ trong session). Kể từ fix này, Grok tự strip ảnh khỏi request khi model text-only — ảnh được thay bằng placeholder text, file path (nếu có) vẫn giữ để đọc qua `read_file`. Không cần làm gì thêm; nếu vẫn lỗi, kiểm tra `input = ["text"]` đã khai báo đúng chưa (`cook models` phải hiện `[text]`) |
-| Muốn ẩn model xAI | Dùng `[models] allowed_models` / `hidden_models` / `disabled_models` (glob) trong docs chính thức |
+| Symptom | Check |
+|---|---|
+| `cook models` does not show a model | Is the TOML section name misspelled? Is an ID containing `.` quoted? Restart `cook`. |
+| 401 / unauthorized | Check `api_key` / `env_key` and confirm the environment variable is set. |
+| 404 model | `model` must match the provider's API model ID. |
+| Request goes to xAI by mistake | Set `base_url` or point `model_provider` to the correct provider. |
+| Tool or reasoning error | The provider may need special headers or compatibility settings; see `11-custom-models.md`. |
+| `400 unknown variant image_url, expected text` | The model is configured with `input = ["text"]`, but the request still contains an image (for example, an image pasted earlier in the session). Cook strips images from requests to text-only models and replaces them with placeholder text; any file path is retained for `read_file`. If the error continues, confirm `input = ["text"]` is set and `cook models` shows `[text]`. |
+| Hide an xAI model | Use `[models] allowed_models`, `hidden_models`, or `disabled_models` (glob patterns) as described in the official guide. |
 
 ```bash
-# Xem model đang available
-thanh models
+# List available models
+cook models
 
-# Backup trước khi sửa tay
+# Back up the config before editing it by hand
 cp ~/.cook/config.toml ~/.cook/config.toml.bak-$(date +%Y%m%d)
 
-# Quyền file (có secret)
+# The file contains credentials
 chmod 600 ~/.cook/config.toml
 ```
 
 ---
 
-## 9. Credential: `api_key` vs `env_key`
+## 9. Credentials: `api_key` vs. `env_key`
 
 ```toml
-# Inline (tiện, kém an toàn hơn nếu file bị copy)
+# Inline; convenient, but less safe if the file is copied
 [model_providers.deepseek]
 api_key = "sk-..."
 
-# Qua env (khuyến nghị)
+# Environment variable; recommended
 [model_providers.deepseek]
 env_key = "DEEPSEEK_API_KEY"
 ```
 
 ```bash
 export DEEPSEEK_API_KEY="sk-..."
-# hoặc trong ~/.zshrc
+# Or add it to ~/.zshrc.
 ```
 
-Thứ tự resolve (tóm tắt): `api_key` model → `env_key` model → provider defaults → session / `XAI_API_KEY` (tùy context).
+Resolution order, in brief: model `api_key` → model `env_key` → provider
+defaults → session / `XAI_API_KEY`, depending on context.
 
 ---
 
-## 10. Liên kết
+## 10. Related guides
 
-- Official: `~/.cook/docs/user-guide/11-custom-models.md`
+- Official model configuration: `~/.cook/docs/user-guide/11-custom-models.md`
 - Slash commands: `~/.cook/docs/user-guide/04-slash-commands.md` (`/model`, `/effort`)
-- Config tổng: `~/.cook/docs/user-guide/05-configuration.md`
+- General configuration: `~/.cook/docs/user-guide/05-configuration.md`

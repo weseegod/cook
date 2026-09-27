@@ -2707,7 +2707,7 @@ impl SessionActor {
     }
     fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
         let mut anchor = format!(
-            "Implement the approved plan at {}. The plan file is the specification. Read it before editing. Do not infer requirements from the earlier conversation.",
+            "Implement the approved plan at {}. The plan file is the specification. Read it before editing. Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.",
             self.plan_mode.lock().plan_file_path().display()
         );
         if let Some(notes) = feedback.filter(|notes| !notes.trim().is_empty()) {
