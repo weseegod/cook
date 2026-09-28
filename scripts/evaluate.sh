@@ -5,14 +5,17 @@ usage() {
   cat <<'EOF'
 Usage: ./scripts/evaluate.sh --model NAME --task TEXT [--timeout SECONDS] [--agents cook,opencode,pi] [--thinking true|false] [--parallel=true|false]
 
-Compare installed agents against the local llama-server on port 8080.
+Compare installed agents against a local llama-server or an OpenAI-compatible API.
 Results: temp/evaluate/ (workdirs and logs), docs/audits/ (markdown report).
---model    model.sh launcher name, for example mimo26-9b (required)
+--model    model launcher name or model ID from ~/.cook/config.toml (required)
 --task     identical task text sent to each agent (required)
 --timeout  seconds allowed per agent (default: 1800)
 --agents   comma-separated subset in execution order (default: cook,opencode,pi)
 --thinking enable model reasoning for every agent (default: false)
 --parallel run selected agents together when the model has enough slots (default: false)
+
+API settings: EVAL_BASE_URL and EVAL_API_KEY override provider settings from
+~/.cook/config.toml. EVAL_PARALLEL_SLOTS sets the API concurrency limit.
 EOF
 }
 
@@ -32,21 +35,21 @@ while (($#)); do
 done
 [[ -n "$MODEL" && -n "$TASK" ]] || { usage >&2; exit 2; }
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { echo "--timeout must be positive seconds" >&2; exit 2; }
-[[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "invalid model name" >&2; exit 2; }
+[[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$MODEL" != *..* && "$MODEL" != *//* ]] || { echo "invalid model name" >&2; exit 2; }
 [[ "$THINKING" == true || "$THINKING" == false ]] || { echo "--thinking must be true or false" >&2; exit 2; }
 [[ "$PARALLEL" == true || "$PARALLEL" == false ]] || { echo "--parallel must be true or false" >&2; exit 2; }
 IFS=, read -r -a SELECTED <<<"$AGENTS"
 ((${#SELECTED[@]} > 0)) || { echo "--agents is empty" >&2; exit 2; }
-declare -A SEEN=()
+SEEN=" "
 for agent in "${SELECTED[@]}"; do
   case "$agent" in cook|opencode|pi) ;; *) echo "invalid agent: $agent" >&2; exit 2 ;; esac
-  [[ -z "${SEEN[$agent]:-}" ]] || { echo "duplicate agent: $agent" >&2; exit 2; }
-  SEEN[$agent]=1
+  case "$SEEN" in *" $agent "*) echo "duplicate agent: $agent" >&2; exit 2 ;; esac
+  SEEN+="$agent "
 done
 
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 MODEL_SH=${MODEL_SH:-/home/thanh/models/model.sh}
-BASE_URL=http://127.0.0.1:8080/v1
+BASE_URL=${EVAL_BASE_URL:-${BASE_URL:-}}
 COOK_BIN=${COOK_BIN:-cook}
 OPENCODE_BIN=${OPENCODE_BIN:-opencode}
 PI_BIN=${PI_BIN:-pi}
@@ -88,7 +91,8 @@ else
 fi
 
 DATE=$(date -u +%Y-%m-%d)
-REPORT_BASE="$ROOT/docs/audits/$DATE-agent-compare-$MODEL"
+REPORT_MODEL=${MODEL//\//-}
+REPORT_BASE="$ROOT/docs/audits/$DATE-agent-compare-$REPORT_MODEL"
 REPORT="$REPORT_BASE.md"
 if [[ -e "$REPORT" ]]; then
   REPORT="$REPORT_BASE-$(date -u +%H%M%S).md"

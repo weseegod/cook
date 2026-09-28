@@ -13,7 +13,7 @@ Goals let Cook keep working over multiple rounds. Describe the result you want, 
 /goal resume
 ```
 
-You can set a token budget with `--budget`, start from a plan file with `--plan path`, or use the current plan with `--from-plan`:
+You can set a positive token budget with `--budget`, start from a plan file with `--plan path`, or use the current plan-mode episode with `--from-plan`:
 
 ```text
 /goal Update the API client --budget 500000
@@ -21,7 +21,14 @@ You can set a token budget with `--budget`, start from a plan file with `--plan 
 /goal Update the API client --from-plan
 ```
 
-Use `/goal clear` to clear a finished or failed goal before starting another. Goals are available only when goal mode is enabled for the session. See [Plan Mode](19-plan-mode.md) and [Slash Commands](04-slash-commands.md#goal) for details.
+`--from-plan` reads the current episode file under the session's `plans/` directory; when no episode file exists, it uses the legacy session `plan.md`. A plan source skips the internal planner and becomes the verifier's baseline. You can also use `/goal_batch` to run main-agent rounds through a configured provider's asynchronous Batch API:
+
+```text
+/goal_batch Update the API client --budget 500000
+/goal_batch Update the API client --from-plan --base-url https://batch-api.example.com/v1
+```
+
+Batch mode requires a selected Chat Completions model configured with `supports_batch_api = true` and a provider API key. It shares `/goal` plan and budget options; `--base-url` is required for providers without the OpenAI default endpoint. Goal mode must be enabled. Use `/goal status`, `/goal pause`, or `/goal resume` to manage a run, and `/goal clear` to clear a finished or failed goal before starting another. The background-workflows setting selects the host-owned or legacy goal driver; see [Configuration](05-configuration.md#goal-mode-and-background-workflows), [Plan Mode](19-plan-mode.md), and [Slash Commands](04-slash-commands.md#goal) for details.
 
 ## Review a plan before coding
 

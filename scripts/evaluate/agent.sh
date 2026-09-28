@@ -1,6 +1,37 @@
 #!/usr/bin/env bash
 # Per-agent configuration, invocation, and artifacts.
 
+run_with_timeout() {
+  local seconds=$1
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --signal=TERM --kill-after=10 "$seconds" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout --signal=TERM --kill-after=10 "$seconds" "$@"
+  else
+    python3 - "$seconds" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+
+seconds = int(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    result = process.wait(timeout=seconds)
+except subprocess.TimeoutExpired:
+    os.killpg(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGKILL)
+        process.wait()
+    raise SystemExit(124)
+raise SystemExit(result)
+PY
+  fi
+}
+
 run_agent() {
   local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking
   if [[ "$THINKING" == true ]]; then effort=medium; pi_thinking=medium; else effort=none; pi_thinking=off; fi
@@ -13,9 +44,12 @@ run_agent() {
       export COOK_HOME
       MODEL="$MODEL" WIRE="$WIRE" BASE_URL="$BASE_URL" \
         CONTEXT_WINDOW="$CONTEXT_WINDOW" python3 - <<'PY' >"$dir/home/cook/config.toml"
+import json
 import os
-print(f'''[model."local/{os.environ["MODEL"]}"]
-model = "{os.environ["WIRE"]}"
+
+quote = json.dumps
+print(f'''[model.{quote("local/" + os.environ["MODEL"])}]
+model = {quote(os.environ["WIRE"])}
 model_provider = "local"
 name = "local evaluation"
 input = ["text"]
@@ -25,8 +59,8 @@ supports_reasoning_effort = true
 reasoning_efforts = ["none", "medium"]
 
 [model_providers.local]
-base_url = "{os.environ["BASE_URL"]}"
-api_key = "{os.environ["LLAMA_API_KEY"]}"
+base_url = {quote(os.environ["BASE_URL"])}
+api_key = {quote(os.environ["LLAMA_API_KEY"])}
 api_backend = "chat_completions"
 
 [privacy]
@@ -40,23 +74,25 @@ account = "evaluate@example.com"
 version = 2''')
 PY
       chmod 600 "$dir/home/cook/config.toml"
-      local -a cook_flags=()
-      if "$COOK_BIN" --help 2>/dev/null | grep -q -- '--no-auto-update'; then cook_flags+=(--no-auto-update); fi
-      cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 --reasoning-effort "$effort" "${cook_flags[@]}")
+      if "$COOK_BIN" --help 2>/dev/null | grep -q -- '--no-auto-update'; then
+        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 --reasoning-effort "$effort" --no-auto-update)
+      else
+        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 --reasoning-effort "$effort")
+      fi
       ;;
     opencode)
       mkdir -p "$dir/home/xdg-data" "$dir/home/xdg-state" "$dir/home/xdg-cache"
       OPENCODE_CONFIG_CONTENT=$(python3 - "$WIRE" "$BASE_URL" "$effort" <<'PY'
 import json,sys
 wire, base, effort=sys.argv[1:]
-print(json.dumps({"$schema":"https://opencode.ai/config.json", "provider":{"llama.cpp":{
-  "npm":"@ai-sdk/openai-compatible", "name":"Local llama.cpp", "options":{"baseURL":base,"apiKey":"{env:LLAMA_API_KEY}"},
+print(json.dumps({"$schema":"https://opencode.ai/config.json", "provider":{"evaluation":{
+  "npm":"@ai-sdk/openai-compatible", "name":"Evaluation API", "options":{"baseURL":base,"apiKey":"{env:LLAMA_API_KEY}"},
   "models":{wire:{"name":wire,"options":{"reasoningEffort":effort}}}}}}))
 PY
 )
       export OPENCODE_CONFIG_CONTENT OPENCODE_DISABLE_AUTOUPDATE=1
       export XDG_DATA_HOME="$dir/home/xdg-data" XDG_STATE_HOME="$dir/home/xdg-state" XDG_CACHE_HOME="$dir/home/xdg-cache"
-      cmd=("$OPENCODE_BIN" run --standalone --auto --format json --model "llama.cpp/$WIRE" "$PROMPT")
+      cmd=("$OPENCODE_BIN" run --standalone --auto --format json --model "evaluation/$WIRE" "$PROMPT")
       ;;
     pi)
       mkdir -p "$dir/home/pi"
@@ -74,12 +110,12 @@ PY
       ;;
   esac
   echo "Running $agent" >&2
-  start=$(date +%s.%N)
+  start=$(python3 -c 'import time; print(time.time())')
   set +e
-  (cd "$dir/workdir" && timeout --signal=TERM --kill-after=10 "$TIMEOUT" "${cmd[@]}") >"$dir/stdout.json" 2>"$dir/stderr.log"
+  (cd "$dir/workdir" && run_with_timeout "$TIMEOUT" "${cmd[@]}") >"$dir/stdout.json" 2>"$dir/stderr.log"
   rc=$?
   set -e
-  end=$(date +%s.%N)
+  end=$(python3 -c 'import time; print(time.time())')
   python3 - "$start" "$end" <<'PY' >"$dir/elapsed-seconds.txt"
 import sys
 print(max(0.0,float(sys.argv[2])-float(sys.argv[1])))

@@ -97,7 +97,7 @@ def cell(value):
 
 
 def render(run_dir, model, wire, task, agents, thinking, parallel):
-    lines = [f"# Local agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", f"Parallel: `{parallel}`", "",
+    lines = [f"# Agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", f"Parallel: `{parallel}`", "",
              "Task:", "", "> " + task.replace("|", "\\|").replace("\n", "\n> "), "",
              "| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Files | Bytes | Output tokens/s |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
