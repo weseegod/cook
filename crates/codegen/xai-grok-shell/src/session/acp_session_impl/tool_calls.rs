@@ -1539,6 +1539,9 @@ impl SessionActor {
                     crate::session::events::ToolOutcome::InvalidTool
                 }
             };
+            if tool_outcome.ran_successfully() {
+                execution_report.successful_calls += 1;
+            }
             if let Some(file) = &prepared.mcp_file {
                 file.complete(tool_outcome.ran_successfully());
             }

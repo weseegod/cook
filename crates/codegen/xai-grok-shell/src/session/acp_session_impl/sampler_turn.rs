@@ -1327,7 +1327,8 @@ impl SessionActor {
                     && error.model_metadata.as_ref().and_then(|m| m.context_window) == Some(cw)
                     && self.compaction.context_window_override.get().is_none()
                 {
-                    cfg.context_window = std::num::NonZeroU64::new(cw).unwrap_or(cfg.context_window);
+                    cfg.context_window =
+                        std::num::NonZeroU64::new(cw).unwrap_or(cfg.context_window);
                     self.chat_state_handle.update_sampling_config(cfg);
                 }
 
@@ -1943,6 +1944,15 @@ impl SessionActor {
     ) -> Result<SamplerTurnOutcome, acp::Error> {
         // Single funnel for every sampler-call failure.
         super::turn::record_failed_sample_on_turn_span(&tracing::Span::current(), info.kind);
+        if info.kind == xai_grok_sampler::SamplingErrorKind::ToolCallBudgetExceeded {
+            // The response was discarded before any tool ran. Its usage was not
+            // reported, and resampling the same request without feedback would
+            // repeat the oversized call.
+            self.mark_turn_usage_unaccounted();
+            return Ok(SamplerTurnOutcome::RecoverToolCallBudget {
+                message: info.message,
+            });
+        }
         match self
             .handle_sampling_failure(
                 info,

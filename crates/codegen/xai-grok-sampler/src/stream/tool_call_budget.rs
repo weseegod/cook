@@ -614,6 +614,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn calendar_sized_call_keeps_the_default_ceiling() {
+        let arguments = "x".repeat(32_828);
+        let events = collect(
+            vec![delta(0, Some("write_file"), Some(&arguments))],
+            ToolCallBudget::default(),
+        )
+        .await;
+        assert_eq!(DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES, 32 * 1024);
+        assert_eq!(
+            failed_kind(&events),
+            Some(crate::events::SamplingErrorKind::ToolCallBudgetExceeded)
+        );
+        let SamplingEvent::Failed { error, .. } = events.last().unwrap() else {
+            panic!("expected a budget failure");
+        };
+        assert!(error.message.contains("32828 bytes"), "{}", error.message);
+    }
+
+    #[tokio::test]
     async fn a_zero_limit_disables_its_check() {
         let budget = ToolCallBudget {
             max_argument_bytes: 0,

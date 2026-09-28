@@ -15,7 +15,7 @@ Audits this file follows:
 - [finance 024232](audits/2026-09-28-agent-compare-stealth-space-bunny-alpha-024232.md)
 - [batch summary](audits/2026-09-28-agent-compare-stealth-space-bunny-alpha-batch-summary.md)
 
-This document is the follow-up to those `scripts/evaluate.sh` runs of cook, opencode, and pi. Cook’s written files were often on disk when the process exited 1, and cache read was high on the runs that finished many rounds. v4 records why, corrects the design sentences v3 left stale, and sequences the next measured changes. It does not copy v2’s token tables. No product phase below has been executed. Phase 1 is the design-doc correction in the same change as this file.
+This document is the follow-up to those `scripts/evaluate.sh` runs of cook, opencode, and pi. Cook’s written files were often on disk when the process exited 1, and cache read was high on the runs that finished many rounds. v4 records why, corrects the design sentences v3 left stale, and sequences the next measured changes. It does not copy v2’s token tables. Phase 1 is the design-doc correction in the same change as this file. Phase 2 was implemented after that correction.
 
 Task correctness is the gate. A shorter prompt, a raised byte ceiling, or an exit code flipped because some file exists is a failed phase.
 
@@ -47,7 +47,7 @@ Cells are cook / opencode / pi, taken from the linked reports. Spark is local `s
 
 An earlier extraction left calendar’s opencode and pi cache-read cells blank and left finance out of a six-row table. The audit files have both. Finance is `temp/evaluate/20260928T020433Z`.
 
-**Per-call argument ceiling.** `DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES` is `32 * 1024` in `crates/codegen/xai-grok-sampler/src/stream/tool_call_budget.rs`. `guard_tool_call_budget` ends the attempt on the first breach. `SamplingError::ToolCallBudgetExceeded` is fatal in `crates/codegen/xai-grok-sampler/src/retry.rs`. The shell persists that ACP internal error and does not read the workdir. Calendar buffered 32,828 argument bytes and exited 1 with `index.html` and `style.css` on disk and `app.js` absent. The four model calls are that stopped attempt.
+**Per-call argument ceiling.** `DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES` is `32 * 1024` in `crates/codegen/xai-grok-sampler/src/stream/tool_call_budget.rs`. `guard_tool_call_budget` ends the attempt on the first breach. `SamplingError::ToolCallBudgetExceeded` is fatal in `crates/codegen/xai-grok-sampler/src/retry.rs`. At audit time, the shell persisted that ACP internal error and did not read the workdir. Calendar buffered 32,828 argument bytes and exited 1 with `index.html` and `style.css` on disk and `app.js` absent. The four model calls are that stopped attempt.
 
 **Turn limit.** Minesweeper (`temp/evaluate/20260928T005604Z`) and finance both cancelled with category `max_turns_reached` after 80 main-loop calls, the evaluate `--max-turns` limit. Finance `stderr.log` is `Error: max turns reached`, and `events.jsonl` records `cancellation_context.reason = max_turns_reached` with `limit: 80`. Both workdirs contain `index.html`, `style.css`, and `app.js`. Headless exit follows the cancellation. A directory listing is not an exit code.
 
@@ -91,9 +91,7 @@ Pass: those sentences match this file’s table; section 6.6 still begins `The s
 
 ## 5. Phase 2 — budget error stays inside the turn
 
-Not executed.
-
-Current path: `guard_tool_call_budget` ends the attempt; `SamplingError::ToolCallBudgetExceeded` is fatal in `retry.rs`; the shell persists the ACP internal error and does not inspect the workdir.
+Before this phase, `guard_tool_call_budget` ended the attempt; `SamplingError::ToolCallBudgetExceeded` was fatal in `retry.rs`; the shell persisted the ACP internal error and did not inspect the workdir. The sampler still stops the oversized attempt and retains the same byte ceiling. The shell now treats that failure as a recoverable step: it marks the missing sample usage as incomplete, puts the byte-count diagnostic and split-write instruction into the model's next request, and stays in the current turn. It permits three such recoveries. A final model answer without a later successfully executed tool call remains a non-zero turn error.
 
 Pass, before any live replay:
 
@@ -104,6 +102,8 @@ Pass, before any live replay:
 - Headless still exits non-zero when the turn has no further successful call and the requested file is absent. Calendar missing `app.js` must not become a pass by ignoring the missing file.
 
 A spark25 calendar replay is recorded when it is run. A model that still fails to write `app.js` is a failed cell, not a reason to raise the ceiling. Do not combine this phase with the summarizer change.
+
+**Result (2026-09-28).** The `32 * 1024` constant is unchanged. `cargo check -p xai-grok-shell -p xai-grok-sampler` passed. The sampler unit stream with a 32,828-byte call passed, and the shell recovery tests passed for feedback, requiring a later successful tool call, and stopping after three breaches. `cargo test -p xai-grok-shell --features test-support --test tool_call_budget_recovery` passed both mock-API ACP cases: an oversized `write` produced model-visible byte and split-write feedback, followed by a smaller `write` that created `app.js` in the same turn; an oversized `write` followed only by final text returned a turn error and left `app.js` absent. No live calendar replay was run because this host has neither the `spark25-4b` launcher nor `llama-server`. The replay cell remains unreported.
 
 ## 6. Phase 3 — evaluate report separates exit from files
 
@@ -139,4 +139,4 @@ Changing the wait, or setting `GROK_FOREGROUND_BLOCK_BUDGET_MS` for the harness,
 
 ## 9. Commit rule
 
-One phase, one commit, on `experiment/core-agent-token-optimization`, when that work starts. This docs change is phase 1 only. Phases 2–4 are specified and not started. If a later pass bar fails, revert that phase. Silence is not a pass. Do not copy another phase’s numbers forward.
+One phase, one commit, on `experiment/core-agent-token-optimization`, when that work starts. The original docs change is phase 1. Phase 2 is the budget-recovery change recorded above; phases 3–4 follow separately. If a later pass bar fails, revert that phase. Silence is not a pass. Do not copy another phase’s numbers forward.

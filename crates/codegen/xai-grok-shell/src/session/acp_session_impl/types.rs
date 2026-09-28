@@ -66,6 +66,11 @@ pub(crate) enum SamplerTurnOutcome {
         Box<xai_grok_sampler::InferenceLatencyStats>,
     ),
     CompactAndResubmit,
+    /// The sampler rejected an oversized tool call before execution. Feed the
+    /// diagnostic to the model and let it make a smaller call in this turn.
+    RecoverToolCallBudget {
+        message: String,
+    },
     /// Retry through the auth-retry schedule. Mirrors
     /// [`SamplerFailureRecovery::RefreshAuthAndResubmit`].
     RefreshAuthAndResubmit {
@@ -143,6 +148,7 @@ pub(crate) enum ToolLoop {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ToolExecutionReport {
     pub(crate) tool_parsing_errors: usize,
+    pub(crate) successful_calls: usize,
 }
 
 impl ToolExecutionReport {
