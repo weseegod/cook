@@ -939,6 +939,11 @@ pub(crate) struct SessionActor {
     /// All plan mode logic lives in `plan_mode.rs`; the session actor just calls into the tracker at the appropriate points.
     /// `Arc`-shared with the notification bridge so `PlanModeEntered` / `PlanModeExited` tool notifications can transition state directly.
     pub(crate) plan_mode: Arc<parking_lot::Mutex<crate::session::plan_mode::PlanModeTracker>>,
+    /// After an approved plan handoff, advertise the narrow implement tool surface until plan mode is re-entered or the user exits without approving.
+    pub(crate) implementing_approved_plan: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Last tool surface that received the write-finish reminder, so entry injects once.
+    pub(crate) last_write_finish_reminder_surface:
+        std::cell::Cell<Option<xai_grok_agent::ToolSurface>>,
     /// Whether goal mode (`/goal`) is enabled for this session (feature flag).
     pub(crate) goal_enabled: bool,
     pub(crate) background_workflows_enabled: bool,

@@ -29,7 +29,7 @@ mod tool_call_budget_recovery_tests {
     use super::{ToolCallBudgetRecovery, ToolExecutionReport, tool_call_budget_feedback};
 
     #[test]
-    fn breach_is_model_visible_and_requires_a_later_successful_call() {
+    fn breach_is_model_visible_and_requires_a_later_successful_mutation() {
         let mut recovery = ToolCallBudgetRecovery::default();
         assert!(recovery.on_breach());
         let feedback = tool_call_budget_feedback(
@@ -43,6 +43,15 @@ mod tool_call_budget_recovery_tests {
         assert!(recovery.needs_successful_call);
         recovery.on_execution(ToolExecutionReport {
             successful_calls: 1,
+            ..Default::default()
+        });
+        assert!(
+            recovery.needs_successful_call,
+            "a successful read must not clear budget debt"
+        );
+        recovery.on_execution(ToolExecutionReport {
+            successful_calls: 1,
+            successful_mutations: 1,
             ..Default::default()
         });
         assert!(!recovery.needs_successful_call);
@@ -66,7 +75,7 @@ impl ToolCallBudgetRecovery {
     }
 
     fn on_execution(&mut self, report: ToolExecutionReport) {
-        if report.successful_calls > 0 {
+        if report.successful_mutations > 0 {
             self.needs_successful_call = false;
         }
     }

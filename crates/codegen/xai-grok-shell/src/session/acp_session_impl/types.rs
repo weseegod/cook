@@ -149,6 +149,8 @@ pub(crate) enum ToolLoop {
 pub(crate) struct ToolExecutionReport {
     pub(crate) tool_parsing_errors: usize,
     pub(crate) successful_calls: usize,
+    /// Successful edit/write calls only; used by argument-budget recovery.
+    pub(crate) successful_mutations: usize,
 }
 
 impl ToolExecutionReport {

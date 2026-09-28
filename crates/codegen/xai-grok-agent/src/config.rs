@@ -282,6 +282,90 @@ fn grok_build_coding_keep_set() -> Vec<xai_grok_tools::registry::types::ToolConf
         wait_tasks_tool_config(),
     ]
 }
+
+/// Per-turn advertised tool surface for primary Grok Build agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolSurface {
+    /// Wide research surface while plan mode is active.
+    Plan,
+    /// Default coding surface before an approved plan handoff.
+    TaskOpen,
+    /// Narrow implement surface after an approved plan is handed off.
+    Implement,
+}
+
+/// Client-facing tool names for the implement surface: coding keep-set plus write.
+pub fn implement_tool_ids() -> &'static [&'static str] {
+    &[
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "write",
+        "list_dir",
+        "glob",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+    ]
+}
+
+/// Task-open surface: implement set plus plan enter/exit, ask-user, and web tools.
+pub fn task_open_tool_ids() -> &'static [&'static str] {
+    &[
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "write",
+        "list_dir",
+        "glob",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "ask_user_question",
+        "web_search",
+        "web_fetch",
+    ]
+}
+
+/// Plan surface: task-open set plus MCP discovery and the task tool.
+pub fn plan_tool_ids() -> &'static [&'static str] {
+    &[
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "write",
+        "list_dir",
+        "glob",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "ask_user_question",
+        "web_search",
+        "web_fetch",
+        "search_tool",
+        "use_tool",
+        "spawn_subagent",
+    ]
+}
+
+/// Allowlist of client-facing tool names for `surface`.
+pub fn tool_ids_for_surface(surface: ToolSurface) -> &'static [&'static str] {
+    match surface {
+        ToolSurface::Implement => implement_tool_ids(),
+        ToolSurface::TaskOpen => task_open_tool_ids(),
+        ToolSurface::Plan => plan_tool_ids(),
+    }
+}
 fn grok_build_core_toolset_with(
     _include_workflow: bool,
     _include_send_feedback: bool,
@@ -1137,7 +1221,7 @@ fn default_true() -> bool {
     true
 }
 /// Strip a tool id's `Namespace:` prefix, yielding its short name.
-pub(crate) fn short_tool_name(id: &str) -> &str {
+pub fn short_tool_name(id: &str) -> &str {
     id.rsplit(':').next().unwrap_or(id)
 }
 /// Whether an allow/deny `entry` refers to tool `id` (by full id or short name).
@@ -1604,6 +1688,37 @@ mod tests {
                 tools.iter().map(|t| t.id.as_str()).collect::<Vec<_>>()
             );
         }
+    }
+    #[test]
+    fn tool_surface_id_lists_nest_correctly() {
+        let implement = implement_tool_ids();
+        let task_open = task_open_tool_ids();
+        let plan = plan_tool_ids();
+        assert!(implement.contains(&"write"));
+        assert!(!implement.contains(&"enter_plan_mode"));
+        assert!(!implement.contains(&"web_search"));
+        assert!(!implement.contains(&"spawn_subagent"));
+        for id in implement {
+            assert!(task_open.contains(id), "task_open missing implement id {id}");
+            assert!(plan.contains(id), "plan missing implement id {id}");
+        }
+        for id in [
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "ask_user_question",
+            "web_search",
+            "web_fetch",
+        ] {
+            assert!(task_open.contains(&id), "task_open missing {id}");
+            assert!(plan.contains(&id), "plan missing {id}");
+        }
+        for id in ["search_tool", "use_tool", "spawn_subagent"] {
+            assert!(!task_open.contains(&id), "task_open must hide {id}");
+            assert!(plan.contains(&id), "plan missing {id}");
+        }
+        assert_eq!(tool_ids_for_surface(ToolSurface::Implement), implement);
+        assert_eq!(tool_ids_for_surface(ToolSurface::TaskOpen), task_open);
+        assert_eq!(tool_ids_for_surface(ToolSurface::Plan), plan);
     }
     #[test]
     fn presets_select_distinct_toolsets_by_size() {

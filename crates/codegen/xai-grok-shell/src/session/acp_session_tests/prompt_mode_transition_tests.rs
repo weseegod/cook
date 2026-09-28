@@ -51,28 +51,41 @@ fn names(defs: &[ToolDefinition]) -> Vec<&str> {
     defs.iter().map(|d| d.function.name.as_str()).collect()
 }
 #[test]
-fn cursor_filter_in_plan_mode_keeps_writes_and_shows_create_plan() {
+fn plan_surface_keeps_research_and_coding_tools() {
     let defs = vec![
-        fn_def("Read"),
-        fn_def("Grep"),
-        fn_def("Write"),
-        fn_def("StrReplace"),
-        fn_def("CreatePlan"),
-        fn_def("SwitchMode"),
-        fn_def("AskQuestion"),
+        fn_def("read_file"),
+        fn_def("grep"),
+        fn_def("write"),
+        fn_def("search_replace"),
+        fn_def("enter_plan_mode"),
+        fn_def("exit_plan_mode"),
+        fn_def("ask_user_question"),
+        fn_def("web_search"),
+        fn_def("web_fetch"),
+        fn_def("search_tool"),
+        fn_def("use_tool"),
+        fn_def("spawn_subagent"),
+        fn_def("workflow"),
+        fn_def("send_feedback"),
     ];
-    let filtered = filter_cursor_tools_by_plan_mode(defs, true);
+    let filtered = project_tools_for_surface(defs, xai_grok_agent::ToolSurface::Plan);
     let kept = names(&filtered);
-    assert!(kept.contains(&"Read"));
-    assert!(kept.contains(&"Grep"));
-    assert!(kept.contains(&"CreatePlan"));
-    assert!(kept.contains(&"SwitchMode"));
-    assert!(kept.contains(&"AskQuestion"));
-    assert!(kept.contains(&"Write"));
-    assert!(kept.contains(&"StrReplace"));
+    for name in [
+        "read_file",
+        "grep",
+        "write",
+        "web_search",
+        "search_tool",
+        "spawn_subagent",
+        "ask_user_question",
+    ] {
+        assert!(kept.contains(&name), "plan surface missing {name}; got {kept:?}");
+    }
+    assert!(!kept.contains(&"workflow"));
+    assert!(!kept.contains(&"send_feedback"));
 }
 #[test]
-fn cursor_filter_is_noop_for_non_cursor_tools() {
+fn task_open_hides_mcp_and_task_while_implement_is_narrow() {
     let defs = vec![
         fn_def("read_file"),
         fn_def("search_replace"),
@@ -80,11 +93,25 @@ fn cursor_filter_is_noop_for_non_cursor_tools() {
         fn_def("ask_user_question"),
         fn_def("enter_plan_mode"),
         fn_def("exit_plan_mode"),
+        fn_def("web_search"),
+        fn_def("search_tool"),
+        fn_def("use_tool"),
+        fn_def("spawn_subagent"),
     ];
-    let in_plan = filter_cursor_tools_by_plan_mode(defs.clone(), true);
-    let out_of_plan = filter_cursor_tools_by_plan_mode(defs.clone(), false);
-    assert_eq!(names(&in_plan).len(), defs.len());
-    assert_eq!(names(&out_of_plan).len(), defs.len());
+    let task_open = project_tools_for_surface(defs.clone(), xai_grok_agent::ToolSurface::TaskOpen);
+    let implement = project_tools_for_surface(defs, xai_grok_agent::ToolSurface::Implement);
+    let task_names = names(&task_open);
+    let impl_names = names(&implement);
+    assert!(task_names.contains(&"enter_plan_mode"));
+    assert!(task_names.contains(&"web_search"));
+    assert!(!task_names.contains(&"search_tool"));
+    assert!(!task_names.contains(&"spawn_subagent"));
+    assert!(impl_names.contains(&"write"));
+    assert!(impl_names.contains(&"search_replace"));
+    assert!(!impl_names.contains(&"enter_plan_mode"));
+    assert!(!impl_names.contains(&"ask_user_question"));
+    assert!(!impl_names.contains(&"web_search"));
+    assert!(!impl_names.contains(&"spawn_subagent"));
 }
 /// Pins the `reconcile_plan_mode_with_prompt` transitions: Plan enters Pending, re-entry is idempotent, and non-plan modes exit cleanly.
 #[test]

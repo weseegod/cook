@@ -211,6 +211,8 @@ async fn create_test_actor(
                 "/tmp/test-session",
             )),
         )),
+        implementing_approved_plan: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        last_write_finish_reminder_surface: std::cell::Cell::new(None),
         goal_enabled: false,
         background_workflows_enabled: false,
         goal_harness_enabled: std::sync::atomic::AtomicBool::new(false),

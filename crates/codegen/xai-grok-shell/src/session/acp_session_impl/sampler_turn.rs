@@ -437,8 +437,10 @@ impl SessionActor {
             bridge.tool_definitions_builtins_only().await
         };
 
-        let plan_active = self.plan_mode.lock().is_active();
-        filter_cursor_tools_by_plan_mode(defs, plan_active)
+        if !self.projects_tool_surface() {
+            return defs;
+        }
+        project_tools_for_surface(defs, self.current_tool_surface())
     }
 
     /// Messages-backed models never see `use_tool`'s file forms: the Anthropic Messages API rejects the schema's

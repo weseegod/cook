@@ -1435,7 +1435,7 @@ impl SessionActor {
                     .await
                     .into_iter()
                     .collect();
-                let skills = if self.rebuild_spec.skills_config.inject {
+                let skills = if self.should_inject_skill_catalog() {
                     self.slash_skills_for_resolve().await
                 } else {
                     Vec::new()
@@ -1738,7 +1738,7 @@ impl SessionActor {
                     .map(|b| b as &dyn xai_grok_tools::types::memory_backend::MemoryBackend)
             };
         let suppress_state_reminder = false;
-        let workflow_listing = if self.rebuild_spec.skills_config.inject {
+        let workflow_listing = if self.should_inject_skill_catalog() {
             self.workflow_listing_for_prompt()
         } else {
             None

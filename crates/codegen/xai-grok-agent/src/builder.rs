@@ -993,7 +993,12 @@ impl AgentBuilder {
             "task"
         );
         let mut task_stripped = false;
-        if !self.subagents_enabled {
+        // Primary Grok Build keeps the task tool registered when subagents exist so plan-mode
+        // projection can advertise explore. Session projection hides it outside Plan unless the
+        // subagents flag is on (TaskOpen allowlist omits it). Non-primary still respects the flag.
+        let register_task_despite_flag = self.prompt_audience == PromptAudience::Primary
+            && is_parent_grok_build;
+        if !self.subagents_enabled && !register_task_despite_flag {
             tool_config.tools.retain(|tc| tc.id != task_tool_id);
             task_stripped = true;
         } else {
@@ -2158,11 +2163,13 @@ mod tests {
                 "[{label}] ask_user_question presence should match ask_user_question_enabled={ask_user}; got tools: {names:?}"
             );
             let has_task = names.contains(&"spawn_subagent");
-            assert_eq!(
-                has_task, *subagents,
-                "[{label}] spawn_subagent presence should match subagents_enabled={subagents}; got tools: {names:?}"
-            );
+            // Primary Grok Build keeps task registered for plan-surface projection even when
+            // subagents_enabled is false; the session projector hides it outside Plan.
             if *subagents {
+                assert!(
+                    has_task,
+                    "[{label}] spawn_subagent must be present when subagents_enabled; got tools: {names:?}"
+                );
                 let task = spawn_subagent_description(&defs);
                 assert!(
                     task.contains("resume_from"),
@@ -2171,6 +2178,16 @@ mod tests {
                 assert!(
                     !task.contains("Agent types:"),
                     "[{label}] task description must not list agent types: {task}"
+                );
+            } else if label.contains("grok-build") {
+                assert!(
+                    has_task,
+                    "[{label}] primary grok-build keeps task for plan projection; got {names:?}"
+                );
+            } else {
+                assert!(
+                    !has_task,
+                    "[{label}] spawn_subagent must be absent when subagents_enabled=false; got {names:?}"
                 );
             }
             assert_eq!(
@@ -2384,8 +2401,8 @@ mod tests {
             "subagents_enabled=false must strip workflow even when workflows are on: {names:?}"
         );
         assert!(
-            !names.iter().any(|name| name == "spawn_subagent" || name == "task"),
-            "subagents_enabled=false must strip task; got {names:?}"
+            names.iter().any(|name| name == "spawn_subagent"),
+            "primary grok-build keeps task registered for plan projection when subagents exist: {names:?}"
         );
     }
 
@@ -2644,7 +2661,6 @@ mod tests {
             );
         }
         for banned in [
-            "spawn_subagent",
             "scheduler_create",
             "monitor",
             "workflow",
@@ -2660,6 +2676,12 @@ mod tests {
                 "default keep-set must omit {banned}; got {names:?}"
             );
         }
+        // Task stays registered on the primary agent so plan-mode projection can show explore;
+        // TaskOpen/Implement surfaces hide it.
+        assert!(
+            names.contains("spawn_subagent"),
+            "primary plan agent registers task for plan projection; got {names:?}"
+        );
     }
     #[tokio::test]
     async fn opt_in_flags_restore_specialized_tools() {

@@ -71,7 +71,12 @@ impl SessionActor {
             )
         });
         let effects = bridge.apply_pending_skill_update().await;
-        let inject_catalog = self.rebuild_spec.skills_config.inject;
+        let surface = self.current_tool_surface();
+        let inject_catalog = match surface {
+            xai_grok_agent::ToolSurface::Plan => true,
+            xai_grok_agent::ToolSurface::Implement => false,
+            xai_grok_agent::ToolSurface::TaskOpen => self.rebuild_spec.skills_config.inject,
+        };
         let skill_text = if inject_catalog {
             effects.as_ref().and_then(|update| {
                 if is_cursor && update.kind == SkillUpdateKind::BaselineChange {
@@ -96,7 +101,31 @@ impl SessionActor {
                 "<{tag}>\n{body}\n</{tag}>"
             )));
         }
+        self.maybe_inject_write_finish_reminder(conversation, surface);
         effects
+    }
+
+    /// Once per TaskOpen/Implement entry: do not end the turn after a rejected oversized write.
+    pub(super) fn maybe_inject_write_finish_reminder(
+        &self,
+        conversation: &mut Vec<ConversationItem>,
+        surface: xai_grok_agent::ToolSurface,
+    ) {
+        use xai_grok_agent::ToolSurface;
+        if !self.projects_tool_surface() {
+            return;
+        }
+        if !matches!(surface, ToolSurface::TaskOpen | ToolSurface::Implement) {
+            return;
+        }
+        if self.last_write_finish_reminder_surface.get() == Some(surface) {
+            return;
+        }
+        self.last_write_finish_reminder_surface.set(Some(surface));
+        let tag = self.reminder_wrapper_tag();
+        conversation.push(ConversationItem::system_reminder(format!(
+            "<{tag}>\nDo not end the turn on a promise to create a file. After a rejected oversized write, make a smaller edit or write next — a later read does not finish the work.\n</{tag}>"
+        )));
     }
     /// The one prefix build every path uses: `full_wait` (delivery-tools sessions) waits for the handshakes (bounded) first,
     /// otherwise the prefix waits only the startup grace. Callers that defer the build pass the same flag to

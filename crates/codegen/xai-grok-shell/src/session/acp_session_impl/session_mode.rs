@@ -1,5 +1,7 @@
 //! Session/plan-mode concern for `SessionActor` (`handle_session_mode`, plan-mode reminders and persistence, active-template detection).
 use super::*;
+use xai_grok_agent::{ToolSurface, short_tool_name, tool_ids_for_surface};
+
 pub(super) fn prompt_mode_from_session_mode_id(session_mode_id: &acp::SessionModeId) -> PromptMode {
     use xai_grok_tools::types::SessionMode;
     match SessionMode::from_id(session_mode_id.0.as_ref()) {
@@ -19,14 +21,83 @@ pub(super) fn session_mode_id_from_prompt_mode(prompt_mode: PromptMode) -> acp::
     };
     acp::SessionModeId::new(mode.as_id())
 }
-/// Pass-through twin: no toolset in this build carries a plan-gated tool.
-pub(super) fn filter_cursor_tools_by_plan_mode(
+
+/// Project registered tool definitions onto the active [`ToolSurface`] allowlist.
+pub(crate) fn project_tools_for_surface(
     defs: Vec<ToolDefinition>,
-    _plan_active: bool,
+    surface: ToolSurface,
 ) -> Vec<ToolDefinition> {
-    defs
+    let allowed = tool_ids_for_surface(surface);
+    defs.into_iter()
+        .filter(|def| {
+            let name = short_tool_name(&def.function.name);
+            allowed.iter().any(|id| *id == name)
+        })
+        .collect()
 }
+
+/// Legacy name kept for call sites/tests; forwards to [`project_tools_for_surface`].
+pub(crate) fn filter_cursor_tools_by_plan_mode(
+    defs: Vec<ToolDefinition>,
+    plan_active: bool,
+) -> Vec<ToolDefinition> {
+    let surface = if plan_active {
+        ToolSurface::Plan
+    } else {
+        ToolSurface::TaskOpen
+    };
+    project_tools_for_surface(defs, surface)
+}
+
 impl SessionActor {
+    /// Resolve the per-turn tool surface for primary Grok Build agents.
+    pub(super) fn current_tool_surface(&self) -> ToolSurface {
+        if self.plan_mode.lock().is_active() {
+            ToolSurface::Plan
+        } else if self
+            .implementing_approved_plan
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            ToolSurface::Implement
+        } else {
+            ToolSurface::TaskOpen
+        }
+    }
+
+    /// Whether this session should project tools onto Plan/TaskOpen/Implement allowlists.
+    pub(super) fn projects_tool_surface(&self) -> bool {
+        if self.startup_hints.is_subagent {
+            return false;
+        }
+        let agent = self.agent.borrow();
+        matches!(
+            agent.definition().name.as_str(),
+            "grok-build"
+                | "grok-build-plan"
+                | "grok-build-plan-no-subagents"
+                | "grok-build-ask-user"
+                | "grok-build-concise"
+        )
+    }
+
+    pub(super) fn set_implementing_approved_plan(&self, value: bool) {
+        self.implementing_approved_plan
+            .store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(super) fn clear_implementing_approved_plan(&self) {
+        self.set_implementing_approved_plan(false);
+    }
+
+    /// Skill catalog follows Plan/TaskOpen/Implement rules (Plan always, Implement never, TaskOpen by flag).
+    pub(super) fn should_inject_skill_catalog(&self) -> bool {
+        match self.current_tool_surface() {
+            xai_grok_agent::ToolSurface::Plan => true,
+            xai_grok_agent::ToolSurface::Implement => false,
+            xai_grok_agent::ToolSurface::TaskOpen => self.rebuild_spec.skills_config.inject,
+        }
+    }
+
     pub(super) fn apply_prompt_modes_to_snapshot(&self, snapshot: &mut TurnDeltaSnapshot) {
         snapshot.start_prompt_mode = Some(self.turn_start_prompt_mode.lock().to_string());
         snapshot.end_prompt_mode = Some(self.turn_prompt_mode.lock().to_string());
@@ -55,6 +126,8 @@ impl SessionActor {
         if mode.is_plan() {
             let entered = self.plan_mode.lock().enter_pending();
             if entered {
+                self.clear_implementing_approved_plan();
+                self.last_write_finish_reminder_surface.set(None);
                 if let Some(goal) = self.goal_tracker.lock().snapshot_mut() {
                     if let Some(path) = &goal.plan_file {
                         crate::session::plan_contract::unregister_frozen_plan(path);
@@ -114,6 +187,8 @@ impl SessionActor {
         if was_plan {
             let turn_in_flight = self.state.lock().await.running_task.is_some();
             self.plan_mode.lock().user_exit(turn_in_flight);
+            // User left plan without approving — stay on TaskOpen, not Implement.
+            self.clear_implementing_approved_plan();
             self.persist_plan_mode_state();
             self.sync_plan_file_path_resource().await;
             self.enqueue_current_mode_update(session_mode_id.clone());

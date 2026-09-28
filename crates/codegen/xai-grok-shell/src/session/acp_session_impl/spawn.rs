@@ -753,6 +753,7 @@ pub(crate) async fn spawn_session_actor(
     let queue_exit_reminder_on_approved_exit = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let emit_local_background_tasks = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let background_tasks_snapshot_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let implementing_approved_plan = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let tools_notification_handle = crate::tools::notification_bridge::spawn_notification_bridge(
         crate::tools::notification_bridge::NotificationBridgeConfig {
             gateway: gateway.clone(),
@@ -765,6 +766,7 @@ pub(crate) async fn spawn_session_actor(
             persistence: persistence.clone(),
             incremental_bash_output,
             plan_mode: plan_mode.clone(),
+            implementing_approved_plan: implementing_approved_plan.clone(),
             current_prompt_mode: current_prompt_mode.clone(),
             turn_prompt_mode: turn_prompt_mode.clone(),
             session_cmd_tx: cmd_tx.clone(),
@@ -2050,6 +2052,8 @@ pub(crate) async fn spawn_session_actor(
         turn_start_prompt_mode: parking_lot::Mutex::new(restored_prompt_mode),
         turn_prompt_mode: turn_prompt_mode.clone(),
         plan_mode: plan_mode.clone(),
+        implementing_approved_plan: implementing_approved_plan.clone(),
+        last_write_finish_reminder_surface: std::cell::Cell::new(None),
         goal_enabled,
         background_workflows_enabled,
         goal_harness_enabled: std::sync::atomic::AtomicBool::new(if background_workflows_enabled {

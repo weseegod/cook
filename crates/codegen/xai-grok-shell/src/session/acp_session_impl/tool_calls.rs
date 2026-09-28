@@ -1541,6 +1541,21 @@ impl SessionActor {
             };
             if tool_outcome.ran_successfully() {
                 execution_report.successful_calls += 1;
+                let is_mutation = self
+                    .agent
+                    .borrow()
+                    .tool_bridge()
+                    .tool_kind(&prepared.tool_name)
+                    .is_some_and(|k| {
+                        matches!(
+                            k,
+                            xai_grok_tools::types::tool::ToolKind::Edit
+                                | xai_grok_tools::types::tool::ToolKind::Write
+                        )
+                    });
+                if is_mutation {
+                    execution_report.successful_mutations += 1;
+                }
             }
             if let Some(file) = &prepared.mcp_file {
                 file.complete(tool_outcome.ran_successfully());
@@ -2457,6 +2472,7 @@ impl SessionActor {
                     PlanApprovalOutcome::Abandoned => {
                         tracing::info!("[exit_plan_mode] user abandoned plan — deactivating");
                         self.leave_plan_mode_to_default().await;
+                        self.clear_implementing_approved_plan();
                         let message = format!(
                             "The user chose to abandon the plan entirely (via the Abandon option in the plan approval dialog). Plan mode has been disabled. Do not call {} again unless the user explicitly asks to re-enter plan mode.",
                             call.function.name
@@ -2499,9 +2515,11 @@ impl SessionActor {
                     }
                     PlanApprovalOutcome::Approved => {
                         tracing::info!("[exit_plan_mode] user approved — executing tool");
+                        self.set_implementing_approved_plan(true);
                     }
                     PlanApprovalOutcome::ApprovedClean => {
                         self.leave_plan_mode_to_default().await;
+                        self.set_implementing_approved_plan(true);
                         if let Err(error) = self.plan_mode.lock().freeze_current_plan() {
                             return self
                                 .complete_exit_plan_intercept(
@@ -2526,6 +2544,7 @@ impl SessionActor {
                             return Ok(Err(ToolLoop::Continue));
                         }
                         self.leave_plan_mode_to_default().await;
+                        self.set_implementing_approved_plan(true);
                         let Some(plan_body) = plan_content.filter(|s| !s.trim().is_empty()) else {
                             unreachable!("the plan contract gate requires nonempty content");
                         };
@@ -2852,6 +2871,7 @@ impl SessionActor {
             ResumeAction::LeaveOnly => {
                 tracing::info!("[exit_plan_mode] resume: user abandoned plan");
                 self.leave_plan_mode_to_default().await;
+                self.clear_implementing_approved_plan();
             }
             ResumeAction::StayAndRevise(text) => {
                 tracing::info!("[exit_plan_mode] resume: user requested changes");
@@ -2861,12 +2881,14 @@ impl SessionActor {
             ResumeAction::LeaveAndImplement => {
                 tracing::info!("[exit_plan_mode] resume: user approved plan");
                 self.leave_plan_mode_to_default().await;
+                self.set_implementing_approved_plan(true);
                 let message = self.plan_approved_implement_message();
                 self.start_resume_turn(message, PromptMode::Agent, completion_tx)
                     .await;
             }
             ResumeAction::LeaveAndImplementClean => {
                 self.leave_plan_mode_to_default().await;
+                self.set_implementing_approved_plan(true);
                 let freeze_result = { self.plan_mode.lock().freeze_current_plan() };
                 if let Err(error) = freeze_result {
                     self.start_resume_turn(
@@ -2899,6 +2921,7 @@ impl SessionActor {
                     return;
                 }
                 self.leave_plan_mode_to_default().await;
+                self.set_implementing_approved_plan(true);
                 let objective = plan_title_or_default(&plan_body);
                 let conversation = self.chat_state_handle.get_conversation().await;
                 let items = Self::clean_context_prefix(&conversation);

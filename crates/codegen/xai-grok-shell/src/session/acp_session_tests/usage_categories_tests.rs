@@ -155,6 +155,7 @@ async fn baseline_reminder_lists_workflows_under_skills() {
             let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
             let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
             actor.background_workflows_enabled = true;
+            assert!(actor.plan_mode.lock().activate_from_tool());
             seed_skills(&actor, &["commit"]).await;
             let mut conversation = vec![ConversationItem::system("sys")];
             actor
@@ -195,6 +196,7 @@ async fn baseline_reminder_lists_workflows_when_there_are_no_skills() {
             let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
             let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
             actor.background_workflows_enabled = true;
+            assert!(actor.plan_mode.lock().activate_from_tool());
             let mut conversation = vec![ConversationItem::system("sys")];
             actor
                 .inject_baseline_skill_reminder(&mut conversation)
@@ -226,6 +228,8 @@ async fn subagent_session_does_not_list_workflows() {
             let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
             actor.background_workflows_enabled = true;
             actor.startup_hints.is_subagent = true;
+            // Plan surface injects the skill catalog even when SkillsConfig.inject is false.
+            assert!(actor.plan_mode.lock().activate_from_tool());
             seed_skills(&actor, &["commit"]).await;
             let mut conversation = vec![ConversationItem::system("sys")];
             actor
