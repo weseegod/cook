@@ -23,11 +23,11 @@ Task correctness is the gate. A shorter prompt, a raised byte ceiling, or an exi
 
 Correct the stale design sentences and record the audit mechanisms in section 8.5 of the design doc. Do not change pruning defaults, the 32×1024 ceiling, catalog size, side-call gates, or the evaluate exit code in that same edit.
 
-Later product work, in order, and only as its own phase:
+Product work, in order, and only as its own phase:
 
 1. An oversized tool-call argument becomes a model-visible error, and the attempt is not ended as a fatal ACP internal error.
 2. The evaluate report lists regular files in the workdir and, when `stdout.json` has no usage, reads the session `usage.json` without inventing zeros. Process exit stays the process exit.
-3. Confirm which runtime flag produced the 15-second background on the medium transcript before any wait change.
+3. Confirm which runtime flag produced the 15-second background on the medium transcript before any wait change. Phase 4 records the resolved flag below.
 
 A catalog cut of about 1–2k, a compaction-policy change, and side-call gates stay later. They are not opened in this file. Named skills still have to surface. The exit-0 audits still have to pass. Estimated tool-schema tokens on the medium run were 475,107 against 1,092,279 main-loop cache-read tokens, so schema size is not that gap. Reminders are 118 tokens per measured request. The session-title call is one stealth request and 140 cache-read tokens.
 
@@ -55,7 +55,7 @@ An earlier extraction left calendar’s opencode and pi cache-read cells blank a
 
 **Single-turn retention.** Pruning runs only when tracked tokens exceed half the context window. `keep_last_n_turns` defaults to 3. Step-round pruning defaults to 0. Auto-compact is 85%. Stealth windows on these runs are 300,000 and spark is 81,920, so neither threshold fired. Later samples resend the transcript. On the medium run the re-sent assistant text and tool results were 293,461 and 101,137 tokens. Pi compacts only above the window minus 16,384, so the same short sessions stay uncompacted there too. Measured Cook usage files show compaction meta at zero and no compact purpose. The gap is extra rounds over a retained transcript.
 
-**Foreground shell.** `FOREGROUND_BLOCK_BUDGET` is 15 seconds in `crates/codegen/xai-grok-tools/src/computer/local/terminal.rs`. A foreground command still running at that limit returns a task id, and the next sample collects it with `get_command_or_subagent_output`. The medium transcript shows a Playwright command moved to the background at that limit. `BashParams::default` sets `auto_background_on_timeout` to false. The 15-second behavior is the rendered tool schema, the constant, and the session tool result. A non-test assignment of that flag was not located. Phase 4 exists to name which of those the session used.
+**Foreground shell.** `FOREGROUND_BLOCK_BUDGET` is 15 seconds in `crates/codegen/xai-grok-tools/src/computer/local/terminal.rs`. A foreground command still running at that limit returns a task id, and the next sample collects it with `get_command_or_subagent_output`. The medium transcript shows a Playwright command moved to the background at that limit. `BashParams::default` sets `auto_background_on_timeout` to false, but `BashToolConfig::to_bash_params_json` resolves the session setting from local config, remote settings, then `true`. The 15-second behavior is the rendered tool schema, the constant, and the session tool result. Phase 4 names the resolved flag and its evidence below.
 
 **What is too small to be the gap.** Injected reminders are 118 tokens per measured request. System tokens per measured request are 2,190. Session title adds one stealth call and 140 cache-read tokens, is absent on the spark success, and sits outside the audit’s model-call column. On one no-tool local session, system prompt plus tool schemas were 12,270 of 15,671 billed input tokens, and schemas alone were 10,956. That is one session and a shape, not a constant. Component buckets are bytes/4 estimates and do not sum to billed input. Compaction, recap, memory, and other side calls fold usage without composition, because components are recorded for main-loop calls only.
 
@@ -67,7 +67,7 @@ No report defines a composite winner. File count is not behavior. Pi’s easy ru
 - v2 phases 1–7 and v3 phases 1–4. Pins stay opt-in. `read_file_max_output_bytes` stays at default `0`. Identical-call stationarity stays at the v3 constants. `supports_batch_api` stays off the coding loop.
 - `DEFAULT_MAX_PER_CALL_ARGUMENT_BYTES = 32 * 1024` until phase 2’s pass bar. Phase 2 does not raise it.
 - The prune gate at half the window, `keep_last_n_turns = 3`, step-round pruning off, and auto-compact at 85%.
-- `FOREGROUND_BLOCK_BUDGET` at 15 seconds until phase 4 names the flag the eval session actually used.
+- `FOREGROUND_BLOCK_BUDGET` at 15 seconds. Phase 4 names the flag; no wait change is included.
 - Evaluate process exit. A workdir that contains `index.html` does not become exit 0. Calendar was missing `app.js`. Finance had all three files and still exited 1.
 - Section 6.6 of the design doc.
 - The per-model context window. No Batch API on the coding loop.
@@ -119,11 +119,13 @@ Pass: a fixture workdir with no `.git`, containing `index.html`, `style.css`, an
 
 ## 7. Phase 4 — name the 15-second shell flag
 
-Not executed. No constant change in this phase.
+Completed as an audit. No constant change in this phase.
 
 Read the medium Cook transcript and the tool schema that session was sent. Write into this file which flag caused the Playwright command to background at about 15 seconds. The candidates already separated are `FOREGROUND_BLOCK_BUDGET`, the rendered schema, and `BashParams::default.auto_background_on_timeout = false`. The result paragraph names the one the session used, or says the assignment was not found.
 
 Changing the wait, or setting `GROK_FOREGROUND_BLOCK_BUDGET_MS` for the harness, is a later file. It opens only if this paragraph names the flag and a replay of the medium task still writes the same three files.
+
+**Result (2026-09-28).** The resolved switch was `auto_background_on_timeout = true`, with background execution enabled and no short-budget override in the eval's local `config.toml`. The non-test assignment is [`BashToolConfig::to_bash_params_json`](../crates/codegen/xai-grok-shell/src/tools/config.rs): local `toolset.bash` value, then remote value, then `true`; [`agent_ops.rs`](../crates/codegen/xai-grok-shell/src/agent/mvp_agent/agent_ops.rs) supplies that map to the tool config. The retained `tool_definitions.json` for `temp/evaluate/20260928T004858Z` renders the `run_terminal_command` description with the 15-second auto-background rule, proving the session's effective setting even though the specific remote/default source is not persisted. In `chat_history.jsonl`, the first Playwright `run_terminal_command` has `timeout: 180000` and no `background` field; its tool result reports automatic backgrounding after 15s and returns task id `5bf5d4a0-f9cc-4570-9c53-dd18da9be3ea`. `BashParams::default = false` did not govern that resolved tool. The terminal's `FOREGROUND_BLOCK_BUDGET` supplied the 15-second deadline after the flag enabled this behavior. No medium replay was run, so the later wait-change gate remains closed.
 
 ## 8. What is deliberately not a phase
 
@@ -141,4 +143,4 @@ Changing the wait, or setting `GROK_FOREGROUND_BLOCK_BUDGET_MS` for the harness,
 
 ## 9. Commit rule
 
-One phase, one commit, on `experiment/core-agent-token-optimization`, when that work starts. The original docs change is phase 1. Phase 2 is the budget-recovery change and phase 3 is the evaluate summary change; phase 4 follows separately. If a later pass bar fails, revert that phase. Silence is not a pass. Do not copy another phase’s numbers forward.
+One phase, one commit, on `experiment/core-agent-token-optimization`, when that work starts. The original docs change is phase 1. Phase 2 is the budget-recovery change, phase 3 is the evaluate summary change, and phase 4 is the shell-flag audit. If a later pass bar fails, revert that phase. Silence is not a pass. Do not copy another phase’s numbers forward.
