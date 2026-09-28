@@ -3970,10 +3970,10 @@ fn no_registered_feature_is_mirrored_by_a_config_field() {
             .unwrap_or_else(|| panic!("{decl} moved; this test needs its new shape"));
         for spec in FEATURES {
             for field in [
-                format!("{}: bool", spec.key),
-                format!("{}_enabled: bool", spec.key),
-                format!("{}: Option<bool>", spec.key),
-                format!("{}_enabled: Option<bool>", spec.key),
+                format!(" {}: bool", spec.key),
+                format!(" {}_enabled: bool", spec.key),
+                format!(" {}: Option<bool>", spec.key),
+                format!(" {}_enabled: Option<bool>", spec.key),
             ] {
                 assert!(
                     !body.contains(&field),
@@ -4648,11 +4648,11 @@ fn resolve_trace_upload_honors_config_when_telemetry_on() {
 }
 #[test]
 #[serial]
-fn resolve_goal_defaults_to_true_when_unset() {
+fn resolve_goal_defaults_to_false_when_unset() {
     unsafe { std::env::remove_var("GROK_GOAL") };
     let cfg = Config::default();
     let r = cfg.resolve_goal();
-    assert!(r.value, "goal should be on by default");
+    assert!(!r.value, "goal should be off by default");
     assert_eq!(r.source, ConfigSource::Default);
 }
 #[test]
@@ -4696,10 +4696,10 @@ fn resolve_goal_remote_settings_used_when_no_local() {
     assert_eq!(r.source, ConfigSource::Remote);
     assert!(r.value);
 }
-/// The remote settings `goal_enabled: false` kill-switch must still win over the default-on fallback.
+/// The remote settings `goal_enabled: false` kill-switch must still win over a local opt-in.
 #[test]
 #[serial]
-fn resolve_goal_remote_settings_kill_switch_overrides_default_on() {
+fn resolve_goal_remote_settings_kill_switch_overrides_local() {
     unsafe { std::env::remove_var("GROK_GOAL") };
     let cfg = Config {
         remote_settings: Some(crate::util::config::RemoteSettings {
@@ -4714,13 +4714,13 @@ fn resolve_goal_remote_settings_kill_switch_overrides_default_on() {
 }
 #[test]
 #[serial]
-fn background_workflows_default_on_without_affecting_goal() {
+fn background_workflows_default_off_without_affecting_goal() {
     unsafe { std::env::remove_var("GROK_WORKFLOWS") };
     let cfg = Config::default();
     let r = cfg.resolve_workflows();
-    assert!(r.value);
+    assert!(!r.value);
     assert_eq!(r.source, ConfigSource::Default);
-    assert!(cfg.resolve_goal().value);
+    assert!(!cfg.resolve_goal().value);
 }
 #[test]
 #[serial]
@@ -4841,18 +4841,18 @@ fn imagine_tools_disabled_gates_image_edit() {
     assert!(!off.value);
     assert_eq!(off.source, ConfigSource::Remote);
     unsafe { std::env::remove_var("GROK_IMAGE_EDIT") };
-    assert!(with_list(vec!["image_to_video"]).resolve_image_edit().value);
-    assert!(Config::default().resolve_image_edit().value);
+    assert!(!with_list(vec!["image_to_video"]).resolve_image_edit().value);
+    assert!(!Config::default().resolve_image_edit().value);
 }
 #[test]
 #[serial]
 fn resolve_image_gen_gates() {
     unsafe { std::env::remove_var("GROK_IMAGE_GEN") };
-    assert!(Config::default().resolve_image_gen().value);
+    assert!(!Config::default().resolve_image_gen().value);
     assert!(
-        !Config {
+        Config {
             features: Features {
-                image_gen: Some(false),
+                image_gen: Some(true),
                 ..Default::default()
             },
             ..Default::default()
@@ -4888,11 +4888,11 @@ fn resolve_image_gen_gates() {
 #[serial]
 fn resolve_video_gen_gates() {
     unsafe { std::env::remove_var("GROK_VIDEO_GEN") };
-    assert!(Config::default().resolve_video_gen().value);
+    assert!(!Config::default().resolve_video_gen().value);
     assert!(
-        !Config {
+        Config {
             features: Features {
-                video_gen: Some(false),
+                video_gen: Some(true),
                 ..Default::default()
             },
             ..Default::default()
@@ -7295,9 +7295,9 @@ fn resolve_runtime_fields_interactive_defaults() {
         laziness_debug_log: None,
         storage_mode: None,
     });
-    assert!(cfg.subagents_enabled);
+    assert!(!cfg.subagents_enabled);
     assert!(!cfg.respect_gitignore);
-    assert!(cfg.managed_mcps_enabled);
+    assert!(!cfg.managed_mcps_enabled);
     assert!(!cfg.managed_mcp_gateway_tools_enabled);
     assert_eq!(
         cfg.web_search_model,
@@ -7342,6 +7342,7 @@ fn resolve_runtime_fields_managed_gateway_tools_from_remote() {
     clear_managed_mcp_env_vars();
     let raw = empty_config();
     let remote = crate::util::config::RemoteSettings {
+        managed_mcps_enabled: Some(true),
         managed_mcp_gateway_tools_enabled: Some(true),
         ..Default::default()
     };
@@ -7359,6 +7360,7 @@ fn resolve_runtime_fields_managed_gateway_tools_from_remote() {
         laziness_debug_log: None,
         storage_mode: None,
     });
+    assert!(cfg.managed_mcps_enabled);
     assert!(cfg.managed_mcp_gateway_tools_enabled);
 }
 #[test]
@@ -7447,7 +7449,7 @@ fn resolve_runtime_fields_partial_subagents_table_stays_enabled() {
         laziness_debug_log: None,
         storage_mode: None,
     });
-    assert!(cfg.subagents_enabled);
+    assert!(!cfg.subagents_enabled);
     assert_eq!(2, cfg.subagents_max_depth);
 }
 #[test]

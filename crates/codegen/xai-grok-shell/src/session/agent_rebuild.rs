@@ -125,6 +125,12 @@ pub(crate) struct AgentRebuildSpec {
     pub subagents_enabled: bool,
     pub subagent_toggle: HashMap<String, bool>,
     pub background_workflows_enabled: bool,
+    /// When true, advertise `update_goal` (subject to the workflow mutual-exclusion gate).
+    pub goal_enabled: bool,
+    /// When true, advertise `send_feedback`.
+    pub feedback_enabled: bool,
+    /// When true, advertise `search_tool` / `use_tool`.
+    pub mcp_discovery_enabled: bool,
     pub ask_user_question_enabled: bool,
     pub persona_summaries: Vec<String>,
     pub prompt_audience: PromptAudience,
@@ -239,6 +245,9 @@ impl AgentRebuildSpec {
             subagents_enabled,
             subagent_toggle,
             background_workflows_enabled,
+            goal_enabled,
+            feedback_enabled,
+            mcp_discovery_enabled,
             ask_user_question_enabled,
             persona_summaries,
             prompt_audience,
@@ -332,6 +341,9 @@ impl AgentRebuildSpec {
         .with_subagents_enabled(*subagents_enabled)
         .with_subagent_toggle(subagent_toggle.clone())
         .with_background_workflows_enabled(*background_workflows_enabled)
+        .with_goal_enabled(*goal_enabled)
+        .with_feedback_enabled(*feedback_enabled)
+        .with_mcp_discovery_enabled(*mcp_discovery_enabled)
         .with_task_model_slugs(presentation.model_slugs.clone())
         .with_task_model_selection(presentation.selection)
         .with_ask_user_question_enabled(*ask_user_question_enabled)
@@ -525,6 +537,9 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         subagents_enabled: false,
         subagent_toggle: HashMap::new(),
         background_workflows_enabled: false,
+        goal_enabled: false,
+        feedback_enabled: false,
+        mcp_discovery_enabled: false,
         ask_user_question_enabled: true,
         persona_summaries: vec![],
         prompt_audience: PromptAudience::Primary,

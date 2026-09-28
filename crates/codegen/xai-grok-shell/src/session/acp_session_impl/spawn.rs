@@ -1154,7 +1154,7 @@ pub(crate) async fn spawn_session_actor(
             },
         ))
     });
-    let (mcp_state, admitted_mcp_servers) = {
+    let (mcp_state, admitted_mcp_servers, acp_mcp_count) = {
         let mut state = McpState::new_with_meta(mcp_servers.clone(), mcp_meta_config_map);
         let admitted_mcp_servers = state.admitted_servers();
         if let Some(ref pool) = parent_mcp_pool {
@@ -1165,6 +1165,7 @@ pub(crate) async fn spawn_session_actor(
                 "Imported shared MCP clients from parent pool"
             );
         }
+        let acp_mcp_count = acp_mcp_servers.len();
         if !acp_mcp_servers.is_empty() {
             let invoker = std::sync::Arc::new(crate::session::acp_mcp::GatewayAcpInvoker::new(
                 gateway.clone(),
@@ -1177,8 +1178,16 @@ pub(crate) async fn spawn_session_actor(
                 "Registered in-process SDK MCP servers (x.ai/mcp/sdk_call)"
             );
         }
-        (Arc::new(TokioMutex::new(state)), admitted_mcp_servers)
+        (
+            Arc::new(TokioMutex::new(state)),
+            admitted_mcp_servers,
+            acp_mcp_count,
+        )
     };
+    let feedback_enabled = feedback_flags.enabled;
+    let mcp_discovery_enabled = !mcp_servers.is_empty()
+        || acp_mcp_count > 0
+        || startup_hints.managed_mcps_enabled;
     let (plugin_registry_wait_timer, plugin_registry_wait_span) =
         spawn_await_step!("plugin_registry_wait");
     let plugin_registry = prefetch
@@ -1243,6 +1252,9 @@ pub(crate) async fn spawn_session_actor(
         subagents_enabled,
         subagent_toggle: subagent_toggle.clone(),
         background_workflows_enabled,
+        goal_enabled,
+        feedback_enabled,
+        mcp_discovery_enabled,
         ask_user_question_enabled,
         persona_summaries: persona_summaries.clone(),
         prompt_audience,

@@ -27,6 +27,8 @@ pub enum Feature {
     WriteFile,
     /// Heuristic feedback popups and the `/feedback` command.
     Feedback,
+    /// The `web_search` tool.
+    WebSearch,
     /// The `/feedback` trace-consent card (the trace-upload opt-in offer).
     FeedbackTraceCard,
     /// The per-turn summary on the agent dashboard.
@@ -201,8 +203,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "feedback",
         path: "features.feedback",
         env: "GROK_FEEDBACK_ENABLED",
-        default_enabled: true,
+        default_enabled: false,
         remote: Some(|settings| settings.feedback_enabled),
+    },
+    FeatureSpec {
+        id: Feature::WebSearch,
+        key: "web_search",
+        path: "features.web_search",
+        env: "GROK_WEB_SEARCH",
+        default_enabled: false,
+        remote: Some(|settings| settings.web_search_enabled),
     },
     FeatureSpec {
         id: Feature::FeedbackTraceCard,

@@ -50,7 +50,7 @@ fn resolve_standalone_memory_mode(
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct SubagentsConfig {
-    /// Whether subagent support is enabled. Defaults to `true`, so a `[subagents]` table that only tunes limits, models, or toggles keeps subagents on.
+    /// Whether subagent support is enabled. Defaults to `false`; set `[subagents] enabled = true` or `GROK_SUBAGENTS=1` to opt in. A `[subagents]` table that only tunes limits still follows this default.
     pub enabled: bool,
     /// Raw `[subagents] max_depth` (i64 so out-of-range parses; clamped to at least 1 at resolve).
     #[serde(default)]
@@ -86,7 +86,7 @@ use xai_grok_subagent_resolution::config::{SubagentPersona, SubagentRole};
 impl Default for SubagentsConfig {
     fn default() -> Self {
         SubagentsConfig {
-            enabled: true,
+            enabled: false,
             max_depth: None,
             max_concurrent: None,
             sampling_limit: None,
@@ -369,9 +369,9 @@ impl SubagentsConfig {
         LimitBehavior::Queue
     }
     /// Resolve the final subagents config from all sources (in priority order): CLI tri-state (`Some(false)` from `--no-subagents` force-disables, `Some(true)` force-enables, `None` defers)
-    /// `GROK_SUBAGENTS` env var: `1`/`true` enables, `0`/`false` force-disables; config file `[subagents] enabled`; Default (enabled).
+    /// `GROK_SUBAGENTS` env var: `1`/`true` enables, `0`/`false` force-disables; config file `[subagents] enabled`; Default (disabled).
     /// `enabled` is deliberately not remotely gated. Only explicit local intent (CLI flag, `GROK_SUBAGENTS`, `[subagents] enabled`) changes the default.
-    /// A `[subagents]` table without an `enabled` key is not intent: it keeps the default so tuning `max_depth` or `[subagents.models]` cannot turn subagents off.
+    /// A `[subagents]` table without an `enabled` key is not intent: it keeps the default so tuning `max_depth` or `[subagents.models]` cannot turn subagents on.
     /// Project files are excluded from this trust-independent base; Task boundaries overlay them using the parent cwd's authoritative trust verdict.
     pub fn resolve(cli_flag: Option<bool>, config: &toml::Value) -> Self {
         let user_grok_root = xai_grok_config::user_grok_home();
@@ -402,7 +402,7 @@ impl SubagentsConfig {
             result.enabled,
             has_local_enabled,
             None,
-            true,
+            false,
         );
         result.enabled = resolved.value;
         if let Some(root) = user_grok_root {
@@ -452,23 +452,23 @@ pub struct ManagedMcpsConfig {
 impl Default for ManagedMcpsConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             gateway_tools_enabled: false,
         }
     }
 }
 impl ManagedMcpsConfig {
-    /// Priority: env var > TOML > remote > default (enabled interactive, disabled headless).
+    /// Priority: env var > TOML > remote > default (disabled for interactive and headless).
     pub fn resolve(
         config: &toml::Value,
         remote: Option<&crate::util::config::RemoteSettings>,
-        is_headless: bool,
+        _is_headless: bool,
     ) -> Self {
         let mut result: Self = config
             .get("managed_mcps")
             .and_then(|v| v.clone().try_into().ok())
             .unwrap_or(Self {
-                enabled: !is_headless,
+                enabled: false,
                 gateway_tools_enabled: false,
             });
         let managed_mcps_table = config.get("managed_mcps").and_then(|v| v.as_table());
@@ -479,7 +479,7 @@ impl ManagedMcpsConfig {
             result.enabled,
             has_local_enabled,
             remote.and_then(|r| r.managed_mcps_enabled),
-            !is_headless,
+            false,
         );
         result.enabled = resolved.value;
         let has_local_gateway_tools =

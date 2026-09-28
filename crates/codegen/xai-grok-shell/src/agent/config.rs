@@ -1702,7 +1702,7 @@ impl Default for Config {
             memory_enabled_override: None,
             cli_subagents: None,
             memory_config: None,
-            managed_mcps_enabled: true,
+            managed_mcps_enabled: false,
             managed_mcp_gateway_tools_enabled: false,
             compat_resolved: CompatConfig::default(),
             requirements: Requirements::default(),
@@ -2565,7 +2565,7 @@ impl Config {
             .default(self.is_feature_enabled(Feature::TurnSummary))
             .resolve()
     }
-    /// `image_gen` (and `/imagine`). Default on.
+    /// `image_gen` (and `/imagine`). Default off.
     /// `imagine_tools_disabled` is a remote force-off (env/config cannot re-enable).
     /// Otherwise: requirement > env > `[features]` > remote > default.
     pub(crate) fn resolve_image_gen(&self) -> Resolved<bool> {
@@ -2587,11 +2587,11 @@ impl Config {
                     .as_ref()
                     .and_then(|s| s.image_gen_enabled),
             )
-            .default(true)
+            .default(false)
             .resolve()
     }
     /// `image_edit` tool gate.
-    /// Same denylist / requirement pattern as [`Self::resolve_image_gen`]; no `[features]` key (defaults on).
+    /// Same denylist / requirement pattern as [`Self::resolve_image_gen`]; no `[features]` key (defaults off).
     pub(crate) fn resolve_image_edit(&self) -> Resolved<bool> {
         use xai_grok_tools::implementations::grok_build::IMAGE_EDIT_TOOL_NAME;
         if let Some(pinned) = self.requirements.image_edit.pinned() {
@@ -2604,9 +2604,9 @@ impl Config {
         {
             return Resolved::new(false, ConfigSource::Remote);
         }
-        BoolFlag::env("GROK_IMAGE_EDIT").default(true).resolve()
+        BoolFlag::env("GROK_IMAGE_EDIT").default(false).resolve()
     }
-    /// `image_to_video` / `reference_to_video` (and `/imagine-video`). Default on.
+    /// `image_to_video` / `reference_to_video` (and `/imagine-video`). Default off.
     /// Registered as a pair; denylisting either tool name (or `video_gen`) disables both.
     /// Otherwise same precedence as [`Self::resolve_image_gen`].
     pub(crate) fn resolve_video_gen(&self) -> Resolved<bool> {
@@ -2630,7 +2630,7 @@ impl Config {
                     .as_ref()
                     .and_then(|s| s.video_gen_enabled),
             )
-            .default(true)
+            .default(false)
             .resolve()
     }
     /// Precedence: env `GROK_IMAGE_GEN_MODEL_OVERRIDE` > `[features] image_gen_model_override` config > remote settings `image_gen_model_override`.
@@ -2657,9 +2657,9 @@ impl Config {
         )
         .map(|r| r.value)
     }
-    /// Goal mode (`/goal`) master switch. Default ON.
+    /// Goal mode (`/goal`) master switch. Default off.
     /// Deployments that can't reach cli-chat-proxy `/v1/settings` never receive the remote settings `goal_enabled` flag.
-    /// The default must not carve those deployments out (custom `models_base_url`, external `auth_provider_command`, air-gapped proxies).
+    /// Explicit config, env, or remote true still wins.
     pub(crate) fn resolve_goal(&self) -> Resolved<bool> {
         let ff = self.remote_settings.as_ref().and_then(|s| s.goal_enabled);
         if ff == Some(false) {
@@ -2668,11 +2668,11 @@ impl Config {
         BoolFlag::env("GROK_GOAL")
             .config(self.goal.enabled)
             .feature_flag(ff)
-            .default(true)
+            .default(false)
             .resolve()
     }
     /// Background workflows (`workflow` tool, `.grok/workflows/*.rhai`, `/deep-research`, host-owned `/goal` driver).
-    /// Default ON: deployments that never receive remote settings still get workflows; `Some(false)` remote / config / env remains a kill-switch.
+    /// Default off: opt in via config, env, or remote; `Some(false)` remote / config / env remains a kill-switch.
     pub(crate) fn resolve_workflows(&self) -> Resolved<bool> {
         let ff = self
             .remote_settings
@@ -2684,8 +2684,16 @@ impl Config {
         BoolFlag::env("GROK_WORKFLOWS")
             .config(self.workflows.enabled)
             .feature_flag(ff)
-            .default(true)
+            .default(false)
             .resolve()
+    }
+    /// Client `web_search` tool. Default off via [`Feature::WebSearch`].
+    /// `--disable-web-search` / `disable_web_search` remains a force-off that beats an enabled feature.
+    pub(crate) fn resolve_web_search(&self) -> Resolved<bool> {
+        if self.disable_web_search {
+            return Resolved::new(false, ConfigSource::Config);
+        }
+        self.feature(Feature::WebSearch)
     }
     /// Classifier, planner, and summary all default to goal mode itself: when `/goal` is on they are on unless config/env/remote says otherwise.
     /// `goal_enabled` is the session's already-resolved master switch (the same value the actor stores).
@@ -2832,10 +2840,16 @@ impl Config {
         &self,
         provider: &ProviderContext,
     ) -> Resolved<bool> {
-        if let Some(env_value) = env_string("GROK_GOAL_USE_CURRENT_MODEL_ONLY")
-            && let Ok(parsed) = env_value.parse::<bool>()
-        {
-            return Resolved::new(parsed, ConfigSource::Env);
+        if let Some(env_value) = env_string("GROK_GOAL_USE_CURRENT_MODEL_ONLY") {
+            let trimmed = env_value.trim();
+            let parsed = match trimmed {
+                "1" | "true" | "TRUE" | "True" => Some(true),
+                "0" | "false" | "FALSE" | "False" => Some(false),
+                _ => trimmed.parse::<bool>().ok(),
+            };
+            if let Some(parsed) = parsed {
+                return Resolved::new(parsed, ConfigSource::Env);
+            }
         }
         if let Some(v) = self.goal.use_current_model_only {
             return Resolved::new(v, ConfigSource::Config);

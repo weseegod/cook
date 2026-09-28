@@ -1435,7 +1435,11 @@ impl SessionActor {
                     .await
                     .into_iter()
                     .collect();
-                let skills = self.slash_skills_for_resolve().await;
+                let skills = if self.rebuild_spec.skills_config.inject {
+                    self.slash_skills_for_resolve().await
+                } else {
+                    Vec::new()
+                };
                 let edited_paths = self.chat_state_handle.get_agent_edited_paths().await;
                 let ctx = {
                     let bridge_tasks = self
@@ -1734,7 +1738,11 @@ impl SessionActor {
                     .map(|b| b as &dyn xai_grok_tools::types::memory_backend::MemoryBackend)
             };
         let suppress_state_reminder = false;
-        let workflow_listing = self.workflow_listing_for_prompt();
+        let workflow_listing = if self.rebuild_spec.skills_config.inject {
+            self.workflow_listing_for_prompt()
+        } else {
+            None
+        };
         let system_reminder = if suppress_state_reminder {
             workflow_listing.as_deref().map(|listing| {
                 let tag = self.reminder_wrapper_tag();

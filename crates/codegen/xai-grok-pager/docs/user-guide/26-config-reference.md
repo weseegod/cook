@@ -153,7 +153,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `disable_web_search` | `boolean` | `yes` | `user` | Drop the web_search tool for this process. Also `--disable-web-search`. |
+| `disable_web_search` | `boolean` | `yes` | `user` | Force-off for the web_search tool for this process (beats `features.web_search`). Also `--disable-web-search`. |
 
 ### `disabled_mcp_servers`
 
@@ -207,10 +207,11 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 | `features.compaction_tool_choice` | `string` | `yes` | `user` | Tool-choice hint used during compaction. |
 | `features.compaction_verbatim_input` | `boolean` | `pin` | `user` | Enable or disable `compaction_verbatim_input`. Default true. Also `GROK_COMPACTION_VERBATIM_INPUT`. |
 | `features.dock` | `boolean` | `pin` | `user` | Enable or disable `dock`. Default false. Also `GROK_DOCK`. |
-| `features.feedback` | `boolean` | `pin` | `user` | Enable or disable `feedback`. Default true. Also `GROK_FEEDBACK_ENABLED`. |
+| `features.feedback` | `boolean` | `pin` | `user` | Enable or disable `feedback`. Default false. Also `GROK_FEEDBACK_ENABLED`. |
+| `features.web_search` | `boolean` | `pin` | `user` | Client `web_search` tool. Default false. Also `GROK_WEB_SEARCH`. `--disable-web-search` remains a force-off. |
 | `features.feedback_trace_card` | `boolean` | `pin` | `user` | Show a trace-upload consent question after `/feedback`. Default false. Also `GROK_FEEDBACK_TRACE_CARD`. |
 | `features.image_edit_model_override` | `string` | `yes` | `user` | Imagine model id for image_edit. |
-| `features.image_gen` | `boolean` | `pin` | `user` | Enable image_gen / `/imagine`. |
+| `features.image_gen` | `boolean` | `pin` | `user` | Enable image_gen / `/imagine`. Default false. Also `GROK_IMAGE_GEN`. |
 | `features.image_gen_model_override` | `string` | `yes` | `user` | Imagine model id for image_gen. Empty defers to the remotely configured default. |
 | `features.lsp_tools` | `boolean` | `pin` | `user` | Enable or disable `lsp_tools`. Default false. Also `GROK_LSP_TOOLS`. |
 | `features.managed_config` | `boolean` | `yes` | `user` | Fetch managed_config.toml and requirements.toml from the deployment. |
@@ -231,7 +232,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 | `features.title_refresh` | `boolean` | `pin` | `user` | Early-session auto-title refresh. Pin this in requirements to beat GROK_TITLE_REFRESH. |
 | `features.turn_summary` | `boolean` | `pin` | `user` | Enable or disable `turn_summary`. Default true. Also `GROK_TURN_SUMMARY`. |
 | `features.two_pass_compaction` | `boolean` | `pin` | `user` | Enable or disable `two_pass_compaction`. Default true. Also `GROK_TWO_PASS_COMPACTION`. |
-| `features.video_gen` | `boolean` | `pin` | `user` | Enable video tools / `/imagine-video`. |
+| `features.video_gen` | `boolean` | `pin` | `user` | Enable video tools / `/imagine-video`. Default false. Also `GROK_VIDEO_GEN`. |
 | `features.voice_mode` | `boolean` | `pin` | `user` | Enable or disable `voice_mode`. Default true. Also `GROK_VOICE_MODE`. |
 | `features.web_fetch` | `boolean` | `pin` | `user` | Enable or disable `web_fetch`. Default false. Also `GROK_WEB_FETCH`. |
 | `features.write_file` | `boolean` | `pin` | `user` | Enable or disable `write_file`. Default true. Also `GROK_WRITE_FILE`. |
@@ -249,7 +250,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `goal.enabled` | `boolean` | `yes` | `user` | Enable `/goal`. |
+| `goal.enabled` | `boolean` | `yes` | `user` | Enable `/goal`. Default false. Also `GROK_GOAL`. |
 
 ### `grok_com_config`
 
@@ -313,7 +314,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `managed_mcps.enabled` | `boolean` | `pin` | `user` | Fetch managed MCP configs at startup. Also GROK_MANAGED_MCPS_ENABLED. |
+| `managed_mcps.enabled` | `boolean` | `pin` | `user` | Fetch managed MCP configs at startup. Default false. Also GROK_MANAGED_MCPS_ENABLED. |
 | `managed_mcps.gateway_tools_enabled` | `boolean` | `yes` | `user` | Expose managed MCP gateway tools. Also GROK_MANAGED_MCP_GATEWAY_TOOLS_ENABLED. |
 
 ### `marketplace`
@@ -514,6 +515,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
 | `skills.disabled` | `string[]` | `yes` | `user` | Skill names to discover but not activate. |
+| `skills.inject` | `boolean` | `yes` | `user` | Inject the discovered skill catalog into the startup reminder and compaction section. Default false. Slash listing still discovers skills. |
 | `skills.paths` | `string[]` | `yes` | `user` | Additional skill directories. |
 
 ### `storage`
@@ -526,7 +528,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `subagents.enabled` | `boolean` | `pin` | `user` | Subagent / task tool master switch, default true even when other `subagents.*` keys are set. Also GROK_SUBAGENTS or `--no-subagents`. |
+| `subagents.enabled` | `boolean` | `pin` | `user` | Subagent / task tool master switch, default false; a `[subagents]` table that only sets limits still follows that default. Also GROK_SUBAGENTS or `--no-subagents`. |
 | `subagents.limit_behavior` | `queue / fail` | `yes` | `user` | What to do when the concurrent subagent cap is hit. |
 | `subagents.max_concurrent` | `integer` | `yes` | `user` | Max concurrent subagents. |
 | `subagents.max_depth` | `integer` | `yes` | `user` | Max nested subagent depth (clamped ≥1). |
@@ -665,7 +667,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `workflows.enabled` | `boolean` | `yes` | `user` | Enable workflows. |
+| `workflows.enabled` | `boolean` | `yes` | `user` | Enable workflows. Default false. Also `GROK_WORKFLOWS`. |
 
 ### `worktree`
 

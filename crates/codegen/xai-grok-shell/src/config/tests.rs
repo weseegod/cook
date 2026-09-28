@@ -1100,11 +1100,11 @@ fn with_grok_subagents<T>(value: &str, f: impl FnOnce() -> T) -> T {
 }
 #[test]
 #[serial_test::serial]
-fn subagents_config_default_enabled() {
+fn subagents_config_default_disabled() {
     without_grok_subagents(|| {
         let config = toml::Value::Table(toml::map::Map::new());
         let sa = SubagentsConfig::resolve(None, &config);
-        assert!(sa.enabled);
+        assert!(!sa.enabled);
     });
 }
 #[test]
@@ -1358,7 +1358,10 @@ fn subagents_config_remote_settings_key_is_ignored() {
             .expect("unknown subagents_enabled key must not break parsing");
         let config = toml::Value::Table(toml::map::Map::new());
         let sa = SubagentsConfig::resolve(None, &config);
-        assert!(sa.enabled);
+        assert!(
+            !sa.enabled,
+            "remote subagents_enabled key is ignored; default stays off"
+        );
     });
 }
 #[test]
@@ -1410,7 +1413,7 @@ fn subagents_config_models_empty_when_missing() {
 }
 #[test]
 #[serial_test::serial]
-fn subagents_config_models_without_enabled_keeps_default_enabled() {
+fn subagents_config_models_without_enabled_keeps_default_disabled() {
     without_grok_subagents(|| {
         let config: toml::Value = toml::from_str(
                 r#"
@@ -1421,8 +1424,8 @@ fn subagents_config_models_without_enabled_keeps_default_enabled() {
             .unwrap();
         let sa = SubagentsConfig::resolve(None, &config);
         assert!(
-                sa.enabled,
-                "[subagents] table without an enabled key must keep the enabled default"
+                !sa.enabled,
+                "[subagents] table without an enabled key must keep the enabled default (off)"
             );
         assert_eq!(sa.models.len(), 1);
         assert_eq!(sa.models.get("explore").unwrap(), "grok-3-fast");
@@ -1430,14 +1433,14 @@ fn subagents_config_models_without_enabled_keeps_default_enabled() {
 }
 #[test]
 #[serial_test::serial]
-fn subagents_config_limits_only_table_keeps_default_enabled() {
+fn subagents_config_limits_only_table_keeps_default_disabled() {
     without_grok_subagents(|| {
         let config: toml::Value = toml::from_str(
                 "[subagents]\nmax_depth = 3\nmax_concurrent = 4\n",
             )
             .unwrap();
         let sa = SubagentsConfig::resolve(None, &config);
-        assert!(sa.enabled, "[subagents] max_* settings alone must not disable subagents");
+        assert!(!sa.enabled, "[subagents] max_* settings alone must not enable subagents");
         assert_eq!(sa.max_depth, Some(3));
         assert_eq!(sa.max_concurrent, Some(4));
     });
@@ -1571,14 +1574,14 @@ fn with_managed_mcp_env<T>(
 }
 #[test]
 #[serial_test::serial]
-fn managed_mcps_interactive_default_enabled() {
+fn managed_mcps_interactive_default_disabled() {
     with_managed_mcp_env(
         None,
         None,
         || {
             let empty = toml::Value::Table(toml::map::Map::new());
             let cfg = ManagedMcpsConfig::resolve(&empty, None, false);
-            assert!(cfg.enabled);
+            assert!(!cfg.enabled);
         },
     );
 }
@@ -1641,10 +1644,12 @@ fn managed_mcp_gateway_tools_remote_enabled() {
         || {
             let empty = toml::Value::Table(toml::map::Map::new());
             let remote = crate::util::config::RemoteSettings {
+                managed_mcps_enabled: Some(true),
                 managed_mcp_gateway_tools_enabled: Some(true),
                 ..Default::default()
             };
             let cfg = ManagedMcpsConfig::resolve(&empty, Some(&remote), false);
+            assert!(cfg.enabled);
             assert!(cfg.gateway_tools_enabled);
         },
     );
@@ -1670,7 +1675,7 @@ fn managed_mcp_gateway_tools_env_overrides_remote() {
 #[serial_test::serial]
 fn managed_mcp_gateway_tools_env_on_overrides_remote_off() {
     with_managed_mcp_env(
-        None,
+        Some("1"),
         Some("1"),
         || {
             let empty = toml::Value::Table(toml::map::Map::new());
@@ -1679,6 +1684,7 @@ fn managed_mcp_gateway_tools_env_on_overrides_remote_off() {
                 ..Default::default()
             };
             let cfg = ManagedMcpsConfig::resolve(&empty, Some(&remote), false);
+            assert!(cfg.enabled);
             assert!(cfg.gateway_tools_enabled);
         },
     );

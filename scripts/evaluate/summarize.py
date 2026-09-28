@@ -135,11 +135,10 @@ def render(run_dir, model, wire, task, agents, thinking, parallel):
              "Task:", "", "> " + task.replace("|", "\\|").replace("\n", "\n> "), "",
              "| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Usage source | Files | Bytes | Output tokens/s |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: |"]
-    output_lines = ["", "## Outputs", ""]
     for agent in agents:
         directory = run_dir / agent
         metrics = {"cook": usage_cook, "opencode": usage_opencode, "pi": usage_pi}[agent](directory / "stdout.json")
-        count, size, files = files_and_bytes(directory / "workdir")
+        count, size, _ = files_and_bytes(directory / "workdir")
         try:
             seconds = float((directory / "elapsed-seconds.txt").read_text().strip())
         except (OSError, ValueError):
@@ -155,11 +154,8 @@ def render(run_dir, model, wire, task, agents, thinking, parallel):
                   metrics["read"], metrics["write"], cache_presence,
                   metrics.get("source", "stdout.json"), count, size, rate]
         lines.append("| " + " | ".join(cell(v) for v in values) + " |")
-        file_list = ", ".join(f"`{path}`" for path in files) if files else "none"
-        output_lines.append(f"- **{agent}**: files {file_list}; workdir `{directory / 'workdir'}`; "
-                            f"raw output `{directory / 'stdout.json'}`; errors `{directory / 'stderr.log'}`.")
     lines += ["", "Metrics come from each agent's JSON output or the labeled Cook session usage file. `unreported` means the field was absent.",
-              "Files and bytes count regular files in each workdir, excluding .git and node_modules.", *output_lines, ""]
+              "Files and bytes count regular files in each workdir, excluding .git and node_modules.", ""]
     return "\n".join(lines)
 
 
@@ -224,7 +220,7 @@ def self_test():
         assert no_cache_field["read"] is None and no_cache_field["write"] is None
         stdout.write_text("{}")
         (directory / "exit-code.txt").write_text("1")
-        report = render(run_dir, "fixture", "fixture", "task", ["cook"], "false", "false")
+        report = render(run_dir, "fixture", "fixture", "task", ["cook"], "false", 1)
         row = next(line for line in report.splitlines() if line.startswith("| cook |"))
         cells = [value.strip() for value in row.strip("|").split("|")]
         assert cells[2] == "1" and cells[11] == "3"
@@ -250,7 +246,7 @@ if __name__ == "__main__":
     parser.add_argument("--task")
     parser.add_argument("--agents")
     parser.add_argument("--thinking", choices=("true", "false"), default="false")
-    parser.add_argument("--parallel", choices=("true", "false"), default="false")
+    parser.add_argument("--parallel", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.self_test:

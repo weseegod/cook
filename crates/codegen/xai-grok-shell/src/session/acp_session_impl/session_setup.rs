@@ -71,17 +71,26 @@ impl SessionActor {
             )
         });
         let effects = bridge.apply_pending_skill_update().await;
-        let skill_text = effects.as_ref().and_then(|update| {
-            if is_cursor && update.kind == SkillUpdateKind::BaselineChange {
-                None
-            } else {
-                update.system_reminder.as_deref()
-            }
-        });
-        if let Some(body) = crate::session::workflow::listing::merge_listing_sections(
-            skill_text,
-            self.workflow_listing_for_prompt().as_deref(),
-        ) {
+        let inject_catalog = self.rebuild_spec.skills_config.inject;
+        let skill_text = if inject_catalog {
+            effects.as_ref().and_then(|update| {
+                if is_cursor && update.kind == SkillUpdateKind::BaselineChange {
+                    None
+                } else {
+                    update.system_reminder.as_deref()
+                }
+            })
+        } else {
+            None
+        };
+        let workflow_listing = if inject_catalog {
+            self.workflow_listing_for_prompt()
+        } else {
+            None
+        };
+        if let Some(body) =
+            crate::session::workflow::listing::merge_listing_sections(skill_text, workflow_listing.as_deref())
+        {
             let tag = self.reminder_wrapper_tag();
             conversation.push(ConversationItem::system_reminder(format!(
                 "<{tag}>\n{body}\n</{tag}>"

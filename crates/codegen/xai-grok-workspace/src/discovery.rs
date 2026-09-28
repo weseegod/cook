@@ -262,6 +262,7 @@ mod tests {
         .unwrap();
 
         let config = SkillsConfig {
+            inject: false,
             paths: vec![],
             ignore: vec![tmp.path().to_string_lossy().to_string()],
             disabled: vec![],
