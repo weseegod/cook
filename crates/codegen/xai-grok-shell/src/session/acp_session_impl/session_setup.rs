@@ -123,8 +123,9 @@ impl SessionActor {
         }
         self.last_write_finish_reminder_surface.set(Some(surface));
         let tag = self.reminder_wrapper_tag();
+        let text = crate::session::working_plan::entry_reminder(surface);
         conversation.push(ConversationItem::system_reminder(format!(
-            "<{tag}>\nDo not end the turn on a promise to create a file. After a rejected oversized write, make a smaller edit or write next — a later read does not finish the work.\n</{tag}>"
+            "<{tag}>\n{text}\n</{tag}>"
         )));
     }
     /// The one prefix build every path uses: `full_wait` (delivery-tools sessions) waits for the handshakes (bounded) first,

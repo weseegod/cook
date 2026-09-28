@@ -355,6 +355,9 @@ pub struct Cwd(pub PathBuf);
 /// absent the tool falls back to `Cwd/.grok/plan.md`.
 #[derive(Debug, Clone)]
 pub struct PlanFilePath(pub PathBuf);
+/// Set by the session for each tool call. True only on TaskOpen for a projecting primary agent.
+#[derive(Debug, Clone, Copy)]
+pub struct WorkingPlanAllowed(pub bool);
 /// Default plan-file path (relative to the workspace root) used when no
 /// explicit [`PlanFilePath`] is set. Shared by the plan-mode tools.
 pub const PLAN_FILE_RELATIVE_PATH: &str = ".grok/plan.md";

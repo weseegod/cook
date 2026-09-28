@@ -1808,6 +1808,58 @@ impl SessionActor {
         self.chat_state_handle.push_tool_result(tool_chat);
         Ok(Err(ToolLoop::Continue))
     }
+    /// Write a passive working plan and continue the turn. Plan mode stays inactive.
+    async fn complete_save_working_plan(
+        &self,
+        call: &crate::sampling::types::ToolCallResponse,
+        tool_call_id: &acp::ToolCallId,
+        raw_input: &serde_json::Value,
+    ) -> Result<Result<PreparedToolCall, ToolLoop>, acp::Error> {
+        if !crate::session::working_plan::allowed_on_surface(
+            self.projects_tool_surface(),
+            self.current_tool_surface(),
+        ) {
+            self.handle_tool_not_executed(
+                &call.id,
+                tool_call_id,
+                "save_working_plan is only available on an open task with no approved plan.".into(),
+            )
+            .await?;
+            return Ok(Err(ToolLoop::Continue));
+        }
+        let body = raw_input
+            .get("body")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if body.is_empty() {
+            self.handle_tool_not_executed(
+                &call.id,
+                tool_call_id,
+                "save_working_plan needs a markdown body.".into(),
+            )
+            .await?;
+            return Ok(Err(ToolLoop::Continue));
+        }
+        let session_dir = crate::session::persistence::session_dir(&self.session_info);
+        match crate::session::working_plan::save_working_plan(&session_dir, body) {
+            Ok(path) => {
+                self.complete_exit_plan_intercept(
+                    call,
+                    tool_call_id,
+                    format!(
+                        "Saved working plan to {}. Plan mode stays off. Keep implementing on this turn.",
+                        path.display()
+                    ),
+                )
+                .await
+            }
+            Err(error) => {
+                self.handle_tool_not_executed(&call.id, tool_call_id, error)
+                    .await?;
+                Ok(Err(ToolLoop::Continue))
+            }
+        }
+    }
     pub(crate) async fn prepare_tool_call(
         &self,
         call: crate::sampling::types::ToolCallResponse,
@@ -2116,6 +2168,22 @@ impl SessionActor {
             self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
                 .await?;
             return Ok(Err(ToolLoop::Continue));
+        }
+        {
+            let allowed = crate::session::working_plan::allowed_on_surface(
+                self.projects_tool_surface(),
+                self.current_tool_surface(),
+            );
+            self.tool_bridge_handle()
+                .update_resource(xai_grok_tools::types::resources::WorkingPlanAllowed(
+                    allowed,
+                ))
+                .await;
+        }
+        if crate::session::working_plan::is_save_working_plan(&call.function.name) {
+            return self
+                .complete_save_working_plan(&call, &tool_call_id, &raw_input)
+                .await;
         }
         let local_frozen = self
             .plan_mode

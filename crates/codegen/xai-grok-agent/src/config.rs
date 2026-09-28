@@ -165,6 +165,8 @@ pub fn workspace_grok_build_toolset() -> ToolServerConfig {
     tools.push((&grok_build::ImageToVideoTool).into());
     tools.push((&grok_build::ReferenceToVideoTool).into());
     tools.push((&grok_build::WebFetchTool).into());
+    tools.push((&grok_build::WorkingPlanSkillTool).into());
+    tools.push((&grok_build::SaveWorkingPlanTool).into());
     tools.push((&memory::search_tool::MemorySearchImpl).into());
     tools.push((&memory::get_tool::MemoryGetImpl).into());
     tools.push((&grok_build::LspTool).into());
@@ -330,6 +332,8 @@ pub fn task_open_tool_ids() -> &'static [&'static str] {
         "ask_user_question",
         "web_search",
         "web_fetch",
+        "skill",
+        "save_working_plan",
     ]
 }
 
@@ -465,6 +469,8 @@ fn grok_build_plan_toolset() -> ToolServerConfig {
     tools.push((&grok_build::EnterPlanModeTool).into());
     tools.push((&grok_build::ExitPlanModeTool).into());
     tools.push((&grok_build::AskUserQuestionTool).into());
+    tools.push((&grok_build::WorkingPlanSkillTool).into());
+    tools.push((&grok_build::SaveWorkingPlanTool).into());
     ToolServerConfig {
         tools,
         behavior_preset: None,
@@ -1699,7 +1705,10 @@ mod tests {
         assert!(!implement.contains(&"web_search"));
         assert!(!implement.contains(&"spawn_subagent"));
         for id in implement {
-            assert!(task_open.contains(id), "task_open missing implement id {id}");
+            assert!(
+                task_open.contains(id),
+                "task_open missing implement id {id}"
+            );
             assert!(plan.contains(id), "plan missing implement id {id}");
         }
         for id in [
@@ -1715,6 +1724,11 @@ mod tests {
         for id in ["search_tool", "use_tool", "spawn_subagent"] {
             assert!(!task_open.contains(&id), "task_open must hide {id}");
             assert!(plan.contains(&id), "plan missing {id}");
+        }
+        for id in ["skill", "save_working_plan"] {
+            assert!(task_open.contains(&id), "task_open missing {id}");
+            assert!(!plan.contains(&id), "plan must hide {id}");
+            assert!(!implement.contains(&id), "implement must hide {id}");
         }
         assert_eq!(tool_ids_for_surface(ToolSurface::Implement), implement);
         assert_eq!(tool_ids_for_surface(ToolSurface::TaskOpen), task_open);
