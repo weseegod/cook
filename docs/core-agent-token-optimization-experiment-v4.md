@@ -15,7 +15,7 @@ Audits this file follows:
 - [finance 024232](audits/2026-09-28-agent-compare-stealth-space-bunny-alpha-024232.md)
 - [batch summary](audits/2026-09-28-agent-compare-stealth-space-bunny-alpha-batch-summary.md)
 
-This document is the follow-up to those `scripts/evaluate.sh` runs of cook, opencode, and pi. Cook’s written files were often on disk when the process exited 1, and cache read was high on the runs that finished many rounds. v4 records why, corrects the design sentences v3 left stale, and sequences the next measured changes. It does not copy v2’s token tables. Phase 1 is the design-doc correction in the same change as this file. Phase 2 was implemented after that correction.
+This document is the follow-up to those `scripts/evaluate.sh` runs of cook, opencode, and pi. Cook’s written files were often on disk when the process exited 1, and cache read was high on the runs that finished many rounds. v4 records why, corrects the design sentences v3 left stale, and sequences the next measured changes. It does not copy v2’s token tables. Phase 1 is the design-doc correction in the same change as this file. Phases 2 and 3 were implemented after that correction.
 
 Task correctness is the gate. A shorter prompt, a raised byte ceiling, or an exit code flipped because some file exists is a failed phase.
 
@@ -51,7 +51,7 @@ An earlier extraction left calendar’s opencode and pi cache-read cells blank a
 
 **Turn limit.** Minesweeper (`temp/evaluate/20260928T005604Z`) and finance both cancelled with category `max_turns_reached` after 80 main-loop calls, the evaluate `--max-turns` limit. Finance `stderr.log` is `Error: max turns reached`, and `events.jsonl` records `cancellation_context.reason = max_turns_reached` with `limit: 80`. Both workdirs contain `index.html`, `style.css`, and `app.js`. Headless exit follows the cancellation. A directory listing is not an exit code.
 
-**Summarizer.** `scripts/evaluate/summarize.py` reads Cook usage from `stdout.json` (`num_turns`, `usage`) and counts files with `git ls-files --cached --others --exclude-standard`. Minesweeper Cook `stdout.json` is absent, so those cells stay `unreported`. That workdir has no `.git`, and the parent repo gitignores `/temp/`, so the report’s file count is 0 while the three files exist. Whether `.git` was already missing when summarize ran is not logged. Finance did have stdout usage and git-visible files, and it still exited 1. Do not fill an absent field with zero.
+**Summarizer.** At audit time, `scripts/evaluate/summarize.py` read Cook usage from `stdout.json` (`num_turns`, `usage`) and counted files with `git ls-files --cached --others --exclude-standard`. Minesweeper Cook `stdout.json` is absent, so those cells stay `unreported`. That workdir has no `.git`, and the parent repo gitignores `/temp/`, so the report’s file count is 0 while the three files exist. Whether `.git` was already missing when summarize ran is not logged. Finance did have stdout usage and git-visible files, and it still exited 1. Do not fill an absent field with zero.
 
 **Single-turn retention.** Pruning runs only when tracked tokens exceed half the context window. `keep_last_n_turns` defaults to 3. Step-round pruning defaults to 0. Auto-compact is 85%. Stealth windows on these runs are 300,000 and spark is 81,920, so neither threshold fired. Later samples resend the transcript. On the medium run the re-sent assistant text and tool results were 293,461 and 101,137 tokens. Pi compacts only above the window minus 16,384, so the same short sessions stay uncompacted there too. Measured Cook usage files show compaction meta at zero and no compact purpose. The gap is extra rounds over a retained transcript.
 
@@ -107,13 +107,15 @@ A spark25 calendar replay is recorded when it is run. A model that still fails t
 
 ## 6. Phase 3 — evaluate report separates exit from files
 
-Not executed. File: `scripts/evaluate/summarize.py` only.
+Implemented in `scripts/evaluate/summarize.py`.
 
 - `files_and_bytes` walks the workdir for regular files. It does not use `git ls-files`. It skips `.git` and `node_modules`. The report footer stops saying the count is git-visible once that is true.
 - `usage_cook` keeps reading `stdout.json`. When `num_turns` or `usage` is absent, it may read the session `usage.json` and label that source. Absent fields stay `unreported`. A missing `stdout.json`, as on Minesweeper now, stays unreported.
 - `exit-code.txt` is still the Exit column. A non-empty file list does not change the exit code. Finance already shows three files and exit 1. That pair stays.
 
 Pass: a fixture workdir with no `.git`, containing `index.html`, `style.css`, and `app.js`, under a parent that gitignores the directory, reports 3 files. A fixture with usage only in session `usage.json` reports those numbers and names the source. A fixture with neither stdout usage nor session usage stays `unreported`, not 0. Existing `self_test` expectations that pin git behavior are updated in this phase. No agent binary change.
+
+**Result (2026-09-28).** `python3 scripts/evaluate/summarize.py --self-test` passed with an ignored workdir containing three app files, usage only in the session file, absent usage, and Exit 1 beside three files. The footer now describes regular files, and a `Usage source` column distinguishes `stdout.json`, session fallback, and `unreported`. On the retained runs, Minesweeper now counts three files while its missing `stdout.json` leaves usage unreported and Exit 1; finance remains three files and Exit 1. The fallback uses `purposeUsage.main_loop` to avoid including the session-title side call, and preserves an absent cache field.
 
 ## 7. Phase 4 — name the 15-second shell flag
 
@@ -139,4 +141,4 @@ Changing the wait, or setting `GROK_FOREGROUND_BLOCK_BUDGET_MS` for the harness,
 
 ## 9. Commit rule
 
-One phase, one commit, on `experiment/core-agent-token-optimization`, when that work starts. The original docs change is phase 1. Phase 2 is the budget-recovery change recorded above; phases 3–4 follow separately. If a later pass bar fails, revert that phase. Silence is not a pass. Do not copy another phase’s numbers forward.
+One phase, one commit, on `experiment/core-agent-token-optimization`, when that work starts. The original docs change is phase 1. Phase 2 is the budget-recovery change and phase 3 is the evaluate summary change; phase 4 follows separately. If a later pass bar fails, revert that phase. Silence is not a pass. Do not copy another phase’s numbers forward.
