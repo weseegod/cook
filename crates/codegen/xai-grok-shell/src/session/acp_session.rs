@@ -204,7 +204,11 @@ mod reminders;
 #[path = "acp_session_impl/subagent_handoff.rs"]
 mod subagent_handoff;
 use reminders::*;
-pub use reminders::{CollectedTodoGateInput, TodoGateInput, evaluate_todo_gate};
+pub use reminders::{
+    CollectedTodoGateInput, MISSING_DELIVERABLE_MAX_FIRES, MissingDeliverableDecision,
+    TodoGateInput, deliverable_paths, evaluate_missing_deliverables, evaluate_todo_gate,
+    missing_deliverable_gate_applies,
+};
 #[path = "acp_session_impl/laziness_classifier.rs"]
 mod laziness_classifier;
 pub(crate) use laziness_classifier::*;

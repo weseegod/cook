@@ -17,14 +17,34 @@ import sys
 
 seconds = int(sys.argv[1])
 process = subprocess.Popen(sys.argv[2:], start_new_session=True)
-try:
-    result = process.wait(timeout=seconds)
-except subprocess.TimeoutExpired:
-    os.killpg(process.pid, signal.SIGTERM)
+
+def kill_child(sig):
+    try:
+        os.killpg(process.pid, sig)
+    except ProcessLookupError:
+        pass
+
+def on_signal(signum, _frame):
+    # Forward cancel/timeout signals into the agent session so Ctrl-C on the
+    # evaluate harness cannot leave cook/opencode/pi running detached.
+    kill_child(signal.SIGTERM)
     try:
         process.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        kill_child(signal.SIGKILL)
+        process.wait()
+    raise SystemExit(128 + signum)
+
+signal.signal(signal.SIGTERM, on_signal)
+signal.signal(signal.SIGINT, on_signal)
+try:
+    result = process.wait(timeout=seconds)
+except subprocess.TimeoutExpired:
+    kill_child(signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        kill_child(signal.SIGKILL)
         process.wait()
     raise SystemExit(124)
 raise SystemExit(result)
@@ -75,9 +95,9 @@ version = 2''')
 PY
       chmod 600 "$dir/home/cook/config.toml"
       if "$COOK_BIN" --help 2>/dev/null | grep -q -- '--no-auto-update'; then
-        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 --reasoning-effort "$effort" --no-auto-update)
+        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort" --no-auto-update)
       else
-        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --max-turns 80 --reasoning-effort "$effort")
+        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort")
       fi
       ;;
     opencode)

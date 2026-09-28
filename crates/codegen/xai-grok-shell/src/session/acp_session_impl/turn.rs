@@ -2797,6 +2797,7 @@ impl SessionActor {
         let mut loop_index: u32 = 0;
         let mut identical_tool_calls = IdenticalToolCallRun::default();
         let mut todo_gate_fires: u32 = 0;
+        let mut missing_deliverable_fires: u32 = 0;
         let mut length_salvage_streak = LengthSalvageStreak::default();
         let mut auth_retry_schedule = AuthRetrySchedule::new();
         let mut rate_limit_waits = self.rate_limit_wait_budget(
@@ -3820,6 +3821,50 @@ impl SessionActor {
                     return Err(acp::Error::internal_error().data(
                         "tool-call argument budget was exceeded and no later valid tool call ran",
                     ));
+                }
+                if missing_deliverable_gate_applies(
+                    self.attach_non_interactive.get(),
+                    self.startup_hints.is_subagent,
+                    self.current_tool_surface(),
+                ) {
+                    let conversation = self.chat_state_handle.get_conversation().await;
+                    let query = crate::session::helpers::session_compact::extract_last_real_user_query(
+                        &conversation,
+                    )
+                    .unwrap_or_default();
+                    let named = deliverable_paths(&query);
+                    let cwd = std::path::Path::new(&self.session_info.cwd);
+                    let missing: Vec<&str> = named
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|p| !cwd.join(p).is_file())
+                        .collect();
+                    match evaluate_missing_deliverables(&missing, missing_deliverable_fires) {
+                        MissingDeliverableDecision::Continue => {}
+                        MissingDeliverableDecision::Nudge { reminder } => {
+                            missing_deliverable_fires += 1;
+                            tracing::info!(
+                                prompt_id = %req_id,
+                                missing = ?missing,
+                                missing_deliverable_fires,
+                                "turn-end missing-deliverable gate: nudging model to create files"
+                            );
+                            self.push_system_reminder(&reminder);
+                            salvage.step_boundary();
+                            continue;
+                        }
+                        MissingDeliverableDecision::Exhaust { missing } => {
+                            let joined = missing.join(", ");
+                            tracing::error!(
+                                prompt_id = %req_id,
+                                missing = %joined,
+                                "turn-end missing-deliverable gate: exhausted nudges"
+                            );
+                            return Err(acp::Error::internal_error().data(format!(
+                                "missing deliverable files after nudges: {joined}"
+                            )));
+                        }
+                    }
                 }
                 if !schema_ok
                     && !turn_refused
