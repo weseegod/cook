@@ -1,11 +1,9 @@
 use super::{
-    CollectedTodoGateInput, MISSING_DELIVERABLE_MAX_FIRES, MissingDeliverableDecision,
-    TodoGateDecision, TodoGateInput, TodoGateReason, build_todo_gate_reminder, deliverable_paths,
-    evaluate_missing_deliverables, evaluate_todo_gate, missing_deliverable_gate_applies,
+    CollectedTodoGateInput, TodoGateDecision, TodoGateInput, TodoGateReason,
+    build_todo_gate_reminder, evaluate_todo_gate,
 };
 use crate::tools::todo::TodoStatus;
 use std::collections::HashMap;
-use xai_grok_agent::ToolSurface;
 use xai_grok_tools::types::template_renderer::TemplateRenderer;
 use xai_grok_tools::types::tool::ToolKind;
 
@@ -240,81 +238,4 @@ fn as_input_completed_and_cancelled_are_dropped() {
     // `first-ip` (which appears before `second-ip` in `todos`) takes the one backed slot
     assert_eq!(input.in_progress_backed, vec!["first-ip"]);
     assert_eq!(input.in_progress_unbacked, vec!["second-ip"]);
-}
-
-// ── Missing-deliverable gate ──────────────────────────────────────.
-
-#[test]
-fn deliverable_paths_extracts_relative_html_and_js() {
-    let paths = deliverable_paths(
-        "Please create index.html and js/canvas.js for the editor.",
-    );
-    assert_eq!(paths, vec!["index.html", "js/canvas.js"]);
-}
-
-#[test]
-fn deliverable_paths_rejects_url_and_dotdot() {
-    let paths = deliverable_paths(
-        "Fetch https://cdn.example.com/app.js and also ../secret/config.json plus good/app.js",
-    );
-    assert_eq!(paths, vec!["good/app.js"]);
-    assert!(!paths.iter().any(|p| p.contains("cdn.example.com")));
-    assert!(!paths.iter().any(|p| p.contains("..")));
-}
-
-#[test]
-fn missing_deliverables_nudges_while_files_absent() {
-    let decision = evaluate_missing_deliverables(&["index.html", "app.js"], 0);
-    let MissingDeliverableDecision::Nudge { reminder } = decision else {
-        panic!("expected Nudge when files are missing");
-    };
-    assert!(reminder.contains("index.html"));
-    assert!(reminder.contains("app.js"));
-}
-
-#[test]
-fn missing_deliverables_continues_when_none_missing() {
-    assert_eq!(
-        evaluate_missing_deliverables(&[], 0),
-        MissingDeliverableDecision::Continue
-    );
-}
-
-#[test]
-fn missing_deliverables_exhausts_when_cap_spent() {
-    let decision =
-        evaluate_missing_deliverables(&["index.html"], MISSING_DELIVERABLE_MAX_FIRES);
-    let MissingDeliverableDecision::Exhaust { missing } = decision else {
-        panic!("expected Exhaust when fire cap is spent");
-    };
-    assert_eq!(missing, vec!["index.html"]);
-}
-
-#[test]
-fn missing_deliverable_gate_skips_plan_and_subagent() {
-    assert!(!missing_deliverable_gate_applies(
-        true,
-        false,
-        ToolSurface::Plan
-    ));
-    assert!(!missing_deliverable_gate_applies(
-        true,
-        true,
-        ToolSurface::TaskOpen
-    ));
-    assert!(!missing_deliverable_gate_applies(
-        false,
-        false,
-        ToolSurface::TaskOpen
-    ));
-    assert!(missing_deliverable_gate_applies(
-        true,
-        false,
-        ToolSurface::TaskOpen
-    ));
-    assert!(missing_deliverable_gate_applies(
-        true,
-        false,
-        ToolSurface::Implement
-    ));
 }
