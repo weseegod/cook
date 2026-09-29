@@ -58,28 +58,117 @@ fn read_capped(path: &Path) -> Option<String> {
 /// A second stop is allowed to finish. This is not a completion gate.
 pub(crate) const PLAN_STOP_NUDGE_CAP: u32 = 1;
 
-/// First unchecked box under `## Task checklist` or `## Steps`.
-/// Checkboxes outside those sections, including under `## Acceptance criteria`, are not a step.
-pub(crate) fn open_checklist_step(body: &str) -> Option<String> {
-    if !has_checklist_section(body) {
-        return None;
+/// A normal coding turn has no structured-output schema. That is not a reason to skip the reminder.
+pub(crate) fn should_plan_stop_nudge(
+    turn_refused: bool,
+    truncated: bool,
+    fires: u32,
+    goal_loop: bool,
+) -> bool {
+    !turn_refused && !truncated && fires < PLAN_STOP_NUDGE_CAP && !goal_loop
+}
+
+/// Every unchecked box under `## Task checklist` or `## Steps`.
+/// Checkboxes outside those sections, including under `## Acceptance criteria`, are not steps.
+/// No checklist heading means no steps: this does not fall back to other boxes or `plan.json`.
+pub(crate) fn open_checklist_steps(body: &str) -> Vec<String> {
+    let Some(name) = checklist_section_name(body) else {
+        return Vec::new();
+    };
+    let mut section_level: Option<usize> = None;
+    let mut steps = Vec::new();
+    for line in body.lines() {
+        if is_section_header(line, name) {
+            section_level = Some(header_level(line));
+            continue;
+        }
+        let Some(level) = section_level else {
+            continue;
+        };
+        if is_any_header(line) && header_level(line) <= level {
+            break;
+        }
+        if let Some(item) = parse_checkbox_item(line.trim_start()) {
+            steps.push(item);
+        }
     }
-    extract_first_unchecked(body)
+    steps
 }
 
-/// Reads the episode and returns the open checklist step, if any.
-pub(crate) fn open_checklist_step_at(path: &Path) -> Option<String> {
-    let body = read_capped(path)?;
-    open_checklist_step(&body)
+/// First unchecked box under `## Task checklist` or `## Steps`.
+pub(crate) fn open_checklist_step(body: &str) -> Option<String> {
+    open_checklist_steps(body).into_iter().next()
 }
 
-pub(crate) fn plan_stop_reminder(step: &str) -> String {
+/// Reads the episode and returns every open checklist step. A missing file is an empty list.
+pub(crate) fn open_checklist_steps_at(path: &Path) -> Vec<String> {
+    let Some(body) = read_capped(path) else {
+        return Vec::new();
+    };
+    open_checklist_steps(&body)
+}
+
+pub(crate) fn plan_stop_reminder(steps: &[String]) -> String {
+    let mut listed = String::new();
+    for step in steps {
+        listed.push_str("- ");
+        listed.push_str(step);
+        listed.push('\n');
+    }
     format!(
-        "You stopped without a tool call while the plan still has an open step: {step}. \
-Continue that step now. If a planned check already finished on the tree after the last edit, \
-cite that result and do not run it again. If you are blocked, name this step and the \
+        "You stopped without a tool call while the plan still has open steps:\n\
+{listed}\
+Continue the first open step whose result is not already in the tree. \
+Mark a step only when its Done when observation holds. \
+If a planned check already finished on the tree after the last edit, \
+cite that result and do not run it again. If you are blocked, name these steps and the \
 observation that is still missing, then stop."
     )
+}
+
+/// Goal, acceptance criteria, and still-open checklist steps from a saved plan.
+/// `None` when those three are all absent. A `## Tests` heading is the criteria section
+/// when `## Acceptance criteria` is not present. Checked steps and other sections are omitted.
+pub(crate) fn plan_compaction_reminder(body: &str) -> Option<String> {
+    let goal = named_section_body(body, "goal");
+    let criteria = named_section_body(body, "acceptance criteria")
+        .or_else(|| named_section_body(body, "tests"));
+    let open = open_checklist_steps(body);
+    if goal.is_none() && criteria.is_none() && open.is_empty() {
+        return None;
+    }
+    let mut out = String::from(
+        "The saved plan is the checklist for this task. If the latest user message asks for something else, follow that message.",
+    );
+    if let Some(goal) = goal {
+        out.push_str("\n\n## Goal\n");
+        out.push_str(&goal);
+    }
+    if let Some(criteria) = criteria {
+        out.push_str("\n\n## Acceptance criteria\n");
+        out.push_str(&criteria);
+    }
+    if open.is_empty() {
+        if has_checklist_section(body) {
+            out.push_str(
+                "\n\nThe checklist steps are checked. If a planned check already finished on the tree after the last edit, cite that result and do not run it again.",
+            );
+        }
+    } else {
+        out.push_str("\n\n## Open steps\n");
+        for step in &open {
+            out.push_str("- [ ] ");
+            out.push_str(step);
+            out.push('\n');
+        }
+    }
+    Some(out)
+}
+
+/// Reads the episode and returns the compaction excerpt, if the file has one.
+pub(crate) fn plan_compaction_reminder_at(path: &Path) -> Option<String> {
+    let body = read_capped(path)?;
+    plan_compaction_reminder(&body)
 }
 
 /// Legacy fallback: first unchecked `- [ ]` (or `* [ ]` / `+ [ ]`) markdown checkbox.
@@ -113,6 +202,28 @@ fn has_checklist_section(body: &str) -> bool {
     body.lines().any(|line| {
         is_section_header(line, "task checklist") || is_section_header(line, "steps")
     })
+}
+
+/// Non-empty lines of the first section whose title matches `name`, without the heading.
+fn named_section_body(body: &str, name: &str) -> Option<String> {
+    let mut section_level: Option<usize> = None;
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        if section_level.is_none() && is_section_header(line, name) {
+            section_level = Some(header_level(line));
+            continue;
+        }
+        let Some(level) = section_level else {
+            continue;
+        };
+        if is_any_header(line) && header_level(line) <= level {
+            break;
+        }
+        if !line.trim().is_empty() {
+            lines.push(line.trim_end());
+        }
+    }
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn checklist_section_name(body: &str) -> Option<&'static str> {
@@ -510,9 +621,69 @@ mod tests {
         assert!(open_checklist_step(&done).is_none());
         let criteria_only = "## Acceptance criteria\n- [ ] not a step\n";
         assert!(open_checklist_step(criteria_only).is_none());
-        let reminder = plan_stop_reminder("write canvas.js");
-        assert!(reminder.contains("write canvas.js"));
+        assert!(open_checklist_steps(criteria_only).is_empty());
+        let two = "# Plan\n\n## Steps\n- [ ] write shapes.js\n- [x] done shell\n- [ ] Run ## Acceptance criteria.\n";
+        let steps = open_checklist_steps(two);
+        assert_eq!(
+            steps,
+            vec![
+                "write shapes.js".to_string(),
+                "Run ## Acceptance criteria.".to_string(),
+            ]
+        );
+        let reminder = plan_stop_reminder(&steps);
+        assert!(reminder.contains("write shapes.js"));
+        assert!(reminder.contains("Run ## Acceptance criteria."));
         assert!(reminder.contains("do not run it again"));
+        assert!(!reminder.contains("done shell"));
+        assert!(should_plan_stop_nudge(false, false, 0, false));
+        assert!(!should_plan_stop_nudge(true, false, 0, false));
+        assert!(!should_plan_stop_nudge(false, true, 0, false));
+        assert!(!should_plan_stop_nudge(false, false, 1, false));
+        assert!(!should_plan_stop_nudge(false, false, 0, true));
         assert_eq!(PLAN_STOP_NUDGE_CAP, 1);
+    }
+
+    #[test]
+    fn compaction_excerpt_keeps_goal_criteria_and_open_steps() {
+        let body = "\
+# Plan
+
+## Goal
+Ship the editor.
+
+## Context
+- layout notes that must stay out
+
+## Acceptance criteria
+- Criterion: the canvas pans
+  Behavior: dragging empty canvas moves the view
+
+## Steps
+- [x] already shipped
+- [ ] write canvas.js
+";
+        let excerpt = plan_compaction_reminder(body).expect("excerpt");
+        assert!(excerpt.contains("Ship the editor."));
+        assert!(excerpt.contains("the canvas pans"));
+        assert!(excerpt.contains("- [ ] write canvas.js"));
+        assert!(!excerpt.contains("already shipped"));
+        assert!(!excerpt.contains("## Context"));
+        assert!(excerpt.contains("follow that message"));
+        assert!(plan_compaction_reminder("").is_none());
+        assert!(plan_compaction_reminder("## Context\n- notes\n").is_none());
+        let tests_only = "\
+## Tests
+- Criterion: the board loads
+  Command: `cargo test`
+
+## Steps
+- [x] page exists
+";
+        let from_tests = plan_compaction_reminder(tests_only).expect("tests alias");
+        assert!(from_tests.contains("## Acceptance criteria"));
+        assert!(from_tests.contains("the board loads"));
+        assert!(from_tests.contains("The checklist steps are checked"));
+        assert!(!from_tests.contains("## Open steps"));
     }
 }

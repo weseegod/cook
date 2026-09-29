@@ -1872,6 +1872,29 @@ impl SessionActor {
                 system_reminder
             }
         };
+        let system_reminder = {
+            let episode = self.plan_mode.lock().checklist_episode();
+            if let Some(path) = episode
+                && let Some(excerpt) =
+                    crate::session::goal_next_step::plan_compaction_reminder_at(&path)
+            {
+                let wrapper = self.reminder_wrapper_tag();
+                match system_reminder {
+                    Some(mut existing) => {
+                        if let Some(pos) = existing.rfind("</system-reminder>") {
+                            existing.insert_str(pos, &format!("\n\n{excerpt}\n"));
+                        } else {
+                            existing.push_str("\n\n");
+                            existing.push_str(&excerpt);
+                        }
+                        Some(existing)
+                    }
+                    None => Some(format!("<{wrapper}>\n{excerpt}\n</{wrapper}>")),
+                }
+            } else {
+                system_reminder
+            }
+        };
         let system_reminder = if let Some(goal_section) = self.compaction_goal_section().await {
             use crate::session::acp_session::splice_goal_section;
             match system_reminder {

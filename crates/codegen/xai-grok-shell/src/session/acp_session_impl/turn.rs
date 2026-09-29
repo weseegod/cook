@@ -3878,28 +3878,29 @@ impl SessionActor {
                         ));
                     }
                 }
-                if schema_ok
-                    && !turn_refused
-                    && !salvage.is_truncated()
-                    && plan_stop_nudges < crate::session::goal_next_step::PLAN_STOP_NUDGE_CAP
-                    && !self.goal_loop_active()
-                {
+                if crate::session::goal_next_step::should_plan_stop_nudge(
+                    turn_refused,
+                    salvage.is_truncated(),
+                    plan_stop_nudges,
+                    self.goal_loop_active(),
+                ) {
                     let episode = self.plan_mode.lock().checklist_episode();
-                    if let Some(path) = episode
-                        && let Some(step) =
-                            crate::session::goal_next_step::open_checklist_step_at(&path)
-                    {
-                        plan_stop_nudges += 1;
-                        tracing::info!(
-                            prompt_id = %req_id,
-                            step = %step,
-                            "turn-end plan checklist nudge"
-                        );
-                        self.push_system_reminder(
-                            &crate::session::goal_next_step::plan_stop_reminder(&step),
-                        );
-                        salvage.step_boundary();
-                        continue;
+                    if let Some(path) = episode {
+                        let steps = crate::session::goal_next_step::open_checklist_steps_at(&path);
+                        if !steps.is_empty() {
+                            plan_stop_nudges += 1;
+                            tracing::info!(
+                                prompt_id = %req_id,
+                                open_steps = steps.len(),
+                                first = %steps[0],
+                                "turn-end plan checklist nudge"
+                            );
+                            self.push_system_reminder(
+                                &crate::session::goal_next_step::plan_stop_reminder(&steps),
+                            );
+                            salvage.step_boundary();
+                            continue;
+                        }
                     }
                 }
                 if self.drain_interjections_at_safe_point().await {
