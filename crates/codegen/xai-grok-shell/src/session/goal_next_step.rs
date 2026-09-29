@@ -54,6 +54,34 @@ fn read_capped(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
+/// One soft reminder per user prompt when a turn ends with no tool call and the checklist is still open.
+/// A second stop is allowed to finish. This is not a completion gate.
+pub(crate) const PLAN_STOP_NUDGE_CAP: u32 = 1;
+
+/// First unchecked box under `## Task checklist` or `## Steps`.
+/// Checkboxes outside those sections, including under `## Acceptance criteria`, are not a step.
+pub(crate) fn open_checklist_step(body: &str) -> Option<String> {
+    if !has_checklist_section(body) {
+        return None;
+    }
+    extract_first_unchecked(body)
+}
+
+/// Reads the episode and returns the open checklist step, if any.
+pub(crate) fn open_checklist_step_at(path: &Path) -> Option<String> {
+    let body = read_capped(path)?;
+    open_checklist_step(&body)
+}
+
+pub(crate) fn plan_stop_reminder(step: &str) -> String {
+    format!(
+        "You stopped without a tool call while the plan still has an open step: {step}. \
+Continue that step now. If a planned check already finished on the tree after the last edit, \
+cite that result and do not run it again. If you are blocked, name this step and the \
+observation that is still missing, then stop."
+    )
+}
+
 /// Legacy fallback: first unchecked `- [ ]` (or `* [ ]` / `+ [ ]`) markdown checkbox.
 /// Numbered `## Acceptance criteria` are not mined: they never get checked off, so criterion 1 would surface forever.
 /// When the plan has a `## Task checklist` or `## Steps` section only its checkboxes are mined.
@@ -469,5 +497,22 @@ mod tests {
             first_unchecked_plan_item(f.path()).as_deref(),
             Some("tiny step"),
         );
+    }
+
+    #[test]
+    fn open_checklist_step_ignores_criteria_and_finished_lists() {
+        let open = "# Plan\n\n## Acceptance criteria\n- Criterion: the board loads\n  Behavior: the page shows the board\n\n## Steps\n- [x] `index.html` — page. Done when: file exists.\n- [ ] `js/app.js` — loop. Done when: check runs.\n";
+        assert_eq!(
+            open_checklist_step(open).as_deref(),
+            Some("`js/app.js` — loop. Done when: check runs."),
+        );
+        let done = open.replace("- [ ] `js/app.js`", "- [x] `js/app.js`");
+        assert!(open_checklist_step(&done).is_none());
+        let criteria_only = "## Acceptance criteria\n- [ ] not a step\n";
+        assert!(open_checklist_step(criteria_only).is_none());
+        let reminder = plan_stop_reminder("write canvas.js");
+        assert!(reminder.contains("write canvas.js"));
+        assert!(reminder.contains("do not run it again"));
+        assert_eq!(PLAN_STOP_NUDGE_CAP, 1);
     }
 }

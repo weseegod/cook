@@ -2797,6 +2797,7 @@ impl SessionActor {
         let mut loop_index: u32 = 0;
         let mut identical_tool_calls = IdenticalToolCallRun::default();
         let mut todo_gate_fires: u32 = 0;
+        let mut plan_stop_nudges: u32 = 0;
         let mut length_salvage_streak = LengthSalvageStreak::default();
         let mut auth_retry_schedule = AuthRetrySchedule::new();
         let mut rate_limit_waits = self.rate_limit_wait_budget(
@@ -3875,6 +3876,30 @@ impl SessionActor {
                              to user. If you want autonomous progress, prompt the agent \
                              to continue explicitly, or clean up the todo list."
                         ));
+                    }
+                }
+                if schema_ok
+                    && !turn_refused
+                    && !salvage.is_truncated()
+                    && plan_stop_nudges < crate::session::goal_next_step::PLAN_STOP_NUDGE_CAP
+                    && !self.goal_loop_active()
+                {
+                    let episode = self.plan_mode.lock().checklist_episode();
+                    if let Some(path) = episode
+                        && let Some(step) =
+                            crate::session::goal_next_step::open_checklist_step_at(&path)
+                    {
+                        plan_stop_nudges += 1;
+                        tracing::info!(
+                            prompt_id = %req_id,
+                            step = %step,
+                            "turn-end plan checklist nudge"
+                        );
+                        self.push_system_reminder(
+                            &crate::session::goal_next_step::plan_stop_reminder(&step),
+                        );
+                        salvage.step_boundary();
+                        continue;
                     }
                 }
                 if self.drain_interjections_at_safe_point().await {

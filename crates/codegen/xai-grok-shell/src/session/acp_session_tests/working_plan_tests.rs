@@ -18,8 +18,11 @@ A playable board in the browser.
 fn working_plan_skill_keeps_the_checklist_in_the_file() {
     assert!(working_plan_skill_body.contains("save_working_plan"));
     let tests_at = working_plan_skill_body
-        .find("## Tests")
-        .expect("passive plans name the checks");
+        .find("## Acceptance criteria")
+        .expect("passive plans name the criteria");
+    assert!(working_plan_skill_body.contains("pass or fail"));
+    assert!(working_plan_skill_body.contains("do not name a script you have not written"));
+    assert!(!working_plan_skill_body.contains("## Tests\n"));
     let steps_at = working_plan_skill_body
         .find("## Steps")
         .expect("the checklist is the last section");

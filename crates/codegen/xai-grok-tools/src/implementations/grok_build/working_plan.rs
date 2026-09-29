@@ -16,22 +16,24 @@ pub const SAVE_WORKING_PLAN_TOOL_ID: &str = "save_working_plan";
 macro_rules! run_checks_procedure {
     () => {
         "Check the existing runner and its test command once. Do not start the runner after every edit. \
-When a step's code is done and the next step does not edit files that check covers, run that `## Tests` \
-command once in a background shell and keep implementing the independent step. Do not poll. One check \
-command is in flight; do not start a second run of the same suite while the first is still running. \
-If the next step edits those files, wait: a run against a tree you are still changing is discarded. \
-If the plan has no `## Tests`, run the existing suite that covers the change once, under the same \
-background rule. When that run returns, read it once. Fix every failure from that run as one batch: \
-fix the product, or fix the test without weakening the criterion (do not change the expected result \
-to match the bug, delete the case, or skip it). Rerun only the checks that failed. When those pass, \
-run the full `## Tests` set once, unless the background run that just finished was that same command \
-on the tree after the last edit. A new failure on that last full run is one more batch; do not run \
-the full set after each fix. If the environment cannot run a check, record that limit and run the \
-entries that can. Do not build a stand-in that pretends to be the missing tool, such as a fake \
-browser, a DOM stub, or a toolchain installed only to manufacture evidence. Stop when a rerun shows \
-the same failing observation and your diagnosis of the layer has not changed, and report the \
-observation that is still missing. A different wording of the same failure is not progress. If the \
-observation changed, continue."
+When a step's code is done and the next step does not edit files that check covers, run that \
+`## Acceptance criteria` command once in a background shell and keep implementing the independent \
+step. Do not poll. One check command is in flight; do not start a second run of the same suite \
+while the first is still running. If the next step edits those files, wait: a run against a tree \
+you are still changing is discarded. If the plan has no `## Acceptance criteria` and no `## Tests` \
+list, run the existing suite that covers the change once, under the same background rule. When \
+that run returns, read it once. Fix every failure from that run as one batch: fix the product, or \
+fix the test without weakening the criterion (do not change the expected result to match the bug, \
+delete the case, or skip it). Rerun only the checks that failed. When those pass, run the full \
+`## Acceptance criteria` set once, unless the background run that just finished was that same \
+command on the tree after the last edit. A new failure on that last full run is one more batch; \
+do not run the full set after each fix. If the environment cannot run a check, record that limit \
+and run the entries that can. Do not build a stand-in that pretends to be the missing tool, such \
+as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence. Stop when a \
+rerun shows the same failing observation and your diagnosis of the layer has not changed, and \
+report the observation that is still missing. A different wording of the same failure is not \
+progress. If the observation changed, continue. A list still headed `## Tests` is that same \
+section."
     };
 }
 
@@ -40,14 +42,14 @@ macro_rules! run_checks_classification {
         "\n\nWhen a check fails, decide whether the failure is in the product, in the test or harness, or in the environment.\n\
 - Product: fix the product.\n\
 - Test or harness: fix the test. Do not weaken the criterion. Do not change the expected result to match the bug, delete the case, or skip it. Fixing a broken fixture or a harness syntax error is allowed.\n\
-- Environment: the check cannot run here. Record that limit and run the `## Tests` entries that can run. Do not build a stand-in that pretends to be the missing tool, such as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence.\n"
+- Environment: the check cannot run here. Record that limit and run the `## Acceptance criteria` entries that can run. Do not build a stand-in that pretends to be the missing tool, such as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence.\n"
     };
 }
 
 /// Shared check loop for active prompts and the `run-checks` skill. English. The host does not enforce it.
 pub const RUN_CHECKS_PROCEDURE: &str = run_checks_procedure!();
 
-/// How to run the checks already written in `## Tests`. The procedure, then the failure classes.
+/// How to run the checks already written in `## Acceptance criteria`. The procedure, then the failure classes.
 pub const RUN_CHECKS_SKILL_BODY: &str =
     concat!(run_checks_procedure!(), run_checks_classification!());
 
@@ -68,24 +70,29 @@ Do not call todo_write for these steps.\n\
 ## Goal\n\
 One sentence describing the finished work.\n\
 \n\
-## Tests\n\
-- Criterion: <one important outcome from the task>\n\
-  Command: `<a command you already know>`\n\
-- Criterion: <another important outcome>\n\
-  Behavior: <what must be true when you do not yet know a command>\n\
-One entry per important outcome. No `- [ ]` in this section. Do not add a performance test, a screenshot, \
-or an extra scenario unless that outcome requires it. Do not invent a command.\n\
+## Acceptance criteria\n\
+- Criterion: <one outcome that can pass or fail on its own. One or two sentences. State the observation that separates pass from fail. Do not restate the implementation steps.>\n\
+  Behavior: <the action and the observation, when you do not already know a command>\n\
+- Criterion: <another independent outcome>\n\
+  Command: `<a command that already exists>`\n\
+One entry per outcome that can fail independently. Do not collapse those outcomes into one end-to-end script. \
+No `- [ ]` in this section. Do not add a performance test, a screenshot, or an extra scenario unless that \
+outcome requires it. Do not invent a command, and do not name a script you have not written.\n\
 \n\
 ## Steps\n\
 - [ ] `path` — the change. Done when: an observable result.\n\
-- [ ] Run ## Tests. Done when: each criterion's command or behavior holds.\n\
+- [ ] Run ## Acceptance criteria. Done when: each criterion's command or behavior holds.\n\
 \n\
-The saved file is exactly the body you send, including ## Tests and ## Steps. ## Steps is the last section. \
+The saved file is exactly the body you send, including ## Acceptance criteria and ## Steps. ## Steps is the last section. \
 Do not add a ## Files section: the prompt and the conversation already name the files. Do not add anchors, \
 an edit brief, decisions, or a deviations log.\n\
 \n\
 When a step is done, edit the saved plan file and change that line from `- [ ]` to `- [x]`. \
 Leave the rest of the line unchanged. Do not call save_working_plan again to revise the shape.\n\
+\n\
+Before you stop, read ## Steps and ## Acceptance criteria. If a planned check already finished on the tree \
+after the last edit, cite that result and do not run it again. If a step is still open or a criterion has \
+not been run, name it and continue unless you are blocked.\n\
 \n\
 ",
     run_checks_procedure!(),
@@ -196,7 +203,7 @@ fn rejected(message: &str) -> SkillOutput {
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
-    /// Full working-plan markdown: title, Goal, Tests, and Steps. The host stores this text unchanged.
+    /// Full working-plan markdown: title, Goal, Acceptance criteria, and Steps. The host stores this text unchanged.
     #[schemars(description = "Full working-plan markdown")]
     pub body: String,
 }
@@ -238,7 +245,7 @@ impl crate::types::tool_metadata::ToolMetadata for SaveWorkingPlanTool {
 
     fn description_template(&self) -> &str {
         "Save a passive working plan into the session plans list. Pass the full markdown as \
-         body, including ## Tests and the ## Steps checklist. Then keep implementing on this turn. \
+         body, including ## Acceptance criteria and the ## Steps checklist. Then keep implementing on this turn. \
          Mark a finished step by editing that file from `- [ ]` to `- [x]`. This does not enter \
          plan mode and does not ask for approval."
     }
@@ -305,6 +312,13 @@ mod tests {
         assert!(RUN_CHECKS_SKILL_BODY.starts_with(RUN_CHECKS_PROCEDURE));
         assert!(RUN_CHECKS_PROCEDURE.contains("background shell"));
         assert!(RUN_CHECKS_PROCEDURE.contains("Do not poll"));
+        assert!(RUN_CHECKS_PROCEDURE.contains("## Acceptance criteria"));
+        assert!(
+            RUN_CHECKS_PROCEDURE.contains("A list still headed `## Tests` is that same section.")
+        );
+        assert!(WORKING_PLAN_SKILL_BODY.contains("pass or fail"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("do not name a script you have not written"));
+        assert!(!WORKING_PLAN_SKILL_BODY.contains("## Tests\n"));
         assert!(!RUN_CHECKS_SKILL_BODY.contains("two fixes"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Product:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Test or harness:"));

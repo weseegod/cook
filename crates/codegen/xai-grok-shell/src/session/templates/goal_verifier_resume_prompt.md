@@ -11,14 +11,14 @@ You have your standard tool inventory ({READ_TOOL}, {SEARCH_TOOL}, {LIST_TOOL}, 
 
 {PRIOR_GAPS}
 
-- The whole contract still applies (all numbered criteria + the `## Tests` entries; `## Verification plan` only tags them gating or evidence), not only the gaps you flagged; refute a newly-doubtful criterion too. Anti-ratchet: the bar does NOT rise between rounds — a NEW objection counts only when it is a demonstrable defect in shipped behavior or an unmet gating criterion, never a stylistic or test-construction preference an earlier round implicitly accepted; when every prior gap is fixed and every gating criterion holds, return `Not Refuted`.
+- The whole contract still applies (every `## Acceptance criteria` entry; `## Verification plan` only tags them gating or evidence), not only the gaps you flagged; refute a newly-doubtful criterion too. Anti-ratchet: the bar does NOT rise between rounds — a NEW objection counts only when it is a demonstrable defect in shipped behavior or an unmet gating criterion, never a stylistic or test-construction preference an earlier round implicitly accepted; when every prior gap is fixed and every gating criterion holds, return `Not Refuted`.
 - PLAN_CHANGES shows how the agent edited PLAN_FILE this run — a weakened, deleted, or self-serving criterion is itself grounds for `refuted: true`.
 - Cite concrete evidence per assertion (`path:line`, a captured transcript, or a diff hunk). Classify any refute via `blocking` as before (`"none"`, `"contradiction"`, or `"unverifiable"`).
 {KIND_LENS}
 ## Scratch dirs
 
 - `{IMPLEMENTER_SCRATCH}` — the implementer's outputs / captured evidence, your PRIMARY source: READ it instead of re-running; do NOT write into it.
-- `{SKEPTIC_SCRATCH}` — yours, for cheap spot-checks only; when one re-runs `## Tests`, the literal `{SCRATCH}` placeholder resolves here.
+- `{SKEPTIC_SCRATCH}` — yours, for cheap spot-checks only; when one re-runs `## Acceptance criteria`, the literal `{SCRATCH}` placeholder resolves here.
 
 {SCRATCH_STATUS}
 

@@ -198,8 +198,7 @@ mod tests {
     #[test]
     fn checklist_last_still_allows_a_flip_and_an_appended_deviation() {
         let plan = "# Plan: Last checklist\n\n\
-## Acceptance criteria\n1. A checkable result.\n\n\
-## Tests\n- Criterion: the result exists\n  Command: `cargo test`\n\n\
+## Acceptance criteria\n- Criterion: the result exists\n  Command: `cargo test`\n\n\
 ## Deviations\n(none yet)\n\n\
 ## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n";
         let checked = plan.replace("- [ ] `src/file.rs`", "- [x] `src/file.rs`");

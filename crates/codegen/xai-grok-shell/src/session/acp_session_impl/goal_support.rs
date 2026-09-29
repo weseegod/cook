@@ -501,7 +501,7 @@ pub(super) fn render_goal_reverify_block(
     let lead = if rounds_since_verify >= threshold.saturating_mul(3) {
         "STOP DRIFTING — VERIFY THE REMAINING GAP NOW."
     } else {
-        "Re-run the gating `## Tests` entries before continuing."
+        "Re-run the gating `## Acceptance criteria` entries before continuing."
     };
     format!(
         "{lead} You have run {rounds_since_verify} rounds since the last \
@@ -528,7 +528,7 @@ pub(super) fn render_goal_reverify_block_legacy(
         "{lead} You have run {rounds_since_verify} rounds since your last \
          verification without calling `{goal_tool}(completed: true)`. The ONLY \
          way to finish this goal is to PASS verification — not to keep editing. \
-         If the plan's gating `## Tests` entries now hold, call \
+         If the plan's gating `## Acceptance criteria` entries now hold, call \
          `{goal_tool}(completed: true)` THIS round to re-trigger the skeptic \
          panel. If they do NOT, name the SINGLE concrete gap still blocking it \
          and fix exactly that — do not make cosmetic changes to look busy.\n\n"
@@ -2016,10 +2016,10 @@ mod run_checks_prompt_tests {
     #[test]
     fn reverify_asks_for_gating_tests() {
         let current = super::render_goal_reverify_block(3, true, 3);
-        assert!(current.contains("gating `## Tests`"));
+        assert!(current.contains("gating `## Acceptance criteria`"));
         assert!(!current.contains("verification plan"));
         let legacy = super::render_goal_reverify_block_legacy(3, true, 3, "update_goal");
-        assert!(legacy.contains("gating `## Tests` entries now hold"));
+        assert!(legacy.contains("gating `## Acceptance criteria` entries now hold"));
         assert!(!legacy.contains("Verification plan"));
     }
 }
