@@ -196,6 +196,23 @@ mod tests {
     }
 
     #[test]
+    fn checklist_last_still_allows_a_flip_and_an_appended_deviation() {
+        let plan = "# Plan: Last checklist\n\n\
+## Acceptance criteria\n1. A checkable result.\n\n\
+## Tests\n- Criterion: the result exists\n  Command: `cargo test`\n\n\
+## Deviations\n(none yet)\n\n\
+## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n";
+        let checked = plan.replace("- [ ] `src/file.rs`", "- [x] `src/file.rs`");
+        assert!(progress_only_delta(plan, &checked).is_ok());
+        let with_deviation = plan.replace("(none yet)", "- Used a smaller helper.");
+        assert!(progress_only_delta(plan, &with_deviation).is_ok());
+        let both = checked.replace("(none yet)", "- Used a smaller helper.");
+        assert!(progress_only_delta(plan, &both).is_ok());
+        let rewritten_test = plan.replace("the result exists", "a different result");
+        assert!(progress_only_delta(plan, &rewritten_test).is_err());
+    }
+
+    #[test]
     fn rejects_edit_to_brief_after_freeze() {
         let edited = PLAN.replace(
             "- Change: Add `validate_plan_contract` that checks plan shape.",

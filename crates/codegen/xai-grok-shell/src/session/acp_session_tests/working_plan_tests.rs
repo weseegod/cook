@@ -17,7 +17,16 @@ A playable board in the browser.
 #[test]
 fn working_plan_skill_keeps_the_checklist_in_the_file() {
     assert!(working_plan_skill_body.contains("save_working_plan"));
-    assert!(working_plan_skill_body.contains("## Steps"));
+    let tests_at = working_plan_skill_body
+        .find("## Tests")
+        .expect("passive plans name the checks");
+    let steps_at = working_plan_skill_body
+        .find("## Steps")
+        .expect("the checklist is the last section");
+    assert!(tests_at < steps_at);
+    assert!(working_plan_skill_body.contains("Product:"));
+    assert!(working_plan_skill_body.contains("Test or harness:"));
+    assert!(working_plan_skill_body.contains("Environment:"));
     assert!(working_plan_skill_body.contains("`- [ ]` to `- [x]`"));
     assert!(
         !working_plan_skill_body.contains("## Files\n"),

@@ -27,18 +27,18 @@ When the deliverable is primarily visual or interactive (a game, a canvas/UI app
 
 ## Entry-point launch check — all runnable deliverables
 
-Unit tests of internals do NOT prove the deliverable starts: a missing import map, a crashing `main()`, or a bad entry script all pass unit tests and fail the user on first launch. Whenever the deliverable has a launchable entry point and the environment can run it, the verification plan MUST include one GATING launch on the real entry path with the cheapest available runtime, asserting NOT merely that it starts but that its PRIMARY OBSERVABLE is CORRECT (present and non-empty is INSUFFICIENT), and producing captured output in `{SCRATCH}`. Run the launch MORE THAN ONCE and assert CONSISTENT success: non-deterministic launch output (a pass on one run, an empty/error capture on the next) is an APP-side defect to FIX, not to average away or cherry-pick a success from (if the ENVIRONMENT is what's flaky, capture that and take the honest fallback below). Assert the primary observable per deliverable:
+Unit tests of internals do NOT prove the deliverable starts: a missing import map, a crashing `main()`, or a bad entry script all pass unit tests and fail the user on first launch. Whenever the deliverable has a launchable entry point and the environment can run it, put one GATING entry in `## Tests` for that launch: the cheapest command that already exists, asserting the PRIMARY OBSERVABLE is CORRECT (present and non-empty is INSUFFICIENT), with captured output in `{SCRATCH}`. Run that launch once. A second run, a performance check, a screenshot, or an extra scenario belongs in `## Tests` only when the acceptance criterion requires it. Assert the primary observable per deliverable:
 
 - CLI tool → run the real command on a representative input; assert the actual output CONTENT, not just that it ran; capture output.
 - Server/service → boot it, hit one endpoint, assert the response BODY is sane, not just an HTTP 200.
 - Library → import/load it from a fresh consumer (not only from its tests) and assert a real call's RETURN VALUE.
-- Browser page → probe for a headless browser (e.g. `npx playwright --version`); if present, serve + load the page and assert zero page errors, the render surface's drawing dimensions equal the intended/target size (catches a renderer that cached a stale/default size), the surface is SUBSTANTIALLY filled (a high painted fraction or a painted bbox ≈ the whole surface — NOT a `> 0 pixels` check), and a driven input produces the expected visible change; capture a screenshot. Module-resolution mistakes (bare specifiers, import maps) surface ONLY on a real page load.
+- Browser page → if a browser can already load the page, load it and assert the primary observable the criterion names. Do not probe for a browser tool, capture a screenshot, or drive extra scenarios unless that criterion requires them. Module-resolution mistakes (bare specifiers, import maps) surface ONLY on a real page load.
 
-Degradation MUST be honest, never fabricated: if the launch tool itself fails for environmental reasons (e.g. the headless browser cannot install or start in this sandbox, or it can start but cannot reliably read back the primary observable — headless pixel readback or input injection unavailable), the implementer captures THAT failure output to `{SCRATCH}` and the static/structural fallback + unit tests become the accepted bar — write this escape hatch INTO the launch step ("...or captured evidence the launcher cannot run here"). A readback that SUCCEEDS and returns a blank or partial buffer is the app's output, not an unavailable readback — fix it, do not fall back. Synthetic/hand-built stand-ins for launch evidence are worse than the honest fallback and will be refuted. When the environment clearly cannot launch the deliverable at all, plan the fallback directly and record the limit under `## Risks / Contradictions`. Verification steps may add capturable evidence (a screenshot, a DOM dump, a headless-run log) as `evidence`, never as `gating`.
+Degradation MUST be honest, never fabricated: if the launch tool itself fails for environmental reasons (e.g. the headless browser cannot install or start in this sandbox, or it can start but cannot reliably read back the primary observable — headless pixel readback or input injection unavailable), the implementer captures THAT failure output to `{SCRATCH}` and the static/structural fallback + unit tests become the accepted bar — write this escape hatch INTO the Tests entry ("...or captured evidence the launcher cannot run here"). A readback that SUCCEEDS and returns a blank or partial buffer is the app's output, not an unavailable readback — fix it, do not fall back. Synthetic/hand-built stand-ins for launch evidence are worse than the honest fallback and will be refuted. When the environment clearly cannot launch the deliverable at all, plan the fallback directly and record the limit under `## Risks / Contradictions`. Do not add a screenshot, a DOM dump, or a headless-run log unless the criterion requires that evidence. When one is required, tag it `evidence` in `## Verification plan`, never `gating`.
 
 ## Output contract — STRICT
 
-Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these sections, in order. `## Implementation approach` and `## Task checklist` are `code-change` only; include `## Risks / Contradictions` only when one exists.
+Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these sections, in order. `## Tests` follows `## Acceptance criteria`. `## Implementation approach` and `## Task checklist` are `code-change` only; `## Task checklist` is the last section. Include `## Risks / Contradictions` only when one exists, and place it immediately before the checklist.
 
 ```
 # Plan: <5–10 word headline paraphrasing OBJECTIVE, no paths>
@@ -55,8 +55,14 @@ Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these secti
 ## Acceptance criteria
 1. <gating, outcome-based criterion>
 
+## Tests
+- Criterion: <one important acceptance criterion>
+  Command: `<known command>`
+- Criterion: <another important acceptance criterion>
+  Behavior: <what must be true when no command is known yet>
+
 ## Verification plan
-1. <gating|evidence: action + the observations that MUST be present to pass>
+1. <gating|evidence: points at one ## Tests entry. Do not add a scenario.>
 
 ## Non-goals
 - <out-of-scope item>
@@ -73,21 +79,23 @@ Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these secti
 ## Edit brief
 <code-change only: one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof>
 
-## Task checklist
-- [ ] `<path or symbol>` — <first concrete implementation step>. Done when: <observable result>.
-- [ ] `<path or symbol>` — <next step>. Done when: <observable result>.
-- [ ] `<test path>` — <test or capture evidence>. Done when: <test result or evidence exists>.
-
 ## Deviations
 (none yet)
 
 ## Risks / Contradictions
-- <optional: an internal contradiction or infeasibility in OBJECTIVE>
+- <optional: an internal contradiction or infeasibility in OBJECTIVE; omit this whole section when none>
+
+## Task checklist
+- [ ] `<path or symbol>` — <first concrete implementation step>. Done when: <observable result>.
+- [ ] `<path or symbol>` — <next step>. Done when: <observable result>.
+- [ ] Run ## Tests. Done when: each criterion's command or behavior holds.
 ```
 
 **Acceptance criteria** — these are the GATING set: every one must hold to pass, so keep it SMALL (aim 3-5) and satisficing, never an exhaustive conjunction. Numbered, concrete, one outcome each, anchored to the LITERAL objective: do NOT invent scope. A reasonable-but-unrequested feature goes under `## Non-goals`, never here (but a DEFINING mechanic of an artifact the OBJECTIVE names is implied by that name — it is requested, so it stays here) — inflating the contract is what makes a goal unfinishable. Each criterion must be atomic and independently checkable from near its own start state: never write a single holistic end-to-end gate ("drive the whole thing through to the end"), which an automated check rarely completes — decompose into separate checks. Preserve OBJECTIVE's must-have terms verbatim: never swap a named technique, technology, or artifact for an easier one, and never swap the ENVIRONMENT a result must hold in (CI, a remote pipeline, a deployment) for an easier local stand-in; if a must-have seems wrong or infeasible, keep it AND record the conflict under `## Risks / Contradictions`.
 
-**Verification plan** — the shared procedure the implementer and the verifiers both follow, so all judge by the SAME observable bar; cover every criterion. Tag each step `gating` (decides pass/fail) or `evidence` (best-effort corroboration whose absence alone, once the gating steps and honest unit checks hold, must NOT deny completion). Each step gives the **action** (add or update a test that asserts the change, run it, exercise the entry point, read the artifact) and the **observations that MUST be** present to pass. Rules:
+**Tests** — the only list of checks. One entry per important acceptance criterion. Write `Command:` when you already know the command; otherwise write `Behavior:` and do not invent a command. No checkboxes. No performance test, screenshot, or extra scenario unless that criterion requires it.
+
+**Verification plan** — tags the `## Tests` entries so the implementer and the verifiers judge by the SAME observable bar. Each line points at one Tests entry and tags it `gating` (decides pass/fail) or `evidence` (best-effort corroboration whose absence alone, once the gating entries and honest unit checks hold, must NOT deny completion). Do not add a scenario here. The Tests entry still states the action and the observations that MUST be present to pass. Rules:
 
 - Drive the REAL shipped functions/entry points from their real start state — not a copy, a re-implementation, or a scenario starting past the thing checked.
 - Static / structural fallback — the BLESSED path when behavior cannot be driven here (a UI, a browser, a long-running interactive session): do NOT prescribe a flaky end-to-end run, a specific capture-file ritual, or an end-to-end outcome ("reach the end state") proven through test-only scaffolding. Require only the MINIMAL honest path: the artifact EXISTS in the source AND the shipped unit-level functions are exercised directly against the real path. Never set a bar that can only be met by building a policy/oracle the verifier will then rightly call theater.
@@ -95,7 +103,7 @@ Use your `{WRITE_TOOL}` tool to write Markdown to `{PLAN_FILE}` with these secti
 - Fit every check to what is capturable in the CURRENT environment; if it cannot run here, specify a capturable substitute OR record the limit under `## Risks / Contradictions` (EXEMPT: an objective-named external oracle keeps its gating step per the rule above — never a silent substitute). Never accept generated/mocked artifacts as proof.
 - Output paths use the literal `{SCRATCH}` placeholder (e.g. `{SCRATCH}/out.log`), never a hardcoded `/tmp/...` — it resolves to a private per-runner dir.
 
-The plan also tells the IMPLEMENTER what evidence to PRODUCE, because the verifiers AUDIT that evidence rather than build their own. Require: real in-repo tests that drive the shipped functions (no hardcoded expected values, no mocking the unit under test, no starting past it, no asserting against a re-implementation) PLUS the captured run output under `{SCRATCH}`. A gating criterion proven only by prose, or with no captured evidence, will be refuted. For `code-change`, inspect how this repo already tests similar changes and put one `gating` step in `## Verification plan` that adds or updates that kind of test so it asserts the new behavior. Re-running a suite that never checks the change is not that step. Do not bury it only in `## Implementation approach` or `## Task checklist`.
+The plan also tells the IMPLEMENTER what evidence to PRODUCE, because the verifiers AUDIT that evidence rather than build their own. Require: real in-repo tests that drive the shipped functions (no hardcoded expected values, no mocking the unit under test, no starting past it, no asserting against a re-implementation) PLUS the captured run output under `{SCRATCH}`. A gating criterion proven only by prose, or with no captured evidence, will be refuted. For `code-change`, inspect how this repo already tests similar changes and put that check in `## Tests`, then point one `gating` line in `## Verification plan` at it. Re-running a suite that never checks the change is not that entry. Do not bury it only in `## Implementation approach` or `## Task checklist`.
 
 **Non-goals** — items not asked for that a reader might assume in scope; include at least one.
 
@@ -107,7 +115,7 @@ The plan also tells the IMPLEMENTER what evidence to PRODUCE, because the verifi
 
 **Edit brief** (`code-change` only) — one `###` block per Task checklist line, same path and same order. Two steps on one file become two blocks. Each block has exactly four bullets in order: `Now:` (current state of the exact place about to change), `Change:` (what to change), `Keep:` (invariant not to break), `Proof:` (a backticked command or test path).
 
-**Task checklist** (`code-change` only) — 3-8 ordered `- [ ] `<path>` — change. Done when: observation.` checkbox steps. The checklist stays in this file. The implementer marks a step done by changing `- [ ]` to `- [x]` on that line. Keep each step small, concrete, and completable in one sitting (end with a testing/evidence step). Do not put checkboxes in any other section.
+**Task checklist** (`code-change` only) — the last section, after `## Deviations` and optional `## Risks / Contradictions`. 3-8 ordered `- [ ] `<path>` — change. Done when: observation.` checkbox steps. The last line runs `## Tests`. The checklist stays in this file. The implementer marks a step done by changing `- [ ]` to `- [x]` on that line. Keep each step small, concrete, and completable in one sitting. Do not put checkboxes in any other section.
 
 **Decisions** — at least one bullet with a settled choice. **Context** — 3–8 short bullets with facts needed for a cold run. **Deviations** — exactly `(none yet)` when publishing. Use no code fences or pasted source; put paths in Assumed scope and Task checklist, not the H1.
 

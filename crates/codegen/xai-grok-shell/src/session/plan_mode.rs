@@ -472,15 +472,18 @@ ${%- endif %}
 
 Use this exact section order: `## Goal kind` (code-change, analysis, or research), \
 `## Decisions` (at least one bullet), `## Context` (3–8 bullets), \
-`## Acceptance criteria` (numbered outcomes), `## Verification plan` (numbered actions), \
+`## Acceptance criteria` (numbered outcomes), `## Tests` (one entry per important acceptance criterion; \
+`Command:` when you already know the command, otherwise `Behavior:`; no checkboxes; no performance test, \
+screenshot, or extra scenario unless that criterion requires it), `## Verification plan` (each line tags one \
+`## Tests` entry as `gating` or `evidence` and adds no scenario), \
 `## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
 then for code-change `## Implementation approach` (nonempty), `## Current anchors` \
 (2–12 bullets: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
 `## Edit brief` (one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof), \
-and `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
-and finally `## Deviations` containing exactly `(none yet)`. \
+then `## Deviations` containing exactly `(none yet)`, optional `## Risks / Contradictions`, \
+and last `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; the last line runs `## Tests`). \
 Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
-Only the Task checklist may contain checkboxes, and the checklist stays in this file. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged. The file must stand alone without this conversation. \
+Only the Task checklist may contain checkboxes, and the checklist stays in this file as the last section. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged. The file must stand alone without this conversation. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
 
@@ -508,13 +511,16 @@ for this planning session and it starts empty. \
 Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 
 Use the same complete plan contract: Goal kind, Decisions, Context, Acceptance criteria, \
-Verification plan, Non-goals, Assumed scope, then Implementation approach, Current anchors, \
-Edit brief, and Task checklist for code-change, then Deviations with `(none yet)`. \
+Tests, Verification plan, Non-goals, Assumed scope, then Implementation approach, Current anchors, \
+and Edit brief for code-change, then Deviations with `(none yet)`, optional Risks / Contradictions, \
+and Task checklist last. \
+Tests has one entry per important acceptance criterion, with `Command:` or `Behavior:`, and no checkboxes. \
+Verification plan only tags those Tests entries as `gating` or `evidence`. \
 Context needs 3–8 bullets. Current anchors needs 2–12 bullets with a backticked path, \
 a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
 block per Task checklist line with `Now:`, `Change:`, `Keep:`, `Proof:` bullets. \
 Code-change checklist needs 3–8 `- [ ] `<path>` — change. Done when: observation.` lines, \
-ending with test or evidence. The checklist stays in the file; mark progress by changing `- [ ]` to `- [x]`. \
+and the last line runs `## Tests`. The checklist stays in the file as the last section; mark progress by changing `- [ ]` to `- [x]`. \
 Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
@@ -879,6 +885,25 @@ mod tests {
             SEQ.fetch_add(1, Ordering::SeqCst)
         ));
         PlanModeTracker::new(dir)
+    }
+    #[test]
+    fn active_plan_reminder_puts_tests_before_verification_and_checklist_last() {
+        let full = plan_mode_reminder_full_template();
+        let acceptance = full.find("## Acceptance criteria").expect("criteria");
+        let tests = full.find("## Tests").expect("tests");
+        let verification = full.find("## Verification plan").expect("verification");
+        let deviations = full.find("## Deviations").expect("deviations");
+        let checklist = full.find("## Task checklist").expect("checklist");
+        assert!(acceptance < tests);
+        assert!(tests < verification);
+        assert!(deviations < checklist);
+        assert!(full.contains("Command:"));
+        assert!(full.contains("Behavior:"));
+        assert!(full.contains("adds no scenario"));
+        let reentry = plan_mode_reentry_reminder_template();
+        assert!(reentry.find("Tests").unwrap() < reentry.find("Verification plan").unwrap());
+        assert!(reentry.contains("Task checklist last"));
+        assert!(reentry.contains("only tags those Tests entries"));
     }
     #[test]
     fn user_initiated_lifecycle() {

@@ -10,13 +10,32 @@ use crate::types::resources::WorkingPlanAllowed;
 use crate::types::tool::{ToolKind, ToolNamespace};
 
 pub const WORKING_PLAN_SKILL_NAME: &str = "working-plan";
+pub const RUN_CHECKS_SKILL_NAME: &str = "run-checks";
 pub const SAVE_WORKING_PLAN_TOOL_ID: &str = "save_working_plan";
+
+macro_rules! run_checks_skill_body {
+    () => {
+        "Check the existing runner and its test command once. Then run only the checks written in the plan's `## Tests` section.\n\
+\n\
+When a check fails, decide whether the failure is in the product, in the test or harness, or in the environment.\n\
+- Product: fix the product.\n\
+- Test or harness: fix the test. Do not weaken the criterion. Do not change the expected result to match the bug, delete the case, or skip it. Fixing a broken fixture or a harness syntax error is allowed.\n\
+- Environment: the check cannot run here. Record that limit and run the `## Tests` entries that can run. Do not build a stand-in that pretends to be the missing tool, such as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence.\n\
+\n\
+After the fix, rerun the failing check to confirm it. Then run the full `## Tests` set once. Do not run it again.\n\
+If the same failure remains after two fixes of the layer you diagnosed, stop and report the observation that is still missing.\n"
+    };
+}
+
+/// How to run the checks already written in `## Tests`. English. The host does not enforce it.
+pub const RUN_CHECKS_SKILL_BODY: &str = run_checks_skill_body!();
 
 /// Instructions the model loads before it writes a short plan.
 ///
 /// The checklist stays in the saved file. Shape is this prompt; the host does not reject a body.
-pub const WORKING_PLAN_SKILL_BODY: &str = "\
-Use this when the task needs several new files, or the file split is not already in the prompt. \
+/// The run-checks procedure is included so the model does not load that skill a second time.
+pub const WORKING_PLAN_SKILL_BODY: &str = concat!(
+    "Use this when the task needs several new files, or the file split is not already in the prompt. \
 Skip it for a small edit.\n\
 \n\
 Write the plan below, call save_working_plan once with that markdown as `body`, then keep implementing \
@@ -28,19 +47,39 @@ Do not call todo_write for these steps.\n\
 ## Goal\n\
 One sentence describing the finished work.\n\
 \n\
+## Tests\n\
+- Criterion: <one important outcome from the task>\n\
+  Command: `<a command you already know>`\n\
+- Criterion: <another important outcome>\n\
+  Behavior: <what must be true when you do not yet know a command>\n\
+One entry per important outcome. No `- [ ]` in this section. Do not add a performance test, a screenshot, \
+or an extra scenario unless that outcome requires it. Do not invent a command.\n\
+\n\
 ## Steps\n\
 - [ ] `path` — the change. Done when: an observable result.\n\
-The last step is how you will check the work.\n\
+- [ ] Run ## Tests. Done when: each criterion's command or behavior holds.\n\
 \n\
-The saved file is exactly the body you send, including ## Steps. Do not add a ## Files section: \
-the prompt and the conversation already name the files. Do not add anchors, an edit brief, decisions, \
-or a deviations log.\n\
+The saved file is exactly the body you send, including ## Tests and ## Steps. ## Steps is the last section. \
+Do not add a ## Files section: the prompt and the conversation already name the files. Do not add anchors, \
+an edit brief, decisions, or a deviations log.\n\
 \n\
 When a step is done, edit the saved plan file and change that line from `- [ ]` to `- [x]`. \
 Leave the rest of the line unchanged. Do not call save_working_plan again to revise the shape.\n\
-";
+\n\
+",
+    run_checks_skill_body!()
+);
 
-/// `skill` on TaskOpen. Only `working-plan` resolves.
+/// Body for an open-task skill name. Unknown names are rejected.
+pub(crate) fn open_task_skill_body(name: &str) -> Result<&'static str, &'static str> {
+    match name {
+        WORKING_PLAN_SKILL_NAME => Ok(WORKING_PLAN_SKILL_BODY),
+        RUN_CHECKS_SKILL_NAME => Ok(RUN_CHECKS_SKILL_BODY),
+        _ => Err("Only the working-plan and run-checks skills are available on an open task."),
+    }
+}
+
+/// `skill` on TaskOpen. `working-plan` and `run-checks` resolve.
 #[derive(Debug, Default)]
 pub struct WorkingPlanSkillTool;
 
@@ -54,8 +93,9 @@ impl crate::types::tool_metadata::ToolMetadata for WorkingPlanSkillTool {
     }
 
     fn description_template(&self) -> &str {
-        "Load the working-plan skill before the first code edit on a large task. Pass skill \
-         \"working-plan\". Other skill names are not available on an open task."
+        "Load a skill on an open task with no approved plan. Pass skill \"working-plan\" before the \
+         first code edit on a large task, or \"run-checks\" for how to run the plan's tests. Other \
+         skill names are not available on an open task."
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
@@ -106,16 +146,16 @@ impl xai_tool_runtime::Tool for WorkingPlanSkillTool {
                 "The working-plan skill is only available on an open task with no approved plan.",
             ));
         }
-        if input.skill != WORKING_PLAN_SKILL_NAME {
-            return Ok(rejected(
-                "Only the working-plan skill is available on an open task.",
-            ));
-        }
+        let name = input.skill.as_str();
+        let body = match open_task_skill_body(name) {
+            Ok(body) => body,
+            Err(message) => return Ok(rejected(message)),
+        };
         Ok(SkillOutput {
             success: true,
-            tool_result: "Loaded the working-plan skill.".to_string(),
-            skill_name: WORKING_PLAN_SKILL_NAME.to_string(),
-            skill_message: Some(WORKING_PLAN_SKILL_BODY.to_string()),
+            tool_result: format!("Loaded the {name} skill."),
+            skill_name: name.to_string(),
+            skill_message: Some(body.to_string()),
             error: None,
         })
     }
@@ -134,7 +174,7 @@ fn rejected(message: &str) -> SkillOutput {
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
-    /// Full working-plan markdown: title, Goal, and Steps. The host stores this text unchanged.
+    /// Full working-plan markdown: title, Goal, Tests, and Steps. The host stores this text unchanged.
     #[schemars(description = "Full working-plan markdown")]
     pub body: String,
 }
@@ -176,9 +216,9 @@ impl crate::types::tool_metadata::ToolMetadata for SaveWorkingPlanTool {
 
     fn description_template(&self) -> &str {
         "Save a passive working plan into the session plans list. Pass the full markdown as \
-         body, including the ## Steps checklist. Then keep implementing on this turn. Mark a \
-         finished step by editing that file from `- [ ]` to `- [x]`. This does not enter plan \
-         mode and does not ask for approval."
+         body, including ## Tests and the ## Steps checklist. Then keep implementing on this turn. \
+         Mark a finished step by editing that file from `- [ ]` to `- [x]`. This does not enter \
+         plan mode and does not ask for approval."
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
@@ -221,5 +261,27 @@ impl xai_tool_runtime::Tool for SaveWorkingPlanTool {
             "working_plan_session",
             "save_working_plan is applied by the session on an open task",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_task_skill_resolves_working_plan_and_run_checks() {
+        assert_eq!(
+            open_task_skill_body(WORKING_PLAN_SKILL_NAME),
+            Ok(WORKING_PLAN_SKILL_BODY)
+        );
+        assert_eq!(
+            open_task_skill_body(RUN_CHECKS_SKILL_NAME),
+            Ok(RUN_CHECKS_SKILL_BODY)
+        );
+        assert!(open_task_skill_body("deploy").is_err());
+        assert!(WORKING_PLAN_SKILL_BODY.contains(RUN_CHECKS_SKILL_BODY));
+        assert!(RUN_CHECKS_SKILL_BODY.contains("Product:"));
+        assert!(RUN_CHECKS_SKILL_BODY.contains("Test or harness:"));
+        assert!(RUN_CHECKS_SKILL_BODY.contains("Environment:"));
     }
 }

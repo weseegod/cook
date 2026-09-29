@@ -2866,14 +2866,14 @@ impl SessionActor {
         let path = self.plan_mode.lock().plan_file_path().display().to_string();
         let checklist = self.checklist_summary();
         format!(
-            "The user approved the plan. Implement the plan in {path}. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged.{checklist}",
+            "The user approved the plan. Implement the plan in {path}. The checklist is the last section of that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. When you run `## Tests`, check the existing runner once and run those checks. On a failure, fix the product, or fix the test without weakening the criterion. Rerun the failing check, then run `## Tests` once. The same failure after two fixes: stop and report it.{checklist}",
         )
     }
     async fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
         let path = self.plan_mode.lock().plan_file_path().display().to_string();
         let checklist = self.checklist_summary();
         let mut anchor = format!(
-            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.{checklist}",
+            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The checklist is the last section of that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. When you run `## Tests`, check the existing runner once and run those checks. On a failure, fix the product, or fix the test without weakening the criterion. Rerun the failing check, then run `## Tests` once. The same failure after two fixes: stop and report it. Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.{checklist}",
         );
         if let Some(notes) = feedback.filter(|notes| !notes.trim().is_empty()) {
             anchor.push_str("\n\nReview notes from the approval decision:\n");

@@ -330,6 +330,24 @@ mod tests {
     }
 
     #[test]
+    fn tests_section_bullets_are_not_the_next_step_when_the_checklist_is_last() {
+        let body = "# Plan\n\n## Tests\n- Criterion: the board loads\n  Command: `node --check app.js`\n\n## Deviations\n(none yet)\n\n## Steps\n- [x] `index.html` — page. Done when: file exists.\n- [ ] `js/app.js` — loop. Done when: check runs.\n";
+        assert_eq!(
+            extract_first_unchecked(body).as_deref(),
+            Some("`js/app.js` — loop. Done when: check runs."),
+        );
+        let tests_only =
+            "## Tests\n- Criterion: the board loads\n  Behavior: the page shows the board\n";
+        assert!(extract_first_unchecked(tests_only).is_none());
+        let checklist_last =
+            "## Deviations\n- [ ] not a step\n\n## Task checklist\n- [ ] real last step\n";
+        assert_eq!(
+            extract_first_unchecked(checklist_last).as_deref(),
+            Some("real last step"),
+        );
+    }
+
+    #[test]
     fn checklist_section_scopes_extraction() {
         let body = "# Plan\n\n## Task checklist\n- [x] scaffold\n- [ ] wire input handling\n\n## Notes\n- [ ] stray box elsewhere\n";
         assert_eq!(
