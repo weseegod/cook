@@ -10,6 +10,16 @@ use std::path::Path;
 /// Each goal nudge fires per turn, so a hostile or runaway verdict/plan must not blow up the context.
 pub(crate) const MAX_READ_BYTES: usize = 8 * 1024;
 
+/// Verbatim plan attached once after compaction. Larger than the checklist scan: the checklist is last, and an 8 KiB head would drop it.
+pub(crate) const PLAN_COMPACTION_READ_BYTES: usize = 32 * 1024;
+
+/// Which short wrapper surrounds the saved plan. The file read is the same for both.
+#[derive(Clone, Copy)]
+pub(crate) enum PlanCompactionMode {
+    Active,
+    Passive,
+}
+
 /// The next step is the first unchecked box in the plan file.
 ///
 /// `plan.json` is only the fallback for an old episode whose checklist was stripped out of the file.
@@ -126,49 +136,83 @@ observation that is still missing, then stop."
     )
 }
 
-/// Goal, acceptance criteria, and still-open checklist steps from a saved plan.
-/// `None` when those three are all absent. A `## Tests` heading is the criteria section
-/// when `## Acceptance criteria` is not present. Checked steps and other sections are omitted.
-pub(crate) fn plan_compaction_reminder(body: &str) -> Option<String> {
-    let goal = named_section_body(body, "goal");
-    let criteria = named_section_body(body, "acceptance criteria")
-        .or_else(|| named_section_body(body, "tests"));
-    let open = open_checklist_steps(body);
-    if goal.is_none() && criteria.is_none() && open.is_empty() {
+/// Saved plan, verbatim, with a short mode wrapper.
+///
+/// Passive and empty is `None`. Active and empty still returns the wrapper so plan mode
+/// keeps its boundary. A missing file is `None` from [`plan_compaction_reminder_at`].
+pub(crate) fn plan_compaction_reminder(
+    body: &str,
+    mode: PlanCompactionMode,
+    path_display: &str,
+    truncated: bool,
+) -> Option<String> {
+    let empty = body.trim().is_empty();
+    if empty && matches!(mode, PlanCompactionMode::Passive) {
         return None;
     }
-    let mut out = String::from(
-        "The saved plan is the checklist for this task. If the latest user message asks for something else, follow that message.",
-    );
-    if let Some(goal) = goal {
-        out.push_str("\n\n## Goal\n");
-        out.push_str(&goal);
-    }
-    if let Some(criteria) = criteria {
-        out.push_str("\n\n## Acceptance criteria\n");
-        out.push_str(&criteria);
-    }
-    if open.is_empty() {
-        if has_checklist_section(body) {
-            out.push_str(
-                "\n\nThe checklist steps are checked. If a planned check already finished on the tree after the last edit, cite that result and do not run it again.",
-            );
-        }
+    let mut out = match mode {
+        PlanCompactionMode::Active => format!(
+            "This is the current plan, saved at {path_display}. \
+Plan mode is still active. Its rules still apply, and the only file you may edit is this plan file. \
+End the turn by clarifying with the user or presenting the plan."
+        ),
+        PlanCompactionMode::Passive => format!(
+            "This is the current plan, saved at {path_display}. \
+If the latest user message changes or adds work, update this saved plan and its checklist, \
+keep the steps that still apply, and continue the work. \
+If that message only asks for status or an explanation, answer it and do not edit the plan."
+        ),
+    };
+    if empty {
+        out.push_str(&format!(
+            "\n\nNo plan is written yet. Write it to {path_display}."
+        ));
     } else {
-        out.push_str("\n\n## Open steps\n");
-        for step in &open {
-            out.push_str("- [ ] ");
-            out.push_str(step);
-            out.push('\n');
+        out.push_str("\n\n");
+        out.push_str(body);
+        if truncated {
+            out.push_str("\n\nThe copy stopped at 32 KiB. Read the plan file for the rest.");
         }
     }
     Some(out)
 }
 
-/// Reads the episode and returns the compaction excerpt, if the file has one.
-pub(crate) fn plan_compaction_reminder_at(path: &Path) -> Option<String> {
-    let body = read_capped(path)?;
-    plan_compaction_reminder(&body)
+struct VerbatimPlan {
+    body: String,
+    truncated: bool,
+}
+
+/// Whole plan up to [`PLAN_COMPACTION_READ_BYTES`]. One extra byte distinguishes a file that
+/// ends exactly on the cap from a file that continues. A cut keeps the last complete line.
+fn read_plan_verbatim(path: &Path) -> Option<VerbatimPlan> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take((PLAN_COMPACTION_READ_BYTES as u64) + 1)
+        .read_to_end(&mut buf)
+        .ok()?;
+    let truncated = buf.len() > PLAN_COMPACTION_READ_BYTES;
+    if truncated {
+        buf.truncate(PLAN_COMPACTION_READ_BYTES);
+        if let Some(last_nl) = buf.iter().rposition(|b| *b == b'\n') {
+            buf.truncate(last_nl);
+        }
+    }
+    Some(VerbatimPlan {
+        body: String::from_utf8_lossy(&buf).into_owned(),
+        truncated,
+    })
+}
+
+/// Reads the episode and returns the compaction reminder. A missing or unreadable file is `None`.
+pub(crate) fn plan_compaction_reminder_at(path: &Path, mode: PlanCompactionMode) -> Option<String> {
+    let read = read_plan_verbatim(path)?;
+    plan_compaction_reminder(
+        &read.body,
+        mode,
+        &path.display().to_string(),
+        read.truncated,
+    )
 }
 
 /// Legacy fallback: first unchecked `- [ ]` (or `* [ ]` / `+ [ ]`) markdown checkbox.
@@ -202,28 +246,6 @@ fn has_checklist_section(body: &str) -> bool {
     body.lines().any(|line| {
         is_section_header(line, "task checklist") || is_section_header(line, "steps")
     })
-}
-
-/// Non-empty lines of the first section whose title matches `name`, without the heading.
-fn named_section_body(body: &str, name: &str) -> Option<String> {
-    let mut section_level: Option<usize> = None;
-    let mut lines = Vec::new();
-    for line in body.lines() {
-        if section_level.is_none() && is_section_header(line, name) {
-            section_level = Some(header_level(line));
-            continue;
-        }
-        let Some(level) = section_level else {
-            continue;
-        };
-        if is_any_header(line) && header_level(line) <= level {
-            break;
-        }
-        if !line.trim().is_empty() {
-            lines.push(line.trim_end());
-        }
-    }
-    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 fn checklist_section_name(body: &str) -> Option<&'static str> {
@@ -645,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn compaction_excerpt_keeps_goal_criteria_and_open_steps() {
+    fn compaction_reminder_keeps_the_saved_plan_verbatim() {
         let body = "\
 # Plan
 
@@ -663,15 +685,31 @@ Ship the editor.
 - [x] already shipped
 - [ ] write canvas.js
 ";
-        let excerpt = plan_compaction_reminder(body).expect("excerpt");
-        assert!(excerpt.contains("Ship the editor."));
-        assert!(excerpt.contains("the canvas pans"));
-        assert!(excerpt.contains("- [ ] write canvas.js"));
-        assert!(!excerpt.contains("already shipped"));
-        assert!(!excerpt.contains("## Context"));
-        assert!(excerpt.contains("follow that message"));
-        assert!(plan_compaction_reminder("").is_none());
-        assert!(plan_compaction_reminder("## Context\n- notes\n").is_none());
+        let path = "plans/editor.md";
+        let passive = plan_compaction_reminder(body, PlanCompactionMode::Passive, path, false)
+            .expect("passive");
+        assert!(passive.contains("Ship the editor."));
+        assert!(passive.contains("## Context"));
+        assert!(passive.contains("already shipped"));
+        assert!(passive.contains("- [x] already shipped"));
+        assert!(passive.contains("- [ ] write canvas.js"));
+        assert!(passive.contains("update this saved plan and its checklist"));
+        assert!(passive.contains("do not edit the plan"));
+        assert!(passive.contains("continue the work"));
+        assert!(!passive.contains("only file you may edit"));
+        let active = plan_compaction_reminder(body, PlanCompactionMode::Active, path, false)
+            .expect("active");
+        assert!(active.contains("already shipped"));
+        assert!(active.contains("## Context"));
+        assert!(active.contains("Plan mode is still active"));
+        assert!(active.contains("only file you may edit"));
+        assert!(!active.contains("continue the work"));
+        assert!(plan_compaction_reminder("", PlanCompactionMode::Passive, path, false).is_none());
+        let empty_active = plan_compaction_reminder("", PlanCompactionMode::Active, path, false)
+            .expect("empty active");
+        assert!(empty_active.contains("No plan is written yet"));
+        assert!(empty_active.contains(path));
+        assert!(empty_active.contains("Plan mode is still active"));
         let tests_only = "\
 ## Tests
 - Criterion: the board loads
@@ -680,10 +718,30 @@ Ship the editor.
 ## Steps
 - [x] page exists
 ";
-        let from_tests = plan_compaction_reminder(tests_only).expect("tests alias");
-        assert!(from_tests.contains("## Acceptance criteria"));
-        assert!(from_tests.contains("the board loads"));
-        assert!(from_tests.contains("The checklist steps are checked"));
-        assert!(!from_tests.contains("## Open steps"));
+        let from_tests =
+            plan_compaction_reminder(tests_only, PlanCompactionMode::Passive, path, false)
+                .expect("tests heading stays");
+        assert!(from_tests.contains("## Tests"));
+        assert!(from_tests.contains("page exists"));
+        assert!(!from_tests.contains("## Acceptance criteria"));
+        let missing = std::path::Path::new("/definitely/not/a/real/path/xyzzy-plan.md");
+        assert!(plan_compaction_reminder_at(missing, PlanCompactionMode::Passive).is_none());
+        assert!(plan_compaction_reminder_at(missing, PlanCompactionMode::Active).is_none());
+    }
+
+    #[test]
+    fn compaction_reminder_notes_when_the_plan_exceeds_the_copy_cap() {
+        assert_eq!(PLAN_COMPACTION_READ_BYTES, 32 * 1024);
+        let mut body = String::from("# Plan\n\n## Goal\nkeep this goal\n");
+        while body.len() <= PLAN_COMPACTION_READ_BYTES {
+            body.push_str("x\n");
+        }
+        body.push_str("HIDDEN_PAST_CAP\n");
+        let f = write_temp(&body);
+        let reminder = plan_compaction_reminder_at(f.path(), PlanCompactionMode::Passive)
+            .expect("truncated plan");
+        assert!(reminder.contains("keep this goal"));
+        assert!(reminder.contains("The copy stopped at 32 KiB"));
+        assert!(!reminder.contains("HIDDEN_PAST_CAP"));
     }
 }

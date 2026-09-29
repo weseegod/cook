@@ -1831,52 +1831,27 @@ impl SessionActor {
             (reminder, None) => reminder,
         };
         let system_reminder = {
-            let plan_path = {
+            let attachment = {
                 let guard = self.plan_mode.lock();
-                guard
-                    .is_active()
-                    .then(|| guard.plan_file_path().to_path_buf())
-            };
-            if let Some(plan_path) = plan_path {
-                let plan_has_content =
-                    crate::session::plan_mode::plan_file_has_content(&plan_path).await;
-                let template = crate::session::plan_mode::plan_mode_reminder_full_template();
-                let wrapper = self.reminder_wrapper_tag();
-                let rendered = self
-                    .render_plan_template(template, &plan_path, plan_has_content)
-                    .await;
-                match (system_reminder, rendered) {
-                    (Some(mut existing), Some(plan_section)) => {
-                        if let Some(pos) = existing.rfind("</system-reminder>") {
-                            existing.insert_str(pos, &format!("\n\n{}\n", plan_section));
-                        } else {
-                            existing.push_str("\n\n");
-                            existing.push_str(&plan_section);
-                        }
-                        Some(existing)
-                    }
-                    (None, Some(plan_section)) => Some(format!(
-                        "<{tag}>\n{body}\n</{tag}>",
-                        tag = wrapper,
-                        body = plan_section,
-                    )),
-                    (existing, None) => {
-                        tracing::warn!(
-                            session_id = %self.session_info.id.0,
-                            "compaction: plan mode active but template render failed"
-                        );
-                        existing
-                    }
+                if guard.is_awaiting_plan_approval() {
+                    None
+                } else if guard.is_active() {
+                    Some((
+                        guard.plan_file_path().to_path_buf(),
+                        crate::session::goal_next_step::PlanCompactionMode::Active,
+                    ))
+                } else {
+                    guard.checklist_episode().map(|path| {
+                        (
+                            path,
+                            crate::session::goal_next_step::PlanCompactionMode::Passive,
+                        )
+                    })
                 }
-            } else {
-                system_reminder
-            }
-        };
-        let system_reminder = {
-            let episode = self.plan_mode.lock().checklist_episode();
-            if let Some(path) = episode
+            };
+            if let Some((path, mode)) = attachment
                 && let Some(excerpt) =
-                    crate::session::goal_next_step::plan_compaction_reminder_at(&path)
+                    crate::session::goal_next_step::plan_compaction_reminder_at(&path, mode)
             {
                 let wrapper = self.reminder_wrapper_tag();
                 match system_reminder {
