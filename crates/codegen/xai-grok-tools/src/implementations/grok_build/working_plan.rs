@@ -35,6 +35,9 @@ One sentence describing the finished work.\n\
 - [ ] `path` — the change. Done when: an observable result.\n\
 The last step is how to check the work.\n\
 \n\
+Send the body with ## Steps; the saved episode contains only Goal and Files. \
+The steps appear in the live todo list.\n\
+\n\
 Do not add anchors, an edit brief, decisions, or a deviations log.\n\
 ";
 

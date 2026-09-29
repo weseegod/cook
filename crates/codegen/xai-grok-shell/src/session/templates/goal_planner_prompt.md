@@ -107,7 +107,7 @@ The plan also tells the IMPLEMENTER what evidence to PRODUCE, because the verifi
 
 **Edit brief** (`code-change` only) — one `###` block per Task checklist line, same path and same order. Two steps on one file become two blocks. Each block has exactly four bullets in order: `Now:` (current state of the exact place about to change), `Change:` (what to change), `Keep:` (invariant not to break), `Proof:` (a backticked command or test path).
 
-**Task checklist** (`code-change` only) — 3-8 ordered `- [ ] `<path>` — change. Done when: observation.` checkbox steps the implementer executes and checks off as it goes; the harness mines the first unchecked box as the per-turn "next step" nudge. Steps are HOW guidance like the approach, never part of the judged contract — keep each small, concrete, and completable in one sitting (end with a testing/evidence step). Do not put checkboxes in any other section.
+**Task checklist** (`code-change` only) — 3-8 ordered `- [ ] `<path>` — change. Done when: observation.` checkbox steps. The host moves them to the persisted todo list when the plan is committed; the saved contract has no checklist. Steps are HOW guidance like the approach, never part of the judged contract — keep each small, concrete, and completable in one sitting (end with a testing/evidence step). Do not put checkboxes in any other section.
 
 **Decisions** — at least one bullet with a settled choice. **Context** — 3–8 short bullets with facts needed for a cold run. **Deviations** — exactly `(none yet)` when publishing. Use no code fences or pasted source; put paths in Assumed scope and Task checklist, not the H1.
 

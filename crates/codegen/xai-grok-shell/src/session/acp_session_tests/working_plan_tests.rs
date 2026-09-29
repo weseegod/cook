@@ -36,13 +36,15 @@ fn working_plan_shape() {
 fn working_plan_save() {
     let dir = tempfile::tempdir().unwrap();
     let tracker = crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
-    let path = save_working_plan(dir.path(), SAMPLE).unwrap();
+    let (path, state) = save_working_plan(dir.path(), SAMPLE).unwrap();
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
         name.starts_with("build-the-board-game-"),
         "published name {name}"
     );
     assert!(path.is_file());
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("## Steps"));
+    assert_eq!(state.todo_items().count(), 2);
     assert!(!tracker.is_active());
     assert!(tracker.plan_file_path().ends_with("plan.md"));
     assert!(allowed_on_surface(

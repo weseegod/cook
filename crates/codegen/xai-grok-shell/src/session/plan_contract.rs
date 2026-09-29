@@ -76,14 +76,6 @@ fn checklist(line: &str) -> bool {
         && !detail.ends_with(". Done when: ")
 }
 
-fn normalize_checkbox(line: &str) -> &str {
-    if line.starts_with("- [ ]") || line.starts_with("- [x]") || line.starts_with("- [X]") {
-        &line[5..]
-    } else {
-        line
-    }
-}
-
 /// One `## Current anchors` bullet: backticked path, then a backticked symbol or
 /// `new:Identifier`, then an `observed:` clause with non-empty text.
 fn anchor_shape(line: &str) -> bool {
@@ -352,7 +344,7 @@ pub(crate) fn validate_plan_contract(body: &str) -> Result<(), Vec<String>> {
     }
 }
 
-/// Preserve all approved text byte-for-byte except checklist state and appended deviations.
+/// Preserve all approved text byte-for-byte except appended deviations.
 pub(crate) fn progress_only_delta(baseline: &str, proposed: &str) -> Result<(), &'static str> {
     fn parts(body: &str) -> Vec<(String, String)> {
         let mut result = vec![(String::new(), String::new())];
@@ -392,18 +384,6 @@ pub(crate) fn progress_only_delta(baseline: &str, proposed: &str) -> Result<(), 
             return Err("section changed");
         }
         match old_name.as_str() {
-            "Task checklist" => {
-                let old_lines: Vec<_> = old_body.split_inclusive('\n').collect();
-                let new_lines: Vec<_> = new_body.split_inclusive('\n').collect();
-                if old_lines.len() != new_lines.len()
-                    || old_lines
-                        .iter()
-                        .zip(&new_lines)
-                        .any(|(a, b)| normalize_checkbox(a) != normalize_checkbox(b))
-                {
-                    return Err("checklist text changed");
-                }
-            }
             "Deviations" => {
                 let before = deviation_lines(old_body)?;
                 let after = deviation_lines(new_body)?;
@@ -495,23 +475,19 @@ mod tests {
     }
 
     #[test]
-    fn permits_progress_and_rejects_contract_edits() {
-        let ticked = PLAN.replace(
-            "- [ ] `src/file.rs` — implement",
-            "- [x] `src/file.rs` — implement",
-        );
-        assert!(progress_only_delta(PLAN, &ticked).is_ok());
-        let with_deviation = ticked.replace(
+    fn permits_deviations_and_rejects_contract_edits() {
+        let (contract, _) = crate::session::plan_checklist::extract(PLAN, "Task checklist").unwrap();
+        let with_deviation = contract.replace(
             "(none yet)",
             "- Used a smaller helper.\n- Kept existing API.",
         );
-        assert!(progress_only_delta(PLAN, &with_deviation).is_ok());
+        assert!(progress_only_delta(&contract, &with_deviation).is_ok());
         let appended = with_deviation.replace(
             "- Kept existing API.",
             "- Kept existing API.\n- Added another note.",
         );
         assert!(progress_only_delta(&with_deviation, &appended).is_ok());
-        assert!(progress_only_delta(PLAN, &PLAN.replace("(none yet)", "\n- New note.")).is_err());
+        assert!(progress_only_delta(&contract, &contract.replace("(none yet)", "\n- New note.")).is_err());
         assert!(
             progress_only_delta(
                 &with_deviation,
@@ -521,8 +497,8 @@ mod tests {
         );
         assert!(
             progress_only_delta(
-                PLAN,
-                &PLAN.replace("A checkable result", "A different result")
+                &contract,
+                &contract.replace("A checkable result", "A different result")
             )
             .is_err()
         );

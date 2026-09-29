@@ -2050,12 +2050,6 @@ impl SessionActor {
         if self.memory.is_enabled() {
             tracing::info!(target: xai_grok_telemetry::memory_log::TARGET, "MEMORY_COMPACT: post-compaction reset, next turn re-checks injection (search only if no block persisted)");
         }
-        let _ = self
-            .notifications
-            .persistence_tx
-            .send(PersistenceMsg::PlanState(
-                crate::tools::todo::TodoState::default(),
-            ));
         self.agent
             .borrow()
             .tool_bridge()

@@ -32,7 +32,17 @@ fn create_test_notification() -> acp::SessionNotification {
     )
 }
 fn create_test_plan_state() -> TodoState {
-    TodoState::default()
+    use crate::tools::todo::{TodoItem, TodoPriority, TodoStatus};
+    use xai_grok_tools::implementations::grok_build::todo::TodoBindingKind;
+    let mut state = TodoState::default();
+    state.push("step-1".into(), TodoItem {
+        content: "`src/lib.rs` — implement. Done when: tests pass.".into(),
+        priority: TodoPriority::Medium,
+        status: TodoStatus::InProgress,
+        meta: Some(serde_json::json!({"path":"src/lib.rs", "done_when":"tests pass."})),
+    });
+    state.bind(TodoBindingKind::Approved, "plans/episode.md".into());
+    state
 }
 #[test]
 fn bounded_chat_history_read_rejects_byte_and_item_overflow() {
@@ -157,7 +167,10 @@ async fn test_jsonl_round_trip() {
     assert_eq!(loaded.summary.current_model_id, new_model);
     assert_eq!(loaded.chat_history.len(), messages.len());
     assert_eq!(loaded.updates.len(), 1);
-    assert!(loaded.plan_state.is_some());
+    let restored = loaded.plan_state.unwrap();
+    assert_eq!(restored.binding().unwrap().kind,
+        xai_grok_tools::implementations::grok_build::todo::TodoBindingKind::Approved);
+    assert_eq!(restored.first_pending().unwrap().0, "step-1");
 }
 /// Resume from updates.jsonl alone: when chat_history.jsonl is missing, load rebuilds it from the ACP update stream.
 /// The update stream is the durable source of truth.

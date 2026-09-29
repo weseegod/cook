@@ -38,6 +38,11 @@ const VALID_PLAN_BODY: &str = "# Plan: Build a complete reusable thing here now\
 ## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n- [ ] `src/file.rs` — connect. Done when: call works.\n- [ ] `tests/file.rs` — test. Done when: test passes.\n\n\
 ## Deviations\n(none yet)\n";
 
+fn committed_plan_body() -> String {
+    crate::session::plan_checklist::extract(VALID_PLAN_BODY, "Task checklist")
+        .unwrap().0
+}
+
 /// Spawn behaviour knobs for the planner-coordinator stub.
 enum SpawnBehaviour {
     /// Parse `{PLAN_FILE}` out of the prompt, write `body` there, then respond `Done`.
@@ -422,8 +427,8 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
                 snap.plan_baseline_file.as_deref(),
                 Some(baseline_path.as_path())
             );
-            assert_eq!(std::fs::read_to_string(plan_path).unwrap(), VALID_PLAN_BODY);
-            assert_eq!(std::fs::read_to_string(baseline_path).unwrap(), VALID_PLAN_BODY);
+            assert_eq!(std::fs::read_to_string(plan_path).unwrap(), committed_plan_body());
+            assert_eq!(std::fs::read_to_string(baseline_path).unwrap(), committed_plan_body());
             assert!(
                 !actor
                     .goal_tracker
@@ -513,7 +518,7 @@ async fn planner_fork_inherits_parent_model() {
         .await;
 }
 
-/// The planner's ORIGINAL plan is snapshotted to `plan.baseline.md` once, right after the plan is written, and is NOT re-synced to later edits.
+/// The planner's committed contract is snapshotted to `plan.baseline.md` once and is NOT re-synced to later edits.
 /// A second `maybe_run_goal_planner` early-returns because a plan already exists.
 /// It must leave the baseline pinned to the original body even after `plan.md` itself is edited on disk.
 #[tokio::test(flavor = "current_thread")]
@@ -530,7 +535,7 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
 
             actor.maybe_run_goal_planner("do X").await;
 
-            // Baseline recorded on the orchestration and written to disk with the planner's original body
+            // Baseline recorded on the orchestration and written with the stripped contract.
             let recorded = actor
                 .goal_tracker
                 .lock()
@@ -545,8 +550,8 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
             );
             assert_eq!(
                 std::fs::read_to_string(&baseline_path).unwrap(),
-                VALID_PLAN_BODY,
-                "baseline must hold the planner's ORIGINAL plan body",
+                committed_plan_body(),
+                "baseline must hold the committed contract",
             );
 
             // The agent edits plan.md mid-run; a second planner invocation early-returns (plan already present) and must NOT re-snapshot
@@ -556,8 +561,8 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
 
             assert_eq!(
                 std::fs::read_to_string(&baseline_path).unwrap(),
-                VALID_PLAN_BODY,
-                "baseline must remain the ORIGINAL plan, never overwritten",
+                committed_plan_body(),
+                "baseline must remain the committed contract, never overwritten",
             );
         })
         .await;

@@ -234,6 +234,7 @@ pub(crate) struct SessionSpawnOptions<'a> {
     /// In-flight `.envrc` load; when `None`, `spawn_and_register_session` spawns its own.
     pub envrc: Option<xai_grok_workspace::envrc::EnvrcLoad>,
     pub persisted_signals: Option<crate::session::signals::SessionSignals>,
+    pub persisted_plan_state: Option<crate::tools::todo::TodoState>,
     pub persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     pub persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     pub persisted_workflow_runs: Vec<
@@ -383,6 +384,7 @@ pub(crate) fn chat_session_spawn_options<'a>(
         client_fs_write: false,
         envrc: None,
         persisted_signals: None,
+        persisted_plan_state: None,
         persisted_plan_mode: None,
         persisted_goal_mode: None,
         persisted_workflow_runs: Vec::new(),

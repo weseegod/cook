@@ -268,6 +268,7 @@ pub(crate) async fn spawn_session_actor(
     paths_config: xai_grok_agent::prompt::paths::PathsConfig,
     incremental_bash_output: bool,
     persisted_signals: Option<crate::session::signals::SessionSignals>,
+    persisted_plan_state: Option<crate::tools::todo::TodoState>,
     persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     persisted_workflow_runs: Vec<crate::session::workflow::store::RestoredWorkflowRun>,
@@ -1187,9 +1188,8 @@ pub(crate) async fn spawn_session_actor(
         )
     };
     let feedback_enabled = feedback_flags.enabled;
-    let mcp_discovery_enabled = !mcp_servers.is_empty()
-        || acp_mcp_count > 0
-        || startup_hints.managed_mcps_enabled;
+    let mcp_discovery_enabled =
+        !mcp_servers.is_empty() || acp_mcp_count > 0 || startup_hints.managed_mcps_enabled;
     let (plugin_registry_wait_timer, plugin_registry_wait_span) =
         spawn_await_step!("plugin_registry_wait");
     let plugin_registry = prefetch
@@ -1321,6 +1321,36 @@ pub(crate) async fn spawn_session_actor(
         })?;
     drop(agent_build_timer);
     drop(agent_build_span);
+    let session_dir = crate::session::persistence::session_dir(&session_info);
+    let planning_draft = plan_mode.lock().is_active();
+    let current_plan = (!planning_draft).then(|| plan_mode.lock().plan_file_path().to_path_buf());
+    let goal_plan = goal_tracker
+        .lock()
+        .snapshot()
+        .and_then(|goal| goal.plan_file.clone());
+    let (restored_todos, imported_legacy) = if planning_draft {
+        (persisted_plan_state, false)
+    } else {
+        crate::session::plan_checklist::import_legacy(
+            &session_dir,
+            current_plan.as_deref(),
+            goal_plan.as_deref(),
+            persisted_plan_state,
+        )
+    };
+    if let Some(state) = restored_todos {
+        if imported_legacy {
+            let _ = persistence
+                .tx
+                .send(crate::session::persistence::PersistenceMsg::PlanState(
+                    state.clone(),
+                ));
+        }
+        agent
+            .tool_bridge()
+            .update_resource(xai_grok_tools::types::resources::State(state))
+            .await;
+    }
     let tool_setup_span = spawn_ctx
         .as_ref()
         .map(|ctx| phase_region_under(SubagentSpawnPhase::ToolSetup, &ctx.parent));
@@ -2652,6 +2682,7 @@ pub(crate) async fn spawn_session_on_thread(
     paths_config: xai_grok_agent::prompt::paths::PathsConfig,
     incremental_bash_output: bool,
     persisted_signals: Option<crate::session::signals::SessionSignals>,
+    persisted_plan_state: Option<crate::tools::todo::TodoState>,
     persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     persisted_workflow_runs: Vec<crate::session::workflow::store::RestoredWorkflowRun>,
@@ -2867,6 +2898,7 @@ pub(crate) async fn spawn_session_on_thread(
                     paths_config,
                     incremental_bash_output,
                     persisted_signals,
+                    persisted_plan_state,
                     persisted_plan_mode,
                     persisted_goal_mode,
                     persisted_workflow_runs,

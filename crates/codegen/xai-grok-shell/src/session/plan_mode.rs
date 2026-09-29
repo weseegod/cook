@@ -450,7 +450,7 @@ then for code-change `## Implementation approach` (nonempty), `## Current anchor
 and `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
 and finally `## Deviations` containing exactly `(none yet)`. \
 Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
-Only Task checklist may contain checkboxes. The file must stand alone without this conversation. \
+Only the draft Task checklist may contain checkboxes. On approval its items move to todo_write and the saved contract has no checklist. The file must stand alone without this conversation. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
 

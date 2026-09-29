@@ -956,6 +956,49 @@ impl SessionActor {
                     "The approved plan could not be seeded; the goal is paused. No planner was started.".into(),
                 );
             }
+            let paths =
+                self.goal_tracker.lock().snapshot().and_then(|goal| {
+                    Some((goal.plan_file.clone()?, goal.plan_baseline_file.clone()?))
+                });
+            if let Some((episode, baseline)) = paths {
+                match crate::session::plan_checklist::extract(content, "Task checklist") {
+                    Ok((contract, Some(mut state))) => {
+                        if let Err(error) = std::fs::write(&episode, &contract)
+                            .and_then(|_| std::fs::write(&baseline, &contract))
+                        {
+                            self.goal_tracker.lock().pause_with_message(
+                                crate::session::goal_tracker::GoalPauseReason::Planner,
+                                format!("Could not save the goal checklist: {error}"),
+                            );
+                            self.goal_notify_sender()
+                                .persist_goal_state(&self.goal_tracker.lock());
+                            return GoalSetupOutcome::Message(format!(
+                                "Could not save the goal checklist: {error}"
+                            ));
+                        }
+                        state.bind(
+                            xai_grok_tools::implementations::grok_build::todo::TodoBindingKind::Approved,
+                            crate::session::plan_checklist::binding_episode(
+                                &crate::session::persistence::session_dir(&self.session_info),
+                                &episode,
+                            ),
+                        );
+                        self.replace_todo_state(state).await;
+                    }
+                    Ok((_, None)) => {}
+                    Err(error) => {
+                        self.goal_tracker.lock().pause_with_message(
+                            crate::session::goal_tracker::GoalPauseReason::Planner,
+                            format!("Could not parse the goal checklist: {error}"),
+                        );
+                        self.goal_notify_sender()
+                            .persist_goal_state(&self.goal_tracker.lock());
+                        return GoalSetupOutcome::Message(format!(
+                            "Could not parse the goal checklist: {error}"
+                        ));
+                    }
+                }
+            }
         }
         self.goal_turn_task_ids.lock().clear();
         self.clear_pending_classifier_completions();
@@ -1818,13 +1861,25 @@ impl SessionActor {
     }
 
     async fn has_pending_goal_todos(&self) -> bool {
-        use crate::tools::todo::{TodoState, TodoStatus};
+        use crate::tools::todo::TodoState;
         use xai_grok_tools::types::resources::State;
         let bridge = self.tool_bridge_handle();
         match bridge.read_resource::<State<TodoState>>().await {
-            Some(state) => state.0.todo_items_with_ids().any(|(_id, item)| {
-                matches!(item.status, TodoStatus::Pending | TodoStatus::InProgress)
-            }),
+            Some(state) => {
+                let goal_plan = self
+                    .goal_tracker
+                    .lock()
+                    .snapshot()
+                    .and_then(|goal| goal.plan_file.clone());
+                if let Some(binding) = state.0.binding() {
+                    let session_dir = crate::session::persistence::session_dir(&self.session_info);
+                    let bound_path = session_dir.join(&binding.episode);
+                    if goal_plan.as_deref() != Some(bound_path.as_path()) {
+                        return false;
+                    }
+                }
+                state.0.first_pending().is_some()
+            }
             None => {
                 tracing::warn!(
                     "goal stop-detector: TodoState resource missing; failing OPEN \

@@ -1,6 +1,7 @@
-//! Helper that mines the "next concrete step" inlined into the goal continuation nudge from the planner-emitted plan file.
+//! Helper that reads the next concrete step from the session's bound plan.json state.
 //!
-//! Verifier-verdict gaps are delivered on a separate, more prominent path, so this module only reads the plan's next unchecked item.
+//! Verifier-verdict gaps are delivered on a separate, more prominent path. Legacy markdown
+//! checkboxes are read only before an old episode has been imported.
 //! That path is `render_verifier_gaps_block` in `acp_session.rs`, fed from the persisted `last_classifier_gaps` summary.
 //! If the plan read fails, the caller falls back to a generic "check your todo list" line, so the helper here never returns it itself.
 
@@ -8,6 +9,27 @@ use std::path::Path;
 
 /// Each goal nudge fires per turn, so a hostile or runaway verdict/plan must not blow up the context.
 pub(crate) const MAX_READ_BYTES: usize = 8 * 1024;
+
+/// Bound goals use the same persisted state as the stop detector and todo pane.
+pub(crate) fn first_pending_plan_item(episode: &Path) -> Option<String> {
+    let session_dir = episode.parent()?.parent()?;
+    let state = std::fs::read(session_dir.join("plan.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<crate::tools::todo::TodoState>(&bytes).ok());
+    match state {
+        Some(state) if state.binding().is_some() => state
+            .binding()
+            .filter(|binding| session_dir.join(&binding.episode) == episode)
+            .and_then(|_| {
+                state
+                    .first_pending()
+                    .map(|(id, item)| format!("{id}: {}", item.content))
+            }),
+        // Old sessions are imported on load. The fallback covers the brief interval before
+        // migration persistence finishes and standalone callers that have not loaded a session.
+        _ => first_unchecked_plan_item(episode),
+    }
+}
 
 /// Returns `None` on any I/O failure (missing file, permission denied, etc.).
 /// When the buffer reaches the cap, the trailing potentially-incomplete line is dropped.
@@ -27,7 +49,7 @@ fn read_capped(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// First unchecked `- [ ]` (or `* [ ]` / `+ [ ]`) markdown checkbox in a plan file; `- [x]` / `- [X]` are skipped, `None` when none remain.
+/// Legacy fallback: first unchecked `- [ ]` (or `* [ ]` / `+ [ ]`) markdown checkbox.
 /// Numbered `## Acceptance criteria` are not mined: they never get checked off, so criterion 1 would surface forever.
 /// When the plan has a `## Task checklist` section only its checkboxes are mined.
 pub(crate) fn first_unchecked_plan_item(path: &Path) -> Option<String> {
@@ -126,6 +148,55 @@ mod tests {
         let f = NamedTempFile::new().expect("temp file must be creatable");
         std::fs::write(f.path(), body).expect("write must succeed");
         f
+    }
+
+    #[test]
+    fn bound_next_step_comes_from_plan_json() {
+        use crate::tools::todo::{TodoItem, TodoPriority, TodoState, TodoStatus};
+        use xai_grok_tools::implementations::grok_build::todo::TodoBindingKind;
+        let dir = tempfile::tempdir().unwrap();
+        let plans = dir.path().join("plans");
+        std::fs::create_dir(&plans).unwrap();
+        let episode = plans.join("goal.md");
+        std::fs::write(&episode, "# Plan\n\n## Task checklist\n- [ ] stale item\n").unwrap();
+        let mut state = TodoState::default();
+        state.push(
+            "step-1".into(),
+            TodoItem {
+                content: "current item".into(),
+                priority: TodoPriority::Medium,
+                status: TodoStatus::Pending,
+                meta: None,
+            },
+        );
+        state.bind(
+            TodoBindingKind::Approved,
+            episode.to_string_lossy().into_owned(),
+        );
+        std::fs::write(
+            dir.path().join("plan.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            first_pending_plan_item(&episode).as_deref(),
+            Some("step-1: current item")
+        );
+        state.update(&"step-1".into(), None, Some(TodoStatus::Completed));
+        std::fs::write(
+            dir.path().join("plan.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first_pending_plan_item(&episode), None);
+        state.update(&"step-1".into(), None, Some(TodoStatus::Pending));
+        state.bind(TodoBindingKind::Approved, "plans/other.md".into());
+        std::fs::write(
+            dir.path().join("plan.json"),
+            serde_json::to_vec(&state).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(first_pending_plan_item(&episode), None);
     }
 
     #[test]

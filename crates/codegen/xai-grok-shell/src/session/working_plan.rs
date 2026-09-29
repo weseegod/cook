@@ -3,7 +3,9 @@
 //! The skill text lives next to the tool. This module writes the episode with the plan-mode
 //! allocator and does not activate plan mode.
 
+use crate::tools::todo::TodoState;
 use std::path::{Path, PathBuf};
+use xai_grok_tools::implementations::grok_build::todo::TodoBindingKind;
 
 #[cfg(test)]
 pub(crate) use xai_grok_tools::implementations::grok_build::working_plan::WORKING_PLAN_SKILL_BODY as working_plan_skill_body;
@@ -41,14 +43,26 @@ pub(crate) fn allowed_on_surface(
 
 /// Write `body` under `<session>/plans/` and publish the H1 slug.
 /// Does not change plan-mode state and does not set an approved-plan flag.
-pub(crate) fn save_working_plan(session_dir: &Path, body: &str) -> Result<PathBuf, String> {
+pub(crate) fn save_working_plan(
+    session_dir: &Path,
+    body: &str,
+) -> Result<(PathBuf, TodoState), String> {
     working_plan_shape(body)?;
+    let (contract, Some(mut state)) = crate::session::plan_checklist::extract(body, "Steps")?
+    else {
+        return Err("## Steps is required".into());
+    };
     let path = crate::session::plan_mode::next_episode_path(session_dir);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
     }
-    std::fs::write(&path, body).map_err(|error| error.to_string())?;
-    Ok(crate::session::plan_mode::publish_plan_episode(&path))
+    std::fs::write(&path, contract).map_err(|error| error.to_string())?;
+    let path = crate::session::plan_mode::publish_plan_episode(&path);
+    state.bind(
+        TodoBindingKind::Passive,
+        crate::session::plan_checklist::binding_episode(session_dir, &path),
+    );
+    Ok((path, state))
 }
 
 #[cfg(test)]
