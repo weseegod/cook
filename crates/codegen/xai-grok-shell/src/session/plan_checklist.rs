@@ -177,4 +177,20 @@ mod tests {
         assert!(!imported_again);
         assert_eq!(std::fs::read_to_string(&episode).unwrap(), body);
     }
+
+    #[test]
+    fn imports_old_passive_steps_without_rewriting_episode() {
+        let dir = tempfile::tempdir().unwrap();
+        let plans = dir.path().join("plans");
+        std::fs::create_dir(&plans).unwrap();
+        let episode = plans.join("working.md");
+        let body = "# Plan: Working\n\n## Goal\nBuild it.\n\n## Files\n- `app.js`\n\n## Steps\n- [x] `app.js` — build. Done when: it runs.\n- [ ] `app.js` — check. Done when: tests pass.\n";
+        std::fs::write(&episode, body).unwrap();
+        let (state, imported) = import_legacy(dir.path(), None, None, Some(TodoState::default()));
+        assert!(imported);
+        let state = state.unwrap();
+        assert_eq!(state.binding().unwrap().kind, TodoBindingKind::Passive);
+        assert_eq!(state.first_pending().unwrap().0, "step-2");
+        assert_eq!(std::fs::read_to_string(episode).unwrap(), body);
+    }
 }
