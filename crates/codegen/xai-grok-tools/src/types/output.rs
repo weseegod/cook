@@ -887,7 +887,7 @@ impl ToolOutput {
                      2. Identify similar features, codebase architecture, and understand trade-offs\n\
                      3. Use {ask} if you need to clarify the approach\n\
                      4. Design a concrete implementation strategy\n\
-                     5. Write a self-contained plan to the file above. Start with `# Plan: <5–10 word title>` without a path. Then use these sections: Goal kind, Decisions, Context (3–8 bullets), Acceptance criteria, Verification plan, Non-goals, Assumed scope, code-change Implementation approach and 3–8 Task checklist lines ending in test or evidence, and Deviations containing `(none yet)`. Use no code fences or pasted source; checkboxes belong only in Task checklist. Each checklist line uses `- [ ] `<path>` — change. Done when: observation.`\n\
+                     5. Write a self-contained plan to the file above. Start with `# Plan: <5–10 word title>` without a path. Then use these sections: Goal kind, Decisions, Context (3–8 bullets), Acceptance criteria, Verification plan, Non-goals, Assumed scope, code-change Implementation approach and 3–8 Task checklist lines ending in test or evidence, and Deviations containing `(none yet)`. Use no code fences or pasted source; checkboxes belong only in Task checklist. Each checklist line uses `- [ ] `<path>` — change. Done when: observation.` The checklist stays in the file. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged.\n\
                      6. When ready, use {exit} to present your plan to the user."
                 )
             }

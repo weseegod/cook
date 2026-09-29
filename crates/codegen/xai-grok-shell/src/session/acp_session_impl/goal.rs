@@ -956,49 +956,6 @@ impl SessionActor {
                     "The approved plan could not be seeded; the goal is paused. No planner was started.".into(),
                 );
             }
-            let paths =
-                self.goal_tracker.lock().snapshot().and_then(|goal| {
-                    Some((goal.plan_file.clone()?, goal.plan_baseline_file.clone()?))
-                });
-            if let Some((episode, baseline)) = paths {
-                match crate::session::plan_checklist::extract(content, "Task checklist") {
-                    Ok((contract, Some(mut state))) => {
-                        if let Err(error) = std::fs::write(&episode, &contract)
-                            .and_then(|_| std::fs::write(&baseline, &contract))
-                        {
-                            self.goal_tracker.lock().pause_with_message(
-                                crate::session::goal_tracker::GoalPauseReason::Planner,
-                                format!("Could not save the goal checklist: {error}"),
-                            );
-                            self.goal_notify_sender()
-                                .persist_goal_state(&self.goal_tracker.lock());
-                            return GoalSetupOutcome::Message(format!(
-                                "Could not save the goal checklist: {error}"
-                            ));
-                        }
-                        state.bind(
-                            xai_grok_tools::implementations::grok_build::todo::TodoBindingKind::Approved,
-                            crate::session::plan_checklist::binding_episode(
-                                &crate::session::persistence::session_dir(&self.session_info),
-                                &episode,
-                            ),
-                        );
-                        self.replace_todo_state(state).await;
-                    }
-                    Ok((_, None)) => {}
-                    Err(error) => {
-                        self.goal_tracker.lock().pause_with_message(
-                            crate::session::goal_tracker::GoalPauseReason::Planner,
-                            format!("Could not parse the goal checklist: {error}"),
-                        );
-                        self.goal_notify_sender()
-                            .persist_goal_state(&self.goal_tracker.lock());
-                        return GoalSetupOutcome::Message(format!(
-                            "Could not parse the goal checklist: {error}"
-                        ));
-                    }
-                }
-            }
         }
         self.goal_turn_task_ids.lock().clear();
         self.clear_pending_classifier_completions();

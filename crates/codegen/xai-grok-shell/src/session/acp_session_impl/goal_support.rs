@@ -1287,39 +1287,16 @@ impl SessionActor {
                     }
                     let published_plan_file =
                         crate::session::plan_mode::publish_plan_episode(&plan_file);
-                    let committed = std::fs::read_to_string(&published_plan_file)
-                        .map_err(|error| error.to_string())
-                        .and_then(|body| {
-                            let (contract, state) =
-                                crate::session::plan_checklist::extract(&body, "Task checklist")?;
-                            if contract != body {
-                                std::fs::write(&published_plan_file, contract)
-                                    .map_err(|error| error.to_string())?;
-                            }
-                            Ok(state)
-                        });
-                    let state =
-                        match committed {
-                            Ok(state) => state,
-                            Err(error) => {
-                                tracing::warn!(%error, "goal planner: could not commit checklist");
-                                let _ = self.auto_pause_goal_if_matches_with_message(
+                    if let Err(error) = std::fs::read_to_string(&published_plan_file) {
+                        tracing::warn!(%error, "goal planner: published plan unreadable");
+                        let _ = self
+                            .auto_pause_goal_if_matches_with_message(
                                 &goal_id,
                                 crate::session::goal_tracker::GoalPauseReason::Planner,
-                                format!("The planner's checklist could not be committed: {error}"),
-                            ).await;
-                                break;
-                            }
-                        };
-                    if let Some(mut state) = state {
-                        state.bind(
-                            xai_grok_tools::implementations::grok_build::todo::TodoBindingKind::Approved,
-                            crate::session::plan_checklist::binding_episode(
-                                &crate::session::persistence::session_dir(&self.session_info),
-                                &published_plan_file,
-                            ),
-                        );
-                        self.replace_todo_state(state).await;
+                                format!("The planner's plan could not be read: {error}"),
+                            )
+                            .await;
+                        break;
                     }
                     // Record `plan_file`, then snapshot the committed contract as the immutable baseline the verifier diffs later edits against.
                     // Capture once: this runs only when no plan exists yet, and the `is_none()` guard keeps a restart / re-entry from overwriting it

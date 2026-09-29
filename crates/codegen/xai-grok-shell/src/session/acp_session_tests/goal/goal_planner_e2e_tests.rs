@@ -39,8 +39,7 @@ const VALID_PLAN_BODY: &str = "# Plan: Build a complete reusable thing here now\
 ## Deviations\n(none yet)\n";
 
 fn committed_plan_body() -> String {
-    crate::session::plan_checklist::extract(VALID_PLAN_BODY, "Task checklist")
-        .unwrap().0
+    VALID_PLAN_BODY.to_string()
 }
 
 /// Spawn behaviour knobs for the planner-coordinator stub.
@@ -535,7 +534,7 @@ async fn planner_snapshots_plan_baseline_once_and_does_not_overwrite() {
 
             actor.maybe_run_goal_planner("do X").await;
 
-            // Baseline recorded on the orchestration and written with the stripped contract.
+            // Baseline recorded on the orchestration and written with the full plan body.
             let recorded = actor
                 .goal_tracker
                 .lock()

@@ -1,10 +1,7 @@
 //! Passive working-plan skill and save tool for an open task with no approved plan.
 //!
 //! The skill body is the instruction. `save_working_plan` is advertised on TaskOpen, and the
-//! session writes the episode with the plan-mode allocator. This module checks the short shape
-//! and refuses every other skill name.
-
-use std::collections::HashMap;
+//! session writes the episode with the plan-mode allocator. The host saves the markdown as written.
 
 use crate::implementations::skills::skill::SkillInput;
 use crate::implementations::skills::skill::SkillOutput;
@@ -16,94 +13,32 @@ pub const WORKING_PLAN_SKILL_NAME: &str = "working-plan";
 pub const SAVE_WORKING_PLAN_TOOL_ID: &str = "save_working_plan";
 
 /// Instructions the model loads before it writes a short plan.
+///
+/// The checklist stays in the saved file. Shape is this prompt; the host does not reject a body.
 pub const WORKING_PLAN_SKILL_BODY: &str = "\
 Use this when the task needs several new files, or the file split is not already in the prompt. \
 Skip it for a small edit.\n\
 \n\
-Write the plan below, call save_working_plan with that markdown as `body`, then keep implementing \
-in the same turn. Do not call enter_plan_mode. Do not ask the user to approve. Do not stop after saving.\n\
+Write the plan below, call save_working_plan once with that markdown as `body`, then keep implementing \
+in the same turn. Do not call enter_plan_mode. Do not ask the user to approve. Do not stop after saving. \
+Do not call todo_write for these steps.\n\
 \n\
 # Plan: <short title>\n\
 \n\
 ## Goal\n\
 One sentence describing the finished work.\n\
 \n\
-## Files\n\
-- `path` — what that file is for\n\
-\n\
 ## Steps\n\
 - [ ] `path` — the change. Done when: an observable result.\n\
-The last step is how to check the work.\n\
+The last step is how you will check the work.\n\
 \n\
-Send the body with ## Steps; the saved episode contains only Goal and Files. \
-The steps appear in the live todo list.\n\
+The saved file is exactly the body you send, including ## Steps. Do not add a ## Files section: \
+the prompt and the conversation already name the files. Do not add anchors, an edit brief, decisions, \
+or a deviations log.\n\
 \n\
-Do not add anchors, an edit brief, decisions, or a deviations log.\n\
+When a step is done, edit the saved plan file and change that line from `- [ ]` to `- [x]`. \
+Leave the rest of the line unchanged. Do not call save_working_plan again to revise the shape.\n\
 ";
-
-/// Short shape for a passive plan: title, Goal, Files, and Steps. Not the review contract.
-pub fn working_plan_shape(body: &str) -> Result<(), String> {
-    let mut errors = Vec::new();
-    let first = body.lines().next().unwrap_or("").trim();
-    let title = first.strip_prefix("# Plan: ").unwrap_or("").trim();
-    if title.is_empty() || first.contains('/') || first.contains('\\') {
-        errors.push("H1 must be `# Plan: <title>` without a path".to_string());
-    }
-    let sections = section_bodies(body);
-    for name in ["Goal", "Files", "Steps"] {
-        if !sections.contains_key(name) {
-            errors.push(format!("missing ## {name}"));
-        }
-    }
-    let goal = content(&sections, "Goal");
-    if sections.contains_key("Goal") && goal.is_empty() {
-        errors.push("## Goal needs one sentence".to_string());
-    }
-    let files = content(&sections, "Files");
-    if sections.contains_key("Files") && !files.iter().any(|line| line.contains('`')) {
-        errors.push("## Files needs a backticked path".to_string());
-    }
-    let steps = content(&sections, "Steps");
-    if sections.contains_key("Steps")
-        && !steps
-            .iter()
-            .any(|line| line.contains("- [ ]") && line.contains("Done when:"))
-    {
-        errors.push("## Steps needs a `- [ ]` line with a path and Done when".to_string());
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors.join("; "))
-    }
-}
-
-fn section_bodies(body: &str) -> HashMap<&str, Vec<&str>> {
-    let mut sections: HashMap<&str, Vec<&str>> = HashMap::new();
-    let mut current = "";
-    for line in body.lines() {
-        if let Some(name) = line.strip_prefix("## ") {
-            current = name.trim();
-            sections.entry(current).or_default();
-        } else {
-            sections.entry(current).or_default().push(line);
-        }
-    }
-    sections
-}
-
-fn content<'a>(sections: &'a HashMap<&str, Vec<&'a str>>, name: &str) -> Vec<&'a str> {
-    sections
-        .get(name)
-        .map(|lines| {
-            lines
-                .iter()
-                .copied()
-                .filter(|line| !line.trim().is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
 
 /// `skill` on TaskOpen. Only `working-plan` resolves.
 #[derive(Debug, Default)]
@@ -199,7 +134,7 @@ fn rejected(message: &str) -> SkillOutput {
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
-    /// Full working-plan markdown: title, Goal, Files, and Steps.
+    /// Full working-plan markdown: title, Goal, and Steps. The host stores this text unchanged.
     #[schemars(description = "Full working-plan markdown")]
     pub body: String,
 }
@@ -241,8 +176,9 @@ impl crate::types::tool_metadata::ToolMetadata for SaveWorkingPlanTool {
 
     fn description_template(&self) -> &str {
         "Save a passive working plan into the session plans list. Pass the full markdown as \
-         body. Then keep implementing on this turn. This does not enter plan mode and does not \
-         ask for approval."
+         body, including the ## Steps checklist. Then keep implementing on this turn. Mark a \
+         finished step by editing that file from `- [ ]` to `- [x]`. This does not enter plan \
+         mode and does not ask for approval."
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {

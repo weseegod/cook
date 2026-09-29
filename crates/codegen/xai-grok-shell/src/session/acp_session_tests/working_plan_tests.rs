@@ -1,6 +1,6 @@
 use super::{
     allowed_on_surface, entry_reminder, is_save_working_plan, save_working_plan,
-    working_plan_shape as validate_working_plan_shape, working_plan_skill_body,
+    working_plan_skill_body,
 };
 
 const SAMPLE: &str = "\
@@ -9,42 +9,51 @@ const SAMPLE: &str = "\
 ## Goal
 A playable board in the browser.
 
-## Files
-- `index.html` — page shell
-- `js/app.js` — game loop
-
 ## Steps
 - [ ] `index.html` — add the page. Done when: the file exists and loads the script.
 - [ ] `js/app.js` — add the loop. Done when: the check script runs.
 ";
 
 #[test]
-fn working_plan_shape() {
-    assert!(
-        validate_working_plan_shape(SAMPLE).is_ok(),
-        "short plan should pass"
-    );
-    let missing_steps = SAMPLE.replace("## Steps\n", "## Notes\n");
-    let error = validate_working_plan_shape(&missing_steps).unwrap_err();
-    assert!(error.contains("Steps"), "{error}");
-    let review = crate::session::plan_contract::validate_plan_contract(SAMPLE);
-    assert!(review.is_err(), "review contract stays strict");
+fn working_plan_skill_keeps_the_checklist_in_the_file() {
     assert!(working_plan_skill_body.contains("save_working_plan"));
+    assert!(working_plan_skill_body.contains("## Steps"));
+    assert!(working_plan_skill_body.contains("`- [ ]` to `- [x]`"));
+    assert!(
+        !working_plan_skill_body.contains("## Files\n"),
+        "passive plans do not include a Files section to fill in"
+    );
+    assert!(
+        !working_plan_skill_body.contains("todo list"),
+        "the checklist stays in the plan file"
+    );
 }
 
 #[test]
-fn working_plan_save() {
+fn working_plan_save_keeps_steps_and_overwrites_the_same_episode() {
     let dir = tempfile::tempdir().unwrap();
     let tracker = crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
-    let (path, state) = save_working_plan(dir.path(), SAMPLE).unwrap();
+    let path = save_working_plan(dir.path(), SAMPLE, None).unwrap();
     let name = path.file_name().unwrap().to_string_lossy().into_owned();
     assert!(
         name.starts_with("build-the-board-game-"),
         "published name {name}"
     );
-    assert!(path.is_file());
-    assert!(!std::fs::read_to_string(&path).unwrap().contains("## Steps"));
-    assert_eq!(state.todo_items().count(), 2);
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("## Steps"), "{saved}");
+    assert!(saved.contains("- [ ] `index.html`"));
+    let updated = SAMPLE.replace("- [ ] `index.html`", "- [x] `index.html`");
+    let again = save_working_plan(dir.path(), &updated, Some(&path)).unwrap();
+    assert_eq!(again, path);
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("- [x] `index.html`"));
+    assert!(saved.contains("- [ ] `js/app.js`"));
+    let episodes = std::fs::read_dir(dir.path().join("plans"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "md"))
+        .count();
+    assert_eq!(episodes, 1);
     assert!(!tracker.is_active());
     assert!(tracker.plan_file_path().ends_with("plan.md"));
     assert!(allowed_on_surface(

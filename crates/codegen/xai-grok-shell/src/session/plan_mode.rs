@@ -60,6 +60,8 @@ pub struct PlanModeTracker {
     /// `plan_file_path` plus an on-disk exists() check cover the same guarantee.
     episode_files: Vec<PathBuf>,
     frozen_plan: Option<FrozenPlan>,
+    /// Passive working-plan episode for the open task. Not the active plan-mode file.
+    passive_episode: Option<PathBuf>,
 }
 #[derive(Debug, Clone)]
 pub(crate) struct FrozenPlan {
@@ -93,6 +95,10 @@ pub struct PlanModeSnapshot {
     pub plan_file: Option<String>,
     #[serde(default)]
     pub frozen_plan: bool,
+    /// Relative path of the passive working-plan episode for this open task.
+    /// A later `save_working_plan` overwrites this file instead of allocating another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passive_episode: Option<String>,
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
@@ -109,6 +115,7 @@ impl PlanModeTracker {
             session_dir,
             episode_files: Vec::new(),
             frozen_plan: None,
+            passive_episode: None,
         }
     }
     /// `session_dir` is used to recompute `plan_file_path`.
@@ -133,6 +140,10 @@ impl PlanModeTracker {
         if let Some(plan) = &frozen_plan {
             crate::session::plan_contract::register_frozen_plan(&plan.episode, &plan.baseline);
         }
+        let passive_episode = snapshot.passive_episode.as_deref().and_then(|relative| {
+            let path = restore_plan_file_path(&session_dir, Some(relative));
+            (path == session_dir.join(relative)).then_some(path)
+        });
         Self {
             state: snapshot.state,
             was_previously_active: snapshot.was_previously_active,
@@ -144,7 +155,18 @@ impl PlanModeTracker {
             session_dir,
             episode_files: Vec::new(),
             frozen_plan,
+            passive_episode,
         }
+    }
+
+    /// Passive working-plan episode for this task, when one has been saved.
+    pub(crate) fn passive_episode(&self) -> Option<&Path> {
+        self.passive_episode.as_deref()
+    }
+
+    /// Remember the passive episode so the next save overwrites it.
+    pub(crate) fn set_passive_episode(&mut self, path: PathBuf) {
+        self.passive_episode = Some(path);
     }
     /// Mark that the client is waiting on plan approval (`exit_plan_mode` parked).
     pub(crate) fn set_awaiting_plan_approval(&mut self, awaiting: bool) {
@@ -163,15 +185,23 @@ impl PlanModeTracker {
             pending_exit_reminder: self.pending_exit_reminder,
             plan_file: self.relative_plan_file(),
             frozen_plan: self.frozen_plan.is_some(),
+            passive_episode: self
+                .passive_episode
+                .as_deref()
+                .and_then(|path| self.relative_inside(path)),
         }
+    }
+
+    fn relative_inside(&self, path: &Path) -> Option<String> {
+        let relative = path.strip_prefix(&self.session_dir).ok()?;
+        let text = relative.to_string_lossy().replace('\\', "/");
+        (!text.is_empty() && !text.contains("..")).then_some(text)
     }
 
     /// The current plan file relative to the session directory, when it lives inside it.
     /// Used for persistence so a session's plan file survives resume.
     fn relative_plan_file(&self) -> Option<String> {
-        let relative = self.plan_file_path.strip_prefix(&self.session_dir).ok()?;
-        let text = relative.to_string_lossy().replace('\\', "/");
-        (!text.is_empty()).then_some(text)
+        self.relative_inside(&self.plan_file_path)
     }
 
     /// The path a new episode would allocate, without mutating tracker state.
@@ -450,7 +480,7 @@ then for code-change `## Implementation approach` (nonempty), `## Current anchor
 and `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
 and finally `## Deviations` containing exactly `(none yet)`. \
 Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
-Only the draft Task checklist may contain checkboxes. On approval its items move to todo_write and the saved contract has no checklist. The file must stand alone without this conversation. \
+Only the Task checklist may contain checkboxes, and the checklist stays in this file. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged. The file must stand alone without this conversation. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
 
@@ -484,7 +514,8 @@ Context needs 3–8 bullets. Current anchors needs 2–12 bullets with a backtic
 a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
 block per Task checklist line with `Now:`, `Change:`, `Keep:`, `Proof:` bullets. \
 Code-change checklist needs 3–8 `- [ ] `<path>` — change. Done when: observation.` lines, \
-ending with test or evidence. Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
+ending with test or evidence. The checklist stays in the file; mark progress by changing `- [ ]` to `- [x]`. \
+Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
 

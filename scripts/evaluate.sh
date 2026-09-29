@@ -189,13 +189,57 @@ Work only in the current directory. Create the files needed for the task. Do not
 
 if [[ "$SUITE" == hard ]]; then
 EVAL_TASKS=(
-  'Easy: Build a Markdown Table & CSV/JSON Converter tool across 3 files: index.html, style.css, and app.js using vanilla JavaScript only. Provide two side-by-side text editor panes (Left: Input pane with format dropdown [CSV, JSON, Markdown], Right: Output pane with format dropdown [Markdown, CSV, JSON, HTML Table]). Automatically parse input on typing or pasting and display output alongside a live formatted HTML table preview. Include buttons for "Copy Output", "Clear", and "Load Sample Data" (which auto-populates sales sample data). Handle syntax parse errors gracefully by displaying an accessible inline alert banner without breaking the app. Save input text, selected formats, and dark/light theme state in localStorage, defaulting to sample data if stored data is missing or invalid. Ensure visible keyboard focus rings, ARIA labels, and a responsive stacked layout on mobile. No external dependencies. Do not ask for any clarification or prompt the user for input; make reasonable assumptions and complete the task fully autonomously.'
+  'Easy: Format converter across 3 files: index.html, style.css, app.js.
+Main feature: paste data in one format and see it converted to the other formats, with a live rendered table.
+Files: index.html holds the two panes and buttons, style.css the layout, app.js the parsing, conversion, and rendering.
+Must run by opening index.html directly (file://) with no server and no build step. Plain scripts only: no type="module", no import/export, no npm, no CDN, no third-party libraries.
+Must work:
+- Left input pane with source format CSV, JSON, or Markdown table; right output pane with target format Markdown, CSV, JSON, or HTML.
+- Typing or pasting re-parses and updates the output immediately.
+- The HTML target shows a rendered table in the page, not markup text.
+- Malformed input shows an inline error banner and keeps the last good output instead of crashing.
+Buttons: Copy output, Clear, Load sample (sales table with date, product, quantity, price).
+This is an automated run: implement the whole app and finish the task. Do not ask questions or wait for confirmation.'
 
-  'Medium: Build a Task Kanban Board across 4 files: index.html, style.css, app.js, and storage.js using vanilla JavaScript ES modules (<script type="module">). Display three columns (Backlog, In Progress, Done) with per-column card counts. Tasks contain title, description, category tag, priority (Low, Medium, High), and due date. Features: live text search, priority/category filter dropdowns, card drag-and-drop between columns, and accessible keyboard move controls (Arrow keys + hotkeys) as an alternative to dragging. Validate required fields in the task creation modal. Automatically manage state serialization and recovery inside storage.js, restoring default sample tasks if stored localStorage data is corrupt or missing. Include clear empty states for columns and visible focus indicators. No external dependencies or external CDNs. Execute and build the entire application autonomously without asking any questions or waiting for user confirmation.'
+  'Medium: Task kanban board across 4 files: index.html, style.css, app.js, storage.js.
+Main feature: tasks sit in Backlog, In Progress, or Done, move between columns by drag-and-drop or keyboard, and the board survives a reload.
+Files: index.html markup and task modal, style.css columns and cards, app.js UI and interaction, storage.js load, save, and sample-data fallback.
+Must run by opening index.html directly (file://) with no server and no build step. Plain scripts only: no type="module", no import/export, no npm, no CDN, no third-party libraries.
+Must work:
+- Create a task in a modal: title required, description, category tag, priority Low/Medium/High, due date.
+- Three columns with live card counts and an empty state each.
+- Drag a card to another column and drop it; the target column highlights while dragging.
+- Keyboard move: focus a card and press ArrowLeft or ArrowRight to change column.
+- Text search plus a priority filter narrow the visible cards.
+Nice to have: storage.js restores sample tasks when stored data is missing or corrupt.
+This is an automated run: implement and test the whole app and finish the task. Do not ask questions or wait for confirmation.'
 
-  'Medium-Hard: Build a polished responsive Flappy Bird arcade game across 5 files using vanilla JavaScript ES modules: index.html, css/style.css, js/main.js, js/engine.js, and js/entities.js. Render continuous 60fps gameplay on an HTML5 Canvas featuring realistic gravity physics, jump impulse, bird angle rotation based on vertical velocity, and parallax scrolling backgrounds (clouds/cityscape). Procedurally generate pipe obstacles with random gap heights, moving/oscillating pipes at higher scores, and precise axis-aligned bounding box (AABB) collision detection against pipes and ground boundaries. Support dual inputs: Spacebar/Click for desktop and full-screen touch tap on mobile with default touch scrolling prevented. Include Start Screen, Pause Overlay, and Game Over Modals displaying current score, medal achievements, top-10 high score leaderboard, and localStorage persistence with corrupted data fallback. No audio APIs, no external dependencies, and no external CDNs. Do not ask for any clarification or prompt the user for input; make reasonable assumptions and complete the task fully autonomously.'
+  'Hard: Flappy Bird canvas game across 5 files: index.html, css/style.css, js/entities.js, js/engine.js, js/main.js.
+Main feature: a playable one-button canvas game: flap to stay alive, pass pipes for score, a crash ends the run, restart and try again.
+Files: index.html screens and canvas, css/style.css layout, js/entities.js bird and pipe, js/engine.js loop, physics, collision, score, js/main.js DOM wiring and input.
+Must run by opening index.html directly (file://) with no server and no build step. Plain scripts loaded in order entities.js, engine.js, main.js: no type="module", no import/export, no npm, no CDN, no third-party libraries.
+Must work:
+- Spacebar and click flap; a touch tap flaps and does not scroll the page.
+- Bird falls with gravity, jumps on flap, and tilts with vertical velocity.
+- Pipes scroll in from the right with a random gap; passing a pipe adds 1 to the score.
+- Hitting a pipe or the ground ends the run and shows game over with the score.
+- Start screen with a play button; restart from game over; top-10 high scores kept in localStorage with a safe fallback.
+Nice to have: pause overlay.
+This is an automated run: implement and test the whole app and finish the task. Do not ask questions or wait for confirmation'
 
-  'Very Hard: Build a Vector Flowchart & Diagram Editor across 8 modular files using vanilla JavaScript ES modules: index.html, css/main.css, css/toolbar.css, js/app.js, js/canvas.js, js/shapes.js, js/history.js, and js/export.js. Features: Insert, drag, resize, rotate, and delete geometric nodes (rectangles, diamonds, ellipses, text nodes) rendered on HTML5 Canvas or SVG; dynamic orthogonal connector paths that snap between node connection points; property inspector panel for stroke/fill colors, line width, and typography; multi-level Undo/Redo stack (Command pattern) in js/history.js; grid snapping and pan/zoom viewport control; and vector/image export in js/export.js (PNG, SVG). Include accessible modal dialogs, keyboard navigation shortcuts, dark/light theme, and localStorage auto-save with safe recovery from malformed data. No external dependencies or external CDNs. Build the full system autonomously; do not stop to ask questions, pop up prompts, or request user feedback.'
+  'Very hard: Vector flowchart editor across 8 files: index.html, css/main.css, css/toolbar.css, js/shapes.js, js/history.js, js/canvas.js, js/export.js, js/app.js.
+Main feature: build a small diagram on a canvas: insert shapes, connect them with lines, drag to rearrange, undo mistakes, export the result.
+Files: index.html editor shell and dialogs, css/main.css canvas and inspector, css/toolbar.css toolbar, js/shapes.js shape geometry and hit testing, js/history.js undo and redo stack, js/canvas.js rendering, pan, zoom, pointer events, js/export.js PNG and SVG export, js/app.js toolbar, inspector, dialogs, keyboard, theme, autosave.
+Must run by opening index.html directly (file://) with no server and no build step. Plain scripts loaded in order shapes.js, history.js, canvas.js, export.js, app.js: no type="module", no import/export, no npm, no CDN, no third-party libraries.
+Must work:
+- Insert rectangle, diamond, ellipse, and text nodes from the toolbar; drag to move, handles to resize, Delete key to remove.
+- Connector lines snap between node connection points and stay attached when nodes move.
+- Inspector edits stroke color, fill color, line width, and font size of the selected node.
+- Undo and redo cover insert, move, resize, delete, and connector changes across multiple steps.
+- Pan by dragging empty canvas, zoom with buttons or Ctrl+wheel, grid snapping toggle.
+- Export the diagram as PNG and as SVG.
+Nice to have: localStorage autosave with recovery from malformed data, visible keyboard focus.
+This is an automated run: implement and test the whole app and finish the task. Do not ask questions or wait for confirmation'
 )
   ((${#EVAL_TASKS[@]} > 0)) || { echo "hard suite has no prompts" >&2; exit 2; }
   validate_parallel_slots "$(( ${#EVAL_TASKS[@]} * ${#SELECTED[@]} ))"

@@ -1,4 +1,4 @@
-//! The review-time plan shape and the narrow edits allowed after a plan is frozen.
+//! The narrow edits allowed after a plan is frozen.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -33,318 +33,26 @@ pub(crate) fn registered_frozen_plans() -> Vec<(PathBuf, PathBuf)> {
         .collect()
 }
 
-fn sections(body: &str) -> HashMap<&str, Vec<&str>> {
-    let mut sections = HashMap::<&str, Vec<&str>>::new();
-    let mut current = "";
-    for line in body.lines() {
-        if let Some(name) = line.strip_prefix("## ") {
-            current = name;
-            sections.entry(current).or_default();
-        } else {
-            sections.entry(current).or_default().push(line);
-        }
-    }
-    sections
+/// A pending checklist line may become checked. The rest of the line stays byte-for-byte.
+fn checkbox_marked(before: &str, after: &str) -> bool {
+    let Some(rest) = before.strip_prefix("- [ ] ") else {
+        return false;
+    };
+    after.strip_prefix("- [x] ").is_some_and(|next| next == rest)
+        || after.strip_prefix("- [X] ").is_some_and(|next| next == rest)
 }
 
-fn content<'a>(sections: &'a HashMap<&str, Vec<&'a str>>, name: &str) -> Vec<&'a str> {
-    sections
-        .get(name)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|line| !line.trim().is_empty())
-        .collect()
+fn checklist_status_only(old_body: &str, new_body: &str) -> bool {
+    let old: Vec<_> = old_body.split_inclusive('\n').collect();
+    let new: Vec<_> = new_body.split_inclusive('\n').collect();
+    old.len() == new.len()
+        && old
+            .iter()
+            .zip(new)
+            .all(|(before, after)| before == &after || checkbox_marked(before, after))
 }
 
-fn numbered(line: &str) -> bool {
-    let Some((number, rest)) = line.split_once(". ") else {
-        return false;
-    };
-    !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()) && !rest.trim().is_empty()
-}
-
-fn checklist(line: &str) -> bool {
-    let Some(rest) = line.strip_prefix("- [ ] `") else {
-        return false;
-    };
-    let Some((path, detail)) = rest.split_once("` — ") else {
-        return false;
-    };
-    !path.trim().is_empty()
-        && detail.contains(". Done when: ")
-        && !detail.ends_with(". Done when: ")
-}
-
-/// One `## Current anchors` bullet: backticked path, then a backticked symbol or
-/// `new:Identifier`, then an `observed:` clause with non-empty text.
-fn anchor_shape(line: &str) -> bool {
-    let Some(rest) = line.strip_prefix("- ") else {
-        return false;
-    };
-    // Extract the first backticked run (path).
-    let Some(after_path) = rest.strip_prefix('`') else {
-        return false;
-    };
-    let Some((path, after_path)) = after_path.split_once('`') else {
-        return false;
-    };
-    if path.trim().is_empty() {
-        return false;
-    }
-    let after_path = after_path.trim_start();
-    // Symbol: either `ident` or new:ident.
-    let symbol_ok = if let Some(after_sym) = after_path.strip_prefix('`') {
-        after_sym.split_once('`').is_some_and(|(sym, _)| !sym.trim().is_empty())
-    } else if let Some(after_new) = after_path.strip_prefix("new:") {
-        after_new
-            .split_whitespace()
-            .next()
-            .is_some_and(|sym| !sym.is_empty())
-    } else {
-        false
-    };
-    if !symbol_ok {
-        return false;
-    }
-    // Remaining text must contain `observed:` with non-empty content after it.
-    let Some(idx) = after_path.find("observed:") else {
-        return false;
-    };
-    let after = &after_path[idx + "observed:".len()..];
-    !after.trim().is_empty()
-}
-
-/// Check `## Edit brief` blocks: one `###` heading per checklist line, same path and
-/// order; each block has `Now:`, `Change:`, `Keep:`, `Proof:` bullets in order; `Proof:`
-/// contains a backticked command or test path.
-fn validate_edit_brief(brief: &[&str], tasks: &[&str]) -> Vec<String> {
-    let mut errors = Vec::new();
-    // Collect blocks: each block starts at a `### ` heading.
-    let mut blocks: Vec<(String, Vec<&str>)> = Vec::new();
-    for line in brief {
-        if let Some(heading) = line.strip_prefix("### ") {
-            blocks.push((heading.trim().to_owned(), Vec::new()));
-        } else if let Some(last) = blocks.last_mut() {
-            last.1.push(line);
-        } else {
-            errors.push("## Edit brief must start each block with a `###` heading".into());
-            return errors;
-        }
-    }
-    if blocks.len() != tasks.len() {
-        errors.push(format!(
-            "## Edit brief needs one `###` block per Task checklist item ({} vs {})",
-            blocks.len(),
-            tasks.len()
-        ));
-    }
-    for (i, (heading, items)) in blocks.iter().enumerate() {
-        // Heading must contain a backticked path.
-        let heading_path = heading
-            .strip_prefix('`')
-            .and_then(|s| s.split_once('`'))
-            .map(|(p, _)| p)
-            .unwrap_or("");
-        if heading_path.is_empty() {
-            errors.push(format!(
-                "## Edit brief block {} heading needs a backticked path",
-                i + 1
-            ));
-        }
-        // Path must match the checklist item at the same index.
-        if let Some(task) = tasks.get(i) {
-            let task_path = task
-                .strip_prefix("- [ ] `")
-                .and_then(|s| s.split_once('`'))
-                .map(|(p, _)| p)
-                .unwrap_or("");
-            if !heading_path.is_empty() && heading_path != task_path {
-                errors.push(format!(
-                    "## Edit brief block {} path `{heading_path}` does not match checklist path `{task_path}`",
-                    i + 1
-                ));
-            }
-        }
-        // Four bullets in order: Now:, Change:, Keep:, Proof:.
-        let labels = ["Now:", "Change:", "Keep:", "Proof:"];
-        if items.len() != 4 {
-            errors.push(format!(
-                "## Edit brief block {} needs exactly 4 bullets (Now:, Change:, Keep:, Proof:)",
-                i + 1
-            ));
-            continue;
-        }
-        for (item, label) in items.iter().zip(&labels) {
-            if !item.starts_with("- ") || !item[2..].trim_start().starts_with(label) {
-                errors.push(format!(
-                    "## Edit brief block {} bullet must start with `{label}`",
-                    i + 1
-                ));
-            }
-        }
-        // Proof: must contain a backticked command or test path.
-        if let Some(proof) = items.last()
-            && !proof.contains('`')
-        {
-            errors.push(format!(
-                "## Edit brief block {} Proof: needs a backticked command or test path",
-                i + 1
-            ));
-        }
-    }
-    errors
-}
-
-pub(crate) fn validate_plan_contract(body: &str) -> Result<(), Vec<String>> {
-    let sections = sections(body);
-    let mut errors = Vec::new();
-    let headings: Vec<_> = body
-        .lines()
-        .filter_map(|line| line.strip_prefix("## "))
-        .collect();
-    let mut expected = vec![
-        "Goal kind",
-        "Decisions",
-        "Context",
-        "Acceptance criteria",
-        "Verification plan",
-        "Non-goals",
-        "Assumed scope",
-    ];
-    if content(&sections, "Goal kind") == ["code-change"] {
-        expected.extend([
-            "Implementation approach",
-            "Current anchors",
-            "Edit brief",
-            "Task checklist",
-        ]);
-    }
-    expected.push("Deviations");
-    if headings.last() == Some(&"Risks / Contradictions") {
-        expected.push("Risks / Contradictions");
-    }
-    if headings != expected {
-        errors.push("Plan sections must appear once in the required order".into());
-    }
-    let first = body.lines().next().unwrap_or("");
-    if !first.starts_with("# Plan: ")
-        || first.contains('/')
-        || first.contains('\\')
-        || !(5..=10).contains(
-            &first
-                .trim_start_matches("# Plan: ")
-                .split_whitespace()
-                .count(),
-        )
-    {
-        errors.push("H1 must be `# Plan: <5–10 word title>` without a path".into());
-    }
-    let kind = content(&sections, "Goal kind");
-    if kind.len() != 1 || !matches!(kind[0], "code-change" | "analysis" | "research") {
-        errors.push("## Goal kind must contain exactly code-change, analysis, or research".into());
-    }
-    for (name, minimum, maximum) in [
-        ("Decisions", 1, usize::MAX),
-        ("Context", 3, 8),
-        ("Non-goals", 1, usize::MAX),
-    ] {
-        let lines = content(&sections, name);
-        if lines.len() < minimum
-            || lines.len() > maximum
-            || lines
-                .iter()
-                .any(|line| !line.starts_with("- ") || line.len() <= 2)
-        {
-            errors.push(format!(
-                "## {name} needs {minimum}{} bullet(s)",
-                if maximum == usize::MAX {
-                    " or more"
-                } else {
-                    "–8"
-                }
-            ));
-        }
-    }
-    for name in ["Acceptance criteria", "Verification plan"] {
-        let lines = content(&sections, name);
-        if lines.is_empty() || lines.iter().any(|line| !numbered(line)) {
-            errors.push(format!("## {name} needs numbered items"));
-        }
-    }
-    let scope = content(&sections, "Assumed scope");
-    if scope.is_empty() || scope.iter().any(|line| !line.contains('`')) {
-        errors.push("## Assumed scope needs backticked items".into());
-    }
-    if content(&sections, "Deviations") != ["(none yet)"] {
-        errors.push("## Deviations must contain exactly `(none yet)`".into());
-    }
-    if body.contains("```") {
-        errors.push("Code fences are not allowed in a plan".into());
-    }
-    let mut current = "";
-    for line in body.lines() {
-        if let Some(name) = line.strip_prefix("## ") {
-            current = name;
-        }
-        if current != "Task checklist"
-            && (line.contains("- [ ]") || line.contains("- [x]") || line.contains("- [X]"))
-        {
-            errors.push("Checkboxes belong only in ## Task checklist".into());
-            break;
-        }
-    }
-    if kind == ["code-change"] {
-        if content(&sections, "Implementation approach").is_empty() {
-            errors.push("## Implementation approach is required for code-change".into());
-        }
-        let anchors = content(&sections, "Current anchors");
-        if !(2..=12).contains(&anchors.len()) {
-            errors.push("## Current anchors needs 2–12 bullet(s)".into());
-        }
-        for line in &anchors {
-            if !line.starts_with("- ") {
-                errors.push("## Current anchors items must be bullets".into());
-                break;
-            }
-        }
-        for line in &anchors {
-            if !anchor_shape(line) {
-                errors.push(
-                    "## Current anchors items need a backticked path, a backticked symbol or `new:Symbol`, and an `observed:` clause"
-                        .into(),
-                );
-                break;
-            }
-        }
-        let tasks = content(&sections, "Task checklist");
-        if !(3..=8).contains(&tasks.len()) || tasks.iter().any(|line| !checklist(line)) {
-            errors.push(
-                "## Task checklist needs 3–8 `- [ ] `<path>` — ... Done when: ...` lines".into(),
-            );
-        }
-        if tasks.last().is_some_and(|line| {
-            !line.to_ascii_lowercase().contains("test")
-                && !line.to_ascii_lowercase().contains("evidence")
-                && !line.to_ascii_lowercase().contains("verify")
-        }) {
-            errors.push("The last checklist item must be a test or evidence step".into());
-        }
-        let brief_lines = content(&sections, "Edit brief");
-        if brief_lines.is_empty() {
-            errors.push("## Edit brief is required for code-change".into());
-        } else {
-            errors.extend(validate_edit_brief(&brief_lines, &tasks));
-        }
-    }
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
-}
-
-/// Preserve all approved text byte-for-byte except appended deviations.
+/// Preserve approved text byte-for-byte, except checklist boxes flipping to done and appended deviations.
 pub(crate) fn progress_only_delta(baseline: &str, proposed: &str) -> Result<(), &'static str> {
     fn parts(body: &str) -> Vec<(String, String)> {
         let mut result = vec![(String::new(), String::new())];
@@ -384,6 +92,11 @@ pub(crate) fn progress_only_delta(baseline: &str, proposed: &str) -> Result<(), 
             return Err("section changed");
         }
         match old_name.as_str() {
+            "Task checklist" | "Steps" if old_body != new_body => {
+                if !checklist_status_only(old_body, new_body) {
+                    return Err("approved plan text changed");
+                }
+            }
             "Deviations" => {
                 let before = deviation_lines(old_body)?;
                 let after = deviation_lines(new_body)?;
@@ -446,48 +159,29 @@ mod tests {
 ## Deviations\n(none yet)\n";
 
     #[test]
-    fn validates_complete_plan_and_reports_missing_sections() {
-        assert!(validate_plan_contract(PLAN).is_ok());
-        let errors = validate_plan_contract("# Plan: Only a title exists here now\n").unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("Goal kind")));
-        assert!(errors.iter().any(|e| e.contains("Task checklist")) == false);
-    }
-
-    #[test]
-    fn validates_checklist_shape_and_checkbox_location() {
-        let invalid = PLAN.replace(
+    fn permits_checkbox_flips_and_deviations() {
+        let checked = PLAN.replace(
             "- [ ] `src/file.rs` — implement. Done when: result exists.",
-            "- [ ] implement",
+            "- [x] `src/file.rs` — implement. Done when: result exists.",
         );
-        assert!(
-            validate_plan_contract(&invalid)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.contains("Task checklist"))
+        assert!(progress_only_delta(PLAN, &checked).is_ok());
+        let rewritten = PLAN.replace(
+            "- [ ] `src/file.rs` — implement. Done when: result exists.",
+            "- [x] `src/file.rs` — implement differently. Done when: result exists.",
         );
-        let invalid = PLAN.replace("- First fact.", "- [ ] First fact.");
-        assert!(
-            validate_plan_contract(&invalid)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.contains("Checkboxes"))
-        );
-    }
-
-    #[test]
-    fn permits_deviations_and_rejects_contract_edits() {
-        let (contract, _) = crate::session::plan_checklist::extract(PLAN, "Task checklist").unwrap();
-        let with_deviation = contract.replace(
+        assert!(progress_only_delta(PLAN, &rewritten).is_err());
+        assert!(progress_only_delta(&checked, PLAN).is_err());
+        let with_deviation = PLAN.replace(
             "(none yet)",
             "- Used a smaller helper.\n- Kept existing API.",
         );
-        assert!(progress_only_delta(&contract, &with_deviation).is_ok());
+        assert!(progress_only_delta(PLAN, &with_deviation).is_ok());
         let appended = with_deviation.replace(
             "- Kept existing API.",
             "- Kept existing API.\n- Added another note.",
         );
         assert!(progress_only_delta(&with_deviation, &appended).is_ok());
-        assert!(progress_only_delta(&contract, &contract.replace("(none yet)", "\n- New note.")).is_err());
+        assert!(progress_only_delta(PLAN, &PLAN.replace("(none yet)", "\n- New note.")).is_err());
         assert!(
             progress_only_delta(
                 &with_deviation,
@@ -496,86 +190,8 @@ mod tests {
             .is_err()
         );
         assert!(
-            progress_only_delta(
-                &contract,
-                &contract.replace("A checkable result", "A different result")
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn rejects_code_change_missing_anchors_or_brief() {
-        let no_anchors = PLAN.replace(
-            "## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n",
-            "",
-        );
-        let errors = validate_plan_contract(&no_anchors).unwrap_err();
-        assert!(
-            errors.iter().any(|e| e.contains("Current anchors")),
-            "{errors:?}"
-        );
-        let no_brief = PLAN.replace(
-            "## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n",
-            "",
-        );
-        let errors = validate_plan_contract(&no_brief).unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("Edit brief")), "{errors:?}");
-    }
-
-    #[test]
-    fn rejects_anchor_missing_observed_clause() {
-        let invalid = PLAN.replace("observed: file currently has no contract validator.", "");
-        assert!(
-            validate_plan_contract(&invalid)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.contains("observed:"))
-        );
-    }
-
-    #[test]
-    fn rejects_brief_path_mismatch() {
-        let invalid = PLAN.replace("### `tests/file.rs`", "### `src/other.rs`");
-        assert!(
-            validate_plan_contract(&invalid)
-                .unwrap_err()
-                .iter()
-                .any(|e| e.contains("does not match"))
-        );
-    }
-
-    #[test]
-    fn rejects_brief_missing_block() {
-        let invalid = PLAN.replace(
-            "### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n",
-            "",
-        );
-        let errors = validate_plan_contract(&invalid).unwrap_err();
-        assert!(errors.iter().any(|e| e.contains("Edit brief")), "{errors:?}");
-    }
-
-    #[test]
-    fn rejects_analysis_plan_with_new_sections() {
-        let analysis = PLAN
-            .replace("code-change", "analysis")
-            .replace("## Implementation approach\nUse a pure function.\n\n", "")
-            .replace(
-                "## Current anchors\n- `src/file.rs` `new:validate_plan_contract` observed: file currently has no contract validator.\n- `tests/file.rs` `new:contract_tests` observed: test file does not exist yet.\n\n",
-                "",
-            )
-            .replace(
-                "## Edit brief\n### `src/file.rs`\n- Now: No contract validator exists.\n- Change: Add `validate_plan_contract` that checks plan shape.\n- Keep: Existing public API unchanged.\n- Proof: `cargo test plan_contract`\n\n### `src/file.rs`\n- Now: No anchor or brief validation exists.\n- Change: Add anchor and brief shape checks.\n- Keep: Error messages name the failing section.\n- Proof: `cargo test plan_contract`\n\n### `tests/file.rs`\n- Now: No contract tests exist.\n- Change: Add tests for valid and invalid plans.\n- Keep: No test depends on plan text order.\n- Proof: `cargo test plan_contract`\n\n",
-                "",
-            )
-            .replace(
-                "## Task checklist\n- [ ] `src/file.rs` — implement. Done when: result exists.\n- [ ] `src/file.rs` — connect. Done when: call works.\n- [ ] `tests/file.rs` — test. Done when: test passes.\n\n",
-                "",
-            );
-        assert!(
-            validate_plan_contract(&analysis).is_ok(),
-            "{:?}",
-            validate_plan_contract(&analysis).unwrap_err()
+            progress_only_delta(PLAN, &PLAN.replace("A checkable result", "A different result"))
+                .is_err()
         );
     }
 

@@ -1321,31 +1321,7 @@ pub(crate) async fn spawn_session_actor(
         })?;
     drop(agent_build_timer);
     drop(agent_build_span);
-    let session_dir = crate::session::persistence::session_dir(&session_info);
-    let planning_draft = plan_mode.lock().is_active();
-    let current_plan = (!planning_draft).then(|| plan_mode.lock().plan_file_path().to_path_buf());
-    let goal_plan = goal_tracker
-        .lock()
-        .snapshot()
-        .and_then(|goal| goal.plan_file.clone());
-    let (restored_todos, imported_legacy) = if planning_draft {
-        (persisted_plan_state, false)
-    } else {
-        crate::session::plan_checklist::import_legacy(
-            &session_dir,
-            current_plan.as_deref(),
-            goal_plan.as_deref(),
-            persisted_plan_state,
-        )
-    };
-    if let Some(state) = restored_todos {
-        if imported_legacy {
-            let _ = persistence
-                .tx
-                .send(crate::session::persistence::PersistenceMsg::PlanState(
-                    state.clone(),
-                ));
-        }
+    if let Some(state) = persisted_plan_state {
         agent
             .tool_bridge()
             .update_resource(xai_grok_tools::types::resources::State(state))

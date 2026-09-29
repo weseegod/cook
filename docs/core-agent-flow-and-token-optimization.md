@@ -198,6 +198,7 @@ A 10k-token output retained across the next 12 requests contributes about 120k i
 | One user turn under half the window does not prune or compact | Confirmed thresholds in `request_builder.rs`: prune above `context_window / 2`, `keep_last_n_turns` default 3, step-round pruning default 0, auto-compact at 85% | Replay a one-prompt eval and check that prune and compact counts stay zero while cache read grows with rounds |
 | A tool-call argument over 32×1024 bytes ends the attempt | Confirmed constant. Calendar audit `020424` buffered 32,828 bytes, exited 1, and left `app.js` absent | The session `updates.jsonl` for that run, and `tool_call_budget.rs` |
 | Evaluate file counts are git-visible files | Confirmed in `scripts/evaluate/summarize.py` (`git ls-files`) | A workdir without `.git` under gitignored `/temp/` reports 0 files while the files exist. Minesweeper Cook usage stays unreported because `stdout.json` is absent now. Do not backfill it |
+| A plan-shape reject makes the model resend the whole plan | Confirmed on the [2026-09-29 stealth hard audit](audits/2026-09-29-agent-compare-stealth-space-bunny-alpha-hard-20260929T023937Z/report.md). Kanban Cook called `save_working_plan` five times (02:41:20Z–02:41:38Z) on an 80-call run, cache read 2,958,216. The vector flowchart editor called it twice | Count `save_working_plan` calls on a multi-file task. A non-empty body is stored as written; the working-plan skill states the shape |
 
 There is not enough evidence to claim that the system prompt is the main culprit, that MCP always injects every schema, or that caching is unimplemented. Do not infer request token count from template source size: templates have branches/placeholders and toolsets depend on profile.
 
@@ -483,6 +484,8 @@ At audit time, Minesweeper’s blank Cook usage and 0-file count were summarizer
 | [024232](audits/2026-09-28-agent-compare-stealth-space-bunny-alpha-024232.md) | finance dashboard | 1/0/0 | 3/3/3 | 80/39/65 | 3,641,362 / 1,178,556 / 4,992,086 |
 
 No report names a winner. File count is not behavior: Pi’s easy run also wrote `test.js`, OpenCode’s Minesweeper run also wrote `test.headless.js`, and Pi’s Minesweeper exit 0 recorded 0 files. Cook is not the high cell on every exit-0 row. Calendar’s low call count is the budget stop. Minesweeper’s Cook token cells stay blank. `20260928T020433Z` is the finance row above, not an extra unscored run. The mechanism write-up and the phase bars are in the v4 experiment document.
+
+The 2026-09-29 stealth hard Kanban cell spent five `save_working_plan` calls rewriting one plan until the host shape check passed (80 calls, cache read 2,958,216). Active `/plan` approval and the goal planner used the same kind of reject, and the checklist was copied into a separate todo list. The checklist now stays in the plan episode, `<session>/plans/<utc>.md` (published `<slug>-<utc>.md`). Progress is changing `- [ ]` to `- [x]` on that line. The host stores a non-empty body as written. An empty or unreadable plan file still fails closed. The passive working-plan skill names Goal and Steps; the prompt and the conversation already name the files, so that skill has no Files section. `todo_write` remains for a list that is not that plan.
 
 ## 9. Batch API and per-provider price
 

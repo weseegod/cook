@@ -141,6 +141,13 @@ fn spawn_exit_capture(
 async fn assert_mixed_batch_snapshot(write_first: bool) {
     let (actor, gateway_rx, _dir, plan_path) = seeded_active_plan_actor_with_edit_tools().await;
     let plan_path_str = plan_path.to_string_lossy().into_owned();
+    let todos_before = actor
+        .agent
+        .borrow()
+        .tool_bridge()
+        .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
+        .await
+        .map(|state| serde_json::to_value(&state.0).unwrap());
     let (responder, captured) = spawn_exit_capture(gateway_rx, "approved");
 
     let write = search_replace_plan("call_write_plan", &plan_path_str);
@@ -160,10 +167,7 @@ async fn assert_mixed_batch_snapshot(write_first: bool) {
     .expect("execute_tool_calls must not error");
 
     let expected = SEED_PLAN.replace(OLD_MARKER, NEW_MARKER);
-    let stripped = crate::session::plan_checklist::extract(&expected, "Task checklist")
-        .unwrap()
-        .0;
-    assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), stripped);
+    assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), expected);
     let baseline = actor
         .plan_mode
         .lock()
@@ -171,18 +175,17 @@ async fn assert_mixed_batch_snapshot(write_first: bool) {
         .unwrap()
         .baseline
         .clone();
-    assert_eq!(std::fs::read_to_string(&baseline).unwrap(), stripped);
-    let state = actor
+    assert_eq!(std::fs::read_to_string(&baseline).unwrap(), expected);
+    let todos_after = actor
         .agent
         .borrow()
         .tool_bridge()
         .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
         .await
-        .unwrap();
-    assert_eq!(state.0.todo_items().count(), 3);
+        .map(|state| serde_json::to_value(&state.0).unwrap());
     assert_eq!(
-        state.0.binding().unwrap().kind,
-        xai_grok_tools::implementations::grok_build::todo::TodoBindingKind::Approved
+        todos_before, todos_after,
+        "approving a plan leaves the todo list unchanged"
     );
 
     let snapshot = captured

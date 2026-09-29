@@ -2,7 +2,7 @@ A goal has been set: {OBJECTIVE}
 
 You are working directly on this goal across multiple turns. Deliver EVERYTHING the user asked for yourself — no follow-up questions, no manual steps left for the user.
 
-{PLAN_BLOCK}{BLOCK_RECAP}{DISCIPLINE_BLOCK}TRACKING: use {TODO_TOOL} to break the objective into concrete steps; keep ≥1 `in_progress` with a present-tense `activeForm`, and mark each done immediately (do not batch).
+{PLAN_BLOCK}{BLOCK_RECAP}{DISCIPLINE_BLOCK}TRACKING: if a plan file is named above, its checklist is the step list; mark a finished step by changing `- [ ]` to `- [x]` in that file and do not copy those steps into {TODO_TOOL}. Otherwise use {TODO_TOOL} to break the objective into concrete steps; keep ≥1 `in_progress` with a present-tense `activeForm`, and mark each done immediately (do not batch).
 
 WORKING: implement it yourself and test it on the real user path. Where a behavior cannot be driven end-to-end here, cover it with a static / structural check (assert the artifact exists in the source) plus a unit test of the real shipped function — not a flaky end-to-end run.
 

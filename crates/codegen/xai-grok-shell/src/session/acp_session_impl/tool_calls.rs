@@ -355,7 +355,7 @@ fn resume_action_for(
         PlanApprovalOutcome::Abandoned => ResumeAction::LeaveOnly,
     }
 }
-const FROZEN_PLAN_REJECTION: &str = "The approved plan contract is frozen; update checklist status with todo_write or append one `## Deviations` bullet.";
+const FROZEN_PLAN_REJECTION: &str = "The approved plan contract is frozen. Change `- [ ]` to `- [x]` on a checklist line, or append one `## Deviations` bullet.";
 
 fn same_file(cwd: &Path, supplied: &str, target: &Path) -> bool {
     let path = cwd.join(supplied);
@@ -1841,14 +1841,20 @@ impl SessionActor {
             return Ok(Err(ToolLoop::Continue));
         }
         let session_dir = crate::session::persistence::session_dir(&self.session_info);
-        match crate::session::working_plan::save_working_plan(&session_dir, body) {
-            Ok((path, state)) => {
-                self.replace_todo_state(state).await;
+        let overwrite = self.passive_plan_overwrite_path();
+        match crate::session::working_plan::save_working_plan(
+            &session_dir,
+            body,
+            overwrite.as_deref(),
+        ) {
+            Ok(path) => {
+                self.plan_mode.lock().set_passive_episode(path.clone());
+                self.persist_plan_mode_state();
                 self.complete_exit_plan_intercept(
                     call,
                     tool_call_id,
                     format!(
-                        "Saved working plan to {}. Its checklist is in todo_write as step-1, step-2, and so on in draft order. Plan mode stays off. Keep implementing on this turn.",
+                        "Saved working plan to {}. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. Plan mode stays off. Keep implementing on this turn.",
                         path.display()
                     ),
                 )
@@ -2534,16 +2540,6 @@ impl SessionActor {
             is_cursor_create_plan,
             &plan_read,
         ) {
-            if let Err(errors) = crate::session::plan_contract::validate_plan_contract(
-                plan_content.as_deref().unwrap_or(""),
-            ) {
-                self.handle_tool_not_executed(
-                    &call.id,
-                    &tool_call_id,
-                    format!("Plan contract is incomplete. Fix the plan file and call exit_plan_mode again:\n- {}", errors.join("\n- ")),
-                ).await?;
-                return Ok(Err(ToolLoop::Continue));
-            }
             tracing::info!(
                 tool_call_id = %tool_call_id,
                 cursor_create_plan = is_cursor_create_plan,
@@ -2836,43 +2832,48 @@ impl SessionActor {
     /// Model-facing turn injected after a plan is approved.
     /// Names the episode's file rather than the literal `plan.md`: a later `/plan` allocates a new
     /// file, so the literal would point the implement turn at a stale document.
-    async fn checklist_summary(&self) -> String {
-        use xai_grok_tools::types::resources::State;
-        self.tool_bridge_handle()
-            .read_resource::<State<crate::tools::todo::TodoState>>()
-            .await
-            .and_then(|state| {
-                if state.0.binding().is_some() {
-                    Some(state.0)
-                } else {
-                    None
-                }
-            })
-            .map(|state| {
-                state
-                    .todo_items_with_ids()
-                    .map(|(id, item)| format!("- {id} {} {}", item.status.tag(), item.content))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .filter(|summary| !summary.is_empty())
-            .map(|summary| format!("\n\nCurrent checklist:\n{summary}"))
+    fn checklist_summary(&self) -> String {
+        let path = self.plan_mode.lock().plan_file_path().to_path_buf();
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            return String::new();
+        };
+        crate::session::goal_next_step::checklist_section_text(&body)
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| format!("\n\nCurrent checklist:\n{text}"))
             .unwrap_or_default()
+    }
+    /// Passive episode to overwrite, when this task already saved one and it is not frozen.
+    fn passive_plan_overwrite_path(&self) -> Option<std::path::PathBuf> {
+        let path = {
+            let tracker = self.plan_mode.lock();
+            let path = tracker.passive_episode()?.to_path_buf();
+            if tracker
+                .frozen_plan()
+                .is_some_and(|plan| plan.episode == path)
+            {
+                return None;
+            }
+            path
+        };
+        if self.goal_tracker.lock().snapshot().is_some_and(|goal| {
+            goal.plan_contract_frozen && goal.plan_file.as_deref() == Some(path.as_path())
+        }) {
+            return None;
+        }
+        path.is_file().then_some(path)
     }
     async fn plan_approved_implement_message(&self) -> String {
         let path = self.plan_mode.lock().plan_file_path().display().to_string();
-        let checklist = self.checklist_summary().await;
+        let checklist = self.checklist_summary();
         format!(
-            "The user approved the plan. Implement the plan in {}. Track checklist status with todo_write; send id and status only.{}",
-            path, checklist,
+            "The user approved the plan. Implement the plan in {path}. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged.{checklist}",
         )
     }
     async fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
         let path = self.plan_mode.lock().plan_file_path().display().to_string();
-        let checklist = self.checklist_summary().await;
+        let checklist = self.checklist_summary();
         let mut anchor = format!(
-            "Implement the approved plan at {}. The plan file is the specification. Read it before editing. Track checklist status with todo_write; send id and status only. Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.{}",
-            path, checklist,
+            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.{checklist}",
         );
         if let Some(notes) = feedback.filter(|notes| !notes.trim().is_empty()) {
             anchor.push_str("\n\nReview notes from the approval decision:\n");
@@ -2950,28 +2951,17 @@ impl SessionActor {
         }
     }
     async fn commit_approved_plan(&self) -> Result<(), String> {
-        use xai_grok_tools::implementations::grok_build::todo::TodoBindingKind;
         let draft_path = self.plan_mode.lock().plan_file_path().to_path_buf();
         let body = std::fs::read_to_string(&draft_path).map_err(|error| error.to_string())?;
-        let (contract, state) = crate::session::plan_checklist::extract(&body, "Task checklist")?;
-        if contract != body {
-            std::fs::write(&draft_path, contract).map_err(|error| error.to_string())?;
+        if body.trim().is_empty() {
+            return Err("the plan file is empty".into());
         }
         self.leave_plan_mode_to_default().await;
-        let path = self.plan_mode.lock().plan_file_path().to_path_buf();
         self.plan_mode
             .lock()
             .freeze_current_plan()
             .map_err(|error| error.to_string())?;
         self.persist_plan_mode_state();
-        if let Some(mut state) = state {
-            let session_dir = crate::session::persistence::session_dir(&self.session_info);
-            state.bind(
-                TodoBindingKind::Approved,
-                crate::session::plan_checklist::binding_episode(&session_dir, &path),
-            );
-            self.replace_todo_state(state).await;
-        }
         Ok(())
     }
     /// Resume hook: re-issue the parked `exit_plan_mode` approval after a session restored with `awaiting_plan_approval == true`.
@@ -2999,21 +2989,6 @@ impl SessionActor {
                 return;
             }
         };
-        if let Err(errors) = crate::session::plan_contract::validate_plan_contract(&plan_content) {
-            self.plan_mode.lock().set_awaiting_plan_approval(false);
-            self.persist_plan_mode_state();
-            self.send_update(
-                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                    acp::ContentBlock::Text(acp::TextContent::new(format!(
-                        "Plan review cannot resume until the plan contract is complete:\n- {}",
-                        errors.join("\n- ")
-                    ))),
-                )),
-                None,
-            )
-            .await;
-            return;
-        }
         let tool_call_id = acp::ToolCallId::new(Arc::from(
             format!("exit-plan-mode-resume-{}", self.session_info.id.0).as_str(),
         ));
