@@ -13,22 +13,43 @@ pub const WORKING_PLAN_SKILL_NAME: &str = "working-plan";
 pub const RUN_CHECKS_SKILL_NAME: &str = "run-checks";
 pub const SAVE_WORKING_PLAN_TOOL_ID: &str = "save_working_plan";
 
-macro_rules! run_checks_skill_body {
+macro_rules! run_checks_procedure {
     () => {
-        "Check the existing runner and its test command once. Then run only the checks written in the plan's `## Tests` section.\n\
-\n\
-When a check fails, decide whether the failure is in the product, in the test or harness, or in the environment.\n\
-- Product: fix the product.\n\
-- Test or harness: fix the test. Do not weaken the criterion. Do not change the expected result to match the bug, delete the case, or skip it. Fixing a broken fixture or a harness syntax error is allowed.\n\
-- Environment: the check cannot run here. Record that limit and run the `## Tests` entries that can run. Do not build a stand-in that pretends to be the missing tool, such as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence.\n\
-\n\
-After the fix, rerun the failing check to confirm it. Then run the full `## Tests` set once. Do not run it again.\n\
-If the same failure remains after two fixes of the layer you diagnosed, stop and report the observation that is still missing.\n"
+        "Check the existing runner and its test command once. Do not start the runner after every edit. \
+When a step's code is done and the next step does not edit files that check covers, run that `## Tests` \
+command once in a background shell and keep implementing the independent step. Do not poll. One check \
+command is in flight; do not start a second run of the same suite while the first is still running. \
+If the next step edits those files, wait: a run against a tree you are still changing is discarded. \
+If the plan has no `## Tests`, run the existing suite that covers the change once, under the same \
+background rule. When that run returns, read it once. Fix every failure from that run as one batch: \
+fix the product, or fix the test without weakening the criterion (do not change the expected result \
+to match the bug, delete the case, or skip it). Rerun only the checks that failed. When those pass, \
+run the full `## Tests` set once, unless the background run that just finished was that same command \
+on the tree after the last edit. A new failure on that last full run is one more batch; do not run \
+the full set after each fix. If the environment cannot run a check, record that limit and run the \
+entries that can. Do not build a stand-in that pretends to be the missing tool, such as a fake \
+browser, a DOM stub, or a toolchain installed only to manufacture evidence. Stop when a rerun shows \
+the same failing observation and your diagnosis of the layer has not changed, and report the \
+observation that is still missing. A different wording of the same failure is not progress. If the \
+observation changed, continue."
     };
 }
 
-/// How to run the checks already written in `## Tests`. English. The host does not enforce it.
-pub const RUN_CHECKS_SKILL_BODY: &str = run_checks_skill_body!();
+macro_rules! run_checks_classification {
+    () => {
+        "\n\nWhen a check fails, decide whether the failure is in the product, in the test or harness, or in the environment.\n\
+- Product: fix the product.\n\
+- Test or harness: fix the test. Do not weaken the criterion. Do not change the expected result to match the bug, delete the case, or skip it. Fixing a broken fixture or a harness syntax error is allowed.\n\
+- Environment: the check cannot run here. Record that limit and run the `## Tests` entries that can run. Do not build a stand-in that pretends to be the missing tool, such as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence.\n"
+    };
+}
+
+/// Shared check loop for active prompts and the `run-checks` skill. English. The host does not enforce it.
+pub const RUN_CHECKS_PROCEDURE: &str = run_checks_procedure!();
+
+/// How to run the checks already written in `## Tests`. The procedure, then the failure classes.
+pub const RUN_CHECKS_SKILL_BODY: &str =
+    concat!(run_checks_procedure!(), run_checks_classification!());
 
 /// Instructions the model loads before it writes a short plan.
 ///
@@ -67,7 +88,8 @@ When a step is done, edit the saved plan file and change that line from `- [ ]` 
 Leave the rest of the line unchanged. Do not call save_working_plan again to revise the shape.\n\
 \n\
 ",
-    run_checks_skill_body!()
+    run_checks_procedure!(),
+    run_checks_classification!()
 );
 
 /// Body for an open-task skill name. Unknown names are rejected.
@@ -280,6 +302,10 @@ mod tests {
         );
         assert!(open_task_skill_body("deploy").is_err());
         assert!(WORKING_PLAN_SKILL_BODY.contains(RUN_CHECKS_SKILL_BODY));
+        assert!(RUN_CHECKS_SKILL_BODY.starts_with(RUN_CHECKS_PROCEDURE));
+        assert!(RUN_CHECKS_PROCEDURE.contains("background shell"));
+        assert!(RUN_CHECKS_PROCEDURE.contains("Do not poll"));
+        assert!(!RUN_CHECKS_SKILL_BODY.contains("two fixes"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Product:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Test or harness:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Environment:"));
