@@ -57,6 +57,34 @@ else
 fi
 
 echo "==> Building $APP_NAME (release)..."
+# Apple Silicon's newer system linker can reject Rust's ADRP/ADD relocations
+# with `invalid use of ADRP/imm12` (LLVM in rustc may be newer than ld's LTO
+# reader). Prefer Rust's bundled ld64.lld through Clang; fall back to Apple's
+# classic linker when this toolchain does not include ld64.lld.
+if [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]]; then
+  RUST_LINKER_WRAPPER="$REPO_DIR/target/cook-rust-linker"
+  mkdir -p "$(dirname "$RUST_LINKER_WRAPPER")"
+  RUSTC_SYSROOT=$(rustc --print sysroot)
+  RUSTC_HOST=$(rustc -vV | sed -n 's/^host: //p')
+  COOK_BUILD_LD64_LLD="$RUSTC_SYSROOT/lib/rustlib/$RUSTC_HOST/bin/gcc-ld/ld64.lld"
+  if [ -x "$COOK_BUILD_LD64_LLD" ]; then
+    export COOK_BUILD_LD64_LLD
+    echo "==> macOS arm64: using Rust's bundled ld64.lld for the Cargo build"
+  else
+    unset COOK_BUILD_LD64_LLD
+    echo "==> macOS arm64: Rust ld64.lld not found; falling back to Apple's ld-classic"
+  fi
+  cat >"$RUST_LINKER_WRAPPER" <<'EOF'
+#!/bin/sh
+if [ -n "${COOK_BUILD_LD64_LLD:-}" ] && [ -x "$COOK_BUILD_LD64_LLD" ]; then
+  exec /usr/bin/clang -fuse-ld="$COOK_BUILD_LD64_LLD" "$@"
+fi
+exec /usr/bin/clang -Wl,-ld_classic "$@"
+EOF
+  chmod 755 "$RUST_LINKER_WRAPPER"
+  export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER="$RUST_LINKER_WRAPPER"
+fi
+
 cargo build -p xai-grok-pager-bin --release
 
 mkdir -p "$MANAGED_BIN_DIR" "$INSTALL_DIR"

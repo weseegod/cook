@@ -230,7 +230,8 @@ def render(run_dir, model, wire, task, agents, thinking, parallel):
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: |"]
     for agent in agents:
         directory = run_dir / agent
-        metrics = {"cook": usage_cook, "opencode": usage_opencode, "pi": usage_pi}[agent](directory / "stdout.json")
+        metrics = {"cook": usage_cook, "cook-main": usage_cook,
+                   "opencode": usage_opencode, "pi": usage_pi}[agent](directory / "stdout.json")
         count, size, _ = files_and_bytes(directory / "workdir")
         try:
             seconds = float((directory / "elapsed-seconds.txt").read_text().strip())
@@ -326,6 +327,8 @@ def self_test():
         row = next(line for line in report.splitlines() if line.startswith("| cook |"))
         cells = [value.strip() for value in row.strip("|").split("|")]
         assert cells[2] == "1" and cells[11] == "3"
+        old_cook_report = render(run_dir, "fixture", "fixture", "task", ["cook-main"], "false", 1)
+        assert any(line.startswith("| cook-main |") for line in old_cook_report.splitlines())
 
         app_task = "Very hard: editor across 3 files: index.html, js/app.js, css/main.css.\nBuild it."
         assert expected_files(app_task) == ["index.html", "js/app.js", "css/main.css"]
