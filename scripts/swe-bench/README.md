@@ -9,34 +9,29 @@ four issues and base checkouts to Cook, OpenCode, and Pi. Levels are quartiles o
 python3 -m venv temp/swe-bench/venv
 temp/swe-bench/venv/bin/pip install -r scripts/swe-bench/requirements.txt
 scripts/swe-bench/run.sh --dry-run --seed 1
-
-SWE_PYTHON="$PWD/temp/swe-bench/venv/bin/python" EVAL_PARALLEL_SLOTS=3 \
-  scripts/swe-bench/run.sh --model stealth/space-bunny-alpha \
-  --seed 1 --parallel 3 --no-grade
+scripts/swe-bench/run.sh --model stealth/space-bunny-alpha --parallel 3 --seed 1
 ```
 
-Model resolution, credentials, agent configuration, and API overrides come from
-`scripts/evaluate/model.sh` and `scripts/evaluate/agent.sh`. The default timeout
-is 600 seconds for easy, 1200 for medium, 2400 for hard, and 3600 for very-hard.
+The local `temp/swe-bench/venv` is used automatically when present. Grading is
+enabled by default; on first run, the task environments are cloned to
+`temp/swe-bench/swe-bench-tasks`. Use `--no-grade` to collect patches without
+running Docker tests. Model resolution, credentials, agent configuration, and
+API overrides come from `scripts/evaluate/model.sh` and `scripts/evaluate/agent.sh`.
+The default timeout is 600 seconds for easy, 1200 for medium, 2400 for hard,
+and 3600 for very-hard.
 `--timeout` changes the easy-task budget (minimum 600 seconds); other levels
 receive 2, 4, and 6 times that budget. Each agent gets the same budget for a level.
-`--parallel` defaults to 1,
-has a ceiling of 3, and must fit `model_parallel_slots`. Agent exit 124 means
+`--parallel` defaults to 1 and has a ceiling of 3. Its value sets model slots
+unless `EVAL_PARALLEL_SLOTS` is explicitly set. Agent exit 124 means
 its timeout expired. Smoke results labelled `not graded` do not establish that
 an issue was resolved.
 
-For grading, use the pinned SWE-bench CLI and a clean checkout of
-[SWE-bench/swe-bench-tasks](https://github.com/SWE-bench/swe-bench-tasks) at your
-chosen commit. Validate Docker before a long run:
+The run records the task repo commit in its bundle. To use another clean checkout,
+pass `--task-repo DIR`. Validate Docker before a long graded run:
 
 ```bash
 temp/swe-bench/venv/bin/swebench eval verified --gold \
-  -i sympy__sympy-20590 --task-repo /path/to/swe-bench-tasks
-
-SWE_PYTHON="$PWD/temp/swe-bench/venv/bin/python" \
-SWE_BIN="$PWD/temp/swe-bench/venv/bin/swebench" \
-  scripts/swe-bench/run.sh --model stealth/space-bunny-alpha \
-  --seed 1 --task-repo /path/to/swe-bench-tasks
+  -i sympy__sympy-20590 --task-repo temp/swe-bench/swe-bench-tasks
 ```
 
 Bundles live under `docs/audits/` with mode 700. They contain the selection,

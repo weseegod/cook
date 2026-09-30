@@ -10,23 +10,33 @@ Run one pinned SWE-bench Verified instance per level with each selected agent.
 --timeout SECONDS  easy-task time budget, minimum 600 (default: 600);
                    medium=2x, hard=4x, very-hard=6x for every agent
 --thinking BOOL    reasoning enabled (default: true)
---parallel N       shared pool, 1 to 3 (default: 1), requires model slots
+--parallel N       shared pool, 1 to 3 (default: 1); uses N model slots unless
+                   EVAL_PARALLEL_SLOTS is set
 --output-root DIR  bundle parent (default: docs/audits)
 --dry-run          print four IDs without starting a model or loading datasets
---no-grade         collect patches and report without Docker
---task-repo DIR    clean swe-bench-tasks checkout pinned at a commit, required to grade
+--no-grade         skip Docker grading; grading is enabled by default
+--task-repo DIR    clean swe-bench-tasks checkout (default: temp/swe-bench/swe-bench-tasks)
 
-Install: python3 -m pip install -r scripts/swe-bench/requirements.txt
-Before a long graded run, validate Docker yourself:
-  swebench eval verified --gold -i sympy__sympy-20590 --task-repo /path/to/swe-bench-tasks
+The local temp/swe-bench/venv is used when present. The task repo is cloned
+automatically when missing. Before a long graded run, validate Docker yourself:
+  temp/swe-bench/venv/bin/swebench eval verified --gold -i sympy__sympy-20590 \
+    --task-repo temp/swe-bench/swe-bench-tasks
 API overrides: EVAL_BASE_URL, EVAL_API_KEY, EVAL_CONTEXT_WINDOW, EVAL_PARALLEL_SLOTS.
 EOF
 }
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
-PYTHON=${SWE_PYTHON:-python3}
-SWE_BIN=${SWE_BIN:-swebench}
+if [[ -z "${SWE_PYTHON:-}" && -x "$ROOT/temp/swe-bench/venv/bin/python" ]]; then
+  PYTHON="$ROOT/temp/swe-bench/venv/bin/python"
+else
+  PYTHON=${SWE_PYTHON:-python3}
+fi
+if [[ -z "${SWE_BIN:-}" && -x "$ROOT/temp/swe-bench/venv/bin/swebench" ]]; then
+  SWE_BIN="$ROOT/temp/swe-bench/venv/bin/swebench"
+else
+  SWE_BIN=${SWE_BIN:-swebench}
+fi
 SUITE="$ROOT/scripts/swe-bench/suite.py"
-MODEL= SEED=1 TIMEOUT=600 AGENTS=cook,opencode,pi THINKING=true PARALLEL=1 OUTPUT_ROOT="$ROOT/docs/audits" DRY_RUN=false NO_GRADE=false TASK_REPO=
+MODEL= SEED=1 TIMEOUT=600 AGENTS=cook,opencode,pi THINKING=true PARALLEL=1 OUTPUT_ROOT="$ROOT/docs/audits" DRY_RUN=false NO_GRADE=false TASK_REPO=${SWE_TASK_REPO:-"$ROOT/temp/swe-bench/swe-bench-tasks"}
 while (($#)); do
   case "$1" in
     --model|--seed|--timeout|--agents|--thinking|--parallel|--output-root|--task-repo)
@@ -63,7 +73,12 @@ fi
 [[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$MODEL" != *..* && "$MODEL" != *//* ]] || { echo 'valid --model required' >&2; exit 2; }
 if [[ "$NO_GRADE" == false ]]; then
   command -v "$SWE_BIN" >/dev/null || { echo 'Install grader: pip install -r scripts/swe-bench/requirements.txt' >&2; exit 2; }
-  [[ -n "$TASK_REPO" && -d "$TASK_REPO/.git" ]] || { echo '--task-repo must be a pinned swe-bench-tasks checkout' >&2; exit 2; }
+  if [[ ! -e "$TASK_REPO" ]]; then
+    mkdir -p "$(dirname "$TASK_REPO")"
+    echo "Cloning SWE-bench task environments into $TASK_REPO" >&2
+    git clone https://github.com/SWE-bench/swe-bench-tasks.git "$TASK_REPO"
+  fi
+  [[ -d "$TASK_REPO/.git" ]] || { echo "task repo must be a git checkout: $TASK_REPO" >&2; exit 2; }
   TASK_REPO=$(cd "$TASK_REPO" && pwd)
   TASK_COMMIT=$(git -C "$TASK_REPO" rev-parse HEAD)
   [[ -z $(git -C "$TASK_REPO" status --porcelain) ]] || { echo 'task repo has uncommitted changes' >&2; exit 2; }
@@ -71,6 +86,11 @@ if [[ "$NO_GRADE" == false ]]; then
 fi
 MODEL_SH=${MODEL_SH:-/home/thanh/models/model.sh}
 BASE_URL=${EVAL_BASE_URL:-${BASE_URL:-}}
+# An explicit --parallel value also opts into that many model slots unless the
+# caller or model configuration supplies EVAL_PARALLEL_SLOTS.
+if [[ -z "${EVAL_PARALLEL_SLOTS:-}" && "$PARALLEL" -gt 1 ]]; then
+  export EVAL_PARALLEL_SLOTS="$PARALLEL"
+fi
 COOK_MANAGED_BIN="${GROK_HOME:-${COOK_HOME:-$HOME/.cook}}/bin/cook"
 if [[ -z "${COOK_BIN:-}" ]]; then
   if [[ -x "$COOK_MANAGED_BIN" ]]; then COOK_BIN=$COOK_MANAGED_BIN; else COOK_BIN=cook; fi
