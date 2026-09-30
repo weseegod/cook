@@ -15,25 +15,17 @@ pub const SAVE_WORKING_PLAN_TOOL_ID: &str = "save_working_plan";
 
 macro_rules! run_checks_procedure {
     () => {
-        "Check the existing runner and its test command once. Do not start the runner after every edit. \
-When a step's code is done and the next step does not edit files that check covers, run that \
-`## Acceptance criteria` command once in a background shell and keep implementing the independent \
-step. Do not poll. One check command is in flight; do not start a second run of the same suite \
-while the first is still running. If the next step edits those files, wait: a run against a tree \
-you are still changing is discarded. If the plan has no `## Acceptance criteria` and no `## Tests` \
-list, run the existing suite that covers the change once, under the same background rule. When \
-that run returns, read it once. Fix every failure from that run as one batch: fix the product, or \
-fix the test without weakening the criterion (do not change the expected result to match the bug, \
-delete the case, or skip it). Rerun only the checks that failed. When those pass, run the full \
-`## Acceptance criteria` set once, unless the background run that just finished was that same \
-command on the tree after the last edit. A new failure on that last full run is one more batch; \
-do not run the full set after each fix. If the environment cannot run a check, record that limit \
-and run the entries that can. Do not build a stand-in that pretends to be the missing tool, such \
-as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence. Stop when a \
-rerun shows the same failing observation and your diagnosis of the layer has not changed, and \
-report the observation that is still missing. A different wording of the same failure is not \
-progress. If the observation changed, continue. A list still headed `## Tests` is that same \
-section."
+        "Use the smallest set of checks that covers those outcomes. One integration check may cover related outcomes. \
+Add a focused check only for an outcome still uncovered. Do not require one script to drive the whole product to its end state.\n\
+\n\
+Run a check when the change it covers is ready, not after every edit. If other work can continue, run it in the background and do that work. \
+Do not sleep-loop or ask for that run's status again. Read the result once when it arrives, before relying on it. \
+If nothing else can continue, run it in the foreground. Do not start another run of a suite that is already running. \
+Rerun only the checks that failed. After the last edit, verify the acceptance criteria. \
+A check already run on that unchanged tree counts for the outcomes it covers. \
+Widen the run only when this project's practice requires it, or the change reaches behavior those checks miss. \
+Stop when a rerun shows the same failure and the same diagnosis. A reworded error is the same failure. \
+If the observation changed, continue. A list still headed `## Tests` is that same section."
     };
 }
 
@@ -41,15 +33,15 @@ macro_rules! run_checks_classification {
     () => {
         "\n\nWhen a check fails, decide whether the failure is in the product, in the test or harness, or in the environment.\n\
 - Product: fix the product.\n\
-- Test or harness: fix the test. Do not weaken the criterion. Do not change the expected result to match the bug, delete the case, or skip it. Fixing a broken fixture or a harness syntax error is allowed.\n\
-- Environment: the check cannot run here. Record that limit and run the `## Acceptance criteria` entries that can run. Do not build a stand-in that pretends to be the missing tool, such as a fake browser, a DOM stub, or a toolchain installed only to manufacture evidence.\n"
+- Test or harness: fix the test or the harness. Do not change the expected result to match the bug, delete the case, or skip it.\n\
+- Environment: the check cannot run here. Say why and verify what can. Do not build a stand-in for a missing tool. If no check covers a required outcome, observe it or add one check that drives the shipped behavior.\n"
     };
 }
 
 /// Shared check loop for active prompts and the `run-checks` skill. English. The host does not enforce it.
 pub const RUN_CHECKS_PROCEDURE: &str = run_checks_procedure!();
 
-/// How to run the checks already written in `## Acceptance criteria`. The procedure, then the failure classes.
+/// The procedure, then the failure classes. English. The host does not enforce it.
 pub const RUN_CHECKS_SKILL_BODY: &str =
     concat!(run_checks_procedure!(), run_checks_classification!());
 
@@ -71,13 +63,11 @@ Do not call todo_write for these steps.\n\
 One sentence describing the finished work.\n\
 \n\
 ## Acceptance criteria\n\
-- Criterion: <one outcome that can pass or fail on its own. One or two sentences. State the observation that separates pass from fail. Do not restate the implementation steps.>\n\
-  Behavior: <the action and the observation, when you do not already know a command>\n\
-- Criterion: <another independent outcome>\n\
-  Command: `<a command that already exists>`\n\
-One entry per outcome that can fail independently. Do not collapse those outcomes into one end-to-end script. \
-No `- [ ]` in this section. Do not add a performance test, a screenshot, or an extra scenario unless that \
-outcome requires it. Do not invent a command, and do not name a script you have not written.\n\
+- <observable pass or fail. Name a command that already exists, or describe the behavior.>\n\
+List the outcomes the user requested and any outcome the core behavior needs in order to work. \
+State each as an observable pass or fail. Group outcomes one check can cover. Split an outcome that can fail on its own. \
+Name a command that already exists, or describe the behavior. Do not invent a command, name an unwritten script, or add a checkbox. \
+Do not add an optional idea, a performance test, a screenshot, or an extra scenario unless that outcome needs it.\n\
 \n\
 ## Steps\n\
 - [ ] `path` — the change. Done when: an observable result.\n\
@@ -310,18 +300,18 @@ mod tests {
         assert!(open_task_skill_body("deploy").is_err());
         assert!(WORKING_PLAN_SKILL_BODY.contains(RUN_CHECKS_SKILL_BODY));
         assert!(RUN_CHECKS_SKILL_BODY.starts_with(RUN_CHECKS_PROCEDURE));
-        assert!(RUN_CHECKS_PROCEDURE.contains("background shell"));
-        assert!(RUN_CHECKS_PROCEDURE.contains("Do not poll"));
-        assert!(RUN_CHECKS_PROCEDURE.contains("## Acceptance criteria"));
+        assert!(RUN_CHECKS_PROCEDURE.contains("in the background"));
+        assert!(RUN_CHECKS_PROCEDURE.contains("Do not sleep-loop"));
+        assert!(RUN_CHECKS_PROCEDURE.contains("unchanged tree"));
         assert!(
             RUN_CHECKS_PROCEDURE.contains("A list still headed `## Tests` is that same section.")
         );
         assert!(WORKING_PLAN_SKILL_BODY.contains("pass or fail"));
-        assert!(WORKING_PLAN_SKILL_BODY.contains("do not name a script you have not written"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("unwritten script"));
         assert!(!WORKING_PLAN_SKILL_BODY.contains("## Tests\n"));
-        assert!(!RUN_CHECKS_SKILL_BODY.contains("two fixes"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Product:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Test or harness:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Environment:"));
+        assert!(RUN_CHECKS_SKILL_BODY.contains("stand-in for a missing tool"));
     }
 }

@@ -21,7 +21,7 @@ fn working_plan_skill_keeps_the_checklist_in_the_file() {
         .find("## Acceptance criteria")
         .expect("passive plans name the criteria");
     assert!(working_plan_skill_body.contains("pass or fail"));
-    assert!(working_plan_skill_body.contains("do not name a script you have not written"));
+    assert!(working_plan_skill_body.contains("unwritten script"));
     assert!(!working_plan_skill_body.contains("## Tests\n"));
     let steps_at = working_plan_skill_body
         .find("## Steps")
@@ -30,6 +30,7 @@ fn working_plan_skill_keeps_the_checklist_in_the_file() {
     assert!(working_plan_skill_body.contains("Product:"));
     assert!(working_plan_skill_body.contains("Test or harness:"));
     assert!(working_plan_skill_body.contains("Environment:"));
+    assert!(working_plan_skill_body.contains("unchanged tree"));
     assert!(working_plan_skill_body.contains("`- [ ]` to `- [x]`"));
     assert!(
         !working_plan_skill_body.contains("## Files\n"),

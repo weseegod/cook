@@ -316,9 +316,9 @@ pub fn goal_instruction(objective: &str) -> String {
          (use your todo tool if one is available), marking each done as you \
          finish it.\n\n\
          VERIFY AS YOU GO: do not start the test runner after each edit. \
-         A long check runs in the background so other independent edits can \
-         continue. One run of the checks that cover the change, after the \
-         last edit, is the completion evidence. A completion claim must be \
+         If other work can continue, run the check in the background and read \
+         the result once when it arrives. Do not sleep-loop for status. A check \
+         already run on the unchanged final tree counts. A completion claim must be \
          backed by evidence produced in this session, not assumptions.\n\n\
          Call update_goal(completed: true, message: \"summary\") ONLY when the \
          goal is fully achieved. Call update_goal(blocked_reason: \"reason\") \

@@ -486,11 +486,11 @@ ${%- endif %}
 
 Use this exact section order: `## Goal kind` (code-change, analysis, or research), \
 `## Decisions` (at least one bullet), `## Context` (3–8 bullets), \
-`## Acceptance criteria` (one entry per outcome that can pass or fail on its own: one or two sentences \
-that separate pass from fail, not a copy of the implementation steps; `Behavior:` when you do not already \
-know a command, otherwise `Command:` for a command that already exists; do not name a script you have not \
-written; do not collapse independent outcomes into one end-to-end script; no checkboxes; no performance \
-test, screenshot, or extra scenario unless that criterion requires it), `## Verification plan` (each line \
+`## Acceptance criteria` (outcomes the user requested and any outcome the core behavior needs: \
+each an observable pass or fail; group outcomes one check can cover; split an outcome that can fail on its own; \
+name a command that already exists, or describe the behavior; do not invent a command, name an unwritten script, \
+or add a checkbox; no optional idea, performance test, screenshot, or extra scenario unless that outcome needs it), \
+`## Verification plan` (each line \
 tags one `## Acceptance criteria` entry as `gating` or `evidence` and adds no scenario), \
 `## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
 then for code-change `## Implementation approach` (nonempty), `## Current anchors` \
@@ -530,7 +530,7 @@ Use the same complete plan contract: Goal kind, Decisions, Context, Acceptance c
 Verification plan, Non-goals, Assumed scope, then Implementation approach, Current anchors, \
 and Edit brief for code-change, then Deviations with `(none yet)`, optional Risks / Contradictions, \
 and Task checklist last. \
-Acceptance criteria has one entry per outcome that can pass or fail on its own, with `Behavior:` or `Command:`, and no checkboxes. \
+Acceptance criteria lists those outcomes as an observable pass or fail, groups what one check can cover, and adds no checkbox. \
 Verification plan only tags those Acceptance criteria entries as `gating` or `evidence`. \
 Context needs 3–8 bullets. Current anchors needs 2–12 bullets with a backticked path, \
 a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
@@ -911,10 +911,10 @@ mod tests {
         let checklist = full.find("## Task checklist").expect("checklist");
         assert!(acceptance < verification);
         assert!(!full.contains("## Tests"));
-        assert!(full.contains("pass from fail"));
+        assert!(full.contains("observable pass or fail"));
         assert!(deviations < checklist);
-        assert!(full.contains("Command:"));
-        assert!(full.contains("Behavior:"));
+        assert!(full.contains("command that already exists"));
+        assert!(full.contains("unwritten script"));
         assert!(full.contains("adds no scenario"));
         let reentry = plan_mode_reentry_reminder_template();
         assert!(
