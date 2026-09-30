@@ -640,10 +640,7 @@ impl SessionActor {
             error = tracing::field::Empty,
         )
     )]
-    pub(crate) async fn run_compact(
-        self: &Arc<Self>,
-        user_context: Option<String>,
-    ) -> Result<(), acp::Error> {
+    pub(crate) async fn run_compact(self: &Arc<Self>) -> Result<(), acp::Error> {
         let (_cancel, _cancel_scope) = self.compaction.cancel.enter();
         self.record_compaction_variant();
         let total_tokens = self.chat_state_handle.get_total_tokens().await;
@@ -657,7 +654,6 @@ impl SessionActor {
             .await;
         if let Err(e) = self
             .run_compact_inner(
-                user_context,
                 None,
                 xai_grok_telemetry::events::CompactionTrigger::Manual,
                 false,
@@ -970,7 +966,6 @@ impl SessionActor {
     )]
     async fn run_compact_inner(
         &self,
-        user_context: Option<String>,
         auto_continue: Option<crate::extensions::notification::AutoContinueInfo>,
         trigger: xai_grok_telemetry::events::CompactionTrigger,
         lossy_input: bool,
@@ -1013,7 +1008,6 @@ impl SessionActor {
                 tokens_used: tokens_before,
                 context_window,
                 model_id: model_id.clone(),
-                user_context_provided: user_context.is_some(),
                 compaction_mode: match self.compaction.compaction_mode {
                     xai_chat_state::CompactionMode::Summary => {
                         xai_grok_telemetry::events::CompactionModeLabel::Summary
@@ -1029,7 +1023,7 @@ impl SessionActor {
                 is_subagent: self.startup_hints.is_subagent,
             },
         );
-        let user_context = self.merge_goal_compaction_user_context(user_context);
+        let user_context = self.goal_compaction_user_context();
         let compact_source = trigger_str;
         self.dispatch_hook(
             xai_grok_hooks::event::HookEventName::PreCompact,
@@ -1371,7 +1365,6 @@ impl SessionActor {
             self.persist_compaction_request_artifact(
                 request_chat_history,
                 compaction_tools,
-                user_context.as_deref(),
                 use_short_prompt,
                 &sampling_config.model,
                 trigger,
@@ -1770,8 +1763,12 @@ impl SessionActor {
         };
         let v2_memory_context = if self.memory.can_expose_v2() {
             if let Some(storage) = self.memory.storage() {
+                let compact_index = self.memory.v2_config.compact_index_enabled;
                 match tokio::task::spawn_blocking(move || {
-                    crate::session::helpers::memory_context::format_v2_memory_context(&storage)
+                    crate::session::helpers::memory_context::format_v2_memory_context(
+                        &storage,
+                        compact_index,
+                    )
                 })
                 .await
                 {
@@ -1791,6 +1788,7 @@ impl SessionActor {
                                 ),
                                 global_entry_count: context.global_entry_count,
                                 workspace_entry_count: context.workspace_entry_count,
+                                compact_index,
                                 ..Default::default()
                             },
                         );
@@ -1805,7 +1803,10 @@ impl SessionActor {
                         crate::session::memory_observation::log_memory_injection(
                             self.session_info.id.to_string(),
                             xai_grok_telemetry::memory_telemetry::MemoryInjectionOutcome::Error,
-                            Default::default(),
+                            crate::session::memory_observation::MemoryInjectionMetrics {
+                                compact_index,
+                                ..Default::default()
+                            },
                         );
                         None
                     }
@@ -1818,7 +1819,10 @@ impl SessionActor {
                         crate::session::memory_observation::log_memory_injection(
                             self.session_info.id.to_string(),
                             xai_grok_telemetry::memory_telemetry::MemoryInjectionOutcome::Error,
-                            Default::default(),
+                            crate::session::memory_observation::MemoryInjectionMetrics {
+                                compact_index,
+                                ..Default::default()
+                            },
                         );
                         None
                     }
@@ -2417,7 +2421,6 @@ impl SessionActor {
         let result = self
             .run_compact_inner(
                 None,
-                None,
                 xai_grok_telemetry::events::CompactionTrigger::Auto,
                 lossy_input,
             )
@@ -2471,7 +2474,6 @@ impl SessionActor {
         &self,
         chat_history: Vec<ConversationItem>,
         tools: Vec<xai_grok_sampling_types::ToolSpec>,
-        user_context: Option<&str>,
         use_short_prompt: bool,
         model: &str,
         trigger: xai_grok_telemetry::events::CompactionTrigger,
@@ -2506,7 +2508,6 @@ impl SessionActor {
             trigger: trigger_str.to_owned(),
             prompt_variant: prompt_variant.to_owned(),
             model: model.to_owned(),
-            user_context: user_context.map(str::to_owned),
             chat_history,
             tools,
             summary: summary.map(str::to_owned),

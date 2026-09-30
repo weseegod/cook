@@ -73,15 +73,17 @@ fn resolve_grok_home_from(
     os_home.map(|home| (grok_home_in(home), GrokHomeSource::HomeDefault))
 }
 
+const LEGACY_GROK_DIR: &str = ".grok";
+
 fn is_legacy_user_home(path: &OsStr, os_home: Option<&Path>) -> bool {
     let Some(home) = os_home else {
         return false;
     };
     let path = Path::new(path);
     let canonical = dunce::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
-    path == home.join(".grok")
+    path == home.join(LEGACY_GROK_DIR)
         || path == home.join(".thanh")
-        || path == canonical.join(".grok")
+        || path == canonical.join(LEGACY_GROK_DIR)
         || path == canonical.join(".thanh")
 }
 
@@ -228,7 +230,7 @@ mod tests {
     fn override_pointing_at_real_dot_grok_or_dot_thanh_falls_through() {
         let tmp = tempfile::tempdir().unwrap();
         let expected = expected_default(tmp.path());
-        let grok = tmp.path().join(".grok");
+        let grok = tmp.path().join(LEGACY_GROK_DIR);
         let thanh = tmp.path().join(".thanh");
         assert_eq!(
             resolve_grok_home_with_source_from(Some(grok.as_os_str()), None, Some(tmp.path())),

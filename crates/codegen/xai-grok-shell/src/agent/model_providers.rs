@@ -23,6 +23,7 @@ pub struct ModelProviderConfig {
     pub auth_provider: Option<String>,
     pub auth: Option<xai_grok_config_types::AuthProviderConfig>,
     pub context_window: Option<u64>,
+    pub context_windows: Option<Vec<NonZeroU64>>,
     /// Request-body cap of this endpoint; inherited by models that set none of their own.
     pub max_request_bytes: Option<NonZeroU64>,
 }
@@ -194,6 +195,7 @@ impl ConfigModelOverride {
             auth_provider,
             auth,
             context_window,
+            context_windows,
             max_request_bytes,
         } = provider;
 
@@ -212,6 +214,10 @@ impl ConfigModelOverride {
         merged.context_window = merged.context_window.or(*context_window);
         merged.max_request_bytes = merged.max_request_bytes.or(*max_request_bytes);
         // Inherited wholesale only when the model sets none of its own.
+        if merged.context_window.is_none() && merged.context_windows.is_none() {
+            merged.context_window = *context_window;
+            merged.context_windows = context_windows.clone();
+        }
         if merged.extra_headers.is_empty() {
             merged.extra_headers = extra_headers.clone();
         }
@@ -383,6 +389,7 @@ mod tests {
             [model_providers.gateway]
             base_url = "https://gateway.example/v1"
             context_window = 100000
+            context_windows = [100000, 400000]
 
             [model.override-url]
             model = "m"
@@ -398,6 +405,7 @@ mod tests {
         let model = resolved.get("override-url").expect("model should exist");
         assert_eq!(model.info.base_url, "https://model-specific.example/v1");
         assert_eq!(model.info.context_window.get(), 200000);
+        assert!(model.info.context_windows.is_empty());
     }
 
     #[test]

@@ -225,6 +225,19 @@ Cook reads each variable when it builds the client for a session and places the 
 
 Both fields also work on a shared `[model_providers.<id>]` block. A model that points at a provider with `model_provider = "<id>"` inherits the provider's `query_params` and `env_http_headers` when it sets none of its own, matching how `extra_headers` is inherited.
 
+### Model Notice
+
+`notice` puts a message above the prompt for as long as the model is selected. The banner cannot be dismissed. It goes away when you switch to a model without a notice.
+
+```toml
+[model.legacy]
+model = "legacy-model"
+base_url = "https://gateway.example/v1"
+notice = { severity = "warning", text = "This model is deprecated on Oct 15. Switch to grok-4.6.", label = "deprecated" }
+```
+
+`severity` sets the banner color and is `info`, `warning`, or `critical`. It defaults to `info`. `text` is required, and long text wraps. `label` is an optional short tag shown before the text. A custom models endpoint can send the same object as `notice` or `_meta.notice` on a model entry. To remove a notice a built-in or remote model carries, set `notice = { text = "" }`.
+
 ---
 
 ## Overriding Built-in Models

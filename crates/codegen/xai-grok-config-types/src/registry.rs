@@ -7,7 +7,7 @@ use crate::{
     RemoteSettings,
     flags::{BoolFlag, ConfigSource, Resolved},
 };
-use xai_grok_config::{CampaignEntry, ConfigLayers, env_bool};
+use xai_grok_config::{CampaignEntry, Capability, ConfigLayers, Distribution, env_bool};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, strum::EnumIter)]
 pub enum Feature {
@@ -53,6 +53,8 @@ pub enum Feature {
     Dock,
     /// The terminal-native `terminal` color theme (staged rollout).
     TerminalTheme,
+    /// Hand local sessions' file systems to an installed file accelerator.
+    FileAcceleration,
 }
 
 /// How one feature is written on each surface it can be set from.
@@ -65,6 +67,9 @@ pub struct FeatureSpec {
     pub default_enabled: bool,
     /// `None` where the key has no remote tier, so adding one is a deliberate edit.
     pub remote: Option<fn(&RemoteSettings) -> Option<bool>>,
+    /// The distribution capability the feature needs, where it reaches a service of its own. Every
+    /// row names one or `None`, so a new service is a deliberate choice.
+    pub capability: Option<Capability>,
     // No managed tier: `config` is the loader's merge, where a user's config.toml already beats managed_config.toml
 }
 
@@ -149,6 +154,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_SESSION_SEARCH",
         default_enabled: true,
         remote: Some(|settings| settings.session_search),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::LspTools,
@@ -157,6 +163,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_LSP_TOOLS",
         default_enabled: false,
         remote: Some(|settings| settings.lsp_tools_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::WebFetch,
@@ -165,6 +172,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_WEB_FETCH",
         default_enabled: false,
         remote: Some(|settings| settings.web_fetch_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::SessionRecap,
@@ -173,6 +181,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_SESSION_RECAP",
         default_enabled: true,
         remote: Some(|settings| settings.session_recap),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::AskUserQuestion,
@@ -181,6 +190,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_ASK_USER_QUESTION",
         default_enabled: true,
         remote: Some(|settings| settings.ask_user_question_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::VoiceMode,
@@ -189,6 +199,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_VOICE_MODE",
         default_enabled: true,
         remote: Some(|settings| settings.voice_mode_enabled),
+        capability: Some(Capability::Voice),
     },
     FeatureSpec {
         id: Feature::WriteFile,
@@ -197,6 +208,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_WRITE_FILE",
         default_enabled: true,
         remote: Some(|settings| settings.write_file_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::Feedback,
@@ -205,6 +217,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_FEEDBACK_ENABLED",
         default_enabled: false,
         remote: Some(|settings| settings.feedback_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::WebSearch,
@@ -213,6 +226,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_WEB_SEARCH",
         default_enabled: false,
         remote: Some(|settings| settings.web_search_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::FeedbackTraceCard,
@@ -221,6 +235,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_FEEDBACK_TRACE_CARD",
         default_enabled: false,
         remote: Some(|settings| settings.feedback_trace_card_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::TurnSummary,
@@ -229,6 +244,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_TURN_SUMMARY",
         default_enabled: true,
         remote: Some(|settings| settings.turn_summary),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::CancelRewind,
@@ -237,6 +253,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_CANCEL_REWIND",
         default_enabled: true,
         remote: Some(|settings| settings.cancel_rewind_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::CompactionVerbatimInput,
@@ -245,6 +262,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_COMPACTION_VERBATIM_INPUT",
         default_enabled: true,
         remote: Some(|settings| settings.compaction_verbatim_input),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::TwoPassCompaction,
@@ -253,6 +271,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_TWO_PASS_COMPACTION",
         default_enabled: true,
         remote: Some(|settings| settings.two_pass_compaction_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::BackendTools,
@@ -262,6 +281,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_BACKEND_SEARCH",
         default_enabled: true,
         remote: None,
+        capability: None,
     },
     FeatureSpec {
         id: Feature::AutoWake,
@@ -270,6 +290,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_AUTO_WAKE",
         default_enabled: true,
         remote: Some(|settings| settings.auto_wake_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::SubagentWorktreeSnapshot,
@@ -278,6 +299,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_SUBAGENT_WORKTREE_SNAPSHOT",
         default_enabled: false,
         remote: Some(|settings| settings.subagent_worktree_snapshot_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::SubagentModelInheritance,
@@ -286,6 +308,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_SUBAGENT_MODEL_INHERITANCE",
         default_enabled: false,
         remote: Some(|settings| settings.subagent_model_inheritance_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::ActiveAgentMessages,
@@ -294,6 +317,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_ACTIVE_AGENT_MESSAGES",
         default_enabled: false,
         remote: Some(|settings| settings.active_agent_messages_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::Dock,
@@ -302,6 +326,7 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_DOCK",
         default_enabled: false,
         remote: Some(|settings| settings.dock_enabled),
+        capability: None,
     },
     FeatureSpec {
         id: Feature::TerminalTheme,
@@ -310,6 +335,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         env: "GROK_TERMINAL_THEME",
         default_enabled: false,
         remote: Some(|settings| settings.terminal_theme_enabled),
+        capability: None,
+    },
+    FeatureSpec {
+        id: Feature::FileAcceleration,
+        key: "file_acceleration",
+        path: "features.file_acceleration",
+        env: "GROK_FILE_ACCELERATION",
+        default_enabled: false,
+        remote: Some(|settings| settings.file_acceleration_enabled),
+        capability: None,
     },
 ];
 
@@ -421,8 +456,18 @@ impl Feature {
         }
     }
 
-    /// Pin, then environment, then config, then remote, then the default.
+    /// Pin, then environment, then config, then remote, then the default. A feature the build's
+    /// distribution withholds is off whatever they say.
     pub fn resolve(self, sources: FeatureSources) -> Resolved<bool> {
+        self.resolve_as(Distribution::current(), sources)
+    }
+
+    fn resolve_as(self, distribution: Distribution, sources: FeatureSources) -> Resolved<bool> {
+        if let Some(capability) = self.spec().capability
+            && !distribution.allows(capability)
+        {
+            return Resolved::new(false, ConfigSource::Default);
+        }
         let spec = self.spec();
         BoolFlag::env_value(sources.env)
             .requirement(sources.pin)

@@ -165,10 +165,7 @@ When **Confirm before rewind** is on (default in `/settings`), every pick asks f
 
 ```
 /compact
-/compact [context]
 ```
-
-The optional `context` argument lets you provide additional instructions about what to preserve during compaction.
 
 ### Auto-Compact
 
@@ -328,6 +325,8 @@ cook clone https://example.com/org/repo.git --no-redirects
 ```
 
 `GROVE_REDIRECTS=0` remains a runtime kill switch. Cook does not save the kill switch as the clone's redirect choice.
+
+`grok worktree create [NAME]` creates the same worktree `grok -w [NAME]` would, without starting a session. It prints the directory the session would have opened in. That path is the only output on stdout, so `cd "$(grok worktree create my-fix)"` works. By default the worktree starts from HEAD with your uncommitted changes copied over. Pass `--ref <ref>` to start from a clean checkout of a branch, tag, or commit. If the new worktree lacks the directory you ran from, such as a `--ref` checkout that predates it or an ignored directory, the command prints the worktree root.
 
 ### Manage Grove redirections
 

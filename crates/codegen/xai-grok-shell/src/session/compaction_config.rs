@@ -164,11 +164,10 @@ pub(crate) struct CompactionConfig {
     /// Auto-compaction suppression state (`SUPPRESS_*`) after a deterministic failure; the gates early-return unless `SUPPRESS_NONE`.
     /// Manual `/compact` ignores it.
     pub auto_compact_suppressed: AtomicU8,
-    /// Locks the context window against `x-grok-context-window` upgrades.
-    /// Set from `GROK_DEBUG_CONTEXT_WINDOW` or an explicit user/managed
-    /// `[model.<id>].context_window`. `Cell` so a `/model` switch can
-    /// re-pin (or clear) without `&mut self`.
-    pub context_window_override: Cell<Option<std::num::NonZeroU64>>,
+    /// Locks the context window when `GROK_DEBUG_CONTEXT_WINDOW` is set.
+    pub context_window_override: Option<std::num::NonZeroU64>,
+    /// Shared with `SessionHandle::context_window_selection`.
+    pub context_window_selection: Arc<AtomicU64>,
     pub count: AtomicU64,
     /// Set at turn end; consumed at next turn start for model-switch compaction.
     /// `Cell` because `SessionActor` is `!Send`.

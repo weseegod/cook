@@ -867,7 +867,7 @@ pub(super) async fn run_session(
                                 cfg.model = model_name.clone();
                                 cfg.extra_headers.extend(extra_headers);
                                 if let Some(cw) = context_window
-                                    && session.compaction.context_window_override.get().is_none()
+                                    && session.compaction.context_window_override.is_none()
                                 {
                                     cfg.context_window = cw;
                                 }
@@ -1182,10 +1182,10 @@ pub(super) async fn run_session(
                                 }
                             }
                         }
-                        SessionCommand::CompactSession { user_context, respond_to } => {
+                        SessionCommand::CompactSession { respond_to } => {
                             let s = session.clone();
                             tokio::task::spawn_local(async move {
-                                let compact_session = s.run_compact(user_context).await;
+                                let compact_session = s.run_compact().await;
                                 let _ = respond_to.send(compact_session);
                             });
                         }
@@ -2365,6 +2365,7 @@ pub(super) async fn run_session(
                             .enqueue_v2_turn_capture(source_prompt_index)
                             .await;
                     }
+                    session.schedule_v2_dream_check_after_turn();
                     #[cfg(test)]
                     if let Some(processed) = processed {
                         let _ = processed.send(());
