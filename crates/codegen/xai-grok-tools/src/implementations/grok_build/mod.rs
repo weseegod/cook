@@ -40,6 +40,7 @@ pub mod video_gen;
 pub mod web_fetch;
 pub mod web_search;
 pub mod workflow;
+pub mod working_plan;
 pub use app_builder::AppBuilderDeployerConfig;
 pub use ask_user_question::AskUserQuestionTool;
 pub use bash::BashTool;
@@ -89,3 +90,4 @@ pub use workflow::{
     WORKFLOW_TOOL_NAME, WorkflowTool, is_workflow_tool, is_workflow_tool_id,
     workflow_tool_short_name,
 };
+pub use working_plan::{SaveWorkingPlanTool, WorkingPlanSkillTool};

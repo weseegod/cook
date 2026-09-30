@@ -2,9 +2,14 @@
 """Summarize isolated Cook, OpenCode, and Pi evaluation runs."""
 
 import argparse
+import html
 import json
+import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
+from urllib.parse import unquote, urlsplit
 
 
 def number(value):
@@ -32,7 +37,8 @@ def events(path):
 
 
 def usage_cook(path):
-    raw = path.read_text(errors="replace") if path.exists() else ""
+    stdout_exists = path.is_file()
+    raw = path.read_text(errors="replace") if stdout_exists else ""
     try:
         obj = json.loads(raw)
     except json.JSONDecodeError:
@@ -42,16 +48,45 @@ def usage_cook(path):
     usage = obj.get("usage") or {}
     if not isinstance(usage, dict):
         usage = {}
+    metrics = dict(calls=number(obj.get("num_turns")),
+                   input=number(usage.get("input_tokens")),
+                   output=number(usage.get("output_tokens")),
+                   read=number(usage.get("cache_read_input_tokens")),
+                   write=number(usage.get("cache_creation_input_tokens")))
+    source = "stdout.json" if any(value is not None for value in metrics.values()) else "unreported"
+    # A missing stdout.json is an incomplete headless result, so do not
+    # attribute a possibly unrelated persisted session to it.
+    if stdout_exists and (metrics["calls"] is None or not usage):
+        usage_files = list((path.parent / "home" / "cook" / "sessions").rglob("usage.json"))
+        if len(usage_files) == 1:
+            try:
+                persisted = json.loads(usage_files[0].read_text(errors="replace"))
+            except (OSError, json.JSONDecodeError):
+                persisted = {}
+            session = persisted.get("session", {}) if isinstance(persisted, dict) else {}
+            purposes = session.get("purposeUsage", {}) if isinstance(session, dict) else {}
+            main = purposes.get("main_loop", {}) if isinstance(purposes, dict) else {}
+            if isinstance(main, dict):
+                cache_present = main.get("cacheFieldPresent") is True
+                fallback = dict(calls=number(main.get("modelCalls")),
+                                input=number(main.get("uncachedInputTokens")),
+                                output=number(main.get("outputTokens")),
+                                read=number(main.get("cachedReadTokens")) if cache_present else None,
+                                write=number(main.get("cacheCreationTokens")) if cache_present else None)
+                filled = False
+                for key, value in fallback.items():
+                    if metrics[key] is None and value is not None:
+                        metrics[key] = value
+                        filled = True
+                if filled:
+                    source = "stdout.json + session usage.json" if source != "unreported" else "session usage.json"
     tool_events = []
     for event_file in (path.parent / "home" / "cook" / "sessions").rglob("events.jsonl"):
         tool_events.extend(e for e in events(event_file) if e.get("type") == "tool_started")
     tools = len(tool_events) if tool_events else obj.get("tool_calls")
     if isinstance(tools, list):
         tools = len(tools)
-    return dict(calls=number(obj.get("num_turns")), tools=number(tools),
-                input=number(usage.get("input_tokens")), output=number(usage.get("output_tokens")),
-                read=number(usage.get("cache_read_input_tokens")),
-                write=number(usage.get("cache_creation_input_tokens")))
+    return dict(**metrics, tools=number(tools), source=source)
 
 
 def usage_opencode(path):
@@ -85,11 +120,103 @@ def usage_pi(path):
 def files_and_bytes(workdir):
     if not workdir.is_dir():
         return 0, 0, []
-    found = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-                           cwd=workdir, stdout=subprocess.PIPE, check=True).stdout
-    paths = [workdir / name.decode(errors="surrogateescape") for name in found.split(b"\0") if name]
-    files = [p for p in paths if p.is_file() and not p.is_symlink()]
+    files = []
+    for parent, dirs, names in os.walk(workdir):
+        base = Path(parent)
+        dirs[:] = sorted(d for d in dirs if d not in {".git", "node_modules"}
+                         and not (base / d).is_symlink())
+        files.extend(base / name for name in sorted(names)
+                     if (base / name).is_file() and not (base / name).is_symlink())
     return len(files), sum(p.stat().st_size for p in files), files
+
+
+def expected_files(task):
+    """Return an explicit file list from task headers such as `across 3 files: ...`."""
+    match = re.search(r"\bacross\s+\d+\s+files?:\s*([^\n]+)", task, re.IGNORECASE)
+    if not match:
+        return []
+    return [item.strip().rstrip(". ") for item in match.group(1).split(",") if item.strip()]
+
+
+def missing_local_html_references(workdir, files):
+    """Find missing relative src/href targets in HTML; this is a static warning only."""
+    root = workdir.resolve()
+    missing = []
+    for page in files:
+        if page.suffix.lower() not in {".html", ".htm"}:
+            continue
+        try:
+            source = page.read_text(errors="replace")
+        except OSError:
+            continue
+        for raw in re.findall(r"\b(?:src|href)\s*=\s*(['\"])(.*?)\1", source, re.IGNORECASE | re.DOTALL):
+            reference = html.unescape(raw[1].strip())
+            if not reference or reference.startswith("#"):
+                continue
+            try:
+                parsed = urlsplit(reference)
+            except ValueError:
+                continue
+            if parsed.scheme or parsed.netloc or not parsed.path:
+                continue
+            target = unquote(parsed.path)
+            candidate = (root / target.lstrip("/")) if target.startswith("/") else (page.parent / target)
+            candidate = candidate.resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                missing.append(f"{page.resolve().relative_to(root).as_posix()} -> {reference}")
+                continue
+            if not candidate.is_file():
+                missing.append(f"{page.resolve().relative_to(root).as_posix()} -> {reference}")
+    return sorted(set(missing))
+
+
+def missing_planned_scripts(agent_dir, workdir):
+    """Check workspace-local script paths in plan Command bullets without executing them."""
+    missing = []
+    sessions = agent_dir / "home" / "cook" / "sessions"
+    script_runners = {"node", "nodejs", "python", "python3", "bash", "sh", "ruby", "perl", "php", "deno", "bun"}
+    for plan in sessions.rglob("plans/*.md") if sessions.is_dir() else []:
+        try:
+            lines = plan.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not re.match(r"\s*[-*+]\s*Command\s*:", line, re.IGNORECASE):
+                continue
+            commands = re.findall(r"`([^`]+)`", line)
+            for command in commands:
+                try:
+                    parts = shlex.split(command)
+                except ValueError:
+                    continue
+                if len(parts) < 2 or Path(parts[0]).name not in script_runners:
+                    continue
+                script = next((part for part in parts[1:] if not part.startswith("-")), None)
+                if not script or not ("/" in script or Path(script).suffix.lower() in {".js", ".mjs", ".cjs", ".py", ".sh", ".rb", ".pl", ".php"}):
+                    continue
+                candidate = Path(script)
+                # External scratch paths can be cleaned before the report is written;
+                # their state at execution time cannot be inferred from this snapshot.
+                if candidate.is_absolute():
+                    continue
+                candidate = workdir / candidate
+                if not candidate.is_file():
+                    missing.append(command)
+    return sorted(set(missing))
+
+
+def artifact_findings(agent_dir, task):
+    workdir = agent_dir / "workdir"
+    _, _, files = files_and_bytes(workdir)
+    root = workdir.resolve()
+    actual = {path.resolve().relative_to(root).as_posix() for path in files}
+    expected = expected_files(task)
+    missing = [path for path in expected if path not in actual]
+    references = missing_local_html_references(workdir, files)
+    planned = missing_planned_scripts(agent_dir, workdir)
+    return expected, missing, references, planned
 
 
 def cell(value):
@@ -97,15 +224,15 @@ def cell(value):
 
 
 def render(run_dir, model, wire, task, agents, thinking, parallel):
-    lines = [f"# Local agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", f"Parallel: `{parallel}`", "",
+    lines = [f"# Agent comparison: {model}", "", f"Wire model: `{wire}`", f"Thinking: `{thinking}`", f"Parallel: `{parallel}`", "",
              "Task:", "", "> " + task.replace("|", "\\|").replace("\n", "\n> "), "",
-             "| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Files | Bytes | Output tokens/s |",
-             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: |"]
-    output_lines = ["", "## Outputs", ""]
+             "| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Usage source | Files | Bytes | Output tokens/s |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: |"]
     for agent in agents:
         directory = run_dir / agent
-        metrics = {"cook": usage_cook, "opencode": usage_opencode, "pi": usage_pi}[agent](directory / "stdout.json")
-        count, size, files = files_and_bytes(directory / "workdir")
+        metrics = {"cook": usage_cook, "cook-main": usage_cook,
+                   "opencode": usage_opencode, "pi": usage_pi}[agent](directory / "stdout.json")
+        count, size, _ = files_and_bytes(directory / "workdir")
         try:
             seconds = float((directory / "elapsed-seconds.txt").read_text().strip())
         except (OSError, ValueError):
@@ -118,13 +245,20 @@ def render(run_dir, model, wire, task, agents, thinking, parallel):
         rate = round(metrics["output"] / seconds, 2) if metrics["output"] is not None and seconds and seconds > 0 else None
         values = [agent, f"{seconds:.2f}" if seconds is not None else None, exit_code,
                   metrics["calls"], metrics["tools"], metrics["input"], metrics["output"],
-                  metrics["read"], metrics["write"], cache_presence, count, size, rate]
+                  metrics["read"], metrics["write"], cache_presence,
+                  metrics.get("source", "stdout.json"), count, size, rate]
         lines.append("| " + " | ".join(cell(v) for v in values) + " |")
-        file_list = ", ".join(f"`{path}`" for path in files) if files else "none"
-        output_lines.append(f"- **{agent}**: files {file_list}; workdir `{directory / 'workdir'}`; "
-                            f"raw output `{directory / 'stdout.json'}`; errors `{directory / 'stderr.log'}`.")
-    lines += ["", "Metrics come from each agent's JSON output. `unreported` means the field was absent.",
-              "Files and bytes count git-visible regular files in each workdir.", *output_lines, ""]
+    lines += ["", "## Static artifact checks", "",
+              "These are non-gating snapshot checks; they do not execute the app or test commands. Planned script checks cover workspace-relative paths only.",
+              "", "| Agent | Required files | Missing files | Broken local HTML refs | Missing workspace test scripts |",
+              "| --- | ---: | --- | --- | --- |"]
+    for agent in agents:
+        expected, missing, references, planned = artifact_findings(run_dir / agent, task)
+        values = [agent, len(expected) if expected else "unspecified",
+                  ", ".join(missing) or "—", ", ".join(references) or "—", ", ".join(planned) or "—"]
+        lines.append("| " + " | ".join(str(value).replace("|", "\\|") for value in values) + " |")
+    lines += ["", "Metrics come from each agent's JSON output or the labeled Cook session usage file. `unreported` means the field was absent.",
+              "Files and bytes count regular files in each workdir, excluding .git and node_modules.", ""]
     return "\n".join(lines)
 
 
@@ -136,6 +270,7 @@ def self_test():
         cook.write_text(json.dumps({"num_turns": 2, "usage": {"input_tokens": 5, "output_tokens": 6,
             "cache_read_input_tokens": 0, "cache_creation_input_tokens": 1}}))
         assert usage_cook(cook)["read"] == 0
+        assert usage_cook(cook)["source"] == "stdout.json"
         oc = root / "oc.jsonl"
         oc.write_text(json.dumps({"type": "step_finish", "part": {"tokens": {"input": 3, "output": 4, "cache": {"read": 0}}}}) + "\n"
                       + json.dumps({"type": "tool_use", "part": {"id": "call-1"}}) + "\n")
@@ -145,6 +280,81 @@ def self_test():
         pi.write_text(json.dumps({"type": "message_end", "message": {"role": "assistant", "usage": {"input": 3, "output": 4}}}) + "\n")
         assert usage_pi(pi)["read"] is None
         assert cell(usage_pi(pi)["write"]) == "unreported"
+
+        repo = root / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        (repo / ".gitignore").write_text("/evaluation/\n")
+        run_dir = repo / "evaluation"
+        directory = run_dir / "cook"
+        workdir = directory / "workdir"
+        workdir.mkdir(parents=True)
+        for name in ("index.html", "style.css", "app.js"):
+            (workdir / name).write_text(name)
+        (workdir / "node_modules").mkdir()
+        (workdir / "node_modules" / "skip.js").write_text("skip")
+        assert subprocess.run(["git", "check-ignore", "-q", "evaluation/cook/workdir/index.html"],
+                              cwd=repo).returncode == 0
+        assert not (workdir / ".git").exists()
+        count, size, files = files_and_bytes(workdir)
+        assert count == 3 and size == sum(len(name) for name in ("index.html", "style.css", "app.js"))
+        assert {p.name for p in files} == {"index.html", "style.css", "app.js"}
+
+        stdout = directory / "stdout.json"
+        stdout.write_text("{}")
+        session = directory / "home" / "cook" / "sessions" / "one"
+        session.mkdir(parents=True)
+        (session / "usage.json").write_text(json.dumps({"session": {"purposeUsage": {
+            "main_loop": {"modelCalls": 7, "uncachedInputTokens": 11, "outputTokens": 12,
+                          "cachedReadTokens": 13, "cacheCreationTokens": 0,
+                          "cacheFieldPresent": True}}}}))
+        fallback = usage_cook(stdout)
+        assert (fallback["calls"], fallback["input"], fallback["output"], fallback["read"],
+                fallback["write"], fallback["source"]) == (7, 11, 12, 13, 0, "session usage.json")
+        stdout.write_text(json.dumps({"num_turns": 2}))
+        partial = usage_cook(stdout)
+        assert partial["calls"] == 2 and partial["input"] == 11
+        assert partial["source"] == "stdout.json + session usage.json"
+        persisted = json.loads((session / "usage.json").read_text())
+        persisted["session"]["purposeUsage"]["main_loop"]["cacheFieldPresent"] = False
+        (session / "usage.json").write_text(json.dumps(persisted))
+        stdout.write_text("{}")
+        no_cache_field = usage_cook(stdout)
+        assert no_cache_field["read"] is None and no_cache_field["write"] is None
+        stdout.write_text("{}")
+        (directory / "exit-code.txt").write_text("1")
+        report = render(run_dir, "fixture", "fixture", "task", ["cook"], "false", 1)
+        row = next(line for line in report.splitlines() if line.startswith("| cook |"))
+        cells = [value.strip() for value in row.strip("|").split("|")]
+        assert cells[2] == "1" and cells[11] == "3"
+        old_cook_report = render(run_dir, "fixture", "fixture", "task", ["cook-main"], "false", 1)
+        assert any(line.startswith("| cook-main |") for line in old_cook_report.splitlines())
+
+        app_task = "Very hard: editor across 3 files: index.html, js/app.js, css/main.css.\nBuild it."
+        assert expected_files(app_task) == ["index.html", "js/app.js", "css/main.css"]
+        (workdir / "index.html").write_text(
+            '<link href="css/main.css"><script src="js/app.js"></script>'
+            '<script src="js/canvas.js"></script>'
+        )
+        (workdir / "js").mkdir()
+        (workdir / "js" / "app.js").write_text("// app")
+        plan = session / "plans" / "plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("- Command: `node test/run-tests.js` exits 0.\n")
+        _, missing_files, broken_refs, missing_commands = artifact_findings(directory, app_task)
+        assert missing_files == ["css/main.css"]
+        assert broken_refs == ["index.html -> css/main.css", "index.html -> js/canvas.js"]
+        assert missing_commands == ["node test/run-tests.js"]
+
+        stdout.unlink()
+        absent = usage_cook(stdout)
+        assert absent["calls"] is None and absent["input"] is None
+        assert absent["source"] == "unreported"
+        (session / "usage.json").unlink()
+        stdout.write_text("{}")
+        absent = usage_cook(stdout)
+        assert absent["calls"] is None and absent["input"] is None
+        assert absent["source"] == "unreported"
     print("summarizer self-test passed")
 
 
@@ -157,7 +367,7 @@ if __name__ == "__main__":
     parser.add_argument("--task")
     parser.add_argument("--agents")
     parser.add_argument("--thinking", choices=("true", "false"), default="false")
-    parser.add_argument("--parallel", choices=("true", "false"), default="false")
+    parser.add_argument("--parallel", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     if args.self_test:

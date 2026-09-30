@@ -556,17 +556,13 @@ impl SessionActor {
             (self.construct_legacy_prefix(cwd), true)
         };
         if uses_legacy_prefix {
-            let (workspace_rules, discovered_user_rules) = if include_verification {
-                self.gather_partitioned_rules()
-            } else {
-                (Vec::new(), Vec::new())
-            };
+            let (workspace_rules, discovered_user_rules) = self.gather_partitioned_rules();
             let mut user_rules = xai_grok_agent::prompt::user_message::built_in_user_rules();
             if include_verification {
                 user_rules
                     .extend(xai_grok_agent::prompt::browser_verification::synthetic_user_rules());
-                user_rules.extend(discovered_user_rules);
             }
+            user_rules.extend(discovered_user_rules);
             xai_grok_agent::prompt::user_message::append_rules_section(
                 &mut out,
                 &workspace_rules,

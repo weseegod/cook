@@ -76,6 +76,12 @@ pub struct AgentBuilder {
     active_agent_messages_enabled: bool,
     subagents_enabled: bool,
     background_workflows_enabled: bool,
+    /// When true, advertise `update_goal` for primary Grok Build builds (subject to workflow gate).
+    goal_enabled: bool,
+    /// When true, advertise `send_feedback` for primary Grok Build builds.
+    feedback_enabled: bool,
+    /// When true, advertise `search_tool` / `use_tool` (non-empty MCP server set or managed MCP on).
+    mcp_discovery_enabled: bool,
     ask_user_question_enabled: bool,
     subagent_toggle: HashMap<String, bool>,
     task_model_slugs: Vec<String>,
@@ -304,6 +310,9 @@ impl AgentBuilder {
             active_agent_messages_enabled: false,
             subagents_enabled: false,
             background_workflows_enabled: false,
+            goal_enabled: false,
+            feedback_enabled: false,
+            mcp_discovery_enabled: false,
             ask_user_question_enabled: true,
             subagent_toggle: HashMap::new(),
             task_model_slugs: Vec::new(),
@@ -584,6 +593,21 @@ impl AgentBuilder {
         self.background_workflows_enabled = enabled;
         self
     }
+    /// Gates the `update_goal` tool on primary Grok Build builds.
+    pub fn with_goal_enabled(mut self, enabled: bool) -> Self {
+        self.goal_enabled = enabled;
+        self
+    }
+    /// Gates the `send_feedback` tool on primary Grok Build builds.
+    pub fn with_feedback_enabled(mut self, enabled: bool) -> Self {
+        self.feedback_enabled = enabled;
+        self
+    }
+    /// Gates `search_tool` / `use_tool` when the session has MCP servers (user, ACP, or managed).
+    pub fn with_mcp_discovery_enabled(mut self, enabled: bool) -> Self {
+        self.mcp_discovery_enabled = enabled;
+        self
+    }
     /// Advertised in the GrokBuild Task description.
     pub fn with_task_model_slugs(mut self, slugs: Vec<String>) -> Self {
         self.task_model_slugs = slugs;
@@ -754,6 +778,7 @@ impl AgentBuilder {
         );
         if self.prompt_audience == PromptAudience::Primary
             && is_parent_grok_build
+            && self.feedback_enabled
             && !tool_config
                 .tools
                 .iter()
@@ -762,6 +787,19 @@ impl AgentBuilder {
             tool_config
                 .tools
                 .push((&xai_grok_tools::implementations::grok_build::SendFeedbackTool).into());
+        } else if !self.feedback_enabled {
+            let feedback_id = xai_grok_tools::registry::types::ToolConfig::for_tool::<
+                xai_grok_tools::implementations::grok_build::SendFeedbackTool,
+            >()
+            .id;
+            let feedback_name =
+                xai_grok_tools::implementations::grok_build::SEND_FEEDBACK_TOOL_NAME;
+            tool_config.tools.retain(|tool| {
+                tool.kind != Some(ToolKind::Feedback)
+                    && tool.id != feedback_id
+                    && tool.id != feedback_name
+                    && tool.name_override.as_deref() != Some(feedback_name)
+            });
         }
         if definition.inject_default_tools {
             if self.memory_backend.is_some() {
@@ -804,6 +842,58 @@ impl AgentBuilder {
                     (&xai_grok_tools::implementations::grok_build::ReferenceToVideoTool).into(),
                 );
             }
+            if self.mcp_discovery_enabled {
+                let has_search = tool_config.tools.iter().any(|tc| {
+                    tc.kind == Some(ToolKind::SearchTool) || tc.id.ends_with(":search_tool")
+                });
+                let has_use = tool_config
+                    .tools
+                    .iter()
+                    .any(|tc| tc.kind == Some(ToolKind::UseTool) || tc.id.ends_with(":use_tool"));
+                if !has_search {
+                    tool_config.tools.push(
+                        (&xai_grok_tools::implementations::search_tool::SearchTool).into(),
+                    );
+                }
+                if !has_use {
+                    tool_config
+                        .tools
+                        .push((&xai_grok_tools::implementations::use_tool::UseTool).into());
+                }
+            } else {
+                tool_config.tools.retain(|tc| {
+                    tc.kind != Some(ToolKind::SearchTool)
+                        && tc.kind != Some(ToolKind::UseTool)
+                        && !tc.id.ends_with(":search_tool")
+                        && !tc.id.ends_with(":use_tool")
+                });
+            }
+            if self.goal_enabled {
+                let has_goal = tool_config
+                    .tools
+                    .iter()
+                    .any(|tc| tc.kind == Some(ToolKind::GoalUpdate));
+                if !has_goal {
+                    tool_config.tools.push(
+                        (&xai_grok_tools::implementations::grok_build::UpdateGoalTool).into(),
+                    );
+                }
+            } else {
+                tool_config
+                    .tools
+                    .retain(|tc| tc.kind != Some(ToolKind::GoalUpdate));
+            }
+            if self.background_workflows_enabled && self.subagents_enabled {
+                let has_workflow = tool_config
+                    .tools
+                    .iter()
+                    .any(|tc| tc.kind == Some(ToolKind::Workflow));
+                if !has_workflow {
+                    tool_config.tools.push(
+                        (&xai_grok_tools::implementations::grok_build::WorkflowTool).into(),
+                    );
+                }
+            }
             let has_write_tool = tool_config
                 .tools
                 .iter()
@@ -820,6 +910,14 @@ impl AgentBuilder {
             if self.prompt_audience == PromptAudience::Primary {
                 ensure_plan_mode_tools(&mut tool_config);
             }
+        } else if !self.mcp_discovery_enabled {
+            // Curated toolsets still drop discovery tools when no MCP servers are present.
+            tool_config.tools.retain(|tc| {
+                tc.kind != Some(ToolKind::SearchTool)
+                    && tc.kind != Some(ToolKind::UseTool)
+                    && !tc.id.ends_with(":search_tool")
+                    && !tc.id.ends_with(":use_tool")
+            });
         }
         let active_agent_message = xai_grok_tools::registry::types::ToolConfig::for_tool::<
             xai_grok_tools::implementations::grok_build::SendSubagentMessageTool,
@@ -895,7 +993,12 @@ impl AgentBuilder {
             "task"
         );
         let mut task_stripped = false;
-        if !self.subagents_enabled {
+        // Primary Grok Build keeps the task tool registered when subagents exist so plan-mode
+        // projection can advertise explore. Session projection hides it outside Plan unless the
+        // subagents flag is on (TaskOpen allowlist omits it). Non-primary still respects the flag.
+        let register_task_despite_flag = self.prompt_audience == PromptAudience::Primary
+            && is_parent_grok_build;
+        if !self.subagents_enabled && !register_task_despite_flag {
             tool_config.tools.retain(|tc| tc.id != task_tool_id);
             task_stripped = true;
         } else {
@@ -910,25 +1013,43 @@ impl AgentBuilder {
             if subagents.is_empty() {
                 tool_config.tools.retain(|tc| tc.id != task_tool_id);
                 task_stripped = true;
-            } else if self.prompt_audience == crate::prompt::context::PromptAudience::Subagent {
-                if let Some(task_tc) = tool_config
+            } else {
+                // Only inject task onto profiles that accept default-tool layering.
+                // Curated toolsets (`inject_default_tools = false`) keep their exact list.
+                if definition.inject_default_tools
+                    && !tool_config.tools.iter().any(|tc| tc.id == task_tool_id)
+                {
+                    tool_config.tools.push(
+                        xai_grok_tools::registry::types::ToolConfig::from(
+                            &xai_grok_tools::implementations::grok_build::TaskTool,
+                        )
+                        .with_name("spawn_subagent")
+                        .with_param_rename("run_in_background", "background"),
+                    );
+                }
+                if self.prompt_audience == crate::prompt::context::PromptAudience::Subagent {
+                    if let Some(task_tc) = tool_config
+                        .tools
+                        .iter_mut()
+                        .find(|tc| tc.id == task_tool_id)
+                    {
+                        task_tc.description_override = Some(CHILD_TASK_DESCRIPTION.to_string());
+                    }
+                } else if let Some(task_tc) = tool_config
                     .tools
                     .iter_mut()
                     .find(|tc| tc.id == task_tool_id)
                 {
-                    task_tc.description_override = Some(CHILD_TASK_DESCRIPTION.to_string());
+                    let mut description = xai_tool_types::build_task_description(&TASK_TOOL_NAMING);
+                    description.push_str(&task_model_guidance(
+                        self.task_model_selection,
+                        &self.task_model_slugs,
+                    ));
+                    task_tc.description_override = Some(description);
                 }
-            } else if let Some(task_tc) = tool_config
-                .tools
-                .iter_mut()
-                .find(|tc| tc.id == task_tool_id)
-            {
-                let mut description = xai_tool_types::build_task_description(&TASK_TOOL_NAMING);
-                description.push_str(&task_model_guidance(
-                    self.task_model_selection,
-                    &self.task_model_slugs,
-                ));
-                task_tc.description_override = Some(description);
+                if !tool_config.tools.iter().any(|tc| tc.id == task_tool_id) {
+                    task_stripped = true;
+                }
             }
         }
         let task_params = TaskParams {
@@ -2042,11 +2163,13 @@ mod tests {
                 "[{label}] ask_user_question presence should match ask_user_question_enabled={ask_user}; got tools: {names:?}"
             );
             let has_task = names.contains(&"spawn_subagent");
-            assert_eq!(
-                has_task, *subagents,
-                "[{label}] spawn_subagent presence should match subagents_enabled={subagents}; got tools: {names:?}"
-            );
+            // Primary Grok Build keeps task registered for plan-surface projection even when
+            // subagents_enabled is false; the session projector hides it outside Plan.
             if *subagents {
+                assert!(
+                    has_task,
+                    "[{label}] spawn_subagent must be present when subagents_enabled; got tools: {names:?}"
+                );
                 let task = spawn_subagent_description(&defs);
                 assert!(
                     task.contains("resume_from"),
@@ -2056,19 +2179,30 @@ mod tests {
                     !task.contains("Agent types:"),
                     "[{label}] task description must not list agent types: {task}"
                 );
+            } else if label.contains("grok-build") {
+                assert!(
+                    has_task,
+                    "[{label}] primary grok-build keeps task for plan projection; got {names:?}"
+                );
+            } else {
+                assert!(
+                    !has_task,
+                    "[{label}] spawn_subagent must be absent when subagents_enabled=false; got {names:?}"
+                );
             }
             assert_eq!(
                 Vec::<(String, String)>::new(),
                 unresolved_template_markers(&defs),
                 "[{label}] rendered descriptions must not leak template markers"
             );
-            assert!(
+            assert_eq!(
                 names.contains(&"send_feedback"),
-                "[{label}] parent grok-build sessions must advertise send_feedback; got tools: {names:?}"
+                false,
+                "[{label}] send_feedback defaults off; got tools: {names:?}"
             );
             assert!(
-                builtin_names.contains(&"send_feedback"),
-                "[{label}] parent grok-build built-in definitions must advertise send_feedback; got tools: {builtin_names:?}"
+                !builtin_names.contains(&"send_feedback"),
+                "[{label}] built-in definitions must not advertise send_feedback by default; got tools: {builtin_names:?}"
             );
             assert!(
                 names.contains(&"enter_plan_mode"),
@@ -2267,8 +2401,8 @@ mod tests {
             "subagents_enabled=false must strip workflow even when workflows are on: {names:?}"
         );
         assert!(
-            !names.iter().any(|name| name == "spawn_subagent" || name == "task"),
-            "subagents_enabled=false must strip task; got {names:?}"
+            names.iter().any(|name| name == "spawn_subagent"),
+            "primary grok-build keeps task registered for plan projection when subagents exist: {names:?}"
         );
     }
 
@@ -2485,6 +2619,124 @@ mod tests {
             .expect("finalize must insert Params for the injected ask_user_question");
         assert_eq!(applied.0.non_interactive, Some(true));
     }
+    #[tokio::test]
+    async fn default_grok_build_plan_advertises_coding_keep_set_only() {
+        use xai_grok_tools::computer::local::LocalTerminalBackend;
+        use xai_grok_tools::notification::ToolNotificationHandle;
+        let agent = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(crate::config::AgentDefinition::grok_build_plan())
+        .build()
+        .await
+        .expect("default plan agent should build");
+        let names: std::collections::HashSet<String> = agent
+            .tool_definitions()
+            .await
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        let keep = [
+            "read_file",
+            "grep",
+            "list_dir",
+            "glob",
+            "search_replace",
+            "write",
+            "run_terminal_command",
+            "get_command_or_subagent_output",
+            "wait_commands_or_subagents",
+            "kill_command_or_subagent",
+            "todo_write",
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "ask_user_question",
+        ];
+        for name in keep {
+            assert!(
+                names.contains(name),
+                "keep-set missing {name}; got {names:?}"
+            );
+        }
+        for banned in [
+            "scheduler_create",
+            "monitor",
+            "workflow",
+            "update_goal",
+            "send_feedback",
+            "image_gen",
+            "web_search",
+            "search_tool",
+            "use_tool",
+        ] {
+            assert!(
+                !names.contains(banned),
+                "default keep-set must omit {banned}; got {names:?}"
+            );
+        }
+        // Task stays registered on the primary agent so plan-mode projection can show explore;
+        // TaskOpen/Implement surfaces hide it.
+        assert!(
+            names.contains("spawn_subagent"),
+            "primary plan agent registers task for plan projection; got {names:?}"
+        );
+    }
+    #[tokio::test]
+    async fn opt_in_flags_restore_specialized_tools() {
+        use xai_grok_tools::computer::local::LocalTerminalBackend;
+        use xai_grok_tools::notification::ToolNotificationHandle;
+        let agent = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(crate::config::AgentDefinition::grok_build_plan())
+        .with_subagents_enabled(true)
+        .with_background_workflows_enabled(true)
+        .with_goal_enabled(true)
+        .with_feedback_enabled(true)
+        .with_mcp_discovery_enabled(true)
+        .build()
+        .await
+        .expect("opt-in plan agent should build");
+        let names: std::collections::HashSet<String> = agent
+            .tool_definitions()
+            .await
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(names.contains("spawn_subagent"), "subagents on → task; {names:?}");
+        assert!(names.contains("workflow"), "workflows+subagents on → workflow; {names:?}");
+        // Workflow gate strips goal update while workflows are on.
+        assert!(!names.contains("update_goal"), "workflows on strips goal; {names:?}");
+        assert!(names.contains("send_feedback"), "feedback on; {names:?}");
+        assert!(
+            names.contains("search_tool") && names.contains("use_tool"),
+            "mcp discovery on; {names:?}"
+        );
+        let goal_only = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(crate::config::AgentDefinition::grok_build_plan())
+        .with_goal_enabled(true)
+        .build()
+        .await
+        .expect("goal-only agent should build");
+        let goal_names: std::collections::HashSet<String> = goal_only
+            .tool_definitions()
+            .await
+            .into_iter()
+            .map(|d| d.function.name)
+            .collect();
+        assert!(
+            goal_names.contains("update_goal"),
+            "goal on without workflows → update_goal; {goal_names:?}"
+        );
+    }
     async fn build_with_tools(tools: Vec<String>, disallowed: Vec<String>) -> crate::agent::Agent {
         use xai_grok_tools::computer::local::LocalTerminalBackend;
         use xai_grok_tools::notification::ToolNotificationHandle;
@@ -2497,6 +2749,7 @@ mod tests {
             ToolNotificationHandle::noop(),
         )
         .from_definition(def)
+        .with_mcp_discovery_enabled(true)
         .build()
         .await
         .unwrap()
@@ -2707,11 +2960,7 @@ mod tests {
             !disabled_names.iter().any(|name| name == "spawn_subagent"),
             "disabling general-purpose with no single fallback hides task: {disabled_names:?}"
         );
-        for kept in [
-            "run_terminal_command",
-            "get_command_or_subagent_output",
-            "scheduler_create",
-        ] {
+        for kept in ["run_terminal_command", "get_command_or_subagent_output"] {
             assert!(
                 disabled_names.iter().any(|name| name == kept),
                 "hiding task must keep {kept}: {disabled_names:?}"

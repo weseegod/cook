@@ -16,6 +16,77 @@ static TURNS_ACTIVE: xai_grok_telemetry::activity::ActivityGauge =
 const STRUCTURED_OUTPUT_TOOL: &str = "StructuredOutput";
 /// Max times the model may re-call `StructuredOutput` with non-conforming args before the turn ends with the last validation error.
 const STRUCTURED_OUTPUT_MAX_RETRIES: u32 = 3;
+const TOOL_CALL_BUDGET_MAX_RECOVERIES: u32 = 3;
+
+#[derive(Default)]
+struct ToolCallBudgetRecovery {
+    attempts: u32,
+    needs_successful_call: bool,
+}
+
+#[cfg(test)]
+mod tool_call_budget_recovery_tests {
+    use super::{ToolCallBudgetRecovery, ToolExecutionReport, tool_call_budget_feedback};
+
+    #[test]
+    fn breach_is_model_visible_and_requires_a_later_successful_mutation() {
+        let mut recovery = ToolCallBudgetRecovery::default();
+        assert!(recovery.on_breach());
+        let feedback = tool_call_budget_feedback(
+            "tool call 0 buffered 32828 bytes of arguments, past the 32768 byte per-call ceiling",
+        );
+        assert!(feedback.contains("32828 bytes"));
+        assert!(feedback.contains("Split the write into smaller tool calls"));
+        assert!(recovery.needs_successful_call);
+
+        recovery.on_execution(ToolExecutionReport::default());
+        assert!(recovery.needs_successful_call);
+        recovery.on_execution(ToolExecutionReport {
+            successful_calls: 1,
+            ..Default::default()
+        });
+        assert!(
+            recovery.needs_successful_call,
+            "a successful read must not clear budget debt"
+        );
+        recovery.on_execution(ToolExecutionReport {
+            successful_calls: 1,
+            successful_mutations: 1,
+            ..Default::default()
+        });
+        assert!(!recovery.needs_successful_call);
+    }
+
+    #[test]
+    fn repeated_breaches_stop_after_three_recoveries() {
+        let mut recovery = ToolCallBudgetRecovery::default();
+        assert!(recovery.on_breach());
+        assert!(recovery.on_breach());
+        assert!(recovery.on_breach());
+        assert!(!recovery.on_breach());
+    }
+}
+
+impl ToolCallBudgetRecovery {
+    fn on_breach(&mut self) -> bool {
+        self.attempts += 1;
+        self.needs_successful_call = true;
+        self.attempts <= TOOL_CALL_BUDGET_MAX_RECOVERIES
+    }
+
+    fn on_execution(&mut self, report: ToolExecutionReport) {
+        if report.successful_mutations > 0 {
+            self.needs_successful_call = false;
+        }
+    }
+}
+
+fn tool_call_budget_feedback(message: &str) -> String {
+    format!(
+        "Tool call result: Error: {message}. The call was not executed. \
+         Split the write into smaller tool calls, each with arguments below the per-call byte limit."
+    )
+}
 /// Turn-freeze usage drain: bounds a wedged foreground child at turn end; folds normally land in one or two polls because they run before worktree dispose.
 /// The child completion path's bounded parent awaits are sized to fit inside this (compile-time asserted at `PARENT_ACK_TIMEOUT`).
 pub(crate) const SUBAGENT_USAGE_DRAIN: std::time::Duration = std::time::Duration::from_secs(120);
@@ -2726,6 +2797,7 @@ impl SessionActor {
         let mut loop_index: u32 = 0;
         let mut identical_tool_calls = IdenticalToolCallRun::default();
         let mut todo_gate_fires: u32 = 0;
+        let mut plan_stop_nudges: u32 = 0;
         let mut length_salvage_streak = LengthSalvageStreak::default();
         let mut auth_retry_schedule = AuthRetrySchedule::new();
         let mut rate_limit_waits = self.rate_limit_wait_budget(
@@ -2738,6 +2810,7 @@ impl SessionActor {
         let mut turn_span_totals = TurnSpanTotals::default();
         let mut structured_output_retries: u32 = 0;
         let mut media_gen_resamples: u32 = 0;
+        let mut tool_call_budget_recovery = ToolCallBudgetRecovery::default();
         let structured_output_validator = json_schema.as_ref().map(|schema| {
             jsonschema::validator_for(schema).map_err(|e| format!("invalid output schema: {e}"))
         });
@@ -3282,6 +3355,15 @@ impl SessionActor {
                     turn_phases.record_sampling_retries(1);
                     continue;
                 }
+                Ok(SamplerTurnOutcome::RecoverToolCallBudget { message }) => {
+                    if !tool_call_budget_recovery.on_breach() {
+                        return Err(acp::Error::internal_error().data(format!(
+                            "tool-call argument budget exceeded repeatedly: {message}"
+                        )));
+                    }
+                    self.push_system_reminder(&tool_call_budget_feedback(&message));
+                    continue;
+                }
                 Ok(SamplerTurnOutcome::RefreshAuthAndResubmit { credential, store }) => {
                     if auth_retry_schedule.reset_if_incident_spans_suspend() {
                         tracing::info!("auth 401 retry: incident spanned a suspend; budget reset");
@@ -3735,6 +3817,11 @@ impl SessionActor {
                 }
             }
             if tool_calls.is_empty() {
+                if tool_call_budget_recovery.needs_successful_call {
+                    return Err(acp::Error::internal_error().data(
+                        "tool-call argument budget was exceeded and no later valid tool call ran",
+                    ));
+                }
                 if !schema_ok
                     && !turn_refused
                     && !salvage.is_truncated()
@@ -3789,6 +3876,31 @@ impl SessionActor {
                              to user. If you want autonomous progress, prompt the agent \
                              to continue explicitly, or clean up the todo list."
                         ));
+                    }
+                }
+                if crate::session::goal_next_step::should_plan_stop_nudge(
+                    turn_refused,
+                    salvage.is_truncated(),
+                    plan_stop_nudges,
+                    self.goal_loop_active(),
+                ) {
+                    let episode = self.plan_mode.lock().checklist_episode();
+                    if let Some(path) = episode {
+                        let steps = crate::session::goal_next_step::open_checklist_steps_at(&path);
+                        if !steps.is_empty() {
+                            plan_stop_nudges += 1;
+                            tracing::info!(
+                                prompt_id = %req_id,
+                                open_steps = steps.len(),
+                                first = %steps[0],
+                                "turn-end plan checklist nudge"
+                            );
+                            self.push_system_reminder(
+                                &crate::session::goal_next_step::plan_stop_reminder(&steps),
+                            );
+                            salvage.step_boundary();
+                            continue;
+                        }
                     }
                 }
                 if self.drain_interjections_at_safe_point().await {
@@ -3910,8 +4022,10 @@ impl SessionActor {
                     },
                 );
             }
-            let stub_identical_observation_results =
-                should_stub_identical_observation_result(identical_tool_calls.run_len, step_observation);
+            let stub_identical_observation_results = should_stub_identical_observation_result(
+                identical_tool_calls.run_len,
+                step_observation,
+            );
             let tool_call_responses: Vec<_> = tool_calls
                 .into_iter()
                 .map(|tc| ToolCallResponse {
@@ -3943,6 +4057,9 @@ impl SessionActor {
                 .await
             };
             match execute_tool_calls_result {
+                Ok((ToolLoop::Continue, report)) if report.successful_calls > 0 => {
+                    tool_call_budget_recovery.on_execution(report);
+                }
                 Ok((ToolLoop::PermissionReject { tool_name, reason }, _)) => {
                     return Ok(TurnOutcome::Cancelled {
                         category: Some(
@@ -4195,8 +4312,9 @@ mod identical_tool_call_run_tests {
         IdenticalToolCallRun, MAX_CONSECUTIVE_IDENTICAL_PROBLEMATIC_TOOL_CALLS,
         MAX_CONSECUTIVE_IDENTICAL_TOOL_CALLS, MAX_CONSECUTIVE_TRUE_NOOPS,
         NUDGE_AFTER_IDENTICAL_PROBLEMATIC_TOOL_CALLS, NUDGE_AFTER_IDENTICAL_TOOL_CALLS, ToolKind,
-        action_stationarity_nudge_template, command_is_true, should_stub_identical_observation_result,
-        step_is_observation_repeat, step_is_problematically_repeating, step_signature,
+        action_stationarity_nudge_template, command_is_true,
+        should_stub_identical_observation_result, step_is_observation_repeat,
+        step_is_problematically_repeating, step_signature,
     };
     #[test]
     fn identical_non_true_resets_and_caps_at_the_hard_limit() {

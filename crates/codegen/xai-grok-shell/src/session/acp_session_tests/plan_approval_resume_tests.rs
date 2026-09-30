@@ -90,12 +90,10 @@ async fn clean_handoff_drops_planning_tail_without_system() {
     local
         .run_until(async {
             let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
-            actor
-                .chat_state_handle
-                .replace_conversation(vec![
-                    ConversationItem::user("plan the feature"),
-                    ConversationItem::assistant("here is a plan"),
-                ]);
+            actor.chat_state_handle.replace_conversation(vec![
+                ConversationItem::user("plan the feature"),
+                ConversationItem::assistant("here is a plan"),
+            ]);
             actor.handoff_plan_context(None).await;
             let history = actor.chat_state_handle.get_conversation().await;
             assert_eq!(history.len(), 1);
@@ -124,16 +122,10 @@ async fn clean_handoff_anchor_names_published_plan_path() {
                 assert!(tracker.deactivate_approved());
             }
             let published = actor.plan_mode.lock().plan_file_path().to_path_buf();
-            assert!(
-                published.exists(),
-                "published plan path must exist on disk"
-            );
+            assert!(published.exists(), "published plan path must exist on disk");
             actor.handoff_plan_context(None).await;
             let history = actor.chat_state_handle.get_conversation().await;
-            let anchor = history
-                .last()
-                .expect("anchor user item")
-                .text_content();
+            let anchor = history.last().expect("anchor user item").text_content();
             assert!(
                 anchor.contains(&published.display().to_string()),
                 "anchor must name the published path, got {anchor}"
@@ -148,7 +140,9 @@ async fn clean_handoff_resets_context_tokens_used() {
     local
         .run_until(async {
             let (actor, _gateway_rx, _persistence_rx) = actor_with_channels().await;
-            actor.signals_handle().update_context_usage(250_000, 256_000);
+            actor
+                .signals_handle()
+                .update_context_usage(250_000, 256_000);
             let before = actor.signals_handle().snapshot().await.unwrap();
             assert_eq!(before.context_tokens_used, 250_000);
 
@@ -447,42 +441,55 @@ async fn real_exit_plan_mode_no_client_executes_tool() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn incomplete_plan_does_not_open_review() {
+async fn title_only_plan_still_opens_review() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
             let (actor, mut gateway_rx, _persistence_rx) = actor_with_channels().await;
             *actor.agent.borrow_mut() = test_agent_with_plan_tools().await;
             let dir = tempfile::tempdir().unwrap();
-            std::fs::write(
-                dir.path().join("plan.md"),
-                "# Plan: Only a title exists here now\n",
-            )
-            .unwrap();
+            let body = "# Plan: Only a title exists here now\n";
+            let plan_path = dir.path().join("plan.md");
+            std::fs::write(&plan_path, body).unwrap();
             {
                 let mut tracker = actor.plan_mode.lock();
                 *tracker =
                     crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
                 tracker.activate_from_tool();
             }
+            let responder = tokio::task::spawn_local(async move {
+                while let Some(msg) = gateway_rx.recv().await {
+                    match msg {
+                        xai_acp_lib::AcpClientMessage::ExtMethod(args) => {
+                            let _ = args
+                                .response_tx
+                                .send(Ok(acp::ExtResponse::new(ext_response("approved"))));
+                            break;
+                        }
+                        xai_acp_lib::AcpClientMessage::SessionNotification(args) => {
+                            let _ = args.response_tx.send(Ok(()));
+                        }
+                        _ => {}
+                    }
+                }
+            });
             let call = crate::sampling::types::ToolCallResponse {
-                id: "call-incomplete-plan".into(),
+                id: "call-title-only-plan".into(),
                 kind: "function".into(),
                 function: crate::sampling::types::ToolCallFunction::new("exit_plan_mode", "{}"),
             };
             let mut deferred = Vec::new();
-            let outcome = actor
-                .prepare_tool_call(call, &mut deferred, None)
-                .await
-                .unwrap();
+            let outcome = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                actor.prepare_tool_call(call, &mut deferred, None),
+            )
+            .await
+            .expect("review of a non-empty plan must not hang")
+            .unwrap();
             assert!(matches!(outcome, Err(ToolLoop::Continue)));
-            assert!(actor.plan_mode.lock().is_active());
-            while let Ok(message) = gateway_rx.try_recv() {
-                assert!(!matches!(
-                    message,
-                    xai_acp_lib::AcpClientMessage::ExtMethod(_)
-                ));
-            }
+            assert!(!actor.plan_mode.lock().is_active());
+            assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), body);
+            responder.await.unwrap();
         })
         .await;
 }
@@ -662,6 +669,11 @@ async fn resume_approved_as_goal_seeds_goal_with_plan() {
                 }
             });
 
+            let todos_before = actor
+                .tool_bridge_handle()
+                .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
+                .await
+                .map(|state| serde_json::to_value(&state.0).unwrap());
             let (completion_tx, _completion_rx) = tokio::sync::mpsc::unbounded_channel();
             actor.clone().resume_plan_approval(completion_tx).await;
 
@@ -677,15 +689,20 @@ async fn resume_approved_as_goal_seeds_goal_with_plan() {
                 Some(plan_path.as_path()),
                 "goal must publish the user-approved plan"
             );
-            assert_eq!(
-                std::fs::read_to_string(&plan_path).unwrap(),
-                PLAN_FOR_GOAL,
-                "goal plan.md must carry the approved plan body"
-            );
+            assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), PLAN_FOR_GOAL);
             assert_eq!(
                 std::fs::read_to_string(actor.goal_tracker.lock().plan_baseline_path()).unwrap(),
                 PLAN_FOR_GOAL,
                 "baseline must snapshot the identical body"
+            );
+            let todos_after = actor
+                .tool_bridge_handle()
+                .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
+                .await
+                .map(|state| serde_json::to_value(&state.0).unwrap());
+            assert_eq!(
+                todos_before, todos_after,
+                "starting the goal from the approved plan leaves the todo list unchanged"
             );
             assert_eq!(
                 snap.objective, "Ship a complete reusable widget",

@@ -126,6 +126,14 @@ mod two_pass_prefire_helper_tests;
 #[cfg(test)]
 #[path = "compaction_verbatim_input_tests.rs"]
 mod verbatim_input_tests;
+
+/// The saved plan is reattached only on automatic compaction. Manual `/compact` keeps the summary.
+pub(crate) fn verbatim_plan_on_compact(
+    trigger: xai_grok_telemetry::events::CompactionTrigger,
+) -> bool {
+    matches!(trigger, xai_grok_telemetry::events::CompactionTrigger::Auto)
+}
+
 impl SessionActor {
     /// Two-pass is active for this session when the flag resolved on at build and the agent is not one that keeps its single short self-summary.
     pub(crate) fn two_pass_active(&self) -> bool {
@@ -1435,7 +1443,11 @@ impl SessionActor {
                     .await
                     .into_iter()
                     .collect();
-                let skills = self.slash_skills_for_resolve().await;
+                let skills = if self.should_inject_skill_catalog() {
+                    self.slash_skills_for_resolve().await
+                } else {
+                    Vec::new()
+                };
                 let edited_paths = self.chat_state_handle.get_agent_edited_paths().await;
                 let ctx = {
                     let bridge_tasks = self
@@ -1734,7 +1746,11 @@ impl SessionActor {
                     .map(|b| b as &dyn xai_grok_tools::types::memory_backend::MemoryBackend)
             };
         let suppress_state_reminder = false;
-        let workflow_listing = self.workflow_listing_for_prompt();
+        let workflow_listing = if self.should_inject_skill_catalog() {
+            self.workflow_listing_for_prompt()
+        } else {
+            None
+        };
         let system_reminder = if suppress_state_reminder {
             workflow_listing.as_deref().map(|listing| {
                 let tag = self.reminder_wrapper_tag();
@@ -1822,47 +1838,47 @@ impl SessionActor {
             (None, Some(context)) => Some(context),
             (reminder, None) => reminder,
         };
-        let system_reminder = {
-            let plan_path = {
+        let system_reminder = if verbatim_plan_on_compact(trigger) {
+            let attachment = {
                 let guard = self.plan_mode.lock();
-                guard
-                    .is_active()
-                    .then(|| guard.plan_file_path().to_path_buf())
+                if guard.is_awaiting_plan_approval() {
+                    None
+                } else if guard.is_active() {
+                    Some((
+                        guard.plan_file_path().to_path_buf(),
+                        crate::session::goal_next_step::PlanCompactionMode::Active,
+                    ))
+                } else {
+                    guard.checklist_episode().map(|path| {
+                        (
+                            path,
+                            crate::session::goal_next_step::PlanCompactionMode::Passive,
+                        )
+                    })
+                }
             };
-            if let Some(plan_path) = plan_path {
-                let plan_has_content =
-                    crate::session::plan_mode::plan_file_has_content(&plan_path).await;
-                let template = crate::session::plan_mode::plan_mode_reminder_full_template();
+            if let Some((path, mode)) = attachment
+                && let Some(excerpt) =
+                    crate::session::goal_next_step::plan_compaction_reminder_at(&path, mode)
+            {
                 let wrapper = self.reminder_wrapper_tag();
-                let rendered = self
-                    .render_plan_template(template, &plan_path, plan_has_content)
-                    .await;
-                match (system_reminder, rendered) {
-                    (Some(mut existing), Some(plan_section)) => {
+                match system_reminder {
+                    Some(mut existing) => {
                         if let Some(pos) = existing.rfind("</system-reminder>") {
-                            existing.insert_str(pos, &format!("\n\n{}\n", plan_section));
+                            existing.insert_str(pos, &format!("\n\n{excerpt}\n"));
                         } else {
                             existing.push_str("\n\n");
-                            existing.push_str(&plan_section);
+                            existing.push_str(&excerpt);
                         }
                         Some(existing)
                     }
-                    (None, Some(plan_section)) => Some(format!(
-                        "<{tag}>\n{body}\n</{tag}>",
-                        tag = wrapper,
-                        body = plan_section,
-                    )),
-                    (existing, None) => {
-                        tracing::warn!(
-                            session_id = %self.session_info.id.0,
-                            "compaction: plan mode active but template render failed"
-                        );
-                        existing
-                    }
+                    None => Some(format!("<{wrapper}>\n{excerpt}\n</{wrapper}>")),
                 }
             } else {
                 system_reminder
             }
+        } else {
+            system_reminder
         };
         let system_reminder = if let Some(goal_section) = self.compaction_goal_section().await {
             use crate::session::acp_session::splice_goal_section;
@@ -2042,12 +2058,6 @@ impl SessionActor {
         if self.memory.is_enabled() {
             tracing::info!(target: xai_grok_telemetry::memory_log::TARGET, "MEMORY_COMPACT: post-compaction reset, next turn re-checks injection (search only if no block persisted)");
         }
-        let _ = self
-            .notifications
-            .persistence_tx
-            .send(PersistenceMsg::PlanState(
-                crate::tools::todo::TodoState::default(),
-            ));
         self.agent
             .borrow()
             .tool_bridge()
@@ -2567,3 +2577,19 @@ impl SessionActor {
 #[cfg(test)]
 #[path = "compaction_inline_auto_compact_flow_tests.rs"]
 mod inline_auto_compact_flow_tests;
+
+#[cfg(test)]
+mod verbatim_plan_on_compact_tests {
+    use super::verbatim_plan_on_compact;
+    use xai_grok_telemetry::events::CompactionTrigger;
+
+    #[test]
+    fn auto_compact_keeps_the_saved_plan() {
+        assert!(verbatim_plan_on_compact(CompactionTrigger::Auto));
+    }
+
+    #[test]
+    fn manual_compact_does_not_reattach_the_plan() {
+        assert!(!verbatim_plan_on_compact(CompactionTrigger::Manual));
+    }
+}

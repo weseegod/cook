@@ -38,6 +38,11 @@ pub struct SkillsConfig {
     #[serde(default)]
     pub disabled: Vec<String>,
 
+    /// When true, push the discovered skill catalog into the startup reminder and compaction section.
+    /// Discovery for the slash palette stays on regardless; default is off so the model catalog stays empty.
+    #[serde(default)]
+    pub inject: bool,
+
     /// Skill dirs the launcher injects after syncing from the server (tagged `Server` scope).
     #[serde(default)]
     pub server_skill_dirs: Vec<String>,
@@ -698,6 +703,7 @@ mod tests {
         write_skill_md(&cwd.path().join(".grok").join("skills").join("dup"), "dup");
 
         let config = SkillsConfig {
+            inject: false,
             server_skill_dirs: vec![server.path().to_string_lossy().into_owned()],
             ..Default::default()
         };
@@ -735,6 +741,7 @@ mod tests {
         write_skill_md(&cwd.path().join(".grok").join("skills").join("dup"), "dup");
 
         let config = SkillsConfig {
+            inject: false,
             bundled_skill_dirs: vec![bundled.path().to_string_lossy().into_owned()],
             ..Default::default()
         };
@@ -767,6 +774,7 @@ mod tests {
 
         let cwd = tempfile::tempdir().unwrap();
         let config = SkillsConfig {
+            inject: false,
             server_skill_dirs: vec![server.path().to_string_lossy().into_owned()],
             bundled_skill_dirs: vec![bundled.path().to_string_lossy().into_owned()],
             ..Default::default()
@@ -1800,6 +1808,7 @@ mod tests {
         write_skill_md(&custom_dir.join("custom-skill"), "custom-skill");
 
         let config = SkillsConfig {
+            inject: false,
             paths: vec![custom_dir.to_str().unwrap().to_string()],
             ignore: vec![],
             disabled: vec![],
@@ -1834,6 +1843,7 @@ mod tests {
         let unwanted_path = custom_dir.join("unwanted");
 
         let config = SkillsConfig {
+            inject: false,
             paths: vec![custom_dir.to_str().unwrap().to_string()],
             ignore: vec![unwanted_path.to_str().unwrap().to_string()],
             disabled: vec![],
@@ -1868,6 +1878,7 @@ mod tests {
 
         // Add the same auto-discovered skills root as a config path.
         let config = SkillsConfig {
+            inject: false,
             paths: vec![
                 repo_root
                     .join(".grok")
@@ -1907,6 +1918,7 @@ mod tests {
         write_skill_md(&auto_dir, "overlap-skill");
 
         let config = SkillsConfig {
+            inject: false,
             paths: vec![
                 repo_root
                     .join(".grok")
@@ -1996,6 +2008,7 @@ mod tests {
 
         // Ignore the local skill path. Repo fallback should remain visible.
         let config = SkillsConfig {
+            inject: false,
             paths: vec![],
             ignore: vec![
                 cwd.join(".grok")
@@ -2052,6 +2065,7 @@ mod tests {
         );
 
         let config = SkillsConfig {
+            inject: false,
             paths: vec![],
             ignore: vec![],
             disabled: vec!["commit".to_string()],
@@ -2097,6 +2111,7 @@ mod tests {
         );
 
         let config = SkillsConfig {
+            inject: false,
             paths: vec![],
             ignore: vec![],
             disabled: vec![],

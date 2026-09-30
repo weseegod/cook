@@ -108,6 +108,7 @@ async fn seeded_active_plan_actor_with_edit_tools() -> (
 
 fn spawn_exit_capture(
     mut gateway_rx: tokio::sync::mpsc::UnboundedReceiver<xai_acp_lib::AcpClientMessage>,
+    outcome: &'static str,
 ) -> (
     tokio::task::JoinHandle<()>,
     std::sync::Arc<std::sync::Mutex<Option<String>>>,
@@ -124,7 +125,7 @@ fn spawn_exit_capture(
                         *captured_for_task.lock().unwrap() = req.plan_content;
                         let _ = args
                             .response_tx
-                            .send(Ok(acp::ExtResponse::new(ext_response("approved"))));
+                            .send(Ok(acp::ExtResponse::new(ext_response(outcome))));
                     }
                 }
                 xai_acp_lib::AcpClientMessage::SessionNotification(args) => {
@@ -140,7 +141,14 @@ fn spawn_exit_capture(
 async fn assert_mixed_batch_snapshot(write_first: bool) {
     let (actor, gateway_rx, _dir, plan_path) = seeded_active_plan_actor_with_edit_tools().await;
     let plan_path_str = plan_path.to_string_lossy().into_owned();
-    let (responder, captured) = spawn_exit_capture(gateway_rx);
+    let todos_before = actor
+        .agent
+        .borrow()
+        .tool_bridge()
+        .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
+        .await
+        .map(|state| serde_json::to_value(&state.0).unwrap());
+    let (responder, captured) = spawn_exit_capture(gateway_rx, "approved");
 
     let write = search_replace_plan("call_write_plan", &plan_path_str);
     let exit = exit_plan_mode_call("call_exit_plan");
@@ -160,6 +168,25 @@ async fn assert_mixed_batch_snapshot(write_first: bool) {
 
     let expected = SEED_PLAN.replace(OLD_MARKER, NEW_MARKER);
     assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), expected);
+    let baseline = actor
+        .plan_mode
+        .lock()
+        .frozen_plan()
+        .unwrap()
+        .baseline
+        .clone();
+    assert_eq!(std::fs::read_to_string(&baseline).unwrap(), expected);
+    let todos_after = actor
+        .agent
+        .borrow()
+        .tool_bridge()
+        .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
+        .await
+        .map(|state| serde_json::to_value(&state.0).unwrap());
+    assert_eq!(
+        todos_before, todos_after,
+        "approving a plan leaves the todo list unchanged"
+    );
 
     let snapshot = captured
         .lock()
@@ -181,6 +208,26 @@ async fn mixed_write_then_exit_snapshot_sees_new_plan() {
 async fn mixed_exit_then_write_snapshot_sees_new_plan() {
     let local = tokio::task::LocalSet::new();
     local.run_until(assert_mixed_batch_snapshot(false)).await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn rejected_draft_keeps_checklist_and_does_not_bind() {
+    let local = tokio::task::LocalSet::new();
+    local.run_until(async {
+        let (actor, gateway_rx, _dir, plan_path) = seeded_active_plan_actor_with_edit_tools().await;
+        let (responder, captured) = spawn_exit_capture(gateway_rx, "cancelled");
+        tokio::time::timeout(std::time::Duration::from_secs(10),
+            actor.execute_tool_calls(vec![exit_plan_mode_call("call_exit_rejected")], None))
+            .await.expect("exit must not hang").expect("exit must not error");
+        assert_eq!(captured.lock().unwrap().as_deref(), Some(SEED_PLAN));
+        assert_eq!(std::fs::read_to_string(&plan_path).unwrap(), SEED_PLAN);
+        assert!(actor.plan_mode.lock().is_active());
+        let state = actor.agent.borrow().tool_bridge()
+            .read_resource::<xai_grok_tools::types::resources::State<crate::tools::todo::TodoState>>()
+            .await;
+        assert!(state.is_none_or(|state| state.0.binding().is_none()));
+        responder.abort();
+    }).await;
 }
 
 fn bash_call(id: &str) -> ToolCallResponse {

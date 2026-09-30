@@ -38,6 +38,8 @@ pub(crate) struct NotificationBridgeConfig {
     /// Plan mode tracker shared with the session actor.
     /// Used to transition state on `PlanModeEntered` / `PlanModeExited` tool notifications.
     pub plan_mode: Arc<parking_lot::Mutex<crate::session::plan_mode::PlanModeTracker>>,
+    /// Cleared when EnterPlanMode activates so the session leaves the implement surface.
+    pub implementing_approved_plan: Arc<AtomicBool>,
     /// Session-level prompt mode shared with the session actor.
     /// Updated on `PlanModeEntered` / `PlanModeExited` and `session/set_mode` so the next turn starts in the correct mode.
     pub current_prompt_mode: Arc<parking_lot::Mutex<crate::session::plan_mode::PromptMode>>,
@@ -618,6 +620,9 @@ async fn handle_notification(
         ToolNotification::PlanModeEntered(entered) => {
             let activated = config.plan_mode.lock().activate_from_tool();
             if activated {
+                config
+                    .implementing_approved_plan
+                    .store(false, Ordering::Relaxed);
                 *config.current_prompt_mode.lock() = crate::session::plan_mode::PromptMode::Plan;
                 *config.turn_prompt_mode.lock() = crate::session::plan_mode::PromptMode::Plan;
                 let snapshot = config.plan_mode.lock().snapshot();

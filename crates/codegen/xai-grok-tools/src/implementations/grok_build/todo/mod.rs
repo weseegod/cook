@@ -152,11 +152,68 @@ pub struct TodoItem {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TodoState {
     todos: IndexMap<TodoId, TodoItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    binding: Option<TodoBinding>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TodoBindingKind {
+    Approved,
+    Passive,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TodoBinding {
+    pub kind: TodoBindingKind,
+    pub episode: String,
 }
 
 crate::register_resource!("grok_build", "Todo", TodoState);
 
 impl TodoState {
+    pub fn binding(&self) -> Option<&TodoBinding> {
+        self.binding.as_ref()
+    }
+
+    pub fn bind(&mut self, kind: TodoBindingKind, episode: String) {
+        self.binding = Some(TodoBinding { kind, episode });
+    }
+
+    pub fn first_pending(&self) -> Option<(&TodoId, &TodoItem)> {
+        self.todos
+            .iter()
+            .find(|(_, item)| matches!(item.status, TodoStatus::Pending | TodoStatus::InProgress))
+    }
+
+    /// An approved contract owns its item identities and wording. Only status may move.
+    pub fn apply_approved_statuses(&mut self, updates: &[TodoUpdate]) -> Result<(), String> {
+        for update in updates {
+            let Some(item) = self.todos.get(&update.id) else {
+                return Err(format!("Approved checklist has no item `{}`", update.id));
+            };
+            if update
+                .content
+                .as_deref()
+                .is_some_and(|content| content != item.content)
+            {
+                return Err(format!(
+                    "Approved checklist item `{}` cannot change text",
+                    update.id
+                ));
+            }
+            if update.status.is_none() {
+                return Err(format!(
+                    "Approved checklist item `{}` needs a status",
+                    update.id
+                ));
+            }
+        }
+        for update in updates {
+            self.todos.get_mut(&update.id).unwrap().status = update.status.unwrap();
+        }
+        Ok(())
+    }
     pub fn push(&mut self, id: TodoId, todo: TodoItem) {
         self.todos.insert(id, todo);
     }
@@ -351,7 +408,15 @@ impl xai_tool_runtime::Tool for TodoWriteTool {
                         .iter()
                         .all(|u| u.has_no_content() && todo_state.0.has_id(&u.id)));
 
-            if effective_merge {
+            if todo_state
+                .0
+                .binding()
+                .is_some_and(|binding| binding.kind == TodoBindingKind::Approved)
+            {
+                if let Err(message) = todo_state.0.apply_approved_statuses(&input.todos) {
+                    return Ok(TodoWriteOutput::InvalidArgument(message));
+                }
+            } else if effective_merge {
                 apply_merge(&mut todo_state.0, &input.todos)?;
             } else {
                 apply_replace(&mut todo_state.0, &input.todos)?;
@@ -376,6 +441,84 @@ mod tests {
     use crate::types::output::TodoWriteOutput;
     use crate::types::resources::Resources;
     use crate::types::tool_metadata::test_ctx;
+
+    #[test]
+    fn approved_binding_preserves_items_and_allows_status_only() {
+        let mut state = TodoState::default();
+        state.push(
+            "step-1".into(),
+            TodoItem {
+                content: "`a.rs` — build. Done when: it runs.".into(),
+                priority: TodoPriority::Medium,
+                status: TodoStatus::Pending,
+                meta: Some(serde_json::json!({"path":"a.rs", "done_when":"it runs."})),
+            },
+        );
+        state.bind(TodoBindingKind::Approved, "plans/a.md".into());
+        let original = serde_json::to_value(&state).unwrap();
+        let changed = TodoUpdate {
+            id: "step-1".into(),
+            content: None,
+            status: Some(TodoStatus::Completed),
+        };
+        state.apply_approved_statuses(&[changed]).unwrap();
+        assert_eq!(state.first_pending().map(|(id, _)| id.as_str()), None);
+        assert_eq!(
+            state.todo_items().next().unwrap().meta.as_ref().unwrap()["path"],
+            "a.rs"
+        );
+        assert!(
+            state
+                .apply_approved_statuses(&[TodoUpdate {
+                    id: "step-2".into(),
+                    content: None,
+                    status: Some(TodoStatus::Pending)
+                }])
+                .is_err()
+        );
+        assert!(
+            state
+                .apply_approved_statuses(&[TodoUpdate {
+                    id: "step-1".into(),
+                    content: Some("changed".into()),
+                    status: Some(TodoStatus::Pending)
+                }])
+                .is_err()
+        );
+        let restored: TodoState =
+            serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        assert_eq!(restored.binding().unwrap().kind, TodoBindingKind::Approved);
+        assert_eq!(
+            original["todos"]["step-1"]["content"],
+            serde_json::to_value(&restored).unwrap()["todos"]["step-1"]["content"]
+        );
+    }
+
+    #[test]
+    fn passive_binding_keeps_content_mutable() {
+        let mut state = TodoState::default();
+        state.bind(TodoBindingKind::Passive, "plans/working.md".into());
+        apply_replace(
+            &mut state,
+            &[TodoUpdate {
+                id: "step-1".into(),
+                content: Some("first".into()),
+                status: Some(TodoStatus::Pending),
+            }],
+        )
+        .unwrap();
+        apply_merge(
+            &mut state,
+            &[TodoUpdate {
+                id: "step-1".into(),
+                content: Some("revised".into()),
+                status: Some(TodoStatus::InProgress),
+            }],
+        )
+        .unwrap();
+        assert_eq!(state.todo_items().next().unwrap().content, "revised");
+        assert_eq!(state.binding().unwrap().kind, TodoBindingKind::Passive);
+    }
 
     #[test]
     fn todos_json_string_parses_as_the_array() {

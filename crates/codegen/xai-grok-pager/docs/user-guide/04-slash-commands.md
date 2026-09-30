@@ -58,7 +58,7 @@ Show session details — auth method, model, turn count, and context usage. Alia
 
 ### `/fork`
 
-Branch the current session into a new agent, keeping history up to this point.
+Branch the current session into a new agent, keeping history up to this point. Syntax: `/fork [--worktree|--no-worktree] [directive]`. An optional directive becomes the new agent's first prompt. `--worktree` or `--no-worktree` chooses whether to use a separate Git worktree; omit both to follow the normal worktree prompt. The flags cannot be combined or repeated.
 
 ### `/rewind` (alias: `/undo`)
 
@@ -79,7 +79,12 @@ Every copy is also written to a backup file — `~/.cook/last-copy.txt` by defau
 
 ### `/export`
 
-Export the conversation to a file or the clipboard.
+Export the conversation as Markdown. Syntax: `/export [filename]`. With no filename, copy it to the clipboard; with a filename, write a UTF-8 `.md` file. Relative paths are resolved from the session's working directory, `~` expands, and missing parent directories are created.
+
+```
+/export
+/export ~/notes/session.md
+```
 
 ### `/quit`
 
@@ -122,7 +127,7 @@ Switch models. Accepts a model ID or display name (case-insensitive), and for re
 
 ### `/effort <level>`
 
-Set reasoning effort on the **current** model without reselecting it. Levels are `low`, `medium`, `high`, and `xhigh`, and it only applies when the active model supports reasoning effort.
+Set reasoning effort on the **current** model without reselecting it. The valid levels are the options advertised for that model and can vary by provider. If the endpoint advertises no options, the picker falls back to `xhigh`, `high`, `medium`, and `low`; `none` and `minimal` are also accepted when supported by the model. This applies only when the active model supports reasoning effort.
 
 ```
 /effort high
@@ -224,7 +229,7 @@ Run memory consolidation — merge session logs into organized topics. The statu
 
 ### `/remember`
 
-Save a note to memory immediately, without waiting for an automatic summary.
+Save a note to memory immediately, without waiting for an automatic summary. Syntax: `/remember [text]`. With no text, Cook prompts for the note.
 
 ```
 /remember the staging deploy uses the eu-west cluster
@@ -244,9 +249,9 @@ The shell also advertises individual `/hooks-list`, `/hooks-trust`, `/hooks-add`
 
 ### `/plugins`
 
-Open the extensions modal on the Plugins tab to view installed plugins, install new ones from the marketplace, and manage trust.
+Open the extensions modal on the Plugins tab to view installed plugins, install new ones from the marketplace, and manage trust. Alias: `/plugin`.
 
-The shell additionally supports subcommands (`/plugins list`, `/plugins install <source>`, `/plugins uninstall <name>`, `/plugins update`, `/plugins reload`). In the pager, the modal does the same work visually.
+The shell also accepts `/plugins list`, `reload`, `add <path>`, `remove <path>`, `install <source> [--trust]`, `uninstall <name> [--confirm]`, and `update [name]`. The `--trust` flag is required to install and activate a source; without it, Cook explains the activation effects and asks you to repeat the command. Uninstalling a plugin that shares a repository with others requires `--confirm`. The legacy `/plugins trust` spelling only returns a migration message; manage trust in the modal. `/reload-plugins` is a shell command for `/plugins reload`. These shell management commands are gated on plugin support; in the pager, the modal provides the visual controls.
 
 ### `/marketplace`
 
@@ -323,7 +328,7 @@ Neither command ever force-pushes, rewrites published history, or uses `--no-ver
 
 ### `/goal`
 
-Set, manage, or check an autonomous goal. Cook works across rounds and only marks the goal complete after an independent evidence review confirms the claim; if that review can't reproduce the result or has no usable evidence, the goal stays active or pauses with concrete gaps.
+Set, manage, or check an autonomous goal. Cook works across rounds and only marks the goal complete after an independent evidence review confirms the claim; if that review cannot reproduce the result or has no usable evidence, the goal stays active or pauses with concrete gaps.
 
 ```
 /goal Migrate the auth module to the new API
@@ -336,7 +341,24 @@ Set, manage, or check an autonomous goal. Cook works across rounds and only mark
 /goal clear
 ```
 
-Arguments are `<objective> [--budget <tokens>] [--plan <path> | --from-plan]`, or one of `status`, `pause`, `resume`, `clear`. The `--budget` here is a **token** budget for the goal run, separate from the agent-count budgets that workflows use. `--plan <path>` seeds the goal with an existing plan file (resolved relative to the session's working directory) and `--from-plan` uses the current session's plan-mode `plan.md` — both skip the internal planner and hand the goal to the verifier with your plan as the immutable baseline it diffs later edits against. Only trailing standalone flags are consumed; anything else stays part of the objective. `/goal` appears when goal mode is enabled for the session. Which driver runs it depends on background workflows: with them on, the host evaluates each model round and runs adversarial verification on completion candidates; with them off, the legacy model-facing `update_goal` path reports progress and triggers verification.
+Set a goal with `<objective> [--budget <tokens>] [--plan <path> | --from-plan]`, or use `status`, `pause`, `resume`, or `clear` to manage the current goal. `--budget` is an optional positive, whole-number **token** budget for the goal run, separate from workflow agent-call budgets. The flags must be trailing standalone arguments; a `--plan` path is one whitespace-free token, and `--plan` and `--from-plan` cannot be combined. Other text remains part of the objective.
+
+`--plan <path>` reads a plan relative to the session's working directory. `--from-plan` reads the current plan-mode episode's file; for sessions without an episode file it falls back to the legacy `<session>/plan.md`. Episode files live in `plans/` and receive a title-based filename when the episode ends. Either source skips the internal planner, is snapshotted as `goal/plan.baseline.md`, and gives the verifier an immutable baseline for reviewing later edits. Goal mode is on by default; `[goal] enabled = false`, `GROK_GOAL=0`, or a remote policy can disable `/goal` and `/goal_batch`.
+
+With background workflows enabled (the default), the host evaluates each goal round and runs adversarial verification on completion candidates. With workflows disabled, the session must expose the legacy model-facing `update_goal` tool, which reports progress and triggers verification. See [Configuration](05-configuration.md#goal-mode-and-background-workflows).
+
+### `/goal_batch`
+
+`/goal_batch <objective> [--budget <tokens>] [--plan <path> | --from-plan] [--base-url <URL>]`
+
+Start a goal whose main agent sends each model round through the provider's asynchronous Batch API. Goal helper roles and subagents may still use real-time requests. It uses the same goal lifecycle commands and the same token budget and plan-source options as `/goal`:
+
+```
+/goal_batch Process the backlog --budget 500000
+/goal_batch Migrate auth --from-plan --base-url https://batch-api.example.com/v1
+```
+
+The selected model must opt in with `supports_batch_api = true`, use the Chat Completions API, and have a configured provider API key. OpenAI models use `https://api.openai.com/v1` by default; other providers require `--base-url`. The URL must be HTTPS, end in `/v1`, and use the same provider host as the model. Xiaomi models require the account-region Batch API URL and a pay-as-you-go `sk-` key. This command is available only when goal mode is enabled. See [Configuration](05-configuration.md#goal-mode-and-background-workflows) for the model setting and driver behavior.
 
 ### `/deep-research <query>`
 
@@ -382,7 +404,7 @@ Open the extensions modal on the **Workflows** tab — a browse-only catalog of 
 
 ### `/theme`
 
-Switch the color theme. Alias: `/t`.
+Syntax: `/theme [name]`. Without a name, cycle through available themes. Pass a theme name to select it, or `auto` to follow the system appearance. Selecting a specific theme turns auto mode off. Fullscreen mode only. Alias: `/t`.
 
 ### `/feedback [message]`
 
@@ -410,7 +432,7 @@ Open the MCP servers management modal.
 
 ### `/doctor`
 
-Check the current session for terminal, clipboard, color, input, notification, and sandbox issues. Doctor shows what it found and how to resolve each issue. Run `/doctor fix` to list available automatic fixes; other findings include manual steps. `/terminal-setup`, `/terminal-check`, and `/terminal-info` remain aliases.
+Check the current session for terminal, clipboard, color, input, notification, and sandbox issues. Syntax: `/doctor [fix [FIX]]`. The report includes suggested resolutions. `/doctor fix` lists automatic fixes available in this environment; `/doctor fix <name>` runs a listed fix. `/terminal-setup`, `/terminal-check`, and `/terminal-info` are aliases.
 
 ### `/release-notes`
 
@@ -569,6 +591,7 @@ These names run the same command as the name in the right column:
 | `/full` | `/fullscreen` |
 | `/guides`, `/howto` | `/docs` |
 | `/info`, `/status` | `/session-info` |
+| `/log` | `/transcript` |
 | `/m` | `/model` |
 | `/mem` | `/memory` |
 | `/ml` | `/multiline` |
@@ -576,6 +599,7 @@ These names run the same command as the name in the right column:
 | `/plugin` | `/plugins` |
 | `/plan-view`, `/show-plan` | `/view-plan` |
 | `/t` | `/theme` |
+| `/summarize` | `/recap` |
 | `/terminal-check`, `/terminal-info`, `/terminal-setup` | `/doctor` |
 | `/title` | `/rename` |
 | `/undo` | `/rewind` |
@@ -592,7 +616,7 @@ Some commands appear only when their feature is available:
 | `/dashboard` | The dashboard is enabled and the session is not in minimal mode. |
 | `/dream`, `/flush` | Memory is enabled for the session. |
 | `/feedback` | Feedback is available for the current account. |
-| `/goal` | Goal mode is enabled for the session. |
+| `/goal`, `/goal_batch` | Goal mode is enabled for the session. |
 | `/loop` | The connected agent provides the scheduler tool. |
 | `/memory` | A memory store is configured. |
 | `/recap` | Session recap is enabled. |

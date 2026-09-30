@@ -333,7 +333,7 @@ impl MvpAgent {
             subagent_toggle,
             subagent_roles,
             subagent_personas,
-            disable_web_search: self.cfg.borrow().disable_web_search,
+            disable_web_search: !self.cfg.borrow().resolve_web_search().value,
             todo_gate: self.cfg.borrow().todo_gate,
             remote_settings: self.cfg.borrow().remote_settings.clone(),
             laziness_debug_log: self.cfg.borrow().laziness_debug_log.clone(),

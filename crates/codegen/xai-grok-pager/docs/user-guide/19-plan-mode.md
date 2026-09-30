@@ -86,7 +86,8 @@ Scroll the plan with the arrow keys or `j`/`k`. The action bar shows these short
 | Shortcut | Action                                                                                               |
 | -------- | ---------------------------------------------------------------------------------------------------- |
 | `a`      | Approve the plan and start building. With pending comments, this reads `approve w/ comments` and sends them alongside the approval. |
-| `g`      | Approve the plan AND run it as an autonomous goal: plan mode exits and the goal loop takes over with your approved plan as the contract (its baseline snapshot), instead of a normal interactive implement turn. Requires goal mode; if goal mode is disabled the plan falls back to a normal approve. |
+| `r`      | Approve and run clean: freeze the plan and start implementation after clearing the earlier planning conversation. |
+| `g`      | Approve the plan and run it as an autonomous goal, using the approved plan as its baseline contract instead of starting a normal implement turn. Requires goal mode; if goal mode is disabled, the request is rejected and the plan stays in review. |
 | `s`      | Request changes. Focus moves to the prompt so you can type revision notes; press `Enter` to send them. |
 | `c`      | Comment on the selected line or line range.                                                          |
 | `y`      | Copy the full plan to the clipboard.                                                                 |
@@ -95,7 +96,9 @@ Scroll the plan with the arrow keys or `j`/`k`. The action bar shows these short
 
 Press `Tab` to move focus between the plan preview and the prompt.
 
-While the plan approval view is open you can switch the model before approving: on the prompt, run `/model <id>` (or any slash command — the overlay stays open, then `a` / `g` still work), or press `Ctrl+P` (command palette → model) / `Ctrl+M` from the preview. The new model applies to the implement turn after approval. In the approval preview, `/` starts a slash command on the prompt instead of in-plan search; in-plan search/filter remains on `f`.
+The `r` action is part of this plan-review screen, not a slash command. It freezes the approved plan, removes the earlier planning conversation from model history, and begins implementation with the system prompt, project instructions, and a plan-file anchor. Review comments are included in the handoff, and the transcript shows a context-cleared marker.
+
+While the plan approval view is open you can switch the model before approving: on the prompt, run `/model <id>` (or any slash command — the overlay stays open, then `a`, `r`, or `g` still work), or press `Ctrl+P` (command palette → model) / `Ctrl+M` from the preview. The new model applies to the implement turn after approval. In the approval preview, `/` starts a slash command on the prompt instead of in-plan search; in-plan search/filter remains on `f`.
 
 ### Providing Feedback
 

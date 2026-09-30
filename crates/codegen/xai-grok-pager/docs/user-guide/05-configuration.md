@@ -275,6 +275,7 @@ base_url = "https://api.example.com/v1"  # OpenAI-compatible endpoint
 name = "Display Name"                 # shown in model picker
 description = "Model description"      # optional
 api_key = "sk-..."                    # API key for this provider
+supports_batch_api = true              # opt this model into /goal_batch (Chat Completions only)
 env_key = "XAI_API_KEY"               # env var(s) holding the API key; string or array (first set, non-empty wins)
 temperature = 0.7                     # sampling temperature (0.0-2.0)
 top_p = 0.95                          # nucleus sampling parameter
@@ -373,9 +374,11 @@ To pin the model a subagent uses, set its entry under `[subagents.models]`.
 
 ### Goal mode and background workflows
 
-`/goal` has two drivers, chosen by the background-workflows setting. With workflows enabled, the host-owned workflow engine evaluates rounds and drives completion verification; with them disabled, `/goal` falls back to the legacy model-facing `update_goal` tool. Whether `/goal` is available at all is a separate switch (the goal feature setting).
+`/goal` and `/goal_batch` use the goal feature, which is on by default. Set `[goal] enabled = false` or `GROK_GOAL=0` to disable it; a remote policy can also turn it off. Background workflows are a separate setting, on by default: with workflows enabled, the host evaluates goal rounds and drives completion verification; with them disabled, `/goal` uses the legacy model-facing `update_goal` tool and that tool must be available in the session. Set `[workflows] enabled = false` or `GROK_WORKFLOWS=0` to select the legacy driver; a remote policy can also disable background workflows.
 
-A goal can be seeded with an existing plan instead of the internal planner: `/goal <objective> --plan <path>` reads a plan file, and `/goal <objective> --from-plan` uses the session's plan-mode `plan.md`. The plan becomes the goal's contract — it is snapshotted to `goal/plan.baseline.md` and the verifier diffs later edits against that baseline — and the planner is skipped. The same happens when you press `g` (approve and run as goal) in the plan approval view: the approved plan body is handed to a goal run. Goal mode must be enabled for either path.
+A goal can be seeded with a plan instead of the internal planner: `/goal <objective> --plan <path>` reads a file relative to the session's working directory, while `/goal <objective> --from-plan` reads the current plan-mode episode file. Episode files are allocated under the session's `plans/` directory and renamed from the plan heading when the episode ends. If the session has no episode file, `--from-plan` falls back to the legacy `<session>/plan.md`. Either source skips the internal planner and is snapshotted as `goal/plan.baseline.md`; the verifier compares later edits with that baseline. Pressing `g` in plan review passes the approved plan body directly into a goal run. Goal mode must be enabled for each path.
+
+`/goal_batch <objective>` runs each main-agent model round through an asynchronous provider Batch API job. It accepts the same positive token budget and plan options as `/goal`, plus a trailing `--base-url <URL>` for providers without the default OpenAI Batch API URL. The selected model must set `supports_batch_api = true`, use the Chat Completions API, and have a provider API key. The Batch API URL must be HTTPS, end in `/v1`, and use the model provider's host; Xiaomi models require the account-region Batch API URL and a pay-as-you-go `sk-` key. The batch transport applies only to the main goal agent; helper roles and subagents may use real-time requests. See [Slash Commands](04-slash-commands.md#goalbatch) for full syntax.
 
 BYOK and single-provider catalogs automatically enable `[goal] use_current_model_only` and lower the default skeptic count to 1. Override in config when you want multi-model verification on BYOK:
 
@@ -814,6 +817,7 @@ The key ones. See the README for the complete list.
 | Variable | Description |
 |----------|-------------|
 | `GROK_MEMORY` | Enable (`1`) or disable (`0`) cross-session memory |
+| `GROK_GOAL` | Enable (`1`) or disable (`0`) `/goal` and `/goal_batch` (default on; remote policy can disable) |
 | `GROK_SUBAGENTS` | Enable (`1`) or disable (`0`) subagents |
 | `GROK_WORKFLOWS` | Enable (`1`) or disable (`0`) background workflows and select the `/goal` driver (default on: host-owned workflow driver; off: legacy `update_goal`) |
 | `GROK_WEB_FETCH` | Enable (`1`) or disable (`0`) the web_fetch tool |

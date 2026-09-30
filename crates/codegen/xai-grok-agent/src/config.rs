@@ -143,7 +143,19 @@ fn kill_task_tool_config() -> ToolConfig {
 /// Extends `default_grok_build_toolset()` with tools injected by `AgentBuilder` or available only in specific modes.
 /// In proxy mode the workspace server executes all tools; the shell has zero local dispatch.
 pub fn workspace_grok_build_toolset() -> ToolServerConfig {
-    let mut tools = default_grok_build_toolset().tools;
+    // Hub execution registry: keep the full surface so an opted-in session can still run
+    // every tool even when the default model-facing list is the coding keep-set only.
+    let mut tools = grok_build_coding_keep_set();
+    tools.push(task_tool_config());
+    tools.push((&grok_build::SchedulerCreateTool).into());
+    tools.push((&grok_build::SchedulerDeleteTool).into());
+    tools.push((&grok_build::SchedulerListTool).into());
+    tools.push((&grok_build::MonitorTool).into());
+    tools.push((&search_tool::SearchTool).into());
+    tools.push((&use_tool::UseTool).into());
+    tools.push((&grok_build::UpdateGoalTool).into());
+    tools.push((&grok_build::WorkflowTool).into());
+    tools.push((&grok_build::SendFeedbackTool).into());
     tools.push((&opencode::OpenCodeWriteTool).into());
     tools.push((&grok_build::EnterPlanModeTool).into());
     tools.push((&grok_build::ExitPlanModeTool).into());
@@ -153,6 +165,8 @@ pub fn workspace_grok_build_toolset() -> ToolServerConfig {
     tools.push((&grok_build::ImageToVideoTool).into());
     tools.push((&grok_build::ReferenceToVideoTool).into());
     tools.push((&grok_build::WebFetchTool).into());
+    tools.push((&grok_build::WorkingPlanSkillTool).into());
+    tools.push((&grok_build::SaveWorkingPlanTool).into());
     tools.push((&memory::search_tool::MemorySearchImpl).into());
     tools.push((&memory::get_tool::MemoryGetImpl).into());
     tools.push((&grok_build::LspTool).into());
@@ -241,24 +255,23 @@ pub fn toolset_for_preset(preset: &str) -> Option<ToolServerConfig> {
         .or_else(|| registered_toolset_preset(&normalized))
 }
 fn default_grok_build_toolset() -> ToolServerConfig {
-    grok_build_core_toolset_with(true, true)
+    grok_build_core_toolset_with(false, false)
 }
 fn default_agent_toolset() -> ToolServerConfig {
-    grok_build_core_toolset(true)
+    grok_build_core_toolset(false)
 }
-/// Same as the parent grok-build list, without `workflow`.
-/// The usual `general-purpose` spawn path must not add that tool and then strip it.
+/// Same as the parent grok-build coding keep-set.
+/// Opt-in tools (task, workflow, goal, discovery, …) are added by the builder when flags are on.
 fn general_purpose_toolset() -> ToolServerConfig {
     grok_build_core_toolset(false)
 }
-fn grok_build_core_toolset(include_workflow: bool) -> ToolServerConfig {
-    grok_build_core_toolset_with(include_workflow, false)
+fn grok_build_core_toolset(_include_workflow: bool) -> ToolServerConfig {
+    grok_build_core_toolset_with(false, false)
 }
-fn grok_build_core_toolset_with(
-    include_workflow: bool,
-    include_send_feedback: bool,
-) -> ToolServerConfig {
-    let mut tools = vec![
+/// Default model-facing coding keep-set for Grok Build profiles.
+/// Specialized tools are omitted here and re-added by the builder when their flags are on.
+fn grok_build_coding_keep_set() -> Vec<xai_grok_tools::registry::types::ToolConfig> {
+    vec![
         bash_tool_config(),
         (&grok_build::ReadFileTool).into(),
         (&grok_build::SearchReplaceTool).into(),
@@ -269,23 +282,100 @@ fn grok_build_core_toolset_with(
         (&grok_build::TodoWriteTool).into(),
         task_output_tool_config(),
         wait_tasks_tool_config(),
-        task_tool_config(),
-        (&grok_build::SchedulerCreateTool).into(),
-        (&grok_build::SchedulerDeleteTool).into(),
-        (&grok_build::SchedulerListTool).into(),
-        (&grok_build::MonitorTool).into(),
-        (&search_tool::SearchTool).into(),
-        (&use_tool::UseTool).into(),
-        (&grok_build::UpdateGoalTool).into(),
-    ];
-    if include_workflow {
-        tools.push((&grok_build::WorkflowTool).into());
+    ]
+}
+
+/// Per-turn advertised tool surface for primary Grok Build agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ToolSurface {
+    /// Wide research surface while plan mode is active.
+    Plan,
+    /// Default coding surface before an approved plan handoff.
+    TaskOpen,
+    /// Narrow implement surface after an approved plan is handed off.
+    Implement,
+}
+
+/// Client-facing tool names for the implement surface: coding keep-set plus write.
+pub fn implement_tool_ids() -> &'static [&'static str] {
+    &[
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "write",
+        "list_dir",
+        "glob",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+    ]
+}
+
+/// Task-open surface: implement set plus plan enter/exit, ask-user, and web tools.
+pub fn task_open_tool_ids() -> &'static [&'static str] {
+    &[
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "write",
+        "list_dir",
+        "glob",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "ask_user_question",
+        "web_search",
+        "web_fetch",
+        "skill",
+        "save_working_plan",
+    ]
+}
+
+/// Plan surface: task-open set plus MCP discovery and the task tool.
+pub fn plan_tool_ids() -> &'static [&'static str] {
+    &[
+        "run_terminal_command",
+        "read_file",
+        "search_replace",
+        "write",
+        "list_dir",
+        "glob",
+        "grep",
+        "kill_command_or_subagent",
+        "todo_write",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+        "enter_plan_mode",
+        "exit_plan_mode",
+        "ask_user_question",
+        "web_search",
+        "web_fetch",
+        "search_tool",
+        "use_tool",
+        "spawn_subagent",
+    ]
+}
+
+/// Allowlist of client-facing tool names for `surface`.
+pub fn tool_ids_for_surface(surface: ToolSurface) -> &'static [&'static str] {
+    match surface {
+        ToolSurface::Implement => implement_tool_ids(),
+        ToolSurface::TaskOpen => task_open_tool_ids(),
+        ToolSurface::Plan => plan_tool_ids(),
     }
-    if include_send_feedback {
-        tools.push((&grok_build::SendFeedbackTool).into());
-    }
+}
+fn grok_build_core_toolset_with(
+    _include_workflow: bool,
+    _include_send_feedback: bool,
+) -> ToolServerConfig {
     ToolServerConfig {
-        tools,
+        tools: grok_build_coding_keep_set(),
         behavior_preset: None,
     }
 }
@@ -296,16 +386,12 @@ fn grok_build_concise_toolset() -> ToolServerConfig {
             (&grok_build_concise::ReadFileConciseTool).into(),
             (&grok_build_concise::SearchReplaceConciseTool).into(),
             (&grok_build::ListDirTool).into(),
+            (&opencode::OpenCodeGlobTool).into(),
             (&grok_build::GrepTool).into(),
             kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
             task_output_tool_config(),
-            (&grok_build::SchedulerCreateTool).into(),
-            (&grok_build::SchedulerDeleteTool).into(),
-            (&grok_build::SchedulerListTool).into(),
-            (&grok_build::MonitorTool).into(),
-            (&grok_build::UpdateGoalTool).into(),
-            (&grok_build::WorkflowTool).into(),
+            wait_tasks_tool_config(),
         ],
         behavior_preset: None,
     }
@@ -319,20 +405,11 @@ pub fn grok_build_hashline_toolset(
     tools.extend(hashline_tools);
     tools.extend([
         (&grok_build::ListDirTool).into(),
+        (&opencode::OpenCodeGlobTool).into(),
         kill_task_tool_config(),
         (&grok_build::TodoWriteTool).into(),
         task_output_tool_config(),
         wait_tasks_tool_config(),
-        task_tool_config(),
-        (&grok_build::WebSearchTool).into(),
-        (&grok_build::SchedulerCreateTool).into(),
-        (&grok_build::SchedulerDeleteTool).into(),
-        (&grok_build::SchedulerListTool).into(),
-        (&grok_build::MonitorTool).into(),
-        (&search_tool::SearchTool).into(),
-        (&use_tool::UseTool).into(),
-        (&grok_build::UpdateGoalTool).into(),
-        (&grok_build::WorkflowTool).into(),
     ]);
     ToolServerConfig {
         tools,
@@ -385,35 +462,17 @@ fn plan_toolset() -> ToolServerConfig {
         behavior_preset: None,
     }
 }
-/// Extends the default `grok-build` toolset with plan mode tools.
-/// This allows the agent to enter a structured planning phase before writing code, with user-approved plans.
+/// Extends the coding keep-set with plan mode tools.
+/// Specialized tools (task, workflow, goal, discovery, …) are added by the builder when opted in.
 fn grok_build_plan_toolset() -> ToolServerConfig {
+    let mut tools = grok_build_coding_keep_set();
+    tools.push((&grok_build::EnterPlanModeTool).into());
+    tools.push((&grok_build::ExitPlanModeTool).into());
+    tools.push((&grok_build::AskUserQuestionTool).into());
+    tools.push((&grok_build::WorkingPlanSkillTool).into());
+    tools.push((&grok_build::SaveWorkingPlanTool).into());
     ToolServerConfig {
-        tools: vec![
-            // Standard grok-build tools
-            bash_tool_config(),
-            (&grok_build::ReadFileTool).into(),
-            (&grok_build::SearchReplaceTool).into(),
-            (&grok_build::ListDirTool).into(),
-            (&grok_build::GrepTool).into(),
-            kill_task_tool_config(),
-            (&grok_build::TodoWriteTool).into(),
-            task_output_tool_config(),
-            wait_tasks_tool_config(),
-            task_tool_config(),
-            (&grok_build::SchedulerCreateTool).into(),
-            (&grok_build::SchedulerDeleteTool).into(),
-            (&grok_build::SchedulerListTool).into(),
-            (&grok_build::MonitorTool).into(),
-            (&search_tool::SearchTool).into(),
-            (&use_tool::UseTool).into(),
-            (&grok_build::UpdateGoalTool).into(),
-            (&grok_build::WorkflowTool).into(),
-            // Plan mode tools
-            (&grok_build::EnterPlanModeTool).into(),
-            (&grok_build::ExitPlanModeTool).into(),
-            (&grok_build::AskUserQuestionTool).into(),
-        ],
+        tools,
         behavior_preset: None,
     }
 }
@@ -464,62 +523,17 @@ fn orchestrator_toolset() -> ToolServerConfig {
         behavior_preset: None,
     }
 }
-/// Same as `grok_build_plan_toolset` but excludes `TaskTool`, `TaskOutputTool`, and `KillTaskTool`.
-/// Use this when the shell does not have subagent infrastructure wired up.
+/// Same as `grok_build_plan_toolset`. Task stays off the static list; the builder adds it when subagents are on.
+/// Kill/output/wait stay because BashTool's background mode requires them.
 fn grok_build_plan_no_subagents_toolset() -> ToolServerConfig {
-    ToolServerConfig {
-        tools: vec![
-            // Standard grok-build tools, minus TaskTool only
-            // KillTaskTool and TaskOutputTool are kept because BashTool's background mode requires them
-            bash_tool_config(),
-            (&grok_build::ReadFileTool).into(),
-            (&grok_build::SearchReplaceTool).into(),
-            (&grok_build::ListDirTool).into(),
-            (&grok_build::GrepTool).into(),
-            kill_task_tool_config(),
-            (&grok_build::TodoWriteTool).into(),
-            task_output_tool_config(),
-            wait_tasks_tool_config(),
-            (&grok_build::SchedulerCreateTool).into(),
-            (&grok_build::SchedulerDeleteTool).into(),
-            (&grok_build::SchedulerListTool).into(),
-            (&grok_build::MonitorTool).into(),
-            (&search_tool::SearchTool).into(),
-            (&use_tool::UseTool).into(),
-            (&grok_build::UpdateGoalTool).into(),
-            (&grok_build::WorkflowTool).into(),
-            // Plan mode tools
-            (&grok_build::EnterPlanModeTool).into(),
-            (&grok_build::ExitPlanModeTool).into(),
-            (&grok_build::AskUserQuestionTool).into(),
-        ],
-        behavior_preset: None,
-    }
+    grok_build_plan_toolset()
 }
-/// Same as `default_grok_build_toolset` with the `AskUserQuestionTool` added, allowing the agent to ask structured questions without full plan mode.
+/// Same as the coding keep-set with `AskUserQuestionTool`, without full plan mode.
 fn grok_build_ask_user_toolset() -> ToolServerConfig {
+    let mut tools = grok_build_coding_keep_set();
+    tools.push((&grok_build::AskUserQuestionTool).into());
     ToolServerConfig {
-        tools: vec![
-            bash_tool_config(),
-            (&grok_build::ReadFileTool).into(),
-            (&grok_build::SearchReplaceTool).into(),
-            (&grok_build::ListDirTool).into(),
-            (&grok_build::GrepTool).into(),
-            kill_task_tool_config(),
-            (&grok_build::TodoWriteTool).into(),
-            task_output_tool_config(),
-            wait_tasks_tool_config(),
-            task_tool_config(),
-            (&grok_build::SchedulerCreateTool).into(),
-            (&grok_build::SchedulerDeleteTool).into(),
-            (&grok_build::SchedulerListTool).into(),
-            (&grok_build::MonitorTool).into(),
-            (&search_tool::SearchTool).into(),
-            (&use_tool::UseTool).into(),
-            (&grok_build::UpdateGoalTool).into(),
-            (&grok_build::WorkflowTool).into(),
-            (&grok_build::AskUserQuestionTool).into(),
-        ],
+        tools,
         behavior_preset: None,
     }
 }
@@ -1213,7 +1227,7 @@ fn default_true() -> bool {
     true
 }
 /// Strip a tool id's `Namespace:` prefix, yielding its short name.
-pub(crate) fn short_tool_name(id: &str) -> &str {
+pub fn short_tool_name(id: &str) -> &str {
     id.rsplit(':').next().unwrap_or(id)
 }
 /// Whether an allow/deny `entry` refers to tool `id` (by full id or short name).
@@ -1360,10 +1374,7 @@ impl AgentDefinition {
             && self.scope == AgentScope::BuiltIn
     }
     pub fn include_browser_verification(&self) -> bool {
-        matches!(
-            self.builtin_name,
-            Some(BuiltinAgentName::GrokBuildPlan | BuiltinAgentName::GrokBuildPlanNoSubagents)
-        )
+        false
     }
     /// True iff this agent's wire format is non-interchangeable with the stock harness.
     /// A client-supplied `_meta.agentProfile` must not override it.
@@ -1685,6 +1696,45 @@ mod tests {
         }
     }
     #[test]
+    fn tool_surface_id_lists_nest_correctly() {
+        let implement = implement_tool_ids();
+        let task_open = task_open_tool_ids();
+        let plan = plan_tool_ids();
+        assert!(implement.contains(&"write"));
+        assert!(!implement.contains(&"enter_plan_mode"));
+        assert!(!implement.contains(&"web_search"));
+        assert!(!implement.contains(&"spawn_subagent"));
+        for id in implement {
+            assert!(
+                task_open.contains(id),
+                "task_open missing implement id {id}"
+            );
+            assert!(plan.contains(id), "plan missing implement id {id}");
+        }
+        for id in [
+            "enter_plan_mode",
+            "exit_plan_mode",
+            "ask_user_question",
+            "web_search",
+            "web_fetch",
+        ] {
+            assert!(task_open.contains(&id), "task_open missing {id}");
+            assert!(plan.contains(&id), "plan missing {id}");
+        }
+        for id in ["search_tool", "use_tool", "spawn_subagent"] {
+            assert!(!task_open.contains(&id), "task_open must hide {id}");
+            assert!(plan.contains(&id), "plan missing {id}");
+        }
+        for id in ["skill", "save_working_plan"] {
+            assert!(task_open.contains(&id), "task_open missing {id}");
+            assert!(!plan.contains(&id), "plan must hide {id}");
+            assert!(!implement.contains(&id), "implement must hide {id}");
+        }
+        assert_eq!(tool_ids_for_surface(ToolSurface::Implement), implement);
+        assert_eq!(tool_ids_for_surface(ToolSurface::TaskOpen), task_open);
+        assert_eq!(tool_ids_for_surface(ToolSurface::Plan), plan);
+    }
+    #[test]
     fn presets_select_distinct_toolsets_by_size() {
         let gb = toolset_for_preset("grok-build").unwrap();
         let plan = toolset_for_preset("plan").unwrap();
@@ -1725,24 +1775,10 @@ mod tests {
             );
         }
         for builtin in BuiltinAgentName::iter() {
-            let expected = match builtin {
-                BuiltinAgentName::GrokBuild => true,
-                BuiltinAgentName::GrokBuildConcise
-                | BuiltinAgentName::GrokBuildPlan
-                | BuiltinAgentName::GrokBuildPlanNoSubagents
-                | BuiltinAgentName::GrokBuildAskUser
-                | BuiltinAgentName::Codex
-                | BuiltinAgentName::Opencode
-                | BuiltinAgentName::GeneralPurpose
-                | BuiltinAgentName::Explore
-                | BuiltinAgentName::Plan
-                | BuiltinAgentName::BrowserUse
-                | BuiltinAgentName::GrokBuildOrchestrator => false,
-            };
-            assert_eq!(
-                contains_feedback(&builtin.definition().tool_config),
-                expected,
-                "builtin `{builtin}` has the wrong send_feedback exposure"
+            // Feedback is opt-in via the builder; only the workspace hub preset keeps it on the static list.
+            assert!(
+                !contains_feedback(&builtin.definition().tool_config),
+                "builtin `{builtin}` must not ship send_feedback on the default model-facing list"
             );
         }
         for (name, config) in [
@@ -2380,11 +2416,11 @@ description: Test default tool config
         }))
         .unwrap();
         assert!(!def.include_browser_verification());
-        assert!(AgentDefinition::grok_build_plan().include_browser_verification());
-        assert!(AgentDefinition::grok_build_plan_no_subagents().include_browser_verification());
+        assert!(!AgentDefinition::grok_build_plan().include_browser_verification());
+        assert!(!AgentDefinition::grok_build_plan_no_subagents().include_browser_verification());
     }
     #[test]
-    fn test_from_json_has_default_toolset_with_task_tool() {
+    fn test_from_json_has_default_toolset_without_task_tool() {
         let json = serde_json::json!({
             "name": "grok-build",
             "description": "Multi-surface coding agent.",
@@ -2396,8 +2432,8 @@ description: Test default tool config
         let def = AgentDefinition::from_json(&json).unwrap();
         let task_tool_id = "GrokBuild:task";
         assert!(
-            def.tool_config.tools.iter().any(|tc| tc.id == task_tool_id),
-            "from_json() without toolConfig should include TaskTool in default toolset, \
+            !def.tool_config.tools.iter().any(|tc| tc.id == task_tool_id),
+            "from_json() without toolConfig should omit TaskTool from the coding keep-set, \
              got tool IDs: {:?}",
             def.tool_config
                 .tools

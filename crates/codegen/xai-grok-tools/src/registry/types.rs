@@ -668,6 +668,8 @@ impl ToolRegistryBuilder {
         b.register::<grok_build::ReferenceToVideoTool>();
         b.register::<grok_build::EnterPlanModeTool>();
         b.register::<grok_build::ExitPlanModeTool>();
+        b.register::<grok_build::WorkingPlanSkillTool>();
+        b.register::<grok_build::SaveWorkingPlanTool>();
         b.register_with_params::<
                 grok_build::AskUserQuestionTool,
                 grok_build::ask_user_question::AskUserQuestionParams,

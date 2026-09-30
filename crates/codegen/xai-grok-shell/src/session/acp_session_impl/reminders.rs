@@ -110,6 +110,7 @@ pub fn evaluate_todo_gate(input: &TodoGateInput<'_>) -> TodoGateDecision {
         reason: TodoGateReason::InFlight,
     }
 }
+
 /// Build the in-flight TodoGate reminder text.
 /// Uses the doubled-`${{{{ tools.by_kind.* }}}}` convention, so the caller's `format!` pass leaves a single `${{ tools.by_kind.* }}`.
 /// `TemplateRenderer` / `render_prompt` then resolves that into the model-facing tool name.

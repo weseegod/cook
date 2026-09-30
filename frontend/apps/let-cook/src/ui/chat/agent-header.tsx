@@ -7,7 +7,7 @@ import { TasksChip } from "../activity/tasks-chip";
 import { GitChip } from "./git-chip";
 import { GoalStatus } from "./goal-status";
 import { PlanChip } from "./plan-chip";
-import { TodoChip } from "./todo-chip";
+import { TodoChip, usePlanChecklistEntries } from "./todo-chip";
 
 /**
  * Agent status bar (catalog §3.3): the workspace and its plans left, chips right. One
@@ -28,7 +28,8 @@ export function AgentHeader({
 }) {
   const cwd = useSessionStore((state) => state.cwd);
   const goal = useSessionStore((state) => state.goal);
-  const hasChecklist = useSessionStore((state) => state.planEntries.length > 0);
+  const checklistEntries = usePlanChecklistEntries();
+  const hasChecklist = checklistEntries.length > 0;
   const setTodoOverlayOpen = useSessionStore((state) => state.setTodoOverlayOpen);
   const hasGoal = goal !== null;
 
@@ -63,7 +64,7 @@ export function AgentHeader({
       </div>
       <div className="agent-header-right">
         <div className={`agent-header-slot agent-header-slot-goal${hasGoal ? "" : hasChecklist ? " agent-header-slot-goal-checklist" : " agent-header-slot-goal-empty"}`}>
-          {hasGoal ? <GoalStatus /> : <TodoChip />}
+          {hasGoal ? <GoalStatus /> : <TodoChip entries={checklistEntries} />}
         </div>
         <div className="agent-header-slot agent-header-slot-git">
           <GitChip />

@@ -17,13 +17,15 @@ fn credentials(static_bearer: Option<&str>) -> MediaToolCredentials {
 
 #[test]
 fn the_static_bearer_is_the_configured_key_and_nothing_else() {
-    let cfg = config("[endpoints]\nxai_api_base_url = \"https://api.x.ai/v1\"\n");
+    let cfg = config(
+        "[features]\nimage_gen = true\n\n[endpoints]\nxai_api_base_url = \"https://api.x.ai/v1\"\n",
+    );
 
     let ImageGenConfig::Enabled {
         api_key, base_url, ..
     } = image_gen_config(&cfg, &credentials(None))
     else {
-        panic!("image tools are enabled by default");
+        panic!("image tools should be enabled when features.image_gen is on");
     };
     assert_eq!(None, api_key);
     assert_eq!("https://api.x.ai/v1", base_url);
@@ -31,7 +33,7 @@ fn the_static_bearer_is_the_configured_key_and_nothing_else() {
     let ImageGenConfig::Enabled { api_key, .. } =
         image_gen_config(&cfg, &credentials(Some("xai-key")))
     else {
-        panic!("image tools are enabled by default");
+        panic!("image tools should be enabled when features.image_gen is on");
     };
     assert_eq!(Some("xai-key".to_owned()), api_key);
 }
@@ -40,7 +42,9 @@ fn the_static_bearer_is_the_configured_key_and_nothing_else() {
 /// video download locally.
 #[test]
 fn a_zdr_config_without_a_bucket_restricts_video_on_every_host() {
-    let cfg = config("[tools]\ndisable_zdr_incompatible_tools = true\n");
+    let cfg = config(
+        "[features]\nvideo_gen = true\n\n[tools]\ndisable_zdr_incompatible_tools = true\n",
+    );
 
     let VideoGenConfig::Enabled {
         zdr_restricted,
@@ -56,17 +60,24 @@ fn a_zdr_config_without_a_bucket_restricts_video_on_every_host() {
 
 #[test]
 fn media_headers_identify_build_traffic() {
-    let cfg = config("");
+    let cfg = config("[features]\nimage_gen = true\n");
     let ImageGenConfig::Enabled { extra_headers, .. } = image_gen_config(&cfg, &credentials(None))
     else {
-        panic!("image tools are enabled by default");
+        panic!("image tools should be enabled when features.image_gen is on");
     };
-    assert!(extra_headers.contains_key("x-grok-client-identifier"));
-    assert!(extra_headers.contains_key("x-grok-client-version"));
     assert!(
         extra_headers
             .get("user-agent")
-            .is_some_and(|agent| agent.starts_with("xai-grok-build/")),
+            .is_some_and(|v| v.starts_with("xai-grok-build/")),
         "{extra_headers:?}"
     );
+}
+
+#[test]
+fn video_defaults_off_without_feature() {
+    let cfg = config("");
+    assert!(matches!(
+        video_gen_config(&cfg, &credentials(None)),
+        VideoGenConfig::Disabled
+    ));
 }

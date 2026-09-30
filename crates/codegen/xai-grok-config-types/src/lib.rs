@@ -579,6 +579,9 @@ pub struct RemoteSettings {
     /// Session analytics (signal sync, turn deltas) are gated separately by `telemetry_enabled`.
     #[serde(default)]
     pub feedback_enabled: Option<bool>,
+    /// Enable the client `web_search` tool. `None` falls through env/config then the default (off).
+    #[serde(default)]
+    pub web_search_enabled: Option<bool>,
     /// Gradual rollout of the `/feedback` trace-consent card.
     #[serde(default)]
     pub feedback_trace_card_enabled: Option<bool>,

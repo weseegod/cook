@@ -355,7 +355,7 @@ fn resume_action_for(
         PlanApprovalOutcome::Abandoned => ResumeAction::LeaveOnly,
     }
 }
-const FROZEN_PLAN_REJECTION: &str = "The approved plan contract is frozen; flip a Task checklist box or append one `## Deviations` bullet.";
+const FROZEN_PLAN_REJECTION: &str = "The approved plan contract is frozen. Change `- [ ]` to `- [x]` on a checklist line, or append one `## Deviations` bullet.";
 
 fn same_file(cwd: &Path, supplied: &str, target: &Path) -> bool {
     let path = cwd.join(supplied);
@@ -1539,6 +1539,24 @@ impl SessionActor {
                     crate::session::events::ToolOutcome::InvalidTool
                 }
             };
+            if tool_outcome.ran_successfully() {
+                execution_report.successful_calls += 1;
+                let is_mutation = self
+                    .agent
+                    .borrow()
+                    .tool_bridge()
+                    .tool_kind(&prepared.tool_name)
+                    .is_some_and(|k| {
+                        matches!(
+                            k,
+                            xai_grok_tools::types::tool::ToolKind::Edit
+                                | xai_grok_tools::types::tool::ToolKind::Write
+                        )
+                    });
+                if is_mutation {
+                    execution_report.successful_mutations += 1;
+                }
+            }
             if let Some(file) = &prepared.mcp_file {
                 file.complete(tool_outcome.ran_successfully());
             }
@@ -1789,6 +1807,83 @@ impl SessionActor {
         let tool_chat = ConversationItem::tool_result(call.id.clone(), message);
         self.chat_state_handle.push_tool_result(tool_chat);
         Ok(Err(ToolLoop::Continue))
+    }
+    /// Write a passive working plan and continue the turn. Plan mode stays inactive.
+    async fn complete_save_working_plan(
+        &self,
+        call: &crate::sampling::types::ToolCallResponse,
+        tool_call_id: &acp::ToolCallId,
+        raw_input: &serde_json::Value,
+    ) -> Result<Result<PreparedToolCall, ToolLoop>, acp::Error> {
+        if !crate::session::working_plan::allowed_on_surface(
+            self.projects_tool_surface(),
+            self.current_tool_surface(),
+        ) {
+            self.handle_tool_not_executed(
+                &call.id,
+                tool_call_id,
+                "save_working_plan is only available on an open task with no approved plan.".into(),
+            )
+            .await?;
+            return Ok(Err(ToolLoop::Continue));
+        }
+        let body = raw_input
+            .get("body")
+            .and_then(|value| value.as_str())
+            .unwrap_or("");
+        if body.is_empty() {
+            self.handle_tool_not_executed(
+                &call.id,
+                tool_call_id,
+                "save_working_plan needs a markdown body.".into(),
+            )
+            .await?;
+            return Ok(Err(ToolLoop::Continue));
+        }
+        let session_dir = crate::session::persistence::session_dir(&self.session_info);
+        let overwrite = self.passive_plan_overwrite_path();
+        match crate::session::working_plan::save_working_plan(
+            &session_dir,
+            body,
+            overwrite.as_deref(),
+        ) {
+            Ok(path) => {
+                self.plan_mode.lock().set_passive_episode(path.clone());
+                self.persist_plan_mode_state();
+                self.complete_exit_plan_intercept(
+                    call,
+                    tool_call_id,
+                    format!(
+                        "Saved working plan to {}. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. Plan mode stays off. Keep implementing on this turn.",
+                        path.display()
+                    ),
+                )
+                .await
+            }
+            Err(error) => {
+                self.handle_tool_not_executed(&call.id, tool_call_id, error)
+                    .await?;
+                Ok(Err(ToolLoop::Continue))
+            }
+        }
+    }
+
+    pub(super) async fn replace_todo_state(&self, state: crate::tools::todo::TodoState) {
+        use xai_grok_tools::types::resources::State;
+        let entries = state
+            .todo_items()
+            .cloned()
+            .map(crate::tools::todo::plan_entry_from_todo_item)
+            .collect();
+        self.tool_bridge_handle()
+            .update_resource(State(state.clone()))
+            .await;
+        let _ = self
+            .notifications
+            .persistence_tx
+            .send(PersistenceMsg::PlanState(state));
+        self.send_update(acp::SessionUpdate::Plan(acp::Plan::new(entries)), None)
+            .await;
     }
     pub(crate) async fn prepare_tool_call(
         &self,
@@ -2098,6 +2193,22 @@ impl SessionActor {
             self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
                 .await?;
             return Ok(Err(ToolLoop::Continue));
+        }
+        {
+            let allowed = crate::session::working_plan::allowed_on_surface(
+                self.projects_tool_surface(),
+                self.current_tool_surface(),
+            );
+            self.tool_bridge_handle()
+                .update_resource(xai_grok_tools::types::resources::WorkingPlanAllowed(
+                    allowed,
+                ))
+                .await;
+        }
+        if crate::session::working_plan::is_save_working_plan(&call.function.name) {
+            return self
+                .complete_save_working_plan(&call, &tool_call_id, &raw_input)
+                .await;
         }
         let local_frozen = self
             .plan_mode
@@ -2429,16 +2540,6 @@ impl SessionActor {
             is_cursor_create_plan,
             &plan_read,
         ) {
-            if let Err(errors) = crate::session::plan_contract::validate_plan_contract(
-                plan_content.as_deref().unwrap_or(""),
-            ) {
-                self.handle_tool_not_executed(
-                    &call.id,
-                    &tool_call_id,
-                    format!("Plan contract is incomplete. Fix the plan file and call exit_plan_mode again:\n- {}", errors.join("\n- ")),
-                ).await?;
-                return Ok(Err(ToolLoop::Continue));
-            }
             tracing::info!(
                 tool_call_id = %tool_call_id,
                 cursor_create_plan = is_cursor_create_plan,
@@ -2454,6 +2555,7 @@ impl SessionActor {
                     PlanApprovalOutcome::Abandoned => {
                         tracing::info!("[exit_plan_mode] user abandoned plan — deactivating");
                         self.leave_plan_mode_to_default().await;
+                        self.clear_implementing_approved_plan();
                         let message = format!(
                             "The user chose to abandon the plan entirely (via the Abandon option in the plan approval dialog). Plan mode has been disabled. Do not call {} again unless the user explicitly asks to re-enter plan mode.",
                             call.function.name
@@ -2495,11 +2597,27 @@ impl SessionActor {
                         return Ok(Err(ToolLoop::Continue));
                     }
                     PlanApprovalOutcome::Approved => {
-                        tracing::info!("[exit_plan_mode] user approved — executing tool");
+                        tracing::info!("[exit_plan_mode] user approved");
+                        if let Err(error) = self.commit_approved_plan().await {
+                            return self
+                                .complete_exit_plan_intercept(
+                                    &call,
+                                    &tool_call_id,
+                                    format!("Could not commit the approved plan: {error}"),
+                                )
+                                .await;
+                        }
+                        self.set_implementing_approved_plan(true);
+                        return self
+                            .complete_exit_plan_intercept(
+                                &call,
+                                &tool_call_id,
+                                self.plan_approved_implement_message().await,
+                            )
+                            .await;
                     }
                     PlanApprovalOutcome::ApprovedClean => {
-                        self.leave_plan_mode_to_default().await;
-                        if let Err(error) = self.plan_mode.lock().freeze_current_plan() {
+                        if let Err(error) = self.commit_approved_plan().await {
                             return self
                                 .complete_exit_plan_intercept(
                                     &call,
@@ -2508,6 +2626,7 @@ impl SessionActor {
                                 )
                                 .await;
                         }
+                        self.set_implementing_approved_plan(true);
                         self.persist_plan_mode_state();
                         let result = self.complete_exit_plan_intercept(&call, &tool_call_id,
                             "The plan was approved for a clean run. Context cleared — implementing plan.".into()).await;
@@ -2522,10 +2641,24 @@ impl SessionActor {
                                 "Goal mode is disabled in this session; the plan remains in review.".into()).await?;
                             return Ok(Err(ToolLoop::Continue));
                         }
-                        self.leave_plan_mode_to_default().await;
-                        let Some(plan_body) = plan_content.filter(|s| !s.trim().is_empty()) else {
+                        let Some(_plan_body) = plan_content.filter(|s| !s.trim().is_empty()) else {
                             unreachable!("the plan contract gate requires nonempty content");
                         };
+                        if let Err(error) = self.commit_approved_plan().await {
+                            return self
+                                .complete_exit_plan_intercept(
+                                    &call,
+                                    &tool_call_id,
+                                    format!("Could not commit the approved plan: {error}"),
+                                )
+                                .await;
+                        }
+                        self.set_implementing_approved_plan(true);
+                        let plan_body =
+                            std::fs::read_to_string(self.plan_mode.lock().plan_file_path())
+                                .map_err(|error| {
+                                    acp::Error::internal_error().data(error.to_string())
+                                })?;
                         let objective = plan_title_or_default(&plan_body);
                         self.handoff_plan_context(parsed.feedback.as_deref()).await;
                         let reminder = match self
@@ -2699,16 +2832,52 @@ impl SessionActor {
     /// Model-facing turn injected after a plan is approved.
     /// Names the episode's file rather than the literal `plan.md`: a later `/plan` allocates a new
     /// file, so the literal would point the implement turn at a stale document.
-    fn plan_approved_implement_message(&self) -> String {
+    fn checklist_summary(&self) -> String {
+        let path = self.plan_mode.lock().plan_file_path().to_path_buf();
+        let Ok(body) = std::fs::read_to_string(&path) else {
+            return String::new();
+        };
+        crate::session::goal_next_step::checklist_section_text(&body)
+            .filter(|text| !text.trim().is_empty())
+            .map(|text| format!("\n\nCurrent checklist:\n{text}"))
+            .unwrap_or_default()
+    }
+    /// Passive episode to overwrite, when this task already saved one and it is not frozen.
+    fn passive_plan_overwrite_path(&self) -> Option<std::path::PathBuf> {
+        let path = {
+            let tracker = self.plan_mode.lock();
+            let path = tracker.passive_episode()?.to_path_buf();
+            if tracker
+                .frozen_plan()
+                .is_some_and(|plan| plan.episode == path)
+            {
+                return None;
+            }
+            path
+        };
+        if self.goal_tracker.lock().snapshot().is_some_and(|goal| {
+            goal.plan_contract_frozen && goal.plan_file.as_deref() == Some(path.as_path())
+        }) {
+            return None;
+        }
+        path.is_file().then_some(path)
+    }
+    async fn plan_approved_implement_message(&self) -> String {
+        let path = self.plan_mode.lock().plan_file_path().display().to_string();
+        let checklist = self.checklist_summary();
+        let checks =
+            xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
         format!(
-            "The user approved the plan. Implement the plan in {}.",
-            self.plan_mode.lock().plan_file_path().display()
+            "The user approved the plan. Implement the plan in {path}. The checklist is the last section of that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. {checks}{checklist}",
         )
     }
-    fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
+    async fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
+        let path = self.plan_mode.lock().plan_file_path().display().to_string();
+        let checklist = self.checklist_summary();
+        let checks =
+            xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
         let mut anchor = format!(
-            "Implement the approved plan at {}. The plan file is the specification. Read it before editing. Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.",
-            self.plan_mode.lock().plan_file_path().display()
+            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The checklist is the last section of that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. {checks} Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.{checklist}",
         );
         if let Some(notes) = feedback.filter(|notes| !notes.trim().is_empty()) {
             anchor.push_str("\n\nReview notes from the approval decision:\n");
@@ -2737,7 +2906,9 @@ impl SessionActor {
     async fn reset_plan_model_history(&self, feedback: Option<&str>) {
         let conversation = self.chat_state_handle.get_conversation().await;
         let mut items = Self::clean_context_prefix(&conversation);
-        items.push(ConversationItem::user(self.clean_plan_anchor(feedback)));
+        items.push(ConversationItem::user(
+            self.clean_plan_anchor(feedback).await,
+        ));
         self.chat_state_handle
             .replace_conversation_for_compaction(items);
         let _ = self.chat_state_handle.get_conversation_len().await;
@@ -2783,6 +2954,20 @@ impl SessionActor {
             ));
         }
     }
+    async fn commit_approved_plan(&self) -> Result<(), String> {
+        let draft_path = self.plan_mode.lock().plan_file_path().to_path_buf();
+        let body = std::fs::read_to_string(&draft_path).map_err(|error| error.to_string())?;
+        if body.trim().is_empty() {
+            return Err("the plan file is empty".into());
+        }
+        self.leave_plan_mode_to_default().await;
+        self.plan_mode
+            .lock()
+            .freeze_current_plan()
+            .map_err(|error| error.to_string())?;
+        self.persist_plan_mode_state();
+        Ok(())
+    }
     /// Resume hook: re-issue the parked `exit_plan_mode` approval after a session restored with `awaiting_plan_approval == true`.
     /// The client then re-shows approval chrome over a real live waiter.
     /// Handles the decision with no in-flight turn.
@@ -2808,21 +2993,6 @@ impl SessionActor {
                 return;
             }
         };
-        if let Err(errors) = crate::session::plan_contract::validate_plan_contract(&plan_content) {
-            self.plan_mode.lock().set_awaiting_plan_approval(false);
-            self.persist_plan_mode_state();
-            self.send_update(
-                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                    acp::ContentBlock::Text(acp::TextContent::new(format!(
-                        "Plan review cannot resume until the plan contract is complete:\n- {}",
-                        errors.join("\n- ")
-                    ))),
-                )),
-                None,
-            )
-            .await;
-            return;
-        }
         let tool_call_id = acp::ToolCallId::new(Arc::from(
             format!("exit-plan-mode-resume-{}", self.session_info.id.0).as_str(),
         ));
@@ -2849,6 +3019,7 @@ impl SessionActor {
             ResumeAction::LeaveOnly => {
                 tracing::info!("[exit_plan_mode] resume: user abandoned plan");
                 self.leave_plan_mode_to_default().await;
+                self.clear_implementing_approved_plan();
             }
             ResumeAction::StayAndRevise(text) => {
                 tracing::info!("[exit_plan_mode] resume: user requested changes");
@@ -2857,14 +3028,22 @@ impl SessionActor {
             }
             ResumeAction::LeaveAndImplement => {
                 tracing::info!("[exit_plan_mode] resume: user approved plan");
-                self.leave_plan_mode_to_default().await;
-                let message = self.plan_approved_implement_message();
+                if let Err(error) = self.commit_approved_plan().await {
+                    self.start_resume_turn(
+                        format!("Could not commit the approved plan: {error}"),
+                        PromptMode::Agent,
+                        completion_tx,
+                    )
+                    .await;
+                    return;
+                }
+                self.set_implementing_approved_plan(true);
+                let message = self.plan_approved_implement_message().await;
                 self.start_resume_turn(message, PromptMode::Agent, completion_tx)
                     .await;
             }
             ResumeAction::LeaveAndImplementClean => {
-                self.leave_plan_mode_to_default().await;
-                let freeze_result = { self.plan_mode.lock().freeze_current_plan() };
+                let freeze_result = self.commit_approved_plan().await;
                 if let Err(error) = freeze_result {
                     self.start_resume_turn(
                         format!("Could not freeze the approved plan: {error}"),
@@ -2874,8 +3053,9 @@ impl SessionActor {
                     .await;
                     return;
                 }
+                self.set_implementing_approved_plan(true);
                 self.persist_plan_mode_state();
-                let anchor = self.clean_plan_anchor(approval_feedback.as_deref());
+                let anchor = self.clean_plan_anchor(approval_feedback.as_deref()).await;
                 let conversation = self.chat_state_handle.get_conversation().await;
                 let items = Self::clean_context_prefix(&conversation);
                 self.chat_state_handle
@@ -2895,7 +3075,18 @@ impl SessionActor {
                     .await;
                     return;
                 }
-                self.leave_plan_mode_to_default().await;
+                if let Err(error) = self.commit_approved_plan().await {
+                    self.start_resume_turn(
+                        format!("Could not commit the approved plan: {error}"),
+                        PromptMode::Agent,
+                        completion_tx,
+                    )
+                    .await;
+                    return;
+                }
+                self.set_implementing_approved_plan(true);
+                let plan_body = std::fs::read_to_string(self.plan_mode.lock().plan_file_path())
+                    .unwrap_or(plan_body);
                 let objective = plan_title_or_default(&plan_body);
                 let conversation = self.chat_state_handle.get_conversation().await;
                 let items = Self::clean_context_prefix(&conversation);
@@ -2909,7 +3100,7 @@ impl SessionActor {
                     GoalSetupOutcome::Inference { reminder } => reminder,
                     GoalSetupOutcome::Message(msg) => msg,
                 };
-                let anchor = self.clean_plan_anchor(approval_feedback.as_deref());
+                let anchor = self.clean_plan_anchor(approval_feedback.as_deref()).await;
                 self.start_resume_turn(
                     format!("{anchor}\n\n{reminder}"),
                     PromptMode::Agent,
@@ -3598,6 +3789,15 @@ impl SessionActor {
             stub_identical_observation_result,
         } = args;
         let (mut result, mut tool_layer_images) = drained.into_parts();
+        if let ToolsToolOutput::Todo(
+            xai_grok_tools::types::output::TodoWriteOutput::TodosUpdated(ref updated),
+        ) = result.output
+        {
+            let _ = self
+                .notifications
+                .persistence_tx
+                .send(PersistenceMsg::PlanState(updated.state.clone()));
+        }
         let consumed_ids =
             xai_grok_tools::reminders::task_completion::consumed_completion_ids(&result.output);
         if !consumed_ids.is_empty() {

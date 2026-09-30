@@ -268,6 +268,7 @@ pub(crate) async fn spawn_session_actor(
     paths_config: xai_grok_agent::prompt::paths::PathsConfig,
     incremental_bash_output: bool,
     persisted_signals: Option<crate::session::signals::SessionSignals>,
+    persisted_plan_state: Option<crate::tools::todo::TodoState>,
     persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     persisted_workflow_runs: Vec<crate::session::workflow::store::RestoredWorkflowRun>,
@@ -753,6 +754,7 @@ pub(crate) async fn spawn_session_actor(
     let queue_exit_reminder_on_approved_exit = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let emit_local_background_tasks = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let background_tasks_snapshot_pending = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let implementing_approved_plan = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let tools_notification_handle = crate::tools::notification_bridge::spawn_notification_bridge(
         crate::tools::notification_bridge::NotificationBridgeConfig {
             gateway: gateway.clone(),
@@ -765,6 +767,7 @@ pub(crate) async fn spawn_session_actor(
             persistence: persistence.clone(),
             incremental_bash_output,
             plan_mode: plan_mode.clone(),
+            implementing_approved_plan: implementing_approved_plan.clone(),
             current_prompt_mode: current_prompt_mode.clone(),
             turn_prompt_mode: turn_prompt_mode.clone(),
             session_cmd_tx: cmd_tx.clone(),
@@ -1154,7 +1157,7 @@ pub(crate) async fn spawn_session_actor(
             },
         ))
     });
-    let (mcp_state, admitted_mcp_servers) = {
+    let (mcp_state, admitted_mcp_servers, acp_mcp_count) = {
         let mut state = McpState::new_with_meta(mcp_servers.clone(), mcp_meta_config_map);
         let admitted_mcp_servers = state.admitted_servers();
         if let Some(ref pool) = parent_mcp_pool {
@@ -1165,6 +1168,7 @@ pub(crate) async fn spawn_session_actor(
                 "Imported shared MCP clients from parent pool"
             );
         }
+        let acp_mcp_count = acp_mcp_servers.len();
         if !acp_mcp_servers.is_empty() {
             let invoker = std::sync::Arc::new(crate::session::acp_mcp::GatewayAcpInvoker::new(
                 gateway.clone(),
@@ -1177,8 +1181,15 @@ pub(crate) async fn spawn_session_actor(
                 "Registered in-process SDK MCP servers (x.ai/mcp/sdk_call)"
             );
         }
-        (Arc::new(TokioMutex::new(state)), admitted_mcp_servers)
+        (
+            Arc::new(TokioMutex::new(state)),
+            admitted_mcp_servers,
+            acp_mcp_count,
+        )
     };
+    let feedback_enabled = feedback_flags.enabled;
+    let mcp_discovery_enabled =
+        !mcp_servers.is_empty() || acp_mcp_count > 0 || startup_hints.managed_mcps_enabled;
     let (plugin_registry_wait_timer, plugin_registry_wait_span) =
         spawn_await_step!("plugin_registry_wait");
     let plugin_registry = prefetch
@@ -1243,6 +1254,9 @@ pub(crate) async fn spawn_session_actor(
         subagents_enabled,
         subagent_toggle: subagent_toggle.clone(),
         background_workflows_enabled,
+        goal_enabled,
+        feedback_enabled,
+        mcp_discovery_enabled,
         ask_user_question_enabled,
         persona_summaries: persona_summaries.clone(),
         prompt_audience,
@@ -1307,6 +1321,12 @@ pub(crate) async fn spawn_session_actor(
         })?;
     drop(agent_build_timer);
     drop(agent_build_span);
+    if let Some(state) = persisted_plan_state {
+        agent
+            .tool_bridge()
+            .update_resource(xai_grok_tools::types::resources::State(state))
+            .await;
+    }
     let tool_setup_span = spawn_ctx
         .as_ref()
         .map(|ctx| phase_region_under(SubagentSpawnPhase::ToolSetup, &ctx.parent));
@@ -2038,6 +2058,8 @@ pub(crate) async fn spawn_session_actor(
         turn_start_prompt_mode: parking_lot::Mutex::new(restored_prompt_mode),
         turn_prompt_mode: turn_prompt_mode.clone(),
         plan_mode: plan_mode.clone(),
+        implementing_approved_plan: implementing_approved_plan.clone(),
+        last_write_finish_reminder_surface: std::cell::Cell::new(None),
         goal_enabled,
         background_workflows_enabled,
         goal_harness_enabled: std::sync::atomic::AtomicBool::new(if background_workflows_enabled {
@@ -2636,6 +2658,7 @@ pub(crate) async fn spawn_session_on_thread(
     paths_config: xai_grok_agent::prompt::paths::PathsConfig,
     incremental_bash_output: bool,
     persisted_signals: Option<crate::session::signals::SessionSignals>,
+    persisted_plan_state: Option<crate::tools::todo::TodoState>,
     persisted_plan_mode: Option<crate::session::plan_mode::PlanModeSnapshot>,
     persisted_goal_mode: Option<crate::session::goal_tracker::GoalOrchestration>,
     persisted_workflow_runs: Vec<crate::session::workflow::store::RestoredWorkflowRun>,
@@ -2851,6 +2874,7 @@ pub(crate) async fn spawn_session_on_thread(
                     paths_config,
                     incremental_bash_output,
                     persisted_signals,
+                    persisted_plan_state,
                     persisted_plan_mode,
                     persisted_goal_mode,
                     persisted_workflow_runs,

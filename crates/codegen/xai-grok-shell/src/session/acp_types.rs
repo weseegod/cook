@@ -631,6 +631,9 @@ pub struct StartupHints {
     /// Unlike `yoloMode` / `autoMode`, a warm re-attach to an already-resident actor does NOT re-apply it.
     #[serde(default)]
     pub permission_mode: Option<String>,
+    /// When true, advertise MCP discovery tools even if the server list is still empty at spawn.
+    #[serde(skip)]
+    pub managed_mcps_enabled: bool,
     #[serde(skip)]
     pub startup_traceparent: std::cell::RefCell<Option<String>>,
 }

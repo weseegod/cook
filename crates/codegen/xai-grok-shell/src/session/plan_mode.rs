@@ -60,6 +60,8 @@ pub struct PlanModeTracker {
     /// `plan_file_path` plus an on-disk exists() check cover the same guarantee.
     episode_files: Vec<PathBuf>,
     frozen_plan: Option<FrozenPlan>,
+    /// Passive working-plan episode for the open task. Not the active plan-mode file.
+    passive_episode: Option<PathBuf>,
 }
 #[derive(Debug, Clone)]
 pub(crate) struct FrozenPlan {
@@ -93,6 +95,10 @@ pub struct PlanModeSnapshot {
     pub plan_file: Option<String>,
     #[serde(default)]
     pub frozen_plan: bool,
+    /// Relative path of the passive working-plan episode for this open task.
+    /// A later `save_working_plan` overwrites this file instead of allocating another.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passive_episode: Option<String>,
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
@@ -109,6 +115,7 @@ impl PlanModeTracker {
             session_dir,
             episode_files: Vec::new(),
             frozen_plan: None,
+            passive_episode: None,
         }
     }
     /// `session_dir` is used to recompute `plan_file_path`.
@@ -133,6 +140,10 @@ impl PlanModeTracker {
         if let Some(plan) = &frozen_plan {
             crate::session::plan_contract::register_frozen_plan(&plan.episode, &plan.baseline);
         }
+        let passive_episode = snapshot.passive_episode.as_deref().and_then(|relative| {
+            let path = restore_plan_file_path(&session_dir, Some(relative));
+            (path == session_dir.join(relative)).then_some(path)
+        });
         Self {
             state: snapshot.state,
             was_previously_active: snapshot.was_previously_active,
@@ -144,7 +155,32 @@ impl PlanModeTracker {
             session_dir,
             episode_files: Vec::new(),
             frozen_plan,
+            passive_episode,
         }
+    }
+
+    /// Passive working-plan episode for this task, when one has been saved.
+    pub(crate) fn passive_episode(&self) -> Option<&Path> {
+        self.passive_episode.as_deref()
+    }
+
+    /// Remember the passive episode so the next save overwrites it.
+    pub(crate) fn set_passive_episode(&mut self, path: PathBuf) {
+        self.passive_episode = Some(path);
+    }
+
+    /// Episode whose open checklist means the task is still in progress.
+    ///
+    /// Plan mode and a parked approval are not implementation stops. A passive save does not
+    /// move `plan_file_path`, so that episode is the one to read when it is set.
+    pub(crate) fn checklist_episode(&self) -> Option<PathBuf> {
+        if self.is_active() || self.awaiting_plan_approval {
+            return None;
+        }
+        if let Some(path) = &self.passive_episode {
+            return Some(path.clone());
+        }
+        Some(self.plan_file_path.clone())
     }
     /// Mark that the client is waiting on plan approval (`exit_plan_mode` parked).
     pub(crate) fn set_awaiting_plan_approval(&mut self, awaiting: bool) {
@@ -163,15 +199,23 @@ impl PlanModeTracker {
             pending_exit_reminder: self.pending_exit_reminder,
             plan_file: self.relative_plan_file(),
             frozen_plan: self.frozen_plan.is_some(),
+            passive_episode: self
+                .passive_episode
+                .as_deref()
+                .and_then(|path| self.relative_inside(path)),
         }
+    }
+
+    fn relative_inside(&self, path: &Path) -> Option<String> {
+        let relative = path.strip_prefix(&self.session_dir).ok()?;
+        let text = relative.to_string_lossy().replace('\\', "/");
+        (!text.is_empty() && !text.contains("..")).then_some(text)
     }
 
     /// The current plan file relative to the session directory, when it lives inside it.
     /// Used for persistence so a session's plan file survives resume.
     fn relative_plan_file(&self) -> Option<String> {
-        let relative = self.plan_file_path.strip_prefix(&self.session_dir).ok()?;
-        let text = relative.to_string_lossy().replace('\\', "/");
-        (!text.is_empty()).then_some(text)
+        self.relative_inside(&self.plan_file_path)
     }
 
     /// The path a new episode would allocate, without mutating tracker state.
@@ -441,16 +485,21 @@ Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 ${%- endif %}
 
 Use this exact section order: `## Goal kind` (code-change, analysis, or research), \
-`## Decisions` (at least one bullet), `## Context` (3–8 bullets), \
-`## Acceptance criteria` (numbered outcomes), `## Verification plan` (numbered actions), \
+`## Decisions` (at least one bullet), `## Context` (only the bullets a cold run needs), \
+`## Acceptance criteria` (outcomes the user requested and any outcome the core behavior needs: \
+each an observable pass or fail; group outcomes one check can cover; split an outcome that can fail on its own; \
+name a command that already exists, or describe the behavior; do not invent a command, name an unwritten script, \
+or add a checkbox; no optional idea, performance test, screenshot, or extra scenario unless that outcome needs it), \
+`## Verification plan` (each line \
+tags one `## Acceptance criteria` entry as `gating` or `evidence` and adds no scenario), \
 `## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
 then for code-change `## Implementation approach` (nonempty), `## Current anchors` \
-(2–12 bullets: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
+(as many bullets as the places you read: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
 `## Edit brief` (one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof), \
-and `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; last line tests or gathers evidence), \
-and finally `## Deviations` containing exactly `(none yet)`. \
+then `## Deviations` containing exactly `(none yet)`, optional `## Risks / Contradictions`, \
+and last `## Task checklist` (as many concrete steps as the work requires, each `- [ ] `<path>` — change. Done when: observation.`; the last line runs `## Acceptance criteria`). \
 Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
-Only Task checklist may contain checkboxes. The file must stand alone without this conversation. \
+Only the Task checklist may contain checkboxes, and the checklist stays in this file as the last section. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged. The file must stand alone without this conversation. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
 
@@ -479,12 +528,16 @@ Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 
 Use the same complete plan contract: Goal kind, Decisions, Context, Acceptance criteria, \
 Verification plan, Non-goals, Assumed scope, then Implementation approach, Current anchors, \
-Edit brief, and Task checklist for code-change, then Deviations with `(none yet)`. \
-Context needs 3–8 bullets. Current anchors needs 2–12 bullets with a backticked path, \
+and Edit brief for code-change, then Deviations with `(none yet)`, optional Risks / Contradictions, \
+and Task checklist last. \
+Acceptance criteria lists those outcomes as an observable pass or fail, groups what one check can cover, and adds no checkbox. \
+Verification plan only tags those Acceptance criteria entries as `gating` or `evidence`. \
+Context needs only the bullets a cold run needs. Current anchors needs as many bullets as the places you read, each with a backticked path, \
 a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
 block per Task checklist line with `Now:`, `Change:`, `Keep:`, `Proof:` bullets. \
-Code-change checklist needs 3–8 `- [ ] `<path>` — change. Done when: observation.` lines, \
-ending with test or evidence. Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
+Code-change checklist needs as many concrete steps as the work requires, each `- [ ] `<path>` — change. Done when: observation.`, \
+and the last line runs `## Acceptance criteria`. The checklist stays in the file as the last section; mark progress by changing `- [ ]` to `- [x]`. \
+Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
 do not put layout or signature details in acceptance criteria.
 
@@ -848,6 +901,41 @@ mod tests {
             SEQ.fetch_add(1, Ordering::SeqCst)
         ));
         PlanModeTracker::new(dir)
+    }
+    #[test]
+    fn active_plan_reminder_puts_criteria_before_verification_and_checklist_last() {
+        let full = plan_mode_reminder_full_template();
+        let acceptance = full.find("## Acceptance criteria").expect("criteria");
+        let verification = full.find("## Verification plan").expect("verification");
+        let deviations = full.find("## Deviations").expect("deviations");
+        let checklist = full.find("## Task checklist").expect("checklist");
+        assert!(acceptance < verification);
+        assert!(!full.contains("## Tests"));
+        assert!(full.contains("observable pass or fail"));
+        assert!(deviations < checklist);
+        assert!(full.contains("command that already exists"));
+        assert!(full.contains("unwritten script"));
+        assert!(full.contains("adds no scenario"));
+        assert!(full.contains("only the bullets a cold run needs"));
+        assert!(full.contains("as many bullets as the places you read"));
+        assert!(full.contains("as many concrete steps as the work requires"));
+        assert!(!full.contains("3–8"));
+        assert!(!full.contains("2–12"));
+        assert!(!full.contains("aim 3-5"));
+        let reentry = plan_mode_reentry_reminder_template();
+        assert!(
+            reentry.find("Acceptance criteria").unwrap()
+                < reentry.find("Verification plan").unwrap()
+        );
+        assert!(!reentry.contains("## Tests"));
+        assert!(reentry.contains("Task checklist last"));
+        assert!(reentry.contains("only tags those Acceptance criteria entries"));
+        assert!(reentry.contains("only the bullets a cold run needs"));
+        assert!(reentry.contains("as many bullets as the places you read"));
+        assert!(reentry.contains("as many concrete steps as the work requires"));
+        assert!(!reentry.contains("3–8"));
+        assert!(!reentry.contains("2–12"));
+        assert!(!reentry.contains("aim 3-5"));
     }
     #[test]
     fn user_initiated_lifecycle() {

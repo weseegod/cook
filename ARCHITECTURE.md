@@ -176,6 +176,7 @@ raw drawing and theme changes there; screen behavior belongs in
 | Change session startup or actor spawn | `xai-grok-shell/src/session/acp_session_impl/spawn.rs`, `session_setup.rs`, and `xai-grok-shell/src/agent/mvp_agent/` |
 | Change compaction | `xai-grok-shell/src/session/compaction*.rs`, `two_pass.rs`, `session/helpers/`, and `xai-grok-compaction` |
 | Change goal orchestration | `xai-grok-shell/src/session/goal_*.rs` and `goal_classifier/` |
+| Change the plan checklist or a working-plan save | `xai-grok-shell/src/session/plan_mode.rs`, `plan_contract.rs`, `working_plan.rs`, and `xai-grok-tools/src/implementations/grok_build/working_plan.rs`. Procedure: `docs/core-agent-flow-and-token-optimization.md`. |
 | Change subagents | `xai-grok-shell/src/agent/subagent/` and `xai-grok-subagent-resolution/` |
 | Change workflow execution or scripts | `xai-grok-shell/src/session/workflow/` and `src/session/workflows/` |
 | Add or change a tool | `xai-grok-tools/src/implementations/`, then update `src/registry/types.rs` and tool metadata as needed |

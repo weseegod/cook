@@ -4116,6 +4116,7 @@ impl MvpAgent {
             client_fs_write,
             envrc,
             persisted_signals,
+            persisted_plan_state,
             persisted_plan_mode,
             persisted_goal_mode,
             persisted_workflow_runs,
@@ -4219,7 +4220,8 @@ impl MvpAgent {
             );
             std::sync::Arc::new(TerminalRunner::new(notifier, session_info.id.clone()))
         };
-        let startup_hints = startup_hints_from_meta(session_meta, init.meta.as_ref());
+        let mut startup_hints = startup_hints_from_meta(session_meta, init.meta.as_ref());
+        startup_hints.managed_mcps_enabled = self.cfg.borrow().managed_mcps_enabled;
         let hunk_plan = plan_hunk_tracking(
             init
                 .client_capabilities
@@ -4653,7 +4655,7 @@ impl MvpAgent {
                     .is_feature_enabled(crate::agent::config::Feature::AskUserQuestion)
             });
         let client_hooks = crate::extensions::hooks::parse_client_hooks(session_meta);
-        let disable_web_search = self.cfg.borrow().disable_web_search;
+        let disable_web_search = !self.cfg.borrow().resolve_web_search().value;
         let todo_gate = self.cfg.borrow().todo_gate;
         let remote_settings_for_spawn = self.cfg.borrow().remote_settings.clone();
         let laziness_debug_log_for_spawn = self.cfg.borrow().laziness_debug_log.clone();
@@ -4868,6 +4870,7 @@ impl MvpAgent {
                     paths_config,
                     incremental_bash_output,
                     persisted_signals,
+                    persisted_plan_state,
                     persisted_plan_mode,
                     persisted_goal_mode,
                     persisted_workflow_runs,

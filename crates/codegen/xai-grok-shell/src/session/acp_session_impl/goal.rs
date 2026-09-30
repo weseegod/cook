@@ -1818,13 +1818,25 @@ impl SessionActor {
     }
 
     async fn has_pending_goal_todos(&self) -> bool {
-        use crate::tools::todo::{TodoState, TodoStatus};
+        use crate::tools::todo::TodoState;
         use xai_grok_tools::types::resources::State;
         let bridge = self.tool_bridge_handle();
         match bridge.read_resource::<State<TodoState>>().await {
-            Some(state) => state.0.todo_items_with_ids().any(|(_id, item)| {
-                matches!(item.status, TodoStatus::Pending | TodoStatus::InProgress)
-            }),
+            Some(state) => {
+                let goal_plan = self
+                    .goal_tracker
+                    .lock()
+                    .snapshot()
+                    .and_then(|goal| goal.plan_file.clone());
+                if let Some(binding) = state.0.binding() {
+                    let session_dir = crate::session::persistence::session_dir(&self.session_info);
+                    let bound_path = session_dir.join(&binding.episode);
+                    if goal_plan.as_deref() != Some(bound_path.as_path()) {
+                        return false;
+                    }
+                }
+                state.0.first_pending().is_some()
+            }
             None => {
                 tracing::warn!(
                     "goal stop-detector: TodoState resource missing; failing OPEN \

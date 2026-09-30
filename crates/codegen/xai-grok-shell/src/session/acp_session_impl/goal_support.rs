@@ -185,6 +185,13 @@ pub(super) fn render_goal_task_discipline(names: &GoalToolNames) -> String {
     GOAL_TASK_DISCIPLINE_TEMPLATE.replace("{TODO_TOOL}", &names.todo)
 }
 
+fn expand_run_checks(text: String) -> String {
+    text.replace(
+        "{RUN_CHECKS}",
+        xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE,
+    )
+}
+
 /// Render the plan-aware reminder block.
 /// `Plan: <abs path>` renders on its own column-0 line.
 /// It is a pointer the model and any downstream consumer (debug log scraper, support tooling) can extract reliably, so keep the format stable.
@@ -196,9 +203,11 @@ pub(super) fn render_goal_plan_block(plan_path: &std::path::Path, names: &GoalTo
          cannot follow",
     );
     // Column-0 single-line `Plan: <abs>` contract; see the fn docs
-    GOAL_PLAN_BLOCK_TEMPLATE
-        .replace("{PLAN_PATH}", &plan_path.display().to_string())
-        .replace("{TODO_TOOL}", &names.todo)
+    expand_run_checks(
+        GOAL_PLAN_BLOCK_TEMPLATE
+            .replace("{PLAN_PATH}", &plan_path.display().to_string())
+            .replace("{TODO_TOOL}", &names.todo),
+    )
 }
 
 /// Plan path for the goal-mode reminder, or `None` on the legacy path.
@@ -261,26 +270,28 @@ pub(super) fn render_goal_rules(
         Some(path) => render_goal_plan_block(path, names),
         None => String::new(),
     };
-    GOAL_RULES_TEMPLATE
-        .replace("{OBJECTIVE}", objective)
-        .replace("{TASK_TOOL}", &names.task)
-        .replace("{TODO_TOOL}", &names.todo)
-        .replace("{PLAN_BLOCK}", &plan_block)
-        .replace("{BLOCK_RECAP}", block_recap)
-        .replace("{DISCIPLINE_BLOCK}", &discipline)
-        .replace("{GOAL_STATE}", goal_state)
-        // A literal `{SCRATCH_DIR}` in the objective WOULD be expanded here (harmless, astronomically unlikely)
-        // The `{SCRATCH}` placeholder the text references is a different token, left unreplaced
-        .replace("{SCRATCH_DIR}", scratch_dir)
-        // Only claim the dir exists when the harness actually created it.
-        .replace(
-            "{SCRATCH_STATUS}",
-            if scratch_ready {
-                "The dir has been created for you."
-            } else {
-                "Create it with `mkdir -p` if it does not already exist."
-            },
-        )
+    expand_run_checks(
+        GOAL_RULES_TEMPLATE
+            .replace("{OBJECTIVE}", objective)
+            .replace("{TASK_TOOL}", &names.task)
+            .replace("{TODO_TOOL}", &names.todo)
+            .replace("{PLAN_BLOCK}", &plan_block)
+            .replace("{BLOCK_RECAP}", block_recap)
+            .replace("{DISCIPLINE_BLOCK}", &discipline)
+            .replace("{GOAL_STATE}", goal_state)
+            // A literal `{SCRATCH_DIR}` in the objective WOULD be expanded here (harmless, astronomically unlikely)
+            // The `{SCRATCH}` placeholder the text references is a different token, left unreplaced
+            .replace("{SCRATCH_DIR}", scratch_dir)
+            // Only claim the dir exists when the harness actually created it.
+            .replace(
+                "{SCRATCH_STATUS}",
+                if scratch_ready {
+                    "The dir has been created for you."
+                } else {
+                    "Create it with `mkdir -p` if it does not already exist."
+                },
+            ),
+    )
 }
 
 pub(super) fn render_goal_rules_legacy(
@@ -297,24 +308,26 @@ pub(super) fn render_goal_rules_legacy(
         Some(path) => render_goal_plan_block(path, names),
         None => String::new(),
     };
-    GOAL_RULES_TEMPLATE_LEGACY
-        .replace("{OBJECTIVE}", objective)
-        .replace("{GOAL_TOOL}", &names.goal)
-        .replace("{TASK_TOOL}", &names.task)
-        .replace("{TODO_TOOL}", &names.todo)
-        .replace("{PLAN_BLOCK}", &plan_block)
-        .replace("{BLOCK_RECAP}", block_recap)
-        .replace("{DISCIPLINE_BLOCK}", &discipline)
-        .replace("{GOAL_STATE}", goal_state)
-        .replace("{SCRATCH_DIR}", scratch_dir)
-        .replace(
-            "{SCRATCH_STATUS}",
-            if scratch_ready {
-                "The dir has been created for you."
-            } else {
-                "Create it with `mkdir -p` if it does not already exist."
-            },
-        )
+    expand_run_checks(
+        GOAL_RULES_TEMPLATE_LEGACY
+            .replace("{OBJECTIVE}", objective)
+            .replace("{GOAL_TOOL}", &names.goal)
+            .replace("{TASK_TOOL}", &names.task)
+            .replace("{TODO_TOOL}", &names.todo)
+            .replace("{PLAN_BLOCK}", &plan_block)
+            .replace("{BLOCK_RECAP}", block_recap)
+            .replace("{DISCIPLINE_BLOCK}", &discipline)
+            .replace("{GOAL_STATE}", goal_state)
+            .replace("{SCRATCH_DIR}", scratch_dir)
+            .replace(
+                "{SCRATCH_STATUS}",
+                if scratch_ready {
+                    "The dir has been created for you."
+                } else {
+                    "Create it with `mkdir -p` if it does not already exist."
+                },
+            ),
+    )
 }
 
 /// Assemble a goal auto-pause message from the `headline` (why the goal paused), `pause_summary`, and the `details_path` pointer.
@@ -398,28 +411,30 @@ pub(super) fn render_goal_continuation_directive(
     let verifier_gaps = neutralize_directive_slot(verifier_gaps);
     let strategist_note = neutralize_directive_slot(strategist_note);
     let next_step = neutralize_directive_slot(next_step);
-    GOAL_CONTINUATION_DIRECTIVE_TEMPLATE
-        .replace("{objective}", objective)
-        .replace("{tokens}", &tokens.to_string())
-        .replace("{elapsed}", elapsed)
-        .replace("{bail_preface}", &bail_preface)
-        .replace("{plan_pointer}", plan_pointer)
-        .replace("{verifier_gaps}", &verifier_gaps)
-        .replace("{reverify_block}", reverify_block)
-        .replace("{next_step}", &next_step)
-        .replace("{todo_tool}", todo_tool)
-        // `{SCRATCH}` is left literal; the model resolves it to this dir
-        .replace("{scratch_dir}", scratch_dir)
-        // Only claim the dir exists when the harness actually created it.
-        .replace(
-            "{scratch_status}",
-            if scratch_ready {
-                "(created for you)"
-            } else {
-                "(create with `mkdir -p` if missing)"
-            },
-        )
-        .replace("{strategist_note}", &strategist_note)
+    expand_run_checks(
+        GOAL_CONTINUATION_DIRECTIVE_TEMPLATE
+            .replace("{objective}", objective)
+            .replace("{tokens}", &tokens.to_string())
+            .replace("{elapsed}", elapsed)
+            .replace("{bail_preface}", &bail_preface)
+            .replace("{plan_pointer}", plan_pointer)
+            .replace("{verifier_gaps}", &verifier_gaps)
+            .replace("{reverify_block}", reverify_block)
+            .replace("{next_step}", &next_step)
+            .replace("{todo_tool}", todo_tool)
+            // `{SCRATCH}` is left literal; the model resolves it to this dir
+            .replace("{scratch_dir}", scratch_dir)
+            // Only claim the dir exists when the harness actually created it.
+            .replace(
+                "{scratch_status}",
+                if scratch_ready {
+                    "(created for you)"
+                } else {
+                    "(create with `mkdir -p` if missing)"
+                },
+            )
+            .replace("{strategist_note}", &strategist_note),
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -447,27 +462,29 @@ pub(super) fn render_goal_continuation_directive_legacy(
     let verifier_gaps = neutralize_directive_slot(verifier_gaps);
     let strategist_note = neutralize_directive_slot(strategist_note);
     let next_step = neutralize_directive_slot(next_step);
-    GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY
-        .replace("{objective}", objective)
-        .replace("{tokens}", &tokens.to_string())
-        .replace("{elapsed}", elapsed)
-        .replace("{bail_preface}", &bail_preface)
-        .replace("{plan_pointer}", plan_pointer)
-        .replace("{verifier_gaps}", &verifier_gaps)
-        .replace("{reverify_block}", reverify_block)
-        .replace("{next_step}", &next_step)
-        .replace("{todo_tool}", todo_tool)
-        .replace("{goal_tool}", goal_tool)
-        .replace("{scratch_dir}", scratch_dir)
-        .replace(
-            "{scratch_status}",
-            if scratch_ready {
-                "(created for you)"
-            } else {
-                "(create with `mkdir -p` if missing)"
-            },
-        )
-        .replace("{strategist_note}", &strategist_note)
+    expand_run_checks(
+        GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY
+            .replace("{objective}", objective)
+            .replace("{tokens}", &tokens.to_string())
+            .replace("{elapsed}", elapsed)
+            .replace("{bail_preface}", &bail_preface)
+            .replace("{plan_pointer}", plan_pointer)
+            .replace("{verifier_gaps}", &verifier_gaps)
+            .replace("{reverify_block}", reverify_block)
+            .replace("{next_step}", &next_step)
+            .replace("{todo_tool}", todo_tool)
+            .replace("{goal_tool}", goal_tool)
+            .replace("{scratch_dir}", scratch_dir)
+            .replace(
+                "{scratch_status}",
+                if scratch_ready {
+                    "(created for you)"
+                } else {
+                    "(create with `mkdir -p` if missing)"
+                },
+            )
+            .replace("{strategist_note}", &strategist_note),
+    )
 }
 
 /// Render the `{reverify_block}` slot.
@@ -484,7 +501,7 @@ pub(super) fn render_goal_reverify_block(
     let lead = if rounds_since_verify >= threshold.saturating_mul(3) {
         "STOP DRIFTING — VERIFY THE REMAINING GAP NOW."
     } else {
-        "Re-run the verification plan before continuing."
+        "Re-run the gating `## Acceptance criteria` entries before continuing."
     };
     format!(
         "{lead} You have run {rounds_since_verify} rounds since the last \
@@ -511,7 +528,7 @@ pub(super) fn render_goal_reverify_block_legacy(
         "{lead} You have run {rounds_since_verify} rounds since your last \
          verification without calling `{goal_tool}(completed: true)`. The ONLY \
          way to finish this goal is to PASS verification — not to keep editing. \
-         If the plan's `## Verification plan` steps now hold, call \
+         If the plan's gating `## Acceptance criteria` entries now hold, call \
          `{goal_tool}(completed: true)` THIS round to re-trigger the skeptic \
          panel. If they do NOT, name the SINGLE concrete gap still blocking it \
          and fix exactly that — do not make cosmetic changes to look busy.\n\n"
@@ -606,10 +623,10 @@ pub(super) const GOAL_NEXT_STEP_MAX_CHARS: usize = 400;
 /// A `NotAchieved` verdict's findings render separately via [`render_verifier_gaps_block`] (persisted in `last_classifier_gaps`).
 pub(super) fn resolve_goal_next_step(plan_path: Option<&Path>) -> Option<String> {
     use crate::session::goal_classifier::{cap_chars, neutralize_reminder_tags};
-    use crate::session::goal_next_step::first_unchecked_plan_item;
+    use crate::session::goal_next_step::first_pending_plan_item;
 
     plan_path
-        .and_then(first_unchecked_plan_item)
+        .and_then(first_pending_plan_item)
         .map(|item| neutralize_reminder_tags(cap_chars(&item, GOAL_NEXT_STEP_MAX_CHARS)))
 }
 
@@ -1287,7 +1304,18 @@ impl SessionActor {
                     }
                     let published_plan_file =
                         crate::session::plan_mode::publish_plan_episode(&plan_file);
-                    // Record `plan_file`, then snapshot the planner's ORIGINAL plan as the immutable baseline the verifier diffs later edits against
+                    if let Err(error) = std::fs::read_to_string(&published_plan_file) {
+                        tracing::warn!(%error, "goal planner: published plan unreadable");
+                        let _ = self
+                            .auto_pause_goal_if_matches_with_message(
+                                &goal_id,
+                                crate::session::goal_tracker::GoalPauseReason::Planner,
+                                format!("The planner's plan could not be read: {error}"),
+                            )
+                            .await;
+                        break;
+                    }
+                    // Record `plan_file`, then snapshot the committed contract as the immutable baseline the verifier diffs later edits against.
                     // Capture once: this runs only when no plan exists yet, and the `is_none()` guard keeps a restart / re-entry from overwriting it
                     let baseline_target = {
                         let mut tracker = self.goal_tracker.lock();
@@ -1923,5 +1951,75 @@ mod compaction_goal_section_tests {
         let goal = out.find("A goal has been set: ship it").unwrap();
         assert!(bg < task && task < goal, "{out}");
         assert!(out.contains("</system-reminder>"));
+    }
+}
+
+#[cfg(test)]
+mod run_checks_prompt_tests {
+    use super::super::GoalToolNames;
+    use xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
+
+    fn names() -> GoalToolNames {
+        GoalToolNames {
+            goal: "update_goal".to_string(),
+            task: "task".to_string(),
+            todo: "todo_write".to_string(),
+        }
+    }
+
+    #[test]
+    fn goal_rules_embed_the_shared_procedure() {
+        let rendered =
+            super::render_goal_rules("ship it", &names(), "", "", None, "/tmp/scratch", true);
+        assert!(rendered.contains(RUN_CHECKS_PROCEDURE));
+        assert!(!rendered.contains("run each change"));
+        assert!(!rendered.contains("{RUN_CHECKS}"));
+        assert!(!rendered.contains("two fixes"));
+        let legacy = super::render_goal_rules_legacy(
+            "ship it",
+            &names(),
+            "",
+            "",
+            None,
+            "/tmp/scratch",
+            true,
+        );
+        assert!(legacy.contains(RUN_CHECKS_PROCEDURE));
+        assert!(!legacy.contains("run each change"));
+        assert!(!legacy.contains("{RUN_CHECKS}"));
+    }
+
+    #[test]
+    fn plan_block_and_continuation_embed_the_shared_procedure() {
+        let plan = super::render_goal_plan_block(std::path::Path::new("/tmp/plan.md"), &names());
+        assert!(plan.contains(RUN_CHECKS_PROCEDURE));
+        assert!(!plan.contains("{RUN_CHECKS}"));
+        let continuation = super::render_goal_continuation_directive(
+            "ship it",
+            1,
+            "1s",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "next",
+            "todo_write",
+            "/tmp/scratch",
+            true,
+        );
+        assert!(continuation.contains(RUN_CHECKS_PROCEDURE));
+        assert!(!continuation.contains("two fixes"));
+        assert!(!continuation.contains("{RUN_CHECKS}"));
+    }
+
+    #[test]
+    fn reverify_asks_for_gating_tests() {
+        let current = super::render_goal_reverify_block(3, true, 3);
+        assert!(current.contains("gating `## Acceptance criteria`"));
+        assert!(!current.contains("verification plan"));
+        let legacy = super::render_goal_reverify_block_legacy(3, true, 3, "update_goal");
+        assert!(legacy.contains("gating `## Acceptance criteria` entries now hold"));
+        assert!(!legacy.contains("Verification plan"));
     }
 }

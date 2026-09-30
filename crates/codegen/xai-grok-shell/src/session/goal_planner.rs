@@ -449,26 +449,10 @@ pub(crate) async fn run_goal_planner(
         );
     }
 
-    let plan_body = match tokio::fs::read_to_string(inputs.plan_file).await {
-        Ok(s) => s,
-        Err(_) => {
-            tracing::info!(
-                plan_file = %plan_file_str,
-                "goal planner: plan file unreadable after write; failing closed",
-            );
-            return record_fail_closed(
-                GoalPlannerFailClosedReason::MissingPlan,
-                inputs.attempt,
-                started,
-                emit_event,
-            );
-        }
-    };
-    if let Err(errors) = crate::session::plan_contract::validate_plan_contract(&plan_body) {
-        tracing::warn!(
+    if tokio::fs::read_to_string(inputs.plan_file).await.is_err() {
+        tracing::info!(
             plan_file = %plan_file_str,
-            errors = ?errors,
-            "goal planner: plan contract invalid; failing closed",
+            "goal planner: plan file unreadable after write; failing closed",
         );
         return record_fail_closed(
             GoalPlannerFailClosedReason::MissingPlan,
@@ -477,7 +461,6 @@ pub(crate) async fn run_goal_planner(
             emit_event,
         );
     }
-
     let latency_ms = started.elapsed().as_millis() as u64;
     emit_event(Event::GoalPlannerCompleted {
         attempt: inputs.attempt,
@@ -976,13 +959,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn truncated_plan_body_fails_closed() {
+    async fn truncated_plan_body_is_accepted() {
         let plan_file = tmp_plan_file("truncated");
         let spawner = Arc::new(MockSpawner::ok_writes(
             &plan_file,
             b"# Plan: Truncated body missing sections here now\n\n## Goal kind\ncode-change\n",
         ));
-        let (log, emit) = collect_events();
+        let (_, emit) = collect_events();
 
         let outcome = run_goal_planner(
             spawner,
@@ -999,18 +982,9 @@ mod tests {
         )
         .await;
 
-        assert!(matches!(
-            outcome,
-            GoalPlannerOutcome::FailClosed {
-                reason: GoalPlannerFailClosedReason::MissingPlan,
-                ..
-            }
-        ));
         assert!(
-            log.lock()
-                .unwrap()
-                .iter()
-                .any(|t| t.starts_with("fail_closed:"))
+            matches!(outcome, GoalPlannerOutcome::Planned { .. }),
+            "a non-empty plan is accepted without a shape reject"
         );
     }
 

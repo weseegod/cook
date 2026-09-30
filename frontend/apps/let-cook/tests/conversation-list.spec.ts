@@ -212,6 +212,35 @@ test.describe("conversation list", () => {
     expect(errors).toEqual([]);
   });
 
+  test("repeated New chat clicks reuse an empty conversation", async ({ page }) => {
+    await openWorkspace(page, LIST_SEED);
+    const newChat = page.getByRole("button", { name: "New chat" });
+
+    // A burst of clicks arrives before the first session/new request has settled.
+    await newChat.evaluate((button) => {
+      for (let index = 0; index < 4; index += 1) (button as HTMLButtonElement).click();
+    });
+    await waitForCalls(page, "session/new");
+    await expect.poll(async () => callsTo(await api(page).requests(), "session/new").length).toBe(1);
+    const active = page.locator(".session-row.active");
+    await expect(active).toHaveCount(1);
+    await expect(active.locator(".session-open strong")).toHaveText("Untitled conversation");
+
+    // Further clicks while the new transcript is still empty reuse that session.
+    await newChat.click();
+    expect(callsTo(await api(page).requests(), "session/new")).toHaveLength(1);
+
+    await page.getByPlaceholder("Ask Cook anything…").fill("start the conversation");
+    await page.getByTestId("send-button").click();
+    await waitForCalls(page, "session/prompt");
+
+    // Once the active transcript has content, New chat starts another session.
+    await newChat.click();
+    await waitForCalls(page, "session/new", 2);
+    expect(callsTo(await api(page).requests(), "session/new")).toHaveLength(2);
+    await expect(page.getByRole("heading", { name: "What should we work on?" })).toBeVisible();
+  });
+
   test("shows the turn for a new chat the agent has not listed yet", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
