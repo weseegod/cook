@@ -36,19 +36,6 @@ pub(crate) fn project_tools_for_surface(
         .collect()
 }
 
-/// Legacy name kept for call sites/tests; forwards to [`project_tools_for_surface`].
-pub(crate) fn filter_cursor_tools_by_plan_mode(
-    defs: Vec<ToolDefinition>,
-    plan_active: bool,
-) -> Vec<ToolDefinition> {
-    let surface = if plan_active {
-        ToolSurface::Plan
-    } else {
-        ToolSurface::TaskOpen
-    };
-    project_tools_for_surface(defs, surface)
-}
-
 impl SessionActor {
     /// Resolve the per-turn tool surface for primary Grok Build agents.
     pub(super) fn current_tool_surface(&self) -> ToolSurface {
