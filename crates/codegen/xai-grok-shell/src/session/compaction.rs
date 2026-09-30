@@ -126,6 +126,14 @@ mod two_pass_prefire_helper_tests;
 #[cfg(test)]
 #[path = "compaction_verbatim_input_tests.rs"]
 mod verbatim_input_tests;
+
+/// The saved plan is reattached only on automatic compaction. Manual `/compact` keeps the summary.
+pub(crate) fn verbatim_plan_on_compact(
+    trigger: xai_grok_telemetry::events::CompactionTrigger,
+) -> bool {
+    matches!(trigger, xai_grok_telemetry::events::CompactionTrigger::Auto)
+}
+
 impl SessionActor {
     /// Two-pass is active for this session when the flag resolved on at build and the agent is not one that keeps its single short self-summary.
     pub(crate) fn two_pass_active(&self) -> bool {
@@ -1830,7 +1838,7 @@ impl SessionActor {
             (None, Some(context)) => Some(context),
             (reminder, None) => reminder,
         };
-        let system_reminder = {
+        let system_reminder = if verbatim_plan_on_compact(trigger) {
             let attachment = {
                 let guard = self.plan_mode.lock();
                 if guard.is_awaiting_plan_approval() {
@@ -1869,6 +1877,8 @@ impl SessionActor {
             } else {
                 system_reminder
             }
+        } else {
+            system_reminder
         };
         let system_reminder = if let Some(goal_section) = self.compaction_goal_section().await {
             use crate::session::acp_session::splice_goal_section;
@@ -2567,3 +2577,19 @@ impl SessionActor {
 #[cfg(test)]
 #[path = "compaction_inline_auto_compact_flow_tests.rs"]
 mod inline_auto_compact_flow_tests;
+
+#[cfg(test)]
+mod verbatim_plan_on_compact_tests {
+    use super::verbatim_plan_on_compact;
+    use xai_grok_telemetry::events::CompactionTrigger;
+
+    #[test]
+    fn auto_compact_keeps_the_saved_plan() {
+        assert!(verbatim_plan_on_compact(CompactionTrigger::Auto));
+    }
+
+    #[test]
+    fn manual_compact_does_not_reattach_the_plan() {
+        assert!(!verbatim_plan_on_compact(CompactionTrigger::Manual));
+    }
+}
