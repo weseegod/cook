@@ -41,7 +41,10 @@ SWE_BIN="$PWD/temp/swe-bench/venv/bin/swebench" \
 
 Bundles live under `docs/audits/` with mode 700. They contain the selection,
 exact prompts, agent artifacts, patches, predictions, configuration, and a
-comparison report. Graded runs also retain grader logs and the task repo commit.
+root comparison index and one detailed `report.md` per level. Detailed reports
+include the complete problem statement, exit and wall time, token and tool
+usage, changed-file counts and sizes, output speed, SWE-bench result, and
+non-gating static artifact checks. Graded runs also retain grader logs and the task repo commit.
 Each agent gets a unique run ID; empty patches skip Docker. Upstream mirrors
 live under `temp/swe-bench/mirrors/`; local clones hardlink objects without using
 `--shared`. Working trees still consume disk space.

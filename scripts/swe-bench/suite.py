@@ -103,30 +103,137 @@ def grade_label(patch, report_dir, iid, no_grade):
         return 'error'
 
 
-def render_report(bundle, agents, model, no_grade):
+def load_summarizer():
     spec = importlib.util.spec_from_file_location('evaluation_usage', Path(__file__).parents[1] / 'evaluate/summarize.py')
     usage = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(usage)
-    selection = json.loads((bundle / 'selection.json').read_text())
+    return usage
+
+
+def patch_paths(workdir, base_commit):
+    output = git('diff', '--cached', '--name-only', '-z', base_commit, '--', cwd=workdir)
+    return sorted(Path(os.fsdecode(raw)) for raw in output.split(b'\0') if raw)
+
+
+def patch_file_stats(workdir, paths):
+    files = 0
+    size = 0
+    changed = []
+    for path in paths:
+        full_path = Path(workdir) / path
+        files += 1
+        if full_path.is_file() and not full_path.is_symlink():
+            try:
+                size += full_path.stat().st_size
+            except OSError:
+                pass
+            if full_path.suffix.lower() in {'.html', '.htm'}:
+                changed.append(full_path)
+    return files, size, changed
+
+
+def render_task_report(bundle, row, agents, model, wire, thinking, parallel, no_grade, usage):
+    task_dir = bundle / f"{row['level']}-{row['instance_id']}"
     runs = json.loads((bundle / 'grading.json').read_text()) if (bundle / 'grading.json').exists() else {}
-    lines = [f'# SWE-bench evaluation: {model}', '', f"Seed: {selection['seed']}; dataset: {selection['dataset']}; revision: {selection['revision']}", '', '| Level / instance | ' + ' | '.join(agents) + ' |', '| --- | ' + ' | '.join('---' for _ in agents) + ' |']
+    task = row['problem_statement']
+    quoted_task = '> ' + task.replace('|', '\\|').replace('\n', '\n> ')
+    lines = [f'# Agent comparison: {model}', '', f'Wire model: `{wire}`',
+             f'Thinking: `{thinking}`', f'Parallel: `{parallel}`', '',
+             f"Level: `{row['level']}`", f"Instance: `{row['instance_id']}`", '',
+             'Task:', '', quoted_task, '',
+             '| Agent | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Cache field | Usage source | Files | Bytes | Output tokens/s | SWE-bench result |',
+             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | --- |']
+    summary = {'expected': {}, 'missing': {}, 'references': {}, 'planned': {}}
+    for agent in agents:
+        directory = task_dir / agent
+        metrics = getattr(usage, 'usage_' + ('cook' if agent == 'cook-main' else agent))(directory / 'stdout.json')
+        try:
+            seconds = float((directory / 'elapsed-seconds.txt').read_text().strip())
+        except (OSError, ValueError):
+            seconds = None
+        try:
+            exit_code = int((directory / 'exit-code.txt').read_text().strip())
+        except (OSError, ValueError):
+            exit_code = None
+        patch_file = directory / 'patch.diff'
+        patch = patch_file.read_text(errors='replace') if patch_file.is_file() else None
+        if patch is None:
+            paths = []
+            files, size, changed_html = 0, 0, []
+        else:
+            paths = patch_paths(directory / 'workdir', row['base_commit'])
+            files, size, changed_html = patch_file_stats(directory / 'workdir', paths)
+        rate = round(metrics['output'] / seconds, 2) if metrics['output'] is not None and seconds and seconds > 0 else None
+        cache_presence = 'present' if metrics['read'] is not None or metrics['write'] is not None else 'unreported'
+        run = runs.get(agent, {})
+        report_dir = bundle / 'logs/evaluation' / run.get('run_id', '') / run.get('model_name_or_path', '').replace('/', '__') / row['instance_id']
+        label = grade_label(patch, report_dir, row['instance_id'], no_grade)
+        table_values = [agent, f'{seconds:.2f}' if seconds is not None else 'unreported',
+                        exit_code if exit_code is not None else 'unreported',
+                        metrics['calls'], metrics['tools'], metrics['input'], metrics['output'],
+                        metrics['read'], metrics['write'], cache_presence,
+                        metrics.get('source', 'stdout.json'), files, size, rate, label]
+        lines.append('| ' + ' | '.join('unreported' if value is None else str(value) for value in table_values) + ' |')
+
+        expected = usage.expected_files(task)
+        workdir = directory / 'workdir'
+        missing = [name for name in expected if not (workdir / name).is_file()]
+        references = usage.missing_local_html_references(workdir, changed_html)
+        planned = usage.missing_planned_scripts(directory, workdir)
+        summary['expected'][agent] = expected
+        summary['missing'][agent] = missing
+        summary['references'][agent] = references
+        summary['planned'][agent] = planned
+
+    lines += ['', '## Static artifact checks', '',
+              'These are non-gating snapshot checks; they do not execute the project or test commands. HTML references are checked in patch-changed files; planned script checks cover workspace-relative paths only.',
+              '', '| Agent | Required files | Missing files | Broken local HTML refs | Missing workspace test scripts |',
+              '| --- | ---: | --- | --- | --- |']
+    for agent in agents:
+        expected = summary['expected'][agent]
+        values = [agent, len(expected) if expected else 'unspecified',
+                  ', '.join(summary['missing'][agent]) or '—',
+                  ', '.join(summary['references'][agent]) or '—',
+                  ', '.join(summary['planned'][agent]) or '—']
+        lines.append('| ' + ' | '.join(str(value).replace('|', '\\|') for value in values) + ' |')
+    lines += ['', "Metrics come from each agent's JSON output or the labeled Cook session usage file. `unreported` means the field was absent.",
+              'Files counts changed paths in the patch; bytes count the current contents of changed regular files (deleted files contribute zero bytes).',
+              'SWE-bench status is `not graded` for smoke runs, `empty` for an empty patch, and otherwise comes from the matching grader report.', '']
+    (task_dir / 'report.md').write_text('\n'.join(lines))
+    return lines
+
+
+def render_report(bundle, agents, model, no_grade):
+    usage = load_summarizer()
+    selection = json.loads((bundle / 'selection.json').read_text())
+    config = json.loads((bundle / 'config.json').read_text()) if (bundle / 'config.json').exists() else {}
+    wire = config.get('wire', model)
+    thinking = config.get('thinking', 'unreported')
+    parallel = config.get('parallel', 'unreported')
+    lines = [f'# Agent comparison: {model}', '', f'Wire model: `{wire}`', f'Thinking: `{thinking}`',
+             f'Parallel: `{parallel}`', '',
+             f"Seed: `{selection['seed']}`", f"Dataset: `{selection['dataset']}`", f"Revision: `{selection['revision']}`", '',
+             '| Level | Instance | ' + ' | '.join(agents) + ' | Detailed report |',
+             '| --- | --- | ' + ' | '.join('---' for _ in agents) + ' | --- |']
     for row in selection['instances']:
         iid, level = row['instance_id'], row['level']
         cells = []
         for agent in agents:
             directory = bundle / f'{level}-{iid}' / agent
-            patch = (directory / 'patch.diff').read_text() if (directory / 'patch.diff').exists() else None
-            exit_code = (directory / 'exit-code.txt').read_text().strip() if (directory / 'exit-code.txt').exists() else 'missing'
-            metrics = getattr(usage, 'usage_' + ('cook' if agent == 'cook-main' else agent))(directory / 'stdout.json')
+            patch = (directory / 'patch.diff').read_text(errors='replace') if (directory / 'patch.diff').is_file() else None
+            exit_code = (directory / 'exit-code.txt').read_text().strip() if (directory / 'exit-code.txt').is_file() else 'missing'
+            budget = (directory / 'timeout-seconds.txt').read_text().strip() if (directory / 'timeout-seconds.txt').is_file() else '?'
+            elapsed = (directory / 'elapsed-seconds.txt').read_text().strip() if (directory / 'elapsed-seconds.txt').is_file() else '?'
+            runs = json.loads((bundle / 'grading.json').read_text()) if (bundle / 'grading.json').is_file() else {}
             run = runs.get(agent, {})
             report_dir = bundle / 'logs/evaluation' / run.get('run_id', '') / run.get('model_name_or_path', '').replace('/', '__') / iid
-            label = 'error' if patch is None else grade_label(patch, report_dir, iid, no_grade)
-            tokens = ', '.join(f'{k}={metrics.get(k) if metrics.get(k) is not None else "?"}' for k in ('calls', 'input', 'output', 'read', 'write', 'tools'))
-            budget = (directory / 'timeout-seconds.txt').read_text().strip() if (directory / 'timeout-seconds.txt').exists() else '?'
-            elapsed = (directory / 'elapsed-seconds.txt').read_text().strip() if (directory / 'elapsed-seconds.txt').exists() else '?'
-            cells.append(f'exit {exit_code}; elapsed {elapsed}s / limit {budget}s<br>{tokens}<br>{len(patch.encode()) if patch is not None else "?"} bytes; {label}')
-        lines.append(f'| {level} / {iid} | ' + ' | '.join(cells) + ' |')
-    lines += ['', 'Patches, prompts, exit codes, and raw agent outputs are retained in this bundle.', '']
+            result = grade_label(patch, report_dir, iid, no_grade)
+            cells.append(f'exit {exit_code}<br>{elapsed}s / {budget}s<br>{len(patch.encode()) if patch is not None else "?"} B<br>{result}')
+        render_task_report(bundle, row, agents, model, wire, thinking, parallel, no_grade, usage)
+        details = f'[{level} report]({level}-{iid}/report.md)'
+        lines.append(f'| {level} | {iid} | ' + ' | '.join(cells) + f' | {details} |')
+    lines += ['', 'Each level report includes the full problem statement, per-agent usage and artifact metrics, and static checks.',
+              'Patches, prompts, exit codes, and raw agent outputs are retained in this bundle.', '']
     (bundle / 'report.md').write_text('\n'.join(lines))
     print(bundle / 'report.md')
 
