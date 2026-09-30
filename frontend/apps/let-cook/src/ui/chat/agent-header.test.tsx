@@ -162,6 +162,22 @@ describe("AgentHeader layout", () => {
     expect(screen.getByTestId("todo-overlay")).not.toHaveTextContent("ACP-only task");
   });
 
+  it("expands and collapses a long checklist row on click", () => {
+    const item = "Write the full implementation and verify every requested behavior in the current workspace";
+    useSessionStore.setState({
+      planFiles: [planFile("current.md", `# Plan\n\n## Task checklist\n- [ ] ${item}`)],
+    });
+    renderHeader();
+    fireEvent.click(screen.getByTestId("todo-toggle"));
+
+    const toggle = screen.getByRole("button", { name: item });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
   it("shows a saved passive plan and selects the active file when present", () => {
     useSessionStore.setState({
       planMode: true,

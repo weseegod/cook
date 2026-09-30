@@ -33,6 +33,35 @@
   overflow-wrap: anywhere;
 }
 
+.todo-menu .plan-entry-toggle {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.todo-menu .plan-entry-toggle > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.todo-menu .plan-entry-toggle[aria-expanded="true"] > span {
+  display: block;
+}
+
+.todo-menu .plan-entry-toggle:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: 2px;
+}
+
 .plan-entry-icon {
   flex: 0 0 auto;
   margin-top: 2px;

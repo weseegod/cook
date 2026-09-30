@@ -68,6 +68,35 @@ test.describe("plan list", () => {
     expect(calls.at(-1)?.params).toMatchObject({ sessionId: "mock-session", cwd: "/tmp/cook-demo" });
   });
 
+  test("collapses long header checklist rows to two lines until clicked", async ({ page }) => {
+    const task = "Implement the full workflow, verify the parser, preserve saved sessions, and document the behavior. ".repeat(4);
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      planFiles: [{
+        ...PLAN_SEED.planFiles[0],
+        content: `# Current plan\n\n## Task checklist\n- [ ] ${task}`,
+      }],
+    });
+    await startSession(page);
+    await page.getByTestId("todo-toggle").click();
+
+    const toggle = page.getByTestId("todo-overlay").getByRole("button", { name: task.trim() });
+    const text = toggle.locator("span");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    const collapsed = await text.evaluate((node) => ({
+      height: node.getBoundingClientRect().height,
+      lineHeight: parseFloat(getComputedStyle(node).lineHeight),
+      clamp: getComputedStyle(node).webkitLineClamp,
+    }));
+    expect(collapsed.clamp).toBe("2");
+    expect(collapsed.height).toBeLessThanOrEqual(collapsed.lineHeight * 2 + 1);
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const expandedHeight = await text.evaluate((node) => node.getBoundingClientRect().height);
+    expect(expandedHeight).toBeGreaterThan(collapsed.height);
+  });
+
   test("hides the row actions until the row is hovered, then offers Copy, Copy file path and Delete", async ({ page }) => {
     await openWorkspace(page, PLAN_SEED);
     await startSession(page);

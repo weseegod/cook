@@ -77,7 +77,7 @@ export function TodoChip({ entries }: { entries: ReturnType<typeof extractPlanCh
       </button>
       {open && (
         <div ref={menu} className="todo-menu" role="menu" data-testid="todo-overlay">
-          <PlanChecklist entries={entries} />
+          <PlanChecklist entries={entries} expandable />
         </div>
       )}
     </div>
