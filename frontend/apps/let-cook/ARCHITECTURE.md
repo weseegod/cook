@@ -176,6 +176,11 @@ Markdown is `markdown.tsx`.
 
 `ui/chat/agent-header.tsx` is the status bar. Left: workspace and plans.
 Right, in fixed slots: goal or the plan checklist, Git with line changes, tools.
+The checklist chip extracts `## Task checklist` from the matching plan review body
+or the current plan file content. Active plan-mode and passive OpenTask plans share
+that heading; saved `## Steps` plans still read as a fallback. The current plan
+file is the plan-mode episode while planning and the newest file otherwise.
+ACP Plan entries remain available to other progress surfaces.
 The Git chip menu shows the changed-file count in Preview and opens the diff, or starts Commit / Commit and push.
 
 | Chip | File |
@@ -183,7 +188,7 @@ The Git chip menu shows the changed-file count in Preview and opens the diff, or
 | Plans | `ui/chat/plan-chip.tsx` (list rules: desktop-app §7) |
 | Tasks | `ui/activity/tasks-chip.tsx`, menu `tasks-menu.tsx` |
 | Goal | `ui/chat/goal-status.tsx`, detail `goal-detail.tsx` |
-| Checklist when there is no goal | `ui/chat/todo-chip.tsx` |
+| Checklist when there is no goal | `ui/chat/todo-chip.tsx`, Markdown extractor `ui/chat/plan-entries.ts` |
 | Git and line changes | `ui/chat/git-chip.tsx`, line totals `ui/chat/header-diffstat.tsx`, probe `git-status.ts` |
 | Context | `ui/chat/context-chip.tsx` |
 

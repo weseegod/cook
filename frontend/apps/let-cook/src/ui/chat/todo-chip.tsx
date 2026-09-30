@@ -1,13 +1,25 @@
 import { ListTodo } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useSessionStore } from "../../state/session";
 import { clampMenuToViewport } from "../components/anchored-menu";
-import { planEntryStatus } from "./plan-entries";
+import { extractPlanChecklist, planEntryStatus } from "./plan-entries";
 import { PlanChecklist } from "./plan-list";
 
-/** Header checklist chip: the latest plan's todo pane in the same anchored-menu family as Plans. */
-export function TodoChip() {
-  const entries = useSessionStore((state) => state.planEntries);
+export function usePlanChecklistEntries() {
+  const review = useSessionStore((state) => state.planReview);
+  const files = useSessionStore((state) => state.planFiles);
+  const planMode = useSessionStore((state) => state.planMode);
+  return useMemo(() => {
+    // The tracker can still mark an older episode active after plan mode ends.
+    const current = (planMode ? files.find((file) => file.active) : null) ?? files[0];
+    const reviewMatchesCurrent = review?.pending || !current || current.name === review?.fileName
+      || (review?.fileName && current.name.endsWith(`-${review.fileName}`));
+    return extractPlanChecklist(review?.body?.trim() && reviewMatchesCurrent ? review.body : current?.content);
+  }, [review, files, planMode]);
+}
+
+/** Header checklist chip: task rows from the current plan Markdown. */
+export function TodoChip({ entries }: { entries: ReturnType<typeof extractPlanChecklist> }) {
   const open = useSessionStore((state) => state.todoOverlayOpen);
   const setOpen = useSessionStore((state) => state.setTodoOverlayOpen);
   const root = useRef<HTMLDivElement>(null);

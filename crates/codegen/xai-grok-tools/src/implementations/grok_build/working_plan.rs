@@ -69,18 +69,18 @@ State each as an observable pass or fail. Group outcomes one check can cover. Sp
 Name a command that already exists, or describe the behavior. Do not invent a command, name an unwritten script, or add a checkbox. \
 Do not add an optional idea, a performance test, a screenshot, or an extra scenario unless that outcome needs it.\n\
 \n\
-## Steps\n\
+## Task checklist\n\
 - [ ] `path` — the change. Done when: an observable result.\n\
 - [ ] Run ## Acceptance criteria. Done when: each criterion's command or behavior holds.\n\
 \n\
-The saved file is exactly the body you send, including ## Acceptance criteria and ## Steps. ## Steps is the last section. \
+The saved file is exactly the body you send, including ## Acceptance criteria and ## Task checklist. ## Task checklist is the last section. \
 Do not add a ## Files section: the prompt and the conversation already name the files. Do not add anchors, \
 an edit brief, decisions, or a deviations log.\n\
 \n\
 When a step is done, edit the saved plan file and change that line from `- [ ]` to `- [x]`. \
 Leave the rest of the line unchanged. Do not call save_working_plan again to revise the shape.\n\
 \n\
-Before you stop, read ## Steps and ## Acceptance criteria. If a planned check already finished on the tree \
+Before you stop, read ## Task checklist and ## Acceptance criteria. If a planned check already finished on the tree \
 after the last edit, cite that result and do not run it again. If a step is still open or a criterion has \
 not been run, name it and continue unless you are blocked.\n\
 \n\
@@ -193,7 +193,7 @@ fn rejected(message: &str) -> SkillOutput {
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
-    /// Full working-plan markdown: title, Goal, Acceptance criteria, and Steps. The host stores this text unchanged.
+    /// Full working-plan markdown: title, Goal, Acceptance criteria, and Task checklist. The host stores this text unchanged.
     #[schemars(description = "Full working-plan markdown")]
     pub body: String,
 }
@@ -235,7 +235,7 @@ impl crate::types::tool_metadata::ToolMetadata for SaveWorkingPlanTool {
 
     fn description_template(&self) -> &str {
         "Save a passive working plan into the session plans list. Pass the full markdown as \
-         body, including ## Acceptance criteria and the ## Steps checklist. Then keep implementing on this turn. \
+         body, including ## Acceptance criteria and the ## Task checklist section. Then keep implementing on this turn. \
          Mark a finished step by editing that file from `- [ ]` to `- [x]`. This does not enter \
          plan mode and does not ask for approval."
     }
@@ -308,6 +308,14 @@ mod tests {
         );
         assert!(WORKING_PLAN_SKILL_BODY.contains("pass or fail"));
         assert!(WORKING_PLAN_SKILL_BODY.contains("unwritten script"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("## Task checklist"));
+        assert!(!WORKING_PLAN_SKILL_BODY.contains("## Steps"));
+        assert!(
+            <SaveWorkingPlanTool as crate::types::tool_metadata::ToolMetadata>::description_template(
+                &SaveWorkingPlanTool
+            )
+            .contains("## Task checklist")
+        );
         assert!(!WORKING_PLAN_SKILL_BODY.contains("## Tests\n"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Product:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Test or harness:"));

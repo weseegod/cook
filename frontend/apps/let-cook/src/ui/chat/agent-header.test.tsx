@@ -13,7 +13,9 @@ vi.mock("../../acp/host", () => ({ pickFolder: vi.fn(async () => null) }));
 
 vi.mock("../../acp/workspace", () => ({ loadGitStatus: vi.fn() }));
 
+import type { PlanFileSummary } from "../../acp/plan-files";
 import { loadGitStatus, type GitStatusSummary } from "../../acp/workspace";
+import { reduceGoalUpdate } from "../../state/goal";
 import { useSessionStore } from "../../state/session";
 import { useToolsPanelStore } from "../../state/tools-panel";
 import { AgentHeader } from "./agent-header";
@@ -27,6 +29,13 @@ const dirty: GitStatusSummary = {
   deletions: 3,
   operationInProgress: false,
 };
+
+function planFile(name: string, content: string | null, active = false): PlanFileSummary {
+  return {
+    name, title: name, path: `/plans/${name}`, relativePath: `plans/${name}`,
+    sizeBytes: content?.length ?? 0, modifiedMs: 0, active, deletable: true, content,
+  };
+}
 
 function renderHeader() {
   return render(
@@ -52,6 +61,9 @@ beforeEach(() => {
     blocks: [],
     goal: null,
     planEntries: [],
+    planReview: null,
+    planFiles: [],
+    planMode: false,
     todoOverlayOpen: false,
     usage: null,
     turnRunning: false,
@@ -61,7 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   publishGitStatus(null);
   useToolsPanelStore.setState({ nonce: 0, target: null });
-  useSessionStore.setState({ cwd: null, blocks: [], goal: null, planEntries: [], todoOverlayOpen: false });
+  useSessionStore.setState({ cwd: null, blocks: [], goal: null, planEntries: [], planReview: null, planFiles: [], planMode: false, todoOverlayOpen: false });
 });
 
 describe("AgentHeader git chip", () => {
@@ -128,13 +140,15 @@ describe("AgentHeader layout", () => {
     ]);
   });
 
-  it("shows the checklist chip with completed progress when a plan exists without a goal", () => {
+  it("shows the checklist from the review body without ACP todo entries", () => {
     useSessionStore.setState({
-      planEntries: [
-        { content: "Done", status: "completed" },
-        { content: "In progress", status: "in_progress" },
-        { content: "Pending", status: "pending" },
-      ],
+      planEntries: [{ content: "ACP-only task", status: "in_progress" }],
+      planReview: {
+        body: "# Plan: Build a board\n\n## Task checklist\n- [x] Done\n- [ ] Pending\n- [ ] Verify",
+        fileName: "2026-09-30T04-00-00Z.md",
+        pending: true,
+      },
+      planFiles: [planFile("board-2026-09-30T04-00-00Z.md", null, true)],
     });
     renderHeader();
 
@@ -142,6 +156,63 @@ describe("AgentHeader layout", () => {
     expect(chip).toHaveTextContent("Checklist");
     expect(screen.getByTestId("todo-chip-count")).toHaveTextContent("1/3");
     expect(chip.closest(".agent-header-slot")).toHaveClass("agent-header-slot-goal-checklist");
+    fireEvent.click(chip);
+    expect(screen.getByTestId("todo-overlay")).toHaveTextContent("Done");
+    expect(screen.getByTestId("todo-overlay")).toHaveTextContent("Pending");
+    expect(screen.getByTestId("todo-overlay")).not.toHaveTextContent("ACP-only task");
+  });
+
+  it("shows a saved passive plan and selects the active file when present", () => {
+    useSessionStore.setState({
+      planMode: true,
+      planFiles: [
+        planFile("older.md", "## Task checklist\n- [ ] old task"),
+        planFile("current.md", "# Plan\n\n## Task checklist\n- [x] shipped\n- [ ] run checks", true),
+      ],
+    });
+    const view = renderHeader();
+    expect(screen.getByTestId("todo-chip-count")).toHaveTextContent("1/2");
+    fireEvent.click(screen.getByTestId("todo-toggle"));
+    expect(screen.getByTestId("todo-overlay")).toHaveTextContent("run checks");
+    view.unmount();
+
+    useSessionStore.setState({
+      planMode: false,
+      planReview: { body: "## Task checklist\n- [ ] previous review", fileName: "old.md", pending: false },
+      planFiles: [
+        planFile("passive.md", "# Plan\n\n## Steps\n- [ ] saved passive task"),
+        planFile("old.md", "## Task checklist\n- [ ] old tracker", true),
+      ],
+      todoOverlayOpen: false,
+    });
+    renderHeader();
+    expect(screen.getByTestId("todo-chip-count")).toHaveTextContent("0/1");
+    fireEvent.click(screen.getByTestId("todo-toggle"));
+    expect(screen.getByTestId("todo-overlay")).toHaveTextContent("saved passive task");
+  });
+
+  it("keeps the goal chip in the slot and hides the checklist chip", () => {
+    const goal = reduceGoalUpdate(
+      { goal: null, clearedGoalId: null },
+      { goal_id: "g1", objective: "Build a board", status: "complete" },
+    ).slice.goal;
+    useSessionStore.setState({
+      goal,
+      planFiles: [planFile("board.md", "## Task checklist\n- [ ] todo")],
+    });
+    renderHeader();
+    expect(screen.getByTestId("goal-chip")).toBeInTheDocument();
+    expect(screen.queryByTestId("todo-toggle")).toBeNull();
+  });
+
+  it("hides the checklist when a plan has no checklist rows", () => {
+    useSessionStore.setState({
+      planEntries: [{ content: "ACP-only task", status: "pending" }],
+      planFiles: [planFile("empty.md", "# Plan\n\n## Acceptance criteria\n- [ ] approval")],
+    });
+    renderHeader();
+    expect(screen.queryByTestId("todo-toggle")).toBeNull();
+    expect(document.querySelector(".agent-header-slot-goal-empty")).not.toBeNull();
   });
 
   it("opens the Review panel from the Git chip Preview action", async () => {

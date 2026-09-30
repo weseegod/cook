@@ -9,7 +9,7 @@ const SAMPLE: &str = "\
 ## Goal
 A playable board in the browser.
 
-## Steps
+## Task checklist
 - [ ] `index.html` — add the page. Done when: the file exists and loads the script.
 - [ ] `js/app.js` — add the loop. Done when: the check script runs.
 ";
@@ -23,10 +23,10 @@ fn working_plan_skill_keeps_the_checklist_in_the_file() {
     assert!(working_plan_skill_body.contains("pass or fail"));
     assert!(working_plan_skill_body.contains("unwritten script"));
     assert!(!working_plan_skill_body.contains("## Tests\n"));
-    let steps_at = working_plan_skill_body
-        .find("## Steps")
+    let checklist_at = working_plan_skill_body
+        .find("## Task checklist")
         .expect("the checklist is the last section");
-    assert!(tests_at < steps_at);
+    assert!(tests_at < checklist_at);
     assert!(working_plan_skill_body.contains("Product:"));
     assert!(working_plan_skill_body.contains("Test or harness:"));
     assert!(working_plan_skill_body.contains("Environment:"));
@@ -43,7 +43,7 @@ fn working_plan_skill_keeps_the_checklist_in_the_file() {
 }
 
 #[test]
-fn working_plan_save_keeps_steps_and_overwrites_the_same_episode() {
+fn working_plan_save_keeps_task_checklist_and_overwrites_the_same_episode() {
     let dir = tempfile::tempdir().unwrap();
     let tracker = crate::session::plan_mode::PlanModeTracker::new(dir.path().to_path_buf());
     let path = save_working_plan(dir.path(), SAMPLE, None).unwrap();
@@ -53,7 +53,7 @@ fn working_plan_save_keeps_steps_and_overwrites_the_same_episode() {
         "published name {name}"
     );
     let saved = std::fs::read_to_string(&path).unwrap();
-    assert!(saved.contains("## Steps"), "{saved}");
+    assert!(saved.contains("## Task checklist"), "{saved}");
     assert!(saved.contains("- [ ] `index.html`"));
     let updated = SAMPLE.replace("- [ ] `index.html`", "- [x] `index.html`");
     let again = save_working_plan(dir.path(), &updated, Some(&path)).unwrap();

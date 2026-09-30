@@ -7,6 +7,26 @@
  */
 export type PlanEntryStatus = "pending" | "in_progress" | "completed" | "cancelled";
 
+/** Read the task checklist from an active plan or a saved passive working plan. */
+export function extractPlanChecklist(body: string | null | undefined): Array<{ content: string; status: "pending" | "completed" }> {
+  if (!body) return [];
+  const lines = body.split(/\r?\n/);
+  const headings = lines.map((line) => line.match(/^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/));
+  const findSection = (name: string) => headings.findIndex((heading) => heading?.[2].toLowerCase() === name);
+  const start = findSection("task checklist");
+  const section = start >= 0 ? start : findSection("steps");
+  if (section < 0) return [];
+  const level = headings[section]![1].length;
+  const entries: Array<{ content: string; status: "pending" | "completed" }> = [];
+  for (let index = section + 1; index < lines.length; index += 1) {
+    const heading = headings[index];
+    if (heading && heading[1].length <= level) break;
+    const item = lines[index].match(/^\s*[-*+]\s+\[([ xX])\]\s+(.+?)\s*$/);
+    if (item) entries.push({ content: item[2], status: item[1] === " " ? "pending" : "completed" });
+  }
+  return entries;
+}
+
 /** Entry text: `content`, falling back to the shapes a non-ACP plan body can carry. */
 export function planEntryText(entry: unknown): string {
   if (typeof entry === "string") return entry;
