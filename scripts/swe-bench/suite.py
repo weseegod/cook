@@ -103,6 +103,13 @@ def grade_label(patch, report_dir, iid, no_grade):
         return 'error'
 
 
+def grading_report_dir(bundle, run, iid):
+    relative = Path(run.get('run_id', '')) / run.get('model_name_or_path', '').replace('/', '__') / iid
+    candidates = [bundle / 'logs/run_evaluation' / relative,
+                  bundle / 'logs/evaluation' / relative]
+    return next((path for path in candidates if path.exists()), candidates[0])
+
+
 def load_summarizer():
     spec = importlib.util.spec_from_file_location('evaluation_usage', Path(__file__).parents[1] / 'evaluate/summarize.py')
     usage = importlib.util.module_from_spec(spec)
@@ -166,7 +173,7 @@ def render_task_report(bundle, row, agents, model, wire, thinking, parallel, no_
         rate = round(metrics['output'] / seconds, 2) if metrics['output'] is not None and seconds and seconds > 0 else None
         cache_presence = 'present' if metrics['read'] is not None or metrics['write'] is not None else 'unreported'
         run = runs.get(agent, {})
-        report_dir = bundle / 'logs/evaluation' / run.get('run_id', '') / run.get('model_name_or_path', '').replace('/', '__') / row['instance_id']
+        report_dir = grading_report_dir(bundle, run, row['instance_id'])
         label = grade_label(patch, report_dir, row['instance_id'], no_grade)
         table_values = [agent, f'{seconds:.2f}' if seconds is not None else 'unreported',
                         exit_code if exit_code is not None else 'unreported',
@@ -226,7 +233,7 @@ def render_report(bundle, agents, model, no_grade):
             elapsed = (directory / 'elapsed-seconds.txt').read_text().strip() if (directory / 'elapsed-seconds.txt').is_file() else '?'
             runs = json.loads((bundle / 'grading.json').read_text()) if (bundle / 'grading.json').is_file() else {}
             run = runs.get(agent, {})
-            report_dir = bundle / 'logs/evaluation' / run.get('run_id', '') / run.get('model_name_or_path', '').replace('/', '__') / iid
+            report_dir = grading_report_dir(bundle, run, iid)
             result = grade_label(patch, report_dir, iid, no_grade)
             cells.append(f'exit {exit_code}<br>{elapsed}s / {budget}s<br>{len(patch.encode()) if patch is not None else "?"} B<br>{result}')
         render_task_report(bundle, row, agents, model, wire, thinking, parallel, no_grade, usage)
@@ -272,6 +279,12 @@ def self_test():
         for value, expected in [(True, 'resolved'), (False, 'unresolved')]:
             (root / 'report.json').write_text(json.dumps({iid: {'resolved': value}}))
             assert grade_label('patch', root, iid, False) == expected
+        run = {'run_id': 'fixture-run', 'model_name_or_path': 'model/agent'}
+        actual_report_dir = grading_report_dir(root, run, iid)
+        assert actual_report_dir == root / 'logs/run_evaluation/fixture-run/model__agent' / iid
+        actual_report_dir.mkdir(parents=True)
+        (actual_report_dir / 'report.json').write_text(json.dumps({iid: {'resolved': True}}))
+        assert grade_label('patch', actual_report_dir, iid, False) == 'resolved'
         (root / 'run_instance.log').write_text('>>>>> Patch Apply Failed')
         assert grade_label('patch', root, iid, False) == 'unresolved (apply failed)'
         (root / 'report.json').write_text('{broken')
