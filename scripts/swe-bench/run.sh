@@ -10,8 +10,8 @@ Run one pinned SWE-bench Verified instance per level with each selected agent.
 --timeout SECONDS  easy-task time budget, minimum 600 (default: 600);
                    medium=2x, hard=4x, very-hard=6x for every agent
 --thinking BOOL    reasoning enabled (default: true)
---parallel N       shared pool, 1 to 3 (default: 1); uses N model slots unless
-                   EVAL_PARALLEL_SLOTS is set
+--parallel N       shared model and grader pool, 1 to 3 (default: 1); model
+                   slots use N unless EVAL_PARALLEL_SLOTS is set
 --output-root DIR  bundle parent (default: docs/audits)
 --dry-run          print four IDs without starting a model or loading datasets
 --no-grade         skip Docker grading; grading is enabled by default
@@ -202,7 +202,7 @@ PY
 )
     if ((${#grade_args[@]})); then
       set +e
-      (cd "$BUNDLE_DIR" && "$SWE_BIN" eval verified -p "$BUNDLE_DIR/predictions/$agent.jsonl" --run-id "cook-swe-$STAMP-$agent" --task-repo "$TASK_REPO" -j 1 "${grade_args[@]}") >"$BUNDLE_DIR/grade-$agent.log" 2>&1
+      (cd "$BUNDLE_DIR" && "$SWE_BIN" eval verified -p "$BUNDLE_DIR/predictions/$agent.jsonl" --run-id "cook-swe-$STAMP-$agent" --task-repo "$TASK_REPO" -j "$PARALLEL" "${grade_args[@]}") >"$BUNDLE_DIR/grade-$agent.log" 2>&1
       rc=$?
       set -e
       printf '%s\n' "$rc" >"$BUNDLE_DIR/grade-$agent-exit-code.txt"

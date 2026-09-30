@@ -21,8 +21,10 @@ The default timeout is 600 seconds for easy, 1200 for medium, 2400 for hard,
 and 3600 for very-hard.
 `--timeout` changes the easy-task budget (minimum 600 seconds); other levels
 receive 2, 4, and 6 times that budget. Each agent gets the same budget for a level.
-`--parallel` defaults to 1 and has a ceiling of 3. Its value sets model slots
-unless `EVAL_PARALLEL_SLOTS` is explicitly set. Agent exit 124 means
+`--parallel` defaults to 1 and has a ceiling of 3. It sets both grader workers
+for image builds/tests and model slots, unless `EVAL_PARALLEL_SLOTS` is set.
+The grader rebuilds the selected images from the task repo for each agent, so
+reusing a seed does not skip image builds. Agent exit 124 means
 its timeout expired. Smoke results labelled `not graded` do not establish that
 an issue was resolved.
 
