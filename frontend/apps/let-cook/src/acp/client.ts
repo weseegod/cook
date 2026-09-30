@@ -64,6 +64,7 @@ export class CookAcpClient {
   private restartCount = 0;
   private restartInFlight: Promise<void> | null = null;
   private startup: Promise<void> | null = null;
+  private newSessionInFlight: Promise<string> | null = null;
   private readonly pendingQueuedIds = new Map<string, string[]>();
   private readonly queuedImagesById = new Map<string, string[]>();
   private readonly paintedPromptIds = new Set<string>();
@@ -166,11 +167,28 @@ export class CookAcpClient {
 
   async newSession(): Promise<string> {
     if (!this.cwd) throw new Error("Choose a workspace first");
+    if (this.newSessionInFlight) return this.newSessionInFlight;
+
+    const { sessionId, blocks } = useSessionStore.getState();
+    if (sessionId && blocks.length === 0) return sessionId;
+
+    const creation = this.createSession();
+    this.newSessionInFlight = creation;
+    try {
+      return await creation;
+    } finally {
+      if (this.newSessionInFlight === creation) this.newSessionInFlight = null;
+    }
+  }
+
+  private async createSession(): Promise<string> {
+    const cwd = this.cwd;
+    if (!cwd) throw new Error("Choose a workspace first");
     // Bookkeeping for other conversations stays. Only the new session starts clean.
     const defaultModel = readLocal("defaultModel");
     const yoloMode = readLocal("alwaysApprove") !== "false";
     const params: NewSessionRequest = {
-      cwd: this.cwd,
+      cwd,
       mcpServers: [],
       _meta: {
         clientIdentifier: CAPABILITIES.clientIdentifier,
@@ -197,7 +215,7 @@ export class CookAcpClient {
     }
     await this.refreshCommands();
     void pullUsage(this.xai);
-    void pullPlanFiles(this.cwd);
+    void pullPlanFiles(cwd);
     return response.sessionId;
   }
 
