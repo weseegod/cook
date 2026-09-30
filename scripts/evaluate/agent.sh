@@ -53,12 +53,13 @@ PY
 }
 
 run_agent() {
-  local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking
+  local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking agent_bin
   if [[ "$THINKING" == true ]]; then effort=medium; pi_thinking=medium; else effort=none; pi_thinking=off; fi
   mkdir -p "$dir/workdir" "$dir/home"
   git -C "$dir/workdir" init -q
   case "$agent" in
-    cook)
+    cook|cook-main)
+      if [[ "$agent" == cook-main ]]; then agent_bin=${COOK_MAIN_BIN:-cook-main}; else agent_bin=$COOK_BIN; fi
       mkdir -p "$dir/home/cook"
       COOK_HOME="$dir/home/cook"
       export COOK_HOME
@@ -94,10 +95,10 @@ account = "evaluate@example.com"
 version = 2''')
 PY
       chmod 600 "$dir/home/cook/config.toml"
-      if "$COOK_BIN" --help 2>/dev/null | grep -q -- '--no-auto-update'; then
-        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort" --no-auto-update)
+      if "$agent_bin" --help 2>/dev/null | grep -q -- '--no-auto-update'; then
+        cmd=("$agent_bin" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort" --no-auto-update)
       else
-        cmd=("$COOK_BIN" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort")
+        cmd=("$agent_bin" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort")
       fi
       ;;
     opencode)

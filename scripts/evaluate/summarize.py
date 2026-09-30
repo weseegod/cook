@@ -2,10 +2,14 @@
 """Summarize isolated Cook, OpenCode, and Pi evaluation runs."""
 
 import argparse
+import html
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
+from urllib.parse import unquote, urlsplit
 
 
 def number(value):
@@ -126,6 +130,95 @@ def files_and_bytes(workdir):
     return len(files), sum(p.stat().st_size for p in files), files
 
 
+def expected_files(task):
+    """Return an explicit file list from task headers such as `across 3 files: ...`."""
+    match = re.search(r"\bacross\s+\d+\s+files?:\s*([^\n]+)", task, re.IGNORECASE)
+    if not match:
+        return []
+    return [item.strip().rstrip(". ") for item in match.group(1).split(",") if item.strip()]
+
+
+def missing_local_html_references(workdir, files):
+    """Find missing relative src/href targets in HTML; this is a static warning only."""
+    root = workdir.resolve()
+    missing = []
+    for page in files:
+        if page.suffix.lower() not in {".html", ".htm"}:
+            continue
+        try:
+            source = page.read_text(errors="replace")
+        except OSError:
+            continue
+        for raw in re.findall(r"\b(?:src|href)\s*=\s*(['\"])(.*?)\1", source, re.IGNORECASE | re.DOTALL):
+            reference = html.unescape(raw[1].strip())
+            if not reference or reference.startswith("#"):
+                continue
+            try:
+                parsed = urlsplit(reference)
+            except ValueError:
+                continue
+            if parsed.scheme or parsed.netloc or not parsed.path:
+                continue
+            target = unquote(parsed.path)
+            candidate = (root / target.lstrip("/")) if target.startswith("/") else (page.parent / target)
+            candidate = candidate.resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                missing.append(f"{page.resolve().relative_to(root).as_posix()} -> {reference}")
+                continue
+            if not candidate.is_file():
+                missing.append(f"{page.resolve().relative_to(root).as_posix()} -> {reference}")
+    return sorted(set(missing))
+
+
+def missing_planned_scripts(agent_dir, workdir):
+    """Check workspace-local script paths in plan Command bullets without executing them."""
+    missing = []
+    sessions = agent_dir / "home" / "cook" / "sessions"
+    script_runners = {"node", "nodejs", "python", "python3", "bash", "sh", "ruby", "perl", "php", "deno", "bun"}
+    for plan in sessions.rglob("plans/*.md") if sessions.is_dir() else []:
+        try:
+            lines = plan.read_text(errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            if not re.match(r"\s*[-*+]\s*Command\s*:", line, re.IGNORECASE):
+                continue
+            commands = re.findall(r"`([^`]+)`", line)
+            for command in commands:
+                try:
+                    parts = shlex.split(command)
+                except ValueError:
+                    continue
+                if len(parts) < 2 or Path(parts[0]).name not in script_runners:
+                    continue
+                script = next((part for part in parts[1:] if not part.startswith("-")), None)
+                if not script or not ("/" in script or Path(script).suffix.lower() in {".js", ".mjs", ".cjs", ".py", ".sh", ".rb", ".pl", ".php"}):
+                    continue
+                candidate = Path(script)
+                # External scratch paths can be cleaned before the report is written;
+                # their state at execution time cannot be inferred from this snapshot.
+                if candidate.is_absolute():
+                    continue
+                candidate = workdir / candidate
+                if not candidate.is_file():
+                    missing.append(command)
+    return sorted(set(missing))
+
+
+def artifact_findings(agent_dir, task):
+    workdir = agent_dir / "workdir"
+    _, _, files = files_and_bytes(workdir)
+    root = workdir.resolve()
+    actual = {path.resolve().relative_to(root).as_posix() for path in files}
+    expected = expected_files(task)
+    missing = [path for path in expected if path not in actual]
+    references = missing_local_html_references(workdir, files)
+    planned = missing_planned_scripts(agent_dir, workdir)
+    return expected, missing, references, planned
+
+
 def cell(value):
     return "unreported" if value is None else str(value)
 
@@ -154,6 +247,15 @@ def render(run_dir, model, wire, task, agents, thinking, parallel):
                   metrics["read"], metrics["write"], cache_presence,
                   metrics.get("source", "stdout.json"), count, size, rate]
         lines.append("| " + " | ".join(cell(v) for v in values) + " |")
+    lines += ["", "## Static artifact checks", "",
+              "These are non-gating snapshot checks; they do not execute the app or test commands. Planned script checks cover workspace-relative paths only.",
+              "", "| Agent | Required files | Missing files | Broken local HTML refs | Missing workspace test scripts |",
+              "| --- | ---: | --- | --- | --- |"]
+    for agent in agents:
+        expected, missing, references, planned = artifact_findings(run_dir / agent, task)
+        values = [agent, len(expected) if expected else "unspecified",
+                  ", ".join(missing) or "—", ", ".join(references) or "—", ", ".join(planned) or "—"]
+        lines.append("| " + " | ".join(str(value).replace("|", "\\|") for value in values) + " |")
     lines += ["", "Metrics come from each agent's JSON output or the labeled Cook session usage file. `unreported` means the field was absent.",
               "Files and bytes count regular files in each workdir, excluding .git and node_modules.", ""]
     return "\n".join(lines)
@@ -224,6 +326,22 @@ def self_test():
         row = next(line for line in report.splitlines() if line.startswith("| cook |"))
         cells = [value.strip() for value in row.strip("|").split("|")]
         assert cells[2] == "1" and cells[11] == "3"
+
+        app_task = "Very hard: editor across 3 files: index.html, js/app.js, css/main.css.\nBuild it."
+        assert expected_files(app_task) == ["index.html", "js/app.js", "css/main.css"]
+        (workdir / "index.html").write_text(
+            '<link href="css/main.css"><script src="js/app.js"></script>'
+            '<script src="js/canvas.js"></script>'
+        )
+        (workdir / "js").mkdir()
+        (workdir / "js" / "app.js").write_text("// app")
+        plan = session / "plans" / "plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("- Command: `node test/run-tests.js` exits 0.\n")
+        _, missing_files, broken_refs, missing_commands = artifact_findings(directory, app_task)
+        assert missing_files == ["css/main.css"]
+        assert broken_refs == ["index.html -> css/main.css", "index.html -> js/canvas.js"]
+        assert missing_commands == ["node test/run-tests.js"]
 
         stdout.unlink()
         absent = usage_cook(stdout)

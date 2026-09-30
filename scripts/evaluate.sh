@@ -7,7 +7,7 @@ Usage:
   ./scripts/evaluate.sh --model NAME --task TEXT [options]
   ./scripts/evaluate.sh --model NAME --suite hard [options]
 
-Compare Cook, OpenCode, and Pi against a local llama-server or an OpenAI-compatible API.
+Compare Cook versions, OpenCode, and Pi against a local llama-server or an OpenAI-compatible API.
 Single-task results: temp/evaluate/ plus docs/audits/.
 Hard-suite results: one folder under docs/audits/ with all prompts, agent outputs, and reports.
 
@@ -15,7 +15,7 @@ Hard-suite results: one folder under docs/audits/ with all prompts, agent output
 --task TEXT        identical task text sent to every selected agent
 --suite hard       run the 4 fixed evaluation prompts
 --timeout SECONDS  per-agent timeout (default: 1800)
---agents LIST      comma-separated subset of cook,opencode,pi (default: cook,opencode,pi)
+--agents LIST      comma-separated subset of cook,cook-main,opencode,pi (default: cook,opencode,pi)
 --thinking BOOL    enable reasoning for every agent (default: false for --task, true for --suite hard)
 --parallel N        concurrent agent harnesses: 1, 2, or 3 (default: 1); suite runs share one pool
 --output-root DIR  suite folder parent (default: docs/audits/; useful for isolated smoke tests)
@@ -54,11 +54,12 @@ fi
 [[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$MODEL" != *..* && "$MODEL" != *//* ]] || { echo "invalid model name" >&2; exit 2; }
 [[ "$THINKING" == true || "$THINKING" == false ]] || { echo "--thinking must be true or false" >&2; exit 2; }
 [[ "$PARALLEL" =~ ^[1-3]$ ]] || { echo "--parallel must be 1, 2, or 3" >&2; exit 2; }
+AGENTS=${AGENTS//[[:space:]]/}
 IFS=, read -r -a SELECTED <<<"$AGENTS"
 ((${#SELECTED[@]} > 0)) || { echo "--agents is empty" >&2; exit 2; }
 SEEN=" "
 for agent in "${SELECTED[@]}"; do
-  case "$agent" in cook|opencode|pi) ;; *) echo "invalid agent: $agent" >&2; exit 2 ;; esac
+  case "$agent" in cook|cook-main|opencode|pi) ;; *) echo "invalid agent: $agent" >&2; exit 2 ;; esac
   case "$SEEN" in *" $agent "*) echo "duplicate agent: $agent" >&2; exit 2 ;; esac
   SEEN+="$agent "
 done
@@ -359,6 +360,7 @@ Work only in the current directory. Create the files needed for the task. Do not
   run_hard_suite
   python3 - "$BUNDLE_DIR" "$MODEL" "$WIRE" "$AGENTS" "$THINKING" "$PARALLEL" "${HARD_LABELS[@]}" <<'PY'
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -376,6 +378,7 @@ lines = [
     "",
     "Each prompt folder contains the exact prompt, per-agent workdirs, raw stdout/stderr, and its detailed report.",
     "Exit status and file counts are process/output measures; they do not independently verify feature correctness.",
+    "Static file/reference checks are shown in each detailed report as warnings only.",
     "",
     "| Hard prompt | " + " | ".join(agent_names) + " | Detailed report |",
     "| --- | " + " | ".join("---:" for _ in agent_names) + " | --- |",
@@ -395,7 +398,27 @@ for slug, title in prompts:
             dirs[:] = [name for name in dirs if name not in {".git", "node_modules"}
                        and not (base / name).is_symlink()]
             count += sum((base / name).is_file() and not (base / name).is_symlink() for name in names)
-        cells.append(f"exit {exit_code} / {count} files")
+        artifact_status = "static scan unavailable"
+        report_path = bundle / slug / "report.md"
+        try:
+            detailed = report_path.read_text()
+        except OSError:
+            detailed = ""
+        if "## Static artifact checks" in detailed:
+            section = detailed.split("## Static artifact checks", 1)[1]
+            for row in section.splitlines():
+                if not row.startswith("|"):
+                    continue
+                fields = [field.strip() for field in row.strip("|").split("|")]
+                if len(fields) != 5 or fields[0] != agent:
+                    continue
+                issues = []
+                for label, value in zip(("missing files", "broken HTML refs", "missing plan scripts"), fields[2:5]):
+                    if value != "—":
+                        issues.append(f"{label}: {value}")
+                artifact_status = "static scan: " + ("; ".join(issues) if issues else "no missing paths detected")
+                break
+        cells.append(f"exit {exit_code} / {count} files<br>{artifact_status}")
     lines.append(f"| {title} | " + " | ".join(cells) + f" | [report]({slug}/report.md) |")
 lines += ["", "All reports and outputs for this batch are stored in this folder.", ""]
 (bundle / "report.md").write_text("\n".join(lines))

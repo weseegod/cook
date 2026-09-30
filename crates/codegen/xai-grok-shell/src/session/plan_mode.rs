@@ -485,7 +485,7 @@ Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 ${%- endif %}
 
 Use this exact section order: `## Goal kind` (code-change, analysis, or research), \
-`## Decisions` (at least one bullet), `## Context` (3–8 bullets), \
+`## Decisions` (at least one bullet), `## Context` (only the bullets a cold run needs), \
 `## Acceptance criteria` (outcomes the user requested and any outcome the core behavior needs: \
 each an observable pass or fail; group outcomes one check can cover; split an outcome that can fail on its own; \
 name a command that already exists, or describe the behavior; do not invent a command, name an unwritten script, \
@@ -494,10 +494,10 @@ or add a checkbox; no optional idea, performance test, screenshot, or extra scen
 tags one `## Acceptance criteria` entry as `gating` or `evidence` and adds no scenario), \
 `## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
 then for code-change `## Implementation approach` (nonempty), `## Current anchors` \
-(2–12 bullets: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
+(as many bullets as the places you read: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
 `## Edit brief` (one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof), \
 then `## Deviations` containing exactly `(none yet)`, optional `## Risks / Contradictions`, \
-and last `## Task checklist` (3–8 lines of `- [ ] `<path>` — change. Done when: observation.`; the last line runs `## Acceptance criteria`). \
+and last `## Task checklist` (as many concrete steps as the work requires, each `- [ ] `<path>` — change. Done when: observation.`; the last line runs `## Acceptance criteria`). \
 Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
 Only the Task checklist may contain checkboxes, and the checklist stays in this file as the last section. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged. The file must stand alone without this conversation. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
@@ -532,10 +532,10 @@ and Edit brief for code-change, then Deviations with `(none yet)`, optional Risk
 and Task checklist last. \
 Acceptance criteria lists those outcomes as an observable pass or fail, groups what one check can cover, and adds no checkbox. \
 Verification plan only tags those Acceptance criteria entries as `gating` or `evidence`. \
-Context needs 3–8 bullets. Current anchors needs 2–12 bullets with a backticked path, \
+Context needs only the bullets a cold run needs. Current anchors needs as many bullets as the places you read, each with a backticked path, \
 a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
 block per Task checklist line with `Now:`, `Change:`, `Keep:`, `Proof:` bullets. \
-Code-change checklist needs 3–8 `- [ ] `<path>` — change. Done when: observation.` lines, \
+Code-change checklist needs as many concrete steps as the work requires, each `- [ ] `<path>` — change. Done when: observation.`, \
 and the last line runs `## Acceptance criteria`. The checklist stays in the file as the last section; mark progress by changing `- [ ]` to `- [x]`. \
 Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
 Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
@@ -916,6 +916,12 @@ mod tests {
         assert!(full.contains("command that already exists"));
         assert!(full.contains("unwritten script"));
         assert!(full.contains("adds no scenario"));
+        assert!(full.contains("only the bullets a cold run needs"));
+        assert!(full.contains("as many bullets as the places you read"));
+        assert!(full.contains("as many concrete steps as the work requires"));
+        assert!(!full.contains("3–8"));
+        assert!(!full.contains("2–12"));
+        assert!(!full.contains("aim 3-5"));
         let reentry = plan_mode_reentry_reminder_template();
         assert!(
             reentry.find("Acceptance criteria").unwrap()
@@ -924,6 +930,12 @@ mod tests {
         assert!(!reentry.contains("## Tests"));
         assert!(reentry.contains("Task checklist last"));
         assert!(reentry.contains("only tags those Acceptance criteria entries"));
+        assert!(reentry.contains("only the bullets a cold run needs"));
+        assert!(reentry.contains("as many bullets as the places you read"));
+        assert!(reentry.contains("as many concrete steps as the work requires"));
+        assert!(!reentry.contains("3–8"));
+        assert!(!reentry.contains("2–12"));
+        assert!(!reentry.contains("aim 3-5"));
     }
     #[test]
     fn user_initiated_lifecycle() {
