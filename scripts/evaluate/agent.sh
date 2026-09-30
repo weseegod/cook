@@ -52,11 +52,18 @@ PY
   fi
 }
 
+prepare_workdir() {
+  local dir="$RUN_DIR/$1"
+  mkdir -p "$dir/workdir" "$dir/home"
+  if [[ ! -e "$dir/workdir/.git" ]]; then
+    git -C "$dir/workdir" init -q
+  fi
+}
+
 run_agent() {
   local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking agent_bin
   if [[ "$THINKING" == true ]]; then effort=medium; pi_thinking=medium; else effort=none; pi_thinking=off; fi
-  mkdir -p "$dir/workdir" "$dir/home"
-  git -C "$dir/workdir" init -q
+  prepare_workdir "$agent"
   case "$agent" in
     cook|cook-main)
       if [[ "$agent" == cook-main ]]; then agent_bin=${COOK_MAIN_BIN:-cook-main}; else agent_bin=$COOK_BIN; fi
@@ -145,3 +152,17 @@ PY
   echo "$agent exited $rc" >&2
   unset COOK_HOME OPENCODE_CONFIG_CONTENT XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME PI_CODING_AGENT_DIR || true
 }
+
+if [[ "${BASH_SOURCE[0]}" == "$0" && "${1:-}" == --self-test ]]; then
+  set -euo pipefail
+  RUN_DIR=$(mktemp -d)
+  trap 'rm -rf "$RUN_DIR"' EXIT
+  prepare_workdir existing
+  git -C "$RUN_DIR/existing/workdir" -c user.name=test -c user.email=test@example.com commit --allow-empty -qm initial
+  head=$(git -C "$RUN_DIR/existing/workdir" rev-parse HEAD)
+  prepare_workdir existing
+  [[ $(git -C "$RUN_DIR/existing/workdir" rev-parse HEAD) == "$head" ]]
+  prepare_workdir empty
+  [[ -d "$RUN_DIR/empty/workdir/.git" && -d "$RUN_DIR/empty/home" ]]
+  echo 'agent self-test passed'
+fi
