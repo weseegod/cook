@@ -13,9 +13,9 @@ Do not end the turn on a promise to create a file. After a rejected oversized wr
 smaller edit or write next — a later read does not finish the work.";
 
 const TASK_OPEN_WORKING_PLAN_REMINDER: &str = "\
-If this task needs several new files, or the file split is not already in the prompt, load the \
-working-plan skill and save that short plan before the first code edit, then keep implementing. \
-Skip this for a small edit.";
+If this task has several dependent steps, touches multiple things, or has an unclear cause or scope, \
+load the working-plan skill and save that short plan before the first code edit, then keep implementing. \
+For a small, clear task, give a one- or two-line plan in your reply and skip the tool.";
 
 /// Write-finish sentence, plus the working-plan sentence on TaskOpen only.
 pub(crate) fn entry_reminder(surface: xai_grok_agent::ToolSurface) -> String {

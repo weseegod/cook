@@ -45,49 +45,30 @@ pub const RUN_CHECKS_PROCEDURE: &str = run_checks_procedure!();
 pub const RUN_CHECKS_SKILL_BODY: &str =
     concat!(run_checks_procedure!(), run_checks_classification!());
 
-/// Instructions the model loads before it writes a short plan.
+/// Instructions the model loads before it writes a working plan.
 ///
-/// The checklist stays in the saved file. Shape is this prompt; the host does not reject a body.
-/// The run-checks procedure is included so the model does not load that skill a second time.
-pub const WORKING_PLAN_SKILL_BODY: &str = concat!(
-    "Use this when the task needs several new files, or the file split is not already in the prompt. \
-Skip it for a small edit.\n\
-\n\
-Write the plan below, call save_working_plan once with that markdown as `body`, then keep implementing \
-in the same turn. Do not call enter_plan_mode. Do not ask the user to approve. Do not stop after saving. \
-Do not call todo_write for these steps.\n\
-\n\
-# Plan: <short title>\n\
-\n\
-## Goal\n\
-One sentence describing the finished work.\n\
-\n\
-## Acceptance criteria\n\
-- <observable pass or fail. Name a command that already exists, or describe the behavior.>\n\
-List the outcomes the user requested and any outcome the core behavior needs in order to work. \
-State each as an observable pass or fail. Group outcomes one check can cover. Split an outcome that can fail on its own. \
-Name a command that already exists, or describe the behavior. Do not invent a command, name an unwritten script, or add a checkbox. \
-Do not add an optional idea, a performance test, a screenshot, or an extra scenario unless that outcome needs it.\n\
-\n\
-## Task checklist\n\
-- [ ] `path` — the change. Done when: an observable result.\n\
-- [ ] Run ## Acceptance criteria. Done when: each criterion's command or behavior holds.\n\
-\n\
-The saved file is exactly the body you send, including ## Acceptance criteria and ## Task checklist. ## Task checklist is the last section. \
-Do not add a ## Files section: the prompt and the conversation already name the files. Do not add anchors, \
-an edit brief, decisions, or a deviations log.\n\
-\n\
-When a step is done, edit the saved plan file and change that line from `- [ ]` to `- [x]`. \
-Leave the rest of the line unchanged. Do not call save_working_plan again to revise the shape.\n\
-\n\
-Before you stop, read ## Task checklist and ## Acceptance criteria. If a planned check already finished on the tree \
-after the last edit, cite that result and do not run it again. If a step is still open or a criterion has \
-not been run, name it and continue unless you are blocked.\n\
-\n\
-",
-    run_checks_procedure!(),
-    run_checks_classification!()
-);
+/// The host stores the markdown as written; the saved checklist can evolve while work proceeds.
+pub const WORKING_PLAN_SKILL_BODY: &str = r#"Use this when the task has several dependent steps, touches multiple things, or has an unclear cause or scope. For a small, clear task, a one- or two-line plan in your reply is enough; skip the tool.
+
+First, build a thorough understanding of the user's request: what they asked for, what result they want, and any constraints. If something is ambiguous, state your assumption in the plan and proceed. Then explore enough to understand the shape of the work. Only then write the plan, call save_working_plan once with the markdown as `body`, and keep working in the same turn. Do not call enter_plan_mode, ask for approval, stop after saving, or use todo_write for these steps.
+
+# Plan: <short title>
+
+## Goals
+- <An outcome the user wants, in their terms. One bullet per distinct outcome.>
+
+## Acceptance criteria
+- <How you will know a goal is met: an observable result, an existing command, or a check you can actually perform.>
+
+## Task checklist
+- [ ] <The step, naming the file, document, or area involved if relevant>. Done when: <observable result>.
+- [ ] Verify the acceptance criteria. Done when: <what you run or check, and what passing looks like>
+
+Keep the plan proportional to the task, and use only commands and checks that exist. Keep ## Task checklist last.
+
+The plan is a working document, not a contract. Edit the saved file whenever you learn something: add, remove, split, or reorder steps, or fix the goals and criteria. Do not save a new plan. Mark a step `- [x]` when it is done. Before stopping, make sure every step is checked and every criterion verified; name anything still open and continue unless blocked.
+
+If a check fails, fix the real cause. Never change an expected result to fit a bug, or delete or skip a case. If a check cannot run here, say why and verify what you can."#;
 
 /// Body for an open-task skill name. Unknown names are rejected.
 pub(crate) fn open_task_skill_body(name: &str) -> Result<&'static str, &'static str> {
@@ -112,9 +93,9 @@ impl crate::types::tool_metadata::ToolMetadata for WorkingPlanSkillTool {
     }
 
     fn description_template(&self) -> &str {
-        "Load a skill on an open task with no approved plan. Pass skill \"working-plan\" before the \
-         first code edit on a large task, or \"run-checks\" for how to run the plan's tests. Other \
-         skill names are not available on an open task."
+        "Load a skill on an open task with no approved plan. Use this when the task has several dependent steps, \
+         touches multiple things, or has an unclear cause or scope. For a small, a one- or two-line plan in your \
+         reply is enough; skip the tool."
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
@@ -193,7 +174,7 @@ fn rejected(message: &str) -> SkillOutput {
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
-    /// Full working-plan markdown: title, Goal, Acceptance criteria, and Task checklist. The host stores this text unchanged.
+    /// Full working-plan markdown: title, Goals, Acceptance criteria, and Task checklist. The host stores this text unchanged.
     #[schemars(description = "Full working-plan markdown")]
     pub body: String,
 }
@@ -236,7 +217,7 @@ impl crate::types::tool_metadata::ToolMetadata for SaveWorkingPlanTool {
     fn description_template(&self) -> &str {
         "Save a passive working plan into the session plans list. Pass the full markdown as \
          body, including ## Acceptance criteria and the ## Task checklist section. Then keep implementing on this turn. \
-         Mark a finished step by editing that file from `- [ ]` to `- [x]`. This does not enter \
+         Edit the saved plan as work changes; mark a finished step `- [x]`. This does not enter \
          plan mode and does not ask for approval."
     }
 
@@ -298,7 +279,6 @@ mod tests {
             Ok(RUN_CHECKS_SKILL_BODY)
         );
         assert!(open_task_skill_body("deploy").is_err());
-        assert!(WORKING_PLAN_SKILL_BODY.contains(RUN_CHECKS_SKILL_BODY));
         assert!(RUN_CHECKS_SKILL_BODY.starts_with(RUN_CHECKS_PROCEDURE));
         assert!(RUN_CHECKS_PROCEDURE.contains("in the background"));
         assert!(RUN_CHECKS_PROCEDURE.contains("Do not sleep-loop"));
@@ -306,17 +286,20 @@ mod tests {
         assert!(
             RUN_CHECKS_PROCEDURE.contains("A list still headed `## Tests` is that same section.")
         );
-        assert!(WORKING_PLAN_SKILL_BODY.contains("pass or fail"));
-        assert!(WORKING_PLAN_SKILL_BODY.contains("unwritten script"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("several dependent steps"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("state your assumption in the plan"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("The plan is a working document, not a contract."));
         assert!(WORKING_PLAN_SKILL_BODY.contains("## Task checklist"));
-        assert!(!WORKING_PLAN_SKILL_BODY.contains("## Steps"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("## Goals"));
+        assert!(WORKING_PLAN_SKILL_BODY.contains("Do not save a new plan."));
         assert!(
             <SaveWorkingPlanTool as crate::types::tool_metadata::ToolMetadata>::description_template(
                 &SaveWorkingPlanTool
             )
             .contains("## Task checklist")
         );
-        assert!(!WORKING_PLAN_SKILL_BODY.contains("## Tests\n"));
+        assert!(WORKING_PLAN_SKILL_BODY
+            .contains("If a check cannot run here, say why and verify what you can."));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Product:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Test or harness:"));
         assert!(RUN_CHECKS_SKILL_BODY.contains("Environment:"));

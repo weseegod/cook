@@ -355,7 +355,7 @@ fn resume_action_for(
         PlanApprovalOutcome::Abandoned => ResumeAction::LeaveOnly,
     }
 }
-const FROZEN_PLAN_REJECTION: &str = "The approved plan contract is frozen. Change `- [ ]` to `- [x]` on a checklist line, or append one `## Deviations` bullet.";
+const FROZEN_PLAN_REJECTION: &str = "The approved plan is frozen. Mark a checklist step done only by changing `- [ ]` to `- [x]`, or record a deviation under `## Deviations`. To change goals or acceptance criteria, ask the user to re-enter `/plan`.";
 
 fn same_file(cwd: &Path, supplied: &str, target: &Path) -> bool {
     let path = cwd.join(supplied);
@@ -1854,7 +1854,7 @@ impl SessionActor {
                     call,
                     tool_call_id,
                     format!(
-                        "Saved working plan to {}. The checklist is in that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. Plan mode stays off. Keep implementing on this turn.",
+                        "Saved working plan to {}. Edit that file as the work changes and mark finished steps `- [x]`. Plan mode stays off. Keep implementing on this turn.",
                         path.display()
                     ),
                 )
@@ -2868,7 +2868,7 @@ impl SessionActor {
         let checks =
             xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
         format!(
-            "The user approved the plan. Implement the plan in {path}. The checklist is the last section of that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. {checks}{checklist}",
+            "The user approved the plan. Implement the plan in {path}. The approved plan is frozen as the task specification. Do not change its goals, acceptance criteria, section order, or checklist text. Mark a finished step only by changing `- [ ]` to `- [x]`. If implementation requires a deviation, replace `(none yet)` with the first bullet under `## Deviations`, or append a new bullet after existing ones. Do not rewrite existing plan text or deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`. {checks}{checklist}",
         )
     }
     async fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
@@ -2877,7 +2877,7 @@ impl SessionActor {
         let checks =
             xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
         let mut anchor = format!(
-            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The checklist is the last section of that file. When a step is done, change its `- [ ]` to `- [x]` and leave the rest of the line unchanged. {checks} Do not infer requirements from the earlier conversation.\n\nFollow the plan's `## Current anchors` and `## Edit brief`: use only symbols named there, and do not invent symbols outside the brief. If an anchor is wrong, read the file first and append a bullet to `## Deviations` before deviating.{checklist}",
+            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The approved plan is frozen: do not change its goals, acceptance criteria, section order, or checklist text. Mark a finished step only by changing `- [ ]` to `- [x]`. If implementation requires a deviation, replace `(none yet)` with the first bullet under `## Deviations`, or append a new bullet after existing ones. Do not rewrite existing plan text or deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`. {checks} Do not infer requirements from the earlier conversation.{checklist}",
         );
         if let Some(notes) = feedback.filter(|notes| !notes.trim().is_empty()) {
             anchor.push_str("\n\nReview notes from the approval decision:\n");

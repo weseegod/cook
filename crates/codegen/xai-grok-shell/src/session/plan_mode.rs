@@ -471,79 +471,72 @@ impl PlanModeTracker {
 /// The caller must render it via `TemplateRenderer::render_with_extra()` passing.
 /// ```json { "plan_path": "/path/to/plan.md", "plan_has_content": true } ```.
 pub(crate) fn plan_mode_reminder_full_template() -> &'static str {
-    "\
-Plan mode is active. Do not make any edits or writes to the system.
+    r#"Plan mode is active. Do not make any edits or writes to the system, except to the plan file below. You may read, search, and run read-only commands to explore.
 
-## Plan File:
+## Plan file
 ${%- if plan_has_content %}
-A plan file exists at ${{ plan_path }}. \
-You can read it and make edits using the ${{ tools.by_kind.edit }} tool.
+A plan file exists at ${{ plan_path }}. Read it, then update it with the ${{ tools.by_kind.edit }} tool as you learn more.
 ${%- else %}
-No plan written yet. Write your plan to ${{ plan_path }} \
-using the ${{ tools.by_kind.edit }} tool. \
-Start the file with `# Plan: <short title>` (5–10 words, no file paths).
+No plan written yet. Write your plan to ${{ plan_path }} using the ${{ tools.by_kind.edit }} tool. Start the file with `# Plan: <short title>` (5–10 words, no file paths).
 ${%- endif %}
 
-Use this exact section order: `## Goal kind` (code-change, analysis, or research), \
-`## Decisions` (at least one bullet), `## Context` (only the bullets a cold run needs), \
-`## Acceptance criteria` (outcomes the user requested and any outcome the core behavior needs: \
-each an observable pass or fail; group outcomes one check can cover; split an outcome that can fail on its own; \
-name a command that already exists, or describe the behavior; do not invent a command, name an unwritten script, \
-or add a checkbox; no optional idea, performance test, screenshot, or extra scenario unless that outcome needs it), \
-`## Verification plan` (each line \
-tags one `## Acceptance criteria` entry as `gating` or `evidence` and adds no scenario), \
-`## Non-goals` (at least one bullet), `## Assumed scope` (backticked files or modules), \
-then for code-change `## Implementation approach` (nonempty), `## Current anchors` \
-(as many bullets as the places you read: each a backticked path, a backticked symbol or `new:Symbol`, then `observed:` and one sentence about what you read), \
-`## Edit brief` (one `###` block per Task checklist line, same path and order; each block has bullets `Now:`, `Change:`, `Keep:`, `Proof:` with a backticked command or test path in Proof), \
-then `## Deviations` containing exactly `(none yet)`, optional `## Risks / Contradictions`, \
-and last `## Task checklist` (as many concrete steps as the work requires, each `- [ ] `<path>` — change. Done when: observation.`; the last line runs `## Acceptance criteria`). \
-Put paths in scope and checklist, never in the H1. Do not use code fences or paste source. \
-Only the Task checklist may contain checkboxes, and the checklist stays in this file as the last section. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged. The file must stand alone without this conversation. \
-Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
-do not put layout or signature details in acceptance criteria.
+## How to plan
+First, build a thorough understanding of the user's request: what they asked for, what result they want, and any constraints. If a requirement is unclear in a way that would change the plan, ask with ${{ tools.by_kind.ask_user }}; otherwise state your assumption in the plan. Then explore enough to understand the shape of the work. Then write the plan, and refine it as you learn more. The plan file is the only file you may edit.
 
-You should build your plan by writing to or editing this file. \
-Note that this is the only file you are allowed to edit.
+## Plan format
+Use these sections in this order, skipping optional ones the task doesn't need:
 
-Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify \
-requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
+- `## Goals`: one bullet per distinct outcome the user wants, in their terms.
+- `## Acceptance criteria`: how you will know each goal is met. Each is an observable result, an existing command, or a check that can actually be performed. Do not invent commands or name scripts that don't exist.
+- `## Context` (optional): what someone starting cold would need from your exploration, such as the files, documents, or modules you read and what you found. Only name files, symbols, or sections you actually read; mark new ones as `new:`.
+- `## Approach` (optional): for non-trivial work, how you will do it and the key decisions with reasons.
+- `## Non-goals / Risks` (optional): what is out of scope, and what could go wrong.
+- `## Deviations`: required; its body is exactly `(none yet)` before approval. After approval, replace that marker with the first deviation bullet, then append new bullets as needed.
+- `## Task checklist`: always last. Use as many concrete steps as the work needs, each as `- [ ] <step, naming the file, document, or area involved if relevant>. Done when: <observable result>.` The final step verifies the acceptance criteria.
+
+Keep the plan proportional to the task: a few lines for small work, more detail only where the work needs it. Only the Task checklist may contain checkboxes. Refer to code by path and symbol rather than pasting source. The plan must stand alone: someone reading only this file should be able to carry it out.
+
+## After approval
+Before approval, treat the plan as a working draft and refine it as you learn. After approval, the plan is frozen as the task specification. Do not change its goals, acceptance criteria, section order, or checklist text. When a step is done, change only its `- [ ]` to `- [x]`, leaving the rest of the line unchanged. If implementation requires a change to the approved plan, record it under `## Deviations`: replace `(none yet)` with the first bullet, or append a new bullet after existing ones. Do not rewrite existing plan text or existing deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`.
+
+Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."#
 }
 /// Static string for alternating turns (when `reminder_count` is odd) to save tokens.
 /// No MiniJinja placeholders: plan path and tool names are only in the full reminder.
 pub(crate) fn plan_mode_reminder_sparse_template() -> &'static str {
-    "Plan mode is still active. Do not make any edits or writes to the system except for the plan file."
+    "Plan mode is still active. Do not make any edits or writes to the system, except to the plan file. You may read, search, and run read-only commands to explore."
 }
 /// Returns a MiniJinja template string injected when entering plan mode for the second or later time in the same session.
 /// Render via `TemplateRenderer::render_with_extra()` with `{ "plan_path": "..." }`.
 /// The path is the NEW episode's file (allocation happens on activation), so the copy must not
 /// claim a previous plan exists: doing so makes the model read the old plan back into context.
 pub(crate) fn plan_mode_reentry_reminder_template() -> &'static str {
-    "\
-## Returning to Plan Mode
+    r#"Plan mode is active again. Do not make any edits or writes to the system, except to the plan file below. You may read, search, and run read-only commands to explore.
 
-You are entering plan mode again. A new plan file has been opened at ${{ plan_path }} \
-for this planning session and it starts empty. \
-Start the file with `# Plan: <short title>` (5–10 words, no file paths).
+## Plan file
+A new plan file has been opened at ${{ plan_path }} for this planning session and it starts empty. Start it with `# Plan: <short title>` (5–10 words, no file paths).
 
-Use the same complete plan contract: Goal kind, Decisions, Context, Acceptance criteria, \
-Verification plan, Non-goals, Assumed scope, then Implementation approach, Current anchors, \
-and Edit brief for code-change, then Deviations with `(none yet)`, optional Risks / Contradictions, \
-and Task checklist last. \
-Acceptance criteria lists those outcomes as an observable pass or fail, groups what one check can cover, and adds no checkbox. \
-Verification plan only tags those Acceptance criteria entries as `gating` or `evidence`. \
-Context needs only the bullets a cold run needs. Current anchors needs as many bullets as the places you read, each with a backticked path, \
-a backticked symbol or `new:Symbol`, and an `observed:` clause. Edit brief needs one `###` \
-block per Task checklist line with `Now:`, `Change:`, `Keep:`, `Proof:` bullets. \
-Code-change checklist needs as many concrete steps as the work requires, each `- [ ] `<path>` — change. Done when: observation.`, \
-and the last line runs `## Acceptance criteria`. The checklist stays in the file as the last section; mark progress by changing `- [ ]` to `- [x]`. \
-Keep paths out of the H1, use no code fences, and put checkboxes only in Task checklist. \
-Grounding rule: only name symbols you have actually read; mark new symbols with `new:`; \
-do not put layout or signature details in acceptance criteria.
+## How to plan
+First, build a thorough understanding of the user's request: what they asked for, what result they want, and any constraints. If a requirement is unclear in a way that would change the plan, ask with ${{ tools.by_kind.ask_user }}; otherwise state your assumption in the plan. Then explore enough to understand the shape of the work. Then write the plan, and refine it as you learn more. The plan file is the only file you may edit.
 
-Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
+## Plan format
+Use these sections in this order, skipping optional ones the task doesn't need:
+
+- `## Goals`: one bullet per distinct outcome the user wants, in their terms.
+- `## Acceptance criteria`: how you will know each goal is met. Each is an observable result, an existing command, or a check that can actually be performed. Do not invent commands or name scripts that don't exist.
+- `## Context` (optional): what someone starting cold would need from your exploration, such as the files, documents, or modules you read and what you found. Only name files, symbols, or sections you actually read; mark new ones as `new:`.
+- `## Approach` (optional): for non-trivial work, how you will do it and the key decisions with reasons.
+- `## Non-goals / Risks` (optional): what is out of scope, and what could go wrong.
+- `## Deviations`: required; its body is exactly `(none yet)` before approval. After approval, replace that marker with the first deviation bullet, then append new bullets as needed.
+- `## Task checklist`: always last. Use as many concrete steps as the work needs, each as `- [ ] <step, naming the file, document, or area involved if relevant>. Done when: <observable result>.` The final step verifies the acceptance criteria.
+
+Keep the plan proportional to the task: a few lines for small work, more detail only where the work needs it. Only the Task checklist may contain checkboxes. Refer to code by path and symbol rather than pasting source. The plan must stand alone: someone reading only this file should be able to carry it out.
+
+## After approval
+Before approval, treat the plan as a working draft and refine it as you learn. After approval, the plan is frozen as the task specification. Do not change its goals, acceptance criteria, section order, or checklist text. When a step is done, change only its `- [ ]` to `- [x]`, leaving the rest of the line unchanged. If implementation requires a change to the approved plan, record it under `## Deviations`: replace `(none yet)` with the first bullet, or append a new bullet after existing ones. Do not rewrite existing plan text or existing deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`.
+
+Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."#
 }
-
 /// `<session_dir>/plan.md`: the single plan file used before per-episode allocation, and the
 /// fallback for snapshots that predate it.
 pub(crate) fn legacy_plan_file_path(session_dir: &Path) -> PathBuf {
@@ -903,39 +896,45 @@ mod tests {
         PlanModeTracker::new(dir)
     }
     #[test]
-    fn active_plan_reminder_puts_criteria_before_verification_and_checklist_last() {
+    fn active_plan_reminders_match_the_draft_and_approved_plan_rules() {
         let full = plan_mode_reminder_full_template();
+        let goals = full.find("## Goals").expect("goals");
         let acceptance = full.find("## Acceptance criteria").expect("criteria");
-        let verification = full.find("## Verification plan").expect("verification");
+        let context = full.find("## Context").expect("context");
+        let approach = full.find("## Approach").expect("approach");
+        let non_goals = full
+            .find("## Non-goals / Risks")
+            .expect("non-goals / risks");
         let deviations = full.find("## Deviations").expect("deviations");
         let checklist = full.find("## Task checklist").expect("checklist");
-        assert!(acceptance < verification);
-        assert!(!full.contains("## Tests"));
-        assert!(full.contains("observable pass or fail"));
+        assert!(goals < acceptance);
+        assert!(acceptance < context);
+        assert!(context < approach);
+        assert!(approach < non_goals);
         assert!(deviations < checklist);
-        assert!(full.contains("command that already exists"));
-        assert!(full.contains("unwritten script"));
-        assert!(full.contains("adds no scenario"));
-        assert!(full.contains("only the bullets a cold run needs"));
-        assert!(full.contains("as many bullets as the places you read"));
-        assert!(full.contains("as many concrete steps as the work requires"));
-        assert!(!full.contains("3–8"));
-        assert!(!full.contains("2–12"));
-        assert!(!full.contains("aim 3-5"));
+        assert!(full.contains(
+            "required; its body is exactly `(none yet)` before approval"
+        ));
+        assert!(full.contains(
+            "The final step verifies the acceptance criteria."
+        ));
+        assert!(full.contains(
+            "Before approval, treat the plan as a working draft"
+        ));
+        assert!(full.contains(
+            "After approval, the plan is frozen as the task specification."
+        ));
+        assert!(full.contains("replace `(none yet)` with the first bullet"));
+        assert!(full.contains("ask the user to re-enter `/plan`"));
+        assert!(full.contains("The plan file is the only file you may edit."));
         let reentry = plan_mode_reentry_reminder_template();
         assert!(
-            reentry.find("Acceptance criteria").unwrap()
-                < reentry.find("Verification plan").unwrap()
+            reentry.find("## Deviations").unwrap() < reentry.find("## Task checklist").unwrap()
         );
-        assert!(!reentry.contains("## Tests"));
-        assert!(reentry.contains("Task checklist last"));
-        assert!(reentry.contains("only tags those Acceptance criteria entries"));
-        assert!(reentry.contains("only the bullets a cold run needs"));
-        assert!(reentry.contains("as many bullets as the places you read"));
-        assert!(reentry.contains("as many concrete steps as the work requires"));
-        assert!(!reentry.contains("3–8"));
-        assert!(!reentry.contains("2–12"));
-        assert!(!reentry.contains("aim 3-5"));
+        assert!(
+            reentry.contains("After approval, the plan is frozen as the task specification.")
+        );
+        assert!(reentry.contains("ask the user to re-enter `/plan`"));
     }
     #[test]
     fn user_initiated_lifecycle() {
