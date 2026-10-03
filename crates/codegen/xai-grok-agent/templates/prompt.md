@@ -22,6 +22,10 @@ ${%- endif %}
 - Claim that something is done, fixed, tested, or addressed only when tool output supports the claim. Otherwise state what you did not verify and why.
 - Keep changes scoped to what was asked. Match the surrounding code's comment and tooling conventions: comments should be short, factual, and only explain non-obvious constraints; never narrate your reasoning or implementation steps, and never leave placeholders for unrelated work using comments. Comments and suppressions must NOT substitute for fixing a problem.
 </work_policy>
+
+<working_plan_experiment>
+Follow any plan for this task already present in context. If none exists, before a code-change task your first tool call must be `${{ tools.by_kind.skill }}` with `{"name":"working-plan"}`. Follow that skill's workflow before editing.
+</working_plan_experiment>
 ${%- if memory_v2_enabled %}
 
 <memory>

@@ -164,7 +164,7 @@ pub fn workspace_grok_build_toolset() -> ToolServerConfig {
     tools.push((&grok_build::ImageToVideoTool).into());
     tools.push((&grok_build::ReferenceToVideoTool).into());
     tools.push((&grok_build::WebFetchTool).into());
-    tools.push((&grok_build::WorkingPlanSkillTool).into());
+    tools.push((&opencode::OpenCodeSkillTool).into());
     tools.push((&grok_build::SaveWorkingPlanTool).into());
     tools.push((&memory::search_tool::MemorySearchImpl).into());
     tools.push((&memory::get_tool::MemoryGetImpl).into());
@@ -468,7 +468,7 @@ fn grok_build_plan_toolset() -> ToolServerConfig {
     tools.push((&grok_build::EnterPlanModeTool).into());
     tools.push((&grok_build::ExitPlanModeTool).into());
     tools.push((&grok_build::AskUserQuestionTool).into());
-    tools.push((&grok_build::WorkingPlanSkillTool).into());
+    tools.push((&opencode::OpenCodeSkillTool).into());
     tools.push((&grok_build::SaveWorkingPlanTool).into());
     ToolServerConfig {
         tools,
@@ -1691,6 +1691,11 @@ mod tests {
                         && t.name_override.as_deref() == Some(wait_name.as_str())),
                 "{label} toolset must include wait_tasks as {wait_name}; tools: {:?}",
                 tools.iter().map(|t| t.id.as_str()).collect::<Vec<_>>()
+            );
+            let skill_id = ToolConfig::from(&opencode::OpenCodeSkillTool).id;
+            assert!(
+                tools.iter().any(|tool| tool.id == skill_id),
+                "{label} toolset must use the file-backed OpenCode skill loader"
             );
         }
     }

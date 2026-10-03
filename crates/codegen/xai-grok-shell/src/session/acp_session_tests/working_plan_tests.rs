@@ -1,7 +1,4 @@
-use super::{
-    allowed_on_surface, entry_reminder, is_save_working_plan, save_working_plan,
-    working_plan_skill_body,
-};
+use super::{allowed_on_surface, entry_reminder, is_save_working_plan, save_working_plan};
 
 const SAMPLE: &str = "\
 # Plan: Build the board game
@@ -13,32 +10,6 @@ A playable board in the browser.
 - [ ] `index.html` — add the page. Done when: the file exists and loads the script.
 - [ ] `js/app.js` — add the loop. Done when: the check script runs.
 ";
-
-#[test]
-fn working_plan_skill_keeps_the_checklist_in_the_file() {
-    assert!(working_plan_skill_body.contains("save_working_plan"));
-    let tests_at = working_plan_skill_body
-        .find("## Acceptance criteria")
-        .expect("passive plans name the criteria");
-    assert!(working_plan_skill_body.contains("several dependent steps"));
-    assert!(working_plan_skill_body.contains("state your assumption in the plan"));
-    assert!(!working_plan_skill_body.contains("## Tests\n"));
-    let checklist_at = working_plan_skill_body
-        .find("## Task checklist")
-        .expect("the checklist is the last section");
-    assert!(tests_at < checklist_at);
-    assert!(working_plan_skill_body.contains("The plan is a working document, not a contract."));
-    assert!(working_plan_skill_body.contains("Do not save a new plan."));
-    assert!(working_plan_skill_body.contains("If a check cannot run here, say why and verify what you can."));
-    assert!(
-        !working_plan_skill_body.contains("## Files\n"),
-        "passive plans do not include a Files section to fill in"
-    );
-    assert!(
-        !working_plan_skill_body.contains("todo list"),
-        "the checklist stays in the plan file"
-    );
-}
 
 #[test]
 fn working_plan_save_keeps_task_checklist_and_overwrites_the_same_episode() {
@@ -89,10 +60,8 @@ fn working_plan_save_keeps_task_checklist_and_overwrites_the_same_episode() {
 fn working_plan_reminder() {
     let open = entry_reminder(xai_grok_agent::ToolSurface::TaskOpen);
     let implement = entry_reminder(xai_grok_agent::ToolSurface::Implement);
-    assert!(open.contains("working-plan"));
-    assert!(open.contains("For a small, clear task"));
-    assert!(open.contains("several dependent steps"));
     assert!(open.contains("Do not end the turn on a promise"));
-    assert!(!implement.contains("working-plan"));
     assert!(implement.contains("Do not end the turn on a promise"));
+    assert!(!open.contains("working-plan"));
+    assert!(!implement.contains("working-plan"));
 }

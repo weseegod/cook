@@ -5,26 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-pub(crate) use xai_grok_tools::implementations::grok_build::working_plan::WORKING_PLAN_SKILL_BODY as working_plan_skill_body;
-
 const WRITE_FINISH_REMINDER: &str = "\
 Do not end the turn on a promise to create a file. After a rejected oversized write, make a \
 smaller edit or write next — a later read does not finish the work.";
 
-const TASK_OPEN_WORKING_PLAN_REMINDER: &str = "\
-If this task has several dependent steps, touches multiple things, or has an unclear cause or scope, \
-load the working-plan skill and save that short plan before the first code edit, then keep implementing. \
-For a small, clear task, give a one- or two-line plan in your reply and skip the tool.";
-
-/// Write-finish sentence, plus the working-plan sentence on TaskOpen only.
-pub(crate) fn entry_reminder(surface: xai_grok_agent::ToolSurface) -> String {
-    let mut text = WRITE_FINISH_REMINDER.to_string();
-    if surface == xai_grok_agent::ToolSurface::TaskOpen {
-        text.push_str("\n\n");
-        text.push_str(TASK_OPEN_WORKING_PLAN_REMINDER);
-    }
-    text
+/// Write-finish sentence. Initial-skill policy lives in the system prompt.
+pub(crate) fn entry_reminder(_surface: xai_grok_agent::ToolSurface) -> String {
+    WRITE_FINISH_REMINDER.to_string()
 }
 
 pub(crate) fn is_save_working_plan(name: &str) -> bool {
