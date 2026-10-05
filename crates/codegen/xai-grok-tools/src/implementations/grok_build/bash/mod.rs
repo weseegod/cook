@@ -155,6 +155,10 @@ pub struct BashParams {
     /// `None` means [`DEFAULT_BLOCK_UNTIL_MS`] (30s). The two-knob versions ignore this and use [`Self::timeout_secs`].
     #[serde(default)]
     pub default_block_until_ms: Option<u64>,
+    /// When true, a positive `block_until_ms` waits and returns the command output instead of
+    /// auto-backgrounding. `block_until_ms: 0` still backgrounds. Default false.
+    #[serde(default)]
+    pub return_output_on_block: bool,
     /// Allow a background `&` operator in foreground commands (default `true`). Defaults `true` at the struct level so
     /// hosts that reuse `BashParams` without a client config resolver keep the `&` rejection off (toolsets that disable
     /// backgrounding still reject `&` via the `enabled_background` coupling in `should_reject_background_op`).
@@ -179,6 +183,7 @@ impl Default for BashParams {
             foreground_block_budget_ms: None,
             max_block_until_ms: None,
             default_block_until_ms: None,
+            return_output_on_block: false,
             allow_background_operator: true,
             surface_bg_completion_reminders: true,
         }
@@ -274,6 +279,14 @@ pub struct BashToolInput {
         skip_serializing_if = "Option::is_none"
     )]
     pub block_until_ms: Option<u64>,
+
+    /// Directory to run in. Omitted or empty uses the session workspace. A relative path is
+    /// joined to that workspace. An absolute path is used as given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        description = "Directory to run the command in. Omit to use the workspace. A relative path is joined to the workspace; an absolute path is used as given."
+    )]
+    pub workdir: Option<String>,
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -367,9 +380,11 @@ fn annotations(bash: &BashOutput) -> String {
     if bash.truncated {
         let shown = format_bytes(bash.output.len() as u64);
         let total = format_bytes(bash.total_bytes as u64);
+        let window =
+            crate::util::truncate::truncated_output_window(&String::from_utf8_lossy(&bash.output));
         s.push_str(&format!(
-            " [truncated: showing first/last {} of {} - full output at: {}]",
-            shown, total, bash.output_file
+            " [truncated: showing {window} {shown} of {total} - full output at: {}]",
+            bash.output_file
         ));
     }
     if let Some(signal) = &bash.signal {
@@ -1244,13 +1259,33 @@ impl BashTool {
         }
     }
 
-    /// Sets the params the `current` contract needs. The command moves to the background exactly at the block, with no short budget.
+    /// Sets the params the `current` contract needs. With [`BashParams::return_output_on_block`] off,
+    /// the command moves to the background exactly at the block, with no short budget. With it on,
+    /// a positive block waits and the timeout kill returns output. `0` still backgrounds.
     /// The foreground kill ceiling rises to the background cap unless an operator set one.
     fn apply_single_knob_params(params: &mut BashParams) {
-        params.auto_background_on_timeout = true;
+        params.auto_background_on_timeout = !params.return_output_on_block;
         params.foreground_block_budget_ms = Some(0);
         if !Self::max_timeout_configured(params) {
             params.max_timeout_secs = Some(ABSOLUTE_MAX_TIMEOUT_MS as f64 / 1000.0);
+        }
+    }
+
+    /// Session workspace, or `workdir` joined to it. An empty string is omitted. An absolute path is used as given.
+    pub(crate) fn resolve_workdir(
+        session_cwd: &std::path::Path,
+        workdir: Option<&str>,
+    ) -> std::path::PathBuf {
+        match workdir {
+            Some(dir) if !dir.is_empty() => {
+                let path = std::path::Path::new(dir);
+                if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    session_cwd.join(path)
+                }
+            }
+            _ => session_cwd.to_path_buf(),
         }
     }
 
@@ -1449,12 +1484,16 @@ impl BashTool {
             .and_then(|b| b.as_object_mut())
         {
             let default_ms = Self::effective_default_block_until_ms(params);
-            block.insert(
-                "description".to_string(),
-                serde_json::json!(format!(
+            let description = if params.return_output_on_block {
+                format!(
+                    "How long to block and wait for the command to complete before returning its output (in milliseconds). Defaults to {default_ms}ms. The deadline returns the output and kills the command. Set to 0 to run the command in the background. The timer includes the shell startup time."
+                )
+            } else {
+                format!(
                     "How long to block and wait for the command to complete before moving it to background (in milliseconds). Defaults to {default_ms}ms. Set to 0 to immediately run the command in the background. The timer includes the shell startup time."
-                )),
-            );
+                )
+            };
+            block.insert("description".to_string(), serde_json::json!(description));
             let cap = Self::block_until_ceiling_ms(params);
             if cap < ABSOLUTE_MAX_TIMEOUT_MS {
                 block.insert("maximum".to_string(), serde_json::json!(cap));
@@ -1483,6 +1522,7 @@ impl BashTool {
             "fg_budget_disabled": fg_budget_disabled,
             "background_cap_hours": background_cap_hours(),
             "max_block_until_ms": Self::block_until_ceiling_ms(params),
+            "return_output_on_block": params.return_output_on_block,
         });
         if auto_bg
             && !fg_budget_disabled
@@ -1520,10 +1560,13 @@ impl BashTool {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
 Usage notes:
-  - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms). A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}. `${{ params.execute.block_until_ms }}: 0` runs the command in the background immediately.
+  - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms).${%- if return_output_on_block | default(false) %} A foreground command still running at ${{ params.execute.block_until_ms }} is killed and its output is returned. Pass a larger ${{ params.execute.block_until_ms }} to wait longer. Only `${{ params.execute.block_until_ms }}: 0` runs the command in the background.${%- else %} A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}. `${{ params.execute.block_until_ms }}: 0` runs the command in the background immediately.${%- endif %}
   - Background commands run until they exit${%- if tools.by_kind.kill_task_action %}, until you stop them with ${{ tools.by_kind.kill_task_action }},${%- endif %} or until the ${{ background_cap_hours }}h background cap.${%- if tools.by_kind.kill_task_action %} ${{ tools.by_kind.kill_task_action }}${%- else %} Stopping a command${%- endif %}${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately.${%- else %} sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.${%- endif %}
-  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.
+  - If the output exceeds {max_output_bytes} characters,${%- if return_output_on_block | default(false) %} you keep the end and the result names the log file with the full output, which you can read or search.${%- else %} the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.${%- endif %}
   - Set `${{ params.execute.block_until_ms }}` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if system_reminders_enabled %} You are notified when it completes, so you can keep working; only poll it with ${{ tools.by_kind.background_task_action }} when it needs close monitoring (long-running jobs that can hang or degrade before finishing), and poll later if you end up blocked on the result.${%- elif tools.by_kind.background_task_action %} Use ${{ tools.by_kind.background_task_action }} to monitor it or wait for it to finish.${%- endif %}${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
+  - The shell is already in the workspace. Pass ${{ params.execute.workdir }} instead of `cd <dir> &&`.
+  - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.
+  - Put independent calls in one response.${%- if not shell_uses_semicolon | default(false) %} Chain dependent commands with `&&`.${%- endif %}
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
 ${%- endif %}
@@ -1887,7 +1930,8 @@ impl xai_tool_runtime::Tool for BashTool {
         use crate::types::tool_metadata::shared_resources;
         let resources = shared_resources(&ctx)?;
 
-        let cwd = crate::types::tool_metadata::resolve_cwd(&ctx, &resources).await?;
+        let session_cwd = crate::types::tool_metadata::resolve_cwd(&ctx, &resources).await?;
+        let cwd = Self::resolve_workdir(&session_cwd, input.workdir.as_deref());
         let tool_call_id = ctx.call_id.clone();
 
         // --- Read resources ---
@@ -2008,7 +2052,9 @@ impl xai_tool_runtime::Tool for BashTool {
 
         // Delayed work (`sleep …`) must be backgrounded so the model can wait on a task id.
         // Foreground sleep finishes before any wait tool runs and models then poll files with read.
-        if !input.is_background && background_enabled && command_contains_sleep_utility(&input.command)
+        if !input.is_background
+            && background_enabled
+            && command_contains_sleep_utility(&input.command)
         {
             let bg_param_name = {
                 let res = resources.lock().await;
@@ -2069,6 +2115,7 @@ impl xai_tool_runtime::Tool for BashTool {
                 kind: crate::computer::types::TaskKind::Bash,
                 owner_session_id: owner_session_id.clone(),
                 description: Some(input.description.clone()).filter(|d| !d.trim().is_empty()),
+                tail_only: params.return_output_on_block,
             };
 
             let command_wait_span = tracing::info_span!("bash.command_wait");
@@ -2131,9 +2178,12 @@ impl xai_tool_runtime::Tool for BashTool {
                 &params,
             );
             // Backgroundable commands get the terminal's short budget (the requested `timeout` stays as the kill backstop, nothing
-            // to clamp). Non-backgroundable ones have no background path, so a large `timeout` would wedge the turn — clamp it to
-            // `MAX_FOREGROUND_BLOCK`.
-            let timeout = if Self::auto_background_on_timeout_enabled(&params) {
+            // to clamp). A return-output block waits the resolved deadline and is killed there, so it also skips the 300s clamp.
+            // Other non-backgroundable commands have no background path, so a large `timeout` would wedge the turn — clamp those
+            // to `MAX_FOREGROUND_BLOCK`.
+            let timeout = if Self::auto_background_on_timeout_enabled(&params)
+                || params.return_output_on_block
+            {
                 timeout
             } else {
                 clamp_foreground_block(timeout, config_timeout, max_foreground_block())
@@ -2157,6 +2207,7 @@ impl xai_tool_runtime::Tool for BashTool {
                 kind: crate::computer::types::TaskKind::Bash,
                 owner_session_id: owner_session_id.clone(),
                 description: Some(input.description.clone()).filter(|d| !d.trim().is_empty()),
+                tail_only: params.return_output_on_block,
             };
 
             let command_wait_span =
@@ -2278,6 +2329,13 @@ impl xai_tool_runtime::Tool for BashTool {
                 was_bare_echo: false,
             };
             bash.output_for_prompt = format_default_prompt(&bash);
+            if params.return_output_on_block && bash.timed_out {
+                let block_param = Self::execute_param_name(&resources, "block_until_ms").await;
+                bash.output_for_prompt.push_str(&format!(
+                    "\nThe wait expired. A larger {block_param} can be used. Full output: {}",
+                    bash.output_file
+                ));
+            }
 
             // Bare `echo "<msg>"` usage (common model anti-pattern for "just output something").
             // We tag it for statistics (grok_build backend) and can surface an educational
@@ -2433,7 +2491,10 @@ mod tests {
             )
             .is_err()
         );
-        assert!(serde_json::from_str::<BashToolInput>(r#"{"command":"x"}"#).is_err());
+        let omitted_description =
+            serde_json::from_str::<BashToolInput>(r#"{"command":"x"}"#).unwrap();
+        assert!(!omitted_description.is_background);
+        assert!(omitted_description.description.is_empty());
     }
 
     // A foreground command must not block longer than the cap, whatever its
@@ -2666,6 +2727,7 @@ mod tests {
             description: "test".to_string(),
             is_background: false,
             block_until_ms: None,
+            workdir: None,
         }
     }
 
@@ -2676,6 +2738,7 @@ mod tests {
             description: "test".to_string(),
             is_background: true,
             block_until_ms: None,
+            workdir: None,
         }
     }
 
@@ -2926,7 +2989,9 @@ mod tests {
         let mut stream = xai_tool_runtime::Tool::execute(
             &tool,
             ctx,
-            make_input("for i in 1 2 3; do echo $i; sleep 0.1; done"),
+            make_input(
+                "for i in 1 2 3; do echo $i; python3 -c 'import time; time.sleep(0.1)'; done",
+            ),
         )
         .await;
 
@@ -2971,7 +3036,9 @@ mod tests {
         let mut stream = xai_tool_runtime::Tool::execute(
             &tool,
             test_ctx(resources.into_shared()),
-            make_input("for i in 1 2 3; do echo $i; sleep 0.1; done"),
+            make_input(
+                "for i in 1 2 3; do echo $i; python3 -c 'import time; time.sleep(0.1)'; done",
+            ),
         )
         .await;
 
@@ -3021,7 +3088,7 @@ mod tests {
             &tool,
             test_ctx(resources.into_shared()),
             make_input(
-                "for i in $(seq 1 60); do printf 'LINE%03d-XXXXXXXXXXXXXXXXXXXX\\n' \"$i\"; sleep 0.03; done",
+                "for i in $(seq 1 60); do printf 'LINE%03d-XXXXXXXXXXXXXXXXXXXX\\n' \"$i\"; python3 -c 'import time; time.sleep(0.03)'; done",
             ),
         )
         .await;
@@ -3292,6 +3359,7 @@ mod tests {
                 &BashTool,
                 test_ctx(resources.into_shared()),
                 BashToolInput {
+                    workdir: None,
                     timeout: Some(0),
                     ..make_input("npx next start -p 3456")
                 },
@@ -3329,6 +3397,7 @@ mod tests {
             &BashTool,
             test_ctx(resources.into_shared()),
             BashToolInput {
+                workdir: None,
                 timeout: Some(0),
                 ..make_input("echo ok")
             },
@@ -3385,6 +3454,7 @@ mod tests {
                     &BashTool,
                     versioned_ctx(resources.into_shared(), Some(version)),
                     BashToolInput {
+                        workdir: None,
                         timeout,
                         ..make_input("echo ok")
                     },
@@ -4990,6 +5060,7 @@ mod tests {
                             "description",
                             "is_background",
                             "block_until_ms",
+                            "workdir",
                         ]
                         .map(|p| (p.to_string(), p.to_string())),
                     ),
@@ -5035,7 +5106,8 @@ mod tests {
                     "command",
                     "description",
                     "is_background",
-                    "timeout"
+                    "timeout",
+                    "workdir",
                 ]
             );
 
@@ -5048,11 +5120,11 @@ mod tests {
 
             assert_eq!(
                 property_names(&exported),
-                ["block_until_ms", "command", "description"]
+                ["block_until_ms", "command", "description", "workdir"]
             );
             assert_eq!(
                 exported.get("required"),
-                Some(&serde_json::json!(["command", "description"]))
+                Some(&serde_json::json!(["command"]))
             );
             assert_eq!(
                 property_desc(&exported, "command"),
@@ -5128,7 +5200,7 @@ mod tests {
 
             assert_eq!(
                 property_names(&exported),
-                ["command", "description", "timeout"]
+                ["command", "description", "timeout", "workdir"]
             );
             assert_eq!(
                 property_desc(&exported, "timeout"),
@@ -5148,7 +5220,13 @@ mod tests {
                 );
                 assert_eq!(
                     property_names(&exported),
-                    ["command", "description", "is_background", "timeout"],
+                    [
+                        "command",
+                        "description",
+                        "is_background",
+                        "timeout",
+                        "workdir"
+                    ],
                     "{version:?}"
                 );
             }
@@ -5183,6 +5261,7 @@ mod tests {
             let resolve = |block, is_background, timeout| {
                 BashTool::resolve_block_until_ms(
                     &BashToolInput {
+                        workdir: None,
                         block_until_ms: block,
                         is_background,
                         timeout,
@@ -5229,6 +5308,7 @@ mod tests {
                 block_input("npm run dev", Some(0)),
                 make_bg_input("npm run dev"),
                 BashToolInput {
+                    workdir: None,
                     timeout: Some(0),
                     ..make_input("npm run dev")
                 },
@@ -5263,6 +5343,7 @@ mod tests {
                 (block_input("cargo build", Some(45_000)), 45_000),
                 (
                     BashToolInput {
+                        workdir: None,
                         timeout: Some(5_000),
                         ..make_input("cargo build")
                     },
@@ -5346,6 +5427,7 @@ mod tests {
                 &BashTool,
                 ctx,
                 BashToolInput {
+                    workdir: None,
                     description: "build the crate".to_string(),
                     ..block_input("cargo build", Some(45_000))
                 },
@@ -5422,7 +5504,7 @@ mod tests {
             BashTool::rendered_description(None, &renderer(reminders), params, BashVersion::Current)
         }
 
-        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with get_task_output. `block_until_ms: 0` runs the command in the background immediately.\n  - Background commands run until they exit, until you stop them with kill_task, or until the 10h background cap. kill_task sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You are notified when it completes, so you can keep working; only poll it with get_task_output when it needs close monitoring (long-running jobs that can hang or degrade before finishing), and poll later if you end up blocked on the result. You do not need to use '&' at the end of the command when using this parameter.";
+        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with get_task_output. `block_until_ms: 0` runs the command in the background immediately.\n  - Background commands run until they exit, until you stop them with kill_task, or until the 10h background cap. kill_task sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You are notified when it completes, so you can keep working; only poll it with get_task_output when it needs close monitoring (long-running jobs that can hang or degrade before finishing), and poll later if you end up blocked on the result. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
 
         /// The `current` description is the two-knob text with `block_until_ms` in place of `timeout` and `is_background`.
         /// The kill-at-timeout sentences are gone. Nothing else changed.
@@ -5502,7 +5584,10 @@ mod tests {
                 ]),
                 HashMap::from([(
                     ToolKind::Execute,
-                    HashMap::from([("block_until_ms".to_string(), "wait_ms".to_string())]),
+                    HashMap::from([
+                        ("block_until_ms".to_string(), "wait_ms".to_string()),
+                        ("workdir".to_string(), "workdir".to_string()),
+                    ]),
                 )]),
             );
             let out = BashTool::rendered_description(
@@ -5590,7 +5675,7 @@ mod tests {
             let current = build(None);
             assert_eq!(
                 property_names(&current.function.parameters),
-                ["block_until_ms", "command", "description"]
+                ["block_until_ms", "command", "description", "workdir"]
             );
             let current_desc = current.function.description.as_deref().unwrap();
             assert!(
@@ -5601,7 +5686,13 @@ mod tests {
             let pinned = build(Some("pre-block-until-ms"));
             assert_eq!(
                 property_names(&pinned.function.parameters),
-                ["command", "description", "is_background", "timeout"]
+                [
+                    "command",
+                    "description",
+                    "is_background",
+                    "timeout",
+                    "workdir"
+                ]
             );
             assert!(
                 pinned
@@ -5623,6 +5714,159 @@ mod tests {
 
             let p2: BashParams = serde_json::from_str(r#"{"enabled_background":true}"#).unwrap();
             assert_eq!(p2.default_block_until_ms, None);
+            assert!(!p2.return_output_on_block);
+        }
+
+        #[test]
+        fn workdir_joins_relative_keeps_absolute_and_treats_empty_as_omitted() {
+            let cwd = std::path::Path::new("/workspace/repo");
+            assert_eq!(BashTool::resolve_workdir(cwd, None), cwd);
+            assert_eq!(BashTool::resolve_workdir(cwd, Some("")), cwd);
+            assert_eq!(
+                BashTool::resolve_workdir(cwd, Some("crates/app")),
+                cwd.join("crates/app")
+            );
+            assert_eq!(
+                BashTool::resolve_workdir(cwd, Some("/tmp/other")),
+                std::path::PathBuf::from("/tmp/other")
+            );
+            let exported = BashTool::exported_input_schema(
+                &schema(),
+                &BashParams::default(),
+                "timeout",
+                BashVersion::Current,
+            );
+            assert!(
+                exported.pointer("/properties/workdir").is_some(),
+                "workdir stays in the exported schema"
+            );
+        }
+
+        /// Omitted block 120000 returns output, `0` backgrounds, and a positive block is not shortened to 300s.
+        #[tokio::test]
+        async fn return_output_on_block_waits_without_the_foreground_clamp() {
+            let params = BashParams {
+                return_output_on_block: true,
+                default_block_until_ms: Some(120_000),
+                ..BashParams::default()
+            };
+
+            let (mock, captured) = MockTerminal::success_capturing("ok\n", 0);
+            let resources = make_resources_with_params(mock, params.clone());
+            let result = xai_tool_runtime::Tool::run(
+                &BashTool,
+                test_ctx(resources.into_shared()),
+                block_input("cargo build", None),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, BashToolOutput::Foreground(_)));
+            let request = captured.lock().unwrap().take().expect("foreground request");
+            assert_eq!(request.timeout, Duration::from_millis(120_000));
+            assert!(!request.auto_background_on_timeout);
+            assert!(request.tail_only);
+            assert_eq!(request.foreground_block_budget, None);
+
+            let (mock, captured) = MockTerminal::background_ok_capturing("bg-0");
+            let resources = make_resources_with_params(mock, params.clone());
+            let result = xai_tool_runtime::Tool::run(
+                &BashTool,
+                test_ctx(resources.into_shared()),
+                block_input("npm run dev", Some(0)),
+            )
+            .await
+            .unwrap();
+            assert!(matches!(result, BashToolOutput::Background(_)));
+            let request = captured.lock().unwrap().take().expect("background request");
+            assert!(!request.auto_background_on_timeout);
+
+            let (mock, captured) = MockTerminal::success_capturing("ok\n", 0);
+            let resources = make_resources_with_params(mock, params.clone());
+            xai_tool_runtime::Tool::run(
+                &BashTool,
+                test_ctx(resources.into_shared()),
+                block_input("cargo build", Some(400_000)),
+            )
+            .await
+            .unwrap();
+            let request = captured.lock().unwrap().take().expect("foreground request");
+            assert_eq!(request.timeout, Duration::from_millis(400_000));
+            assert_ne!(request.timeout, MAX_FOREGROUND_BLOCK);
+
+            let mut mock = MockTerminal::timed_out("partial\n");
+            if let Ok(result) = mock.foreground_result.as_mut() {
+                result.signal = Some("timeout".to_string());
+            }
+            let resources = make_resources_with_params(mock, params);
+            let result = xai_tool_runtime::Tool::run(
+                &BashTool,
+                test_ctx(resources.into_shared()),
+                block_input("cargo build", Some(120_000)),
+            )
+            .await
+            .unwrap();
+            let BashToolOutput::Foreground(bash) = result else {
+                panic!("a killed block returns output, not a task id");
+            };
+            assert!(bash.timed_out);
+            assert!(bash.output_for_prompt.contains("exit: killed (timeout)"));
+            assert!(bash.output_for_prompt.contains("The wait expired"));
+            assert!(bash.output_for_prompt.contains("block_until_ms"));
+            assert!(bash.output_for_prompt.contains(&bash.output_file));
+            assert!(!bash.output_file.is_empty());
+        }
+
+        #[test]
+        fn headless_description_returns_output_and_interactive_still_auto_backgrounds() {
+            let headless = desc(
+                &BashParams {
+                    return_output_on_block: true,
+                    default_block_until_ms: Some(120_000),
+                    ..BashParams::default()
+                },
+                true,
+            );
+            for note in [
+                "workdir",
+                "workspace",
+                "grep",
+                "glob",
+                "read_file",
+                "search_replace",
+                "write",
+                "one response",
+                "&&",
+            ] {
+                assert!(headless.contains(note), "missing {note} in {headless}");
+            }
+            let deadline = headless
+                .lines()
+                .find(|line| line.contains("optional block_until_ms"))
+                .expect("deadline note");
+            assert!(deadline.contains("output is returned"), "{deadline}");
+            assert!(deadline.contains("Only `block_until_ms: 0`"), "{deadline}");
+            assert!(!deadline.contains("poll"), "{deadline}");
+            assert!(!deadline.contains("task id"), "{deadline}");
+            assert!(!headless.contains("moved to the background instead of killed"));
+
+            let interactive = desc(&BashParams::default(), true);
+            assert!(interactive.contains("moved to the background instead of killed"));
+            assert!(interactive.contains("workdir"));
+
+            let exported = BashTool::exported_input_schema(
+                &schema(),
+                &BashParams {
+                    return_output_on_block: true,
+                    default_block_until_ms: Some(120_000),
+                    ..BashParams::default()
+                },
+                "timeout",
+                BashVersion::Current,
+            );
+            let property = property_desc(&exported, "block_until_ms");
+            assert!(property.contains("returns the output"));
+            assert!(property.contains("Defaults to 120000ms"));
+            assert!(!property.contains("poll"), "{property}");
         }
     }
 
@@ -6191,7 +6435,7 @@ mod tests {
 
         #[test]
         fn enabled_template_mentions_preserving_trailing_newlines() {
-            let unix = render(BashTool::default_description_template_enabled(), true);
+            let unix = render(BashTool::two_knob_description_template_enabled(), true);
             assert!(
                 unix.contains("preserve trailing newlines"),
                 "bash description must warn about dropping final newlines:\n{unix}"
@@ -6200,10 +6444,9 @@ mod tests {
 
         #[test]
         fn enabled_template_requires_is_background_for_background_work() {
-            let unix = render(BashTool::default_description_template_enabled(), true);
+            let unix = render(BashTool::two_knob_description_template_enabled(), true);
             assert!(
-                unix.contains("runs in the background only when")
-                    && unix.contains("is_background"),
+                unix.contains("runs in the background only when") && unix.contains("is_background"),
                 "bash description must require is_background for background work:\n{unix}"
             );
             assert!(

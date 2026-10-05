@@ -154,6 +154,7 @@ fn foreground_request(
         kind: TaskKind::Bash,
         owner_session_id: Some("owner-1".into()),
         description: Some("build the crate".into()),
+        tail_only: false,
     }
 }
 
@@ -392,6 +393,7 @@ fn background_request(output_file: PathBuf) -> TerminalRunRequest {
         kind: TaskKind::Monitor,
         owner_session_id: Some("owner-1".into()),
         description: None,
+        tail_only: false,
     }
 }
 

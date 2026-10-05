@@ -137,6 +137,7 @@ mod tests {
         use crate::implementations::grok_build::bash::BashToolInput;
         use crate::types::ToolInput;
         let input = ToolInput::Bash(BashToolInput {
+            workdir: None,
             command: "cargo test".into(),
             timeout: None,
             description: "run tests".into(),
