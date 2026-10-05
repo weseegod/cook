@@ -164,7 +164,12 @@ async fn reload_skills(
     let discovery =
         list_skills_with_plugins(Some(cwd), &config, plugin_registry, compat, project_trusted);
     match tokio::time::timeout(std::time::Duration::from_secs(5), discovery).await {
-        Ok(skills) => skills,
+        Ok(skills) => {
+            if let Err(error) = cli_config::sync_skills_status(&skills).await {
+                tracing::warn!(%error, "Failed to synchronize skill status");
+            }
+            skills
+        }
         Err(_) => {
             tracing::warn!("Skills reload timed out");
             vec![]
@@ -595,11 +600,8 @@ pub async fn handle(
             let name = req.name.clone();
             let enabled = req.enabled;
             if let Err(e) = cli_config::update_config(|cfg| {
-                if enabled {
-                    cfg.skills.disabled.retain(|d| d != &name);
-                } else if !cfg.skills.disabled.contains(&name) {
-                    cfg.skills.disabled.push(name.clone());
-                }
+                cfg.skills.status.insert(name.clone(), enabled);
+                cfg.skills.disabled.retain(|d| d != &name);
             })
             .await
             {
@@ -610,12 +612,10 @@ pub async fn handle(
 
             // Re-apply disabled marking against the already-loaded skills to reflect the config change without a second full discovery
             let config = cli_config::load_config().await.skills;
-            let disabled_set: std::collections::HashSet<&str> =
-                config.disabled.iter().map(|s| s.as_str()).collect();
             let skills: Vec<SkillInfo> = current_skills
                 .into_iter()
                 .map(|mut s| {
-                    s.enabled = !disabled_set.contains(s.name.as_str());
+                    s.enabled = config.is_enabled(&s.name);
                     s
                 })
                 .collect();

@@ -528,8 +528,8 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.grok/con
 
 | Key | Type / Values | Requirements | Managed | Details |
 | --- | --- | --- | --- | --- |
-| `skills.disabled` | `string[]` | `yes` | `user` | Skill names to discover but not activate. |
-| `skills.inject` | `boolean` | `yes` | `user` | Inject the discovered skill catalog into the startup reminder and compaction section. Default false. Slash listing still discovers skills. |
+| `skills.status` | `map<string, boolean>` | `yes` | `user` | Explicit activation state. Stored as `[status]` in `~/.cook/skills.toml`; discovery records new names as true. Legacy `disabled` entries migrate to false. |
+| `skills.inject` | `boolean` | `yes` | `user` | Inject the discovered skill catalog into the startup reminder and compaction section. Default true. Includes enabled names and descriptions; slash listing always discovers skills. |
 | `skills.paths` | `string[]` | `yes` | `user` | Additional skill directories. |
 
 ### `storage`

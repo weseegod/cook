@@ -18,7 +18,7 @@ use xai_grok_tools::implementations::skills::discovery::{
     is_valid_skill_name, normalize_skill_name, parse_skill_files, scan_md_files, walk_for_skill_md,
 };
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SkillsConfig {
     /// Additional skill locations to load.
     /// Each entry is a `SKILL.md` file or a directory walked recursively.
@@ -32,15 +32,20 @@ pub struct SkillsConfig {
     #[serde(default)]
     pub ignore: Vec<String>,
 
+    /// Explicit enable state for discovered skills, keyed by name.
+    #[serde(default)]
+    pub status: std::collections::BTreeMap<String, bool>,
+
+    /// Legacy disable list, accepted for migration into `status`.
     /// Skill names that are disabled.
     /// Disabled skills remain in the list (unlike `ignore` which hides them entirely).
     /// They are excluded from the system prompt and skill tool invocation.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disabled: Vec<String>,
 
     /// When true, push the discovered skill catalog into the startup reminder and compaction section.
-    /// Discovery for the slash palette stays on regardless; default is off so the model catalog stays empty.
-    #[serde(default)]
+    /// Discovery for the slash palette stays on regardless; the catalog is injected by default.
+    #[serde(default = "default_skill_inject")]
     pub inject: bool,
 
     /// Skill dirs the launcher injects after syncing from the server (tagged `Server` scope).
@@ -50,6 +55,49 @@ pub struct SkillsConfig {
     /// Skill dirs the launcher injects for skills bundled with the platform (tagged `Bundled` scope).
     #[serde(default)]
     pub bundled_skill_dirs: Vec<String>,
+}
+
+fn default_skill_inject() -> bool {
+    true
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            paths: vec![],
+            ignore: vec![],
+            status: Default::default(),
+            disabled: vec![],
+            inject: true,
+            server_skill_dirs: vec![],
+            bundled_skill_dirs: vec![],
+        }
+    }
+}
+
+impl SkillsConfig {
+    /// Explicit status wins over legacy configuration. New skills retain the
+    /// historical default (enabled) and are recorded when discovered.
+    pub fn is_enabled(&self, name: &str) -> bool {
+        self.status
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| !self.disabled.iter().any(|n| n == name))
+    }
+
+    pub fn migrate_disabled(&mut self) {
+        for name in std::mem::take(&mut self.disabled) {
+            self.status.entry(name).or_insert(false);
+        }
+    }
+
+    /// Keep entries for temporarily missing skills so reinstalling preserves preferences.
+    pub fn record_discovered(&mut self, skills: impl IntoIterator<Item = (String, bool)>) {
+        self.migrate_disabled();
+        for (name, enabled) in skills {
+            self.status.entry(name).or_insert(enabled);
+        }
+    }
 }
 
 /// Empty discovery roots still require trust; only the supplied project roots are checked.
@@ -122,15 +170,8 @@ pub async fn list_skills_with_plugins(
 
     let mut merged = merge_skills_with_plugins(skills, collect_plugin_skills(plugins));
 
-    // Mark disabled skills
-    // Disabled skills remain in the list (unlike `ignore` which hides them) but are excluded from the system prompt and skill tool invocation
-    if !config.disabled.is_empty() {
-        let disabled_set: HashSet<&str> = config.disabled.iter().map(|s| s.as_str()).collect();
-        for skill in &mut merged {
-            if disabled_set.contains(skill.name.as_str()) {
-                skill.enabled = false;
-            }
-        }
+    for skill in &mut merged {
+        skill.enabled &= config.is_enabled(&skill.name);
     }
 
     merged
@@ -682,6 +723,67 @@ mod tests {
         MAX_BODY_PEEK_BYTES, MAX_SKILL_WALK_DEPTH, SkillParseError, extract_first_paragraph,
         is_valid_skill_name, normalize_skill_name, parse_skill_frontmatter,
     };
+
+    #[test]
+    fn skill_status_migrates_legacy_and_preserves_explicit_choices() {
+        let mut config: SkillsConfig = serde_json::from_value(serde_json::json!({
+            "disabled": ["legacy-off", "explicit-on"],
+            "status": {"explicit-on": true, "explicit-off": false}
+        }))
+        .unwrap();
+        assert!(config.inject);
+        assert!(SkillsConfig::default().inject);
+        assert!(config.is_enabled("explicit-on"));
+        assert!(!config.is_enabled("legacy-off"));
+        config.record_discovered([
+            ("new-skill".to_string(), true),
+            ("explicit-off".to_string(), true),
+            ("source-off".to_string(), false),
+        ]);
+        assert_eq!(config.status.get("new-skill"), Some(&true));
+        assert_eq!(config.status.get("legacy-off"), Some(&false));
+        assert!(!config.is_enabled("explicit-off"));
+        assert!(!config.is_enabled("source-off"));
+        let serialized = serde_json::to_value(&config).unwrap();
+        assert!(serialized.get("disabled").is_none());
+        let before = config.clone();
+        config.record_discovered([("new-skill".to_string(), true)]);
+        assert_eq!(config, before);
+    }
+
+    #[tokio::test]
+    async fn skill_status_applies_to_discovery_and_catalog() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_skill_md(&tmp.path().join("status-on"), "status-on");
+        write_skill_md(&tmp.path().join("status-off"), "status-off");
+        let config = SkillsConfig {
+            paths: vec![tmp.path().to_string_lossy().into_owned()],
+            status: [("status-on".into(), true), ("status-off".into(), false)].into(),
+            ..Default::default()
+        };
+        let skills = list_skills(None, &config, CompatConfig::default(), false).await;
+        assert!(
+            skills
+                .iter()
+                .find(|s| s.name == "status-on")
+                .unwrap()
+                .enabled
+        );
+        assert!(
+            !skills
+                .iter()
+                .find(|s| s.name == "status-off")
+                .unwrap()
+                .enabled
+        );
+        let catalog =
+            xai_grok_tools::types::skill_discovery_tracker::format_compaction_skill_listing(
+                &skills,
+            )
+            .unwrap();
+        assert!(catalog.contains("status-on"));
+        assert!(!catalog.contains("status-off"));
+    }
 
     fn write_skill_md(dir: &Path, name: &str) {
         fs::create_dir_all(dir).unwrap();
@@ -1812,6 +1914,7 @@ mod tests {
             inject: false,
             paths: vec![custom_dir.to_str().unwrap().to_string()],
             ignore: vec![],
+            status: Default::default(),
             disabled: vec![],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],
@@ -1847,6 +1950,7 @@ mod tests {
             inject: false,
             paths: vec![custom_dir.to_str().unwrap().to_string()],
             ignore: vec![unwanted_path.to_str().unwrap().to_string()],
+            status: Default::default(),
             disabled: vec![],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],
@@ -1889,6 +1993,7 @@ mod tests {
                     .to_string(),
             ],
             ignore: vec![],
+            status: Default::default(),
             disabled: vec![],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],
@@ -2018,6 +2123,7 @@ mod tests {
                     .unwrap()
                     .to_string(),
             ],
+            status: Default::default(),
             disabled: vec![],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],
@@ -2069,6 +2175,7 @@ mod tests {
             inject: false,
             paths: vec![],
             ignore: vec![],
+            status: Default::default(),
             disabled: vec!["commit".to_string()],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],
@@ -2115,6 +2222,7 @@ mod tests {
             inject: false,
             paths: vec![],
             ignore: vec![],
+            status: Default::default(),
             disabled: vec![],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],

@@ -265,6 +265,7 @@ mod tests {
             inject: false,
             paths: vec![],
             ignore: vec![tmp.path().to_string_lossy().to_string()],
+            status: Default::default(),
             disabled: vec![],
             server_skill_dirs: vec![],
             bundled_skill_dirs: vec![],

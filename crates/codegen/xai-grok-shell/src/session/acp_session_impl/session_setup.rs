@@ -294,6 +294,11 @@ impl SessionActor {
             }
             slash_commands::AcuSkillSource::Disk => bridge.slash_skills().await,
         };
+        if !matches!(trigger, AdvertiseTrigger::UsageMeta)
+            && let Err(error) = crate::util::config::sync_skills_status(&skills).await
+        {
+            tracing::warn!(%error, "Failed to synchronize skill status");
+        }
         let tool_names: Vec<String> = bridge
             .tool_definitions()
             .await

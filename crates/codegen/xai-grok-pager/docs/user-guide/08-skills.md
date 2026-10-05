@@ -36,18 +36,22 @@ Cook scans the Claude and Cursor skill directories by default. To stop scanning 
 
 ### Additional Skill Directories
 
-Add directories, exclude paths, or disable individual skills via `[skills]` in `~/.cook/config.toml`:
+Manage discovered skills in `~/.cook/skills.toml`:
 
 ```toml
-[skills]
 paths = ["~/my-team-skills"]          # Additional directories to scan
 ignore = ["~/my-team-skills/wip"]     # Paths to exclude (hidden entirely)
-disabled = ["wip-skill"]              # Skill names to keep listed but inactive
+inject = true                       # Include the enabled catalog in the prompt
+
+[status]
+bug-fix = true
+working-plan = true
+wip-skill = false
 ```
 
-Each entry in `paths` is a `SKILL.md` file or a directory that Cook walks recursively. `ignore` hides a skill completely; `disabled` keeps it in the list but excludes it from the system prompt and from invocation. `paths` and `ignore` take filesystem paths and support `~` expansion; `disabled` takes skill names.
+Each entry in `paths` is a `SKILL.md` file or a directory that Cook walks recursively. `ignore` hides a skill completely; `status.<name> = false` keeps it listed but excludes it from the system prompt and invocation. `paths` and `ignore` take filesystem paths and support `~` expansion; `status` maps skill names to booleans. Cook records newly discovered skills as `true`, preserves explicit choices and entries for temporarily missing skills, and migrates the legacy `disabled` array into `false` entries. Explicit status takes precedence over legacy settings. `inject` defaults to `true` and includes names and descriptions, while full skill content is loaded on invocation.
 
-`[paths] extra_skill_dirs` is written by `/import-claude`. It does not inject skills. Put extra directories in `[skills] paths`.
+`[paths] extra_skill_dirs` is written by `/import-claude`. It does not inject skills. Put extra directories in `paths` in `~/.cook/skills.toml`.
 
 ---
 
@@ -198,9 +202,9 @@ cook inspect          # Human-readable summary
 cook inspect --json   # Machine-readable report
 ```
 
-In the human-readable output, the Skills section lists each skill's name and its source -- `project`, `user`, `bundled`, `config` (a `[skills].paths` entry), `server` (skills synced from the skill store in managed workspaces), or `plugin: <name>`. Cook tags any skill disabled via `[skills].disabled` or from a disabled vendor surface with `[disabled]`.
+In the human-readable output, the Skills section lists each skill's name and its source -- `project`, `user`, `bundled`, `config` (a `[skills].paths` entry), `server` (skills synced from the skill store in managed workspaces), or `plugin: <name>`. Cook tags any skill disabled via `status` in `~/.cook/skills.toml` or from a disabled vendor surface with `[disabled]`.
 
-The report honors your `[skills]` config the same way a live session does: skills from `paths` are listed, skills under an `ignore` prefix are hidden, and skills named in `disabled` stay listed but tagged `[disabled]`.
+The report honors your `[skills]` config the same way a live session does: skills from `paths` are listed, skills under an `ignore` prefix are hidden, and skills with `status.<name> = false` stay listed but tagged `[disabled]`.
 
 The `--json` report includes the full detail for each skill: its `name`, `description`, `source` (with the path to the SKILL.md file), and `userInvocable` flag. Skills whose bare slash name is contested — by a built-in command or by another skill — also include `collidesWith` (the contested name) and `invocableAs` (the qualified command to type).
 

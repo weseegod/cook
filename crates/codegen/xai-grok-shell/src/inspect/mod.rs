@@ -923,6 +923,10 @@ async fn list_skills(
     )
     .await;
 
+    if let Err(error) = crate::util::config::sync_skills_status(&skills).await {
+        tracing::warn!(%error, "Failed to synchronize skill status");
+    }
+
     let name_counts = slash_name_counts(&skills);
     skills
         .into_iter()
@@ -2704,6 +2708,7 @@ mod tests {
                     .to_string_lossy()
                     .into_owned(),
             ],
+            status: Default::default(),
             disabled: vec!["inspect-cfg-extra".to_string()],
             ..Default::default()
         };

@@ -1801,3 +1801,50 @@ async fn cancelled_blocking_save_holds_write_guard_until_worker_finishes() {
         "second writer acquired locks before the detached save released them"
     );
 }
+
+#[test]
+fn skill_status_migration_preserves_preferences_and_unmodeled_settings() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[ui]\nyolo = false\n[skills]\ndisabled = [\"legacy-main\"]\n",
+    )
+    .unwrap();
+    let skills_path = home.path().join("skills.toml");
+    std::fs::write(
+        &skills_path,
+        "inject = false\ndisabled = [\"off\", \"on\"]\ncustom = \"keep\"\n[status]\non = true\n",
+    )
+    .unwrap();
+    migrate_legacy_skills_config(home.path()).unwrap();
+    let content = std::fs::read_to_string(&skills_path).unwrap();
+    let root: TomlValue = toml::from_str(&content).unwrap();
+    assert!(root.get("disabled").is_none());
+    assert_eq!(root["status"]["off"].as_bool(), Some(false));
+    assert_eq!(root["status"]["on"].as_bool(), Some(true));
+    assert!(root["status"].get("legacy-main").is_none());
+    assert_eq!(root["custom"].as_str(), Some("keep"));
+    assert_eq!(root["inject"].as_bool(), Some(false));
+    let main: TomlValue =
+        toml::from_str(&std::fs::read_to_string(home.path().join("config.toml")).unwrap()).unwrap();
+    assert!(main.get("skills").is_none());
+    assert_eq!(main["ui"]["yolo"].as_bool(), Some(false));
+    migrate_legacy_skills_config(home.path()).unwrap();
+    assert_eq!(std::fs::read_to_string(&skills_path).unwrap(), content);
+}
+
+#[test]
+fn skill_status_migration_moves_main_config_when_dedicated_file_is_absent() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        home.path().join("config.toml"),
+        "[skills]\ndisabled = [\"old-skill\"]\n",
+    )
+    .unwrap();
+    migrate_legacy_skills_config(home.path()).unwrap();
+    let root: TomlValue =
+        toml::from_str(&std::fs::read_to_string(home.path().join("skills.toml")).unwrap()).unwrap();
+    assert_eq!(root["status"]["old-skill"].as_bool(), Some(false));
+    assert_eq!(root["inject"].as_bool(), Some(true));
+    assert!(root.get("disabled").is_none());
+}

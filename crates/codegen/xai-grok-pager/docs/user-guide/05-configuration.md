@@ -409,10 +409,15 @@ Each launch gets a session-unique display handle such as `deep-research-2`. That
 ### Skills
 
 ```toml
-[skills]
+# ~/.cook/skills.toml
 paths = ["~/my-team-skills"]          # additional directories to scan
 ignore = ["~/my-team-skills/wip"]     # paths to exclude
-disabled = ["wip-skill"]              # skill names to keep listed but inactive
+inject = true
+
+[status]
+bug-fix = true
+working-plan = true
+wip-skill = false
 ```
 
 ### Harness compatibility

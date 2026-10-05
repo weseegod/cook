@@ -99,6 +99,10 @@ async fn save_config_locked(
     let write_skills =
         !old_skills.is_empty() || had_legacy_skills || config.skills != SkillsConfig::default();
     if write_skills {
+        skills_root
+            .as_table_mut()
+            .expect("checked above")
+            .remove("disabled");
         merge_toml_tables(
             skills_root.as_table_mut().expect("checked above"),
             TomlValue::try_from(&config.skills)?
@@ -371,7 +375,46 @@ where
         cfg.skills = skills;
     }
     f(&mut cfg);
+    cfg.skills.migrate_disabled();
     save_config_locked(guard, &path, dest, skills_dest, &cfg).await
+}
+
+/// Record all discovered names in skills.toml without resetting explicit preferences.
+/// Repeated discovery does not write, preventing watcher/reload feedback loops.
+pub async fn sync_skills_status(
+    skills: &[xai_grok_agent::prompt::skills::SkillInfo],
+) -> Result<()> {
+    let guard = lock_config_writes().await?;
+    let slot = user_config_path().with_file_name(SKILLS_CONFIG_FILENAME);
+    let (dest, content) = read_follow_bound(&slot)?;
+    let mut root = parse_existing_config_toml(&content)?;
+    let mut config = if content.trim().is_empty() {
+        load_config_from_toml(&crate::config::load_config_file(&user_config_path())?).skills
+    } else {
+        root.clone().try_into::<SkillsConfig>()?
+    };
+    let previous = config.clone();
+    config.record_discovered(
+        skills
+            .iter()
+            .map(|skill| (skill.name.clone(), skill.enabled)),
+    );
+    if config == previous && !content.trim().is_empty() {
+        return Ok(());
+    }
+    let table = root
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("skills root is not a table"))?;
+    table.remove("disabled");
+    merge_toml_tables(
+        table,
+        TomlValue::try_from(&config)?.as_table().unwrap().clone(),
+    );
+    let contents = toml::to_string_pretty(&root)?;
+    guard
+        .run_blocking(move || atomic_write_follow_bound(&slot, &dest, &contents))
+        .await??;
+    Ok(())
 }
 
 /// Move the old user `[skills]` table into the dedicated file on startup.
@@ -382,29 +425,38 @@ pub fn migrate_legacy_skills_config(grok_home: &Path) -> Result<()> {
     let config_slot = grok_home.join("config.toml");
     let (config_dest, content) = read_follow_bound(&config_slot)?;
     let mut config = parse_existing_config_toml(&content)?;
-    let Some(legacy) = config.get("skills").cloned() else {
-        return Ok(());
-    };
-    if !legacy.is_table() {
+    let legacy = config.get("skills").cloned();
+    if legacy.as_ref().is_some_and(|value| !value.is_table()) {
         return Err(anyhow::anyhow!("legacy [skills] is not a table"));
     }
     let skills_slot = grok_home.join(SKILLS_CONFIG_FILENAME);
     let (skills_dest, skills_content) = read_follow_bound(&skills_slot)?;
-    if skills_content.trim().is_empty() {
-        atomic_write_follow_bound(
-            &skills_slot,
-            &skills_dest,
-            &toml::to_string_pretty(&legacy)?,
-        )?;
-    } else {
-        let skills = parse_existing_config_toml(&skills_content)?;
-        if !skills.is_table() {
-            return Err(anyhow::anyhow!(
-                "{} root is not a table",
-                skills_slot.display()
-            ));
+    let mut skills = if skills_content.trim().is_empty() {
+        match legacy.clone() {
+            Some(value) => value,
+            None => return Ok(()),
         }
+    } else {
+        parse_existing_config_toml(&skills_content)?
+    };
+    let mut parsed: SkillsConfig = skills.clone().try_into()?;
+    parsed.migrate_disabled();
+    let table = skills
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("skills root is not a table"))?;
+    table.remove("disabled");
+    merge_toml_tables(
+        table,
+        TomlValue::try_from(&parsed)?.as_table().unwrap().clone(),
+    );
+    let contents = toml::to_string_pretty(&skills)?;
+    if contents != skills_content {
+        atomic_write_follow_bound(&skills_slot, &skills_dest, &contents)?;
     }
+    if legacy.is_none() {
+        return Ok(());
+    }
+
     config
         .as_table_mut()
         .expect("config is a table")
