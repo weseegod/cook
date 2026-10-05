@@ -5,7 +5,18 @@ use std::path::Path;
 use toml::Value as TomlValue;
 use toml::map::Map as TomlMap;
 use xai_grok_agent::prompt::skills::SkillsConfig;
+use xai_grok_config::SKILLS_CONFIG_FILENAME;
 use xai_grok_config::fs_atomic::BoundDest;
+
+fn read_skills_config(path: &Path) -> Result<Option<SkillsConfig>> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+    let value = parse_existing_config_toml(&contents)?;
+    Ok(Some(value.try_into()?))
+}
 /// Process-wide write lock for `~/.grok/config.toml`.
 /// Serializes the read-modify-write in `save_config` so two rapid settings toggles can't interleave and clobber each other.
 static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
@@ -22,6 +33,7 @@ async fn save_config_locked(
     guard: ConfigWriteGuard,
     slot: &Path,
     dest: BoundDest,
+    skills_dest: BoundDest,
     config: &Config,
 ) -> Result<()> {
     let dest = require_same_user_config_dest(slot, &dest)?;
@@ -68,17 +80,45 @@ async fn save_config_locked(
         }
         merge_section(table, "consent", &config.consent);
     }
-    if config.skills == SkillsConfig::default() {
-        table.remove("skills");
-    } else {
-        merge_section(table, "skills", &config.skills);
-    }
+    let had_legacy_skills = table.remove("skills").is_some();
     merge_section(table, "telemetry", &config.telemetry);
     merge_section(table, "features", &config.features);
     let toml_str = toml::to_string_pretty(&root)?;
     let dest = require_same_user_config_dest(slot, &dest)?;
+    let slot = slot.to_path_buf();
+    let skills_slot = slot.with_file_name(SKILLS_CONFIG_FILENAME);
+    let skills_dest = require_same_user_config_dest(&skills_slot, &skills_dest)?;
+    let old_skills = read_to_string_or_empty(skills_dest.as_path())?;
+    let mut skills_root = parse_existing_config_toml(&old_skills)?;
+    if !matches!(skills_root, TomlValue::Table(_)) {
+        return Err(anyhow::anyhow!(
+            "{} root is not a table",
+            skills_slot.display()
+        ));
+    }
+    let write_skills =
+        !old_skills.is_empty() || had_legacy_skills || config.skills != SkillsConfig::default();
+    if write_skills {
+        merge_toml_tables(
+            skills_root.as_table_mut().expect("checked above"),
+            TomlValue::try_from(&config.skills)?
+                .as_table()
+                .expect("SkillsConfig serializes to a table")
+                .clone(),
+        );
+    }
+    let skills_toml = write_skills
+        .then(|| toml::to_string_pretty(&skills_root))
+        .transpose()?;
     guard
-        .run_blocking(move || atomic_write_resolved_string(&dest, &toml_str))
+        .run_blocking(move || -> std::io::Result<()> {
+            if let Some(skills_toml) = skills_toml {
+                let skills_dest = require_same_user_config_dest(&skills_slot, &skills_dest)?;
+                atomic_write_resolved_string(&skills_dest, &skills_toml)?;
+            }
+            let dest = require_same_user_config_dest(&slot, &dest)?;
+            atomic_write_resolved_string(&dest, &toml_str)
+        })
         .await
         .map_err(|e| anyhow::anyhow!("config write task failed: {e}"))??;
     Ok(())
@@ -325,8 +365,56 @@ where
     let dest = bind_user_config_dest(&path)?;
     let root: TomlValue = crate::config::load_config_file(dest.as_path())?;
     let mut cfg = load_config_from_toml(&root);
+    let skills_path = path.with_file_name(SKILLS_CONFIG_FILENAME);
+    let skills_dest = bind_user_config_dest(&skills_path)?;
+    if let Some(skills) = read_skills_config(skills_dest.as_path())? {
+        cfg.skills = skills;
+    }
     f(&mut cfg);
-    save_config_locked(guard, &path, dest, &cfg).await
+    save_config_locked(guard, &path, dest, skills_dest, &cfg).await
+}
+
+/// Move the old user `[skills]` table into the dedicated file on startup.
+/// Writing the new file first keeps the skill preferences available if the
+/// second atomic write fails.
+pub fn migrate_legacy_skills_config(grok_home: &Path) -> Result<()> {
+    let _lock = acquire_init_lock(grok_home)?;
+    let config_slot = grok_home.join("config.toml");
+    let (config_dest, content) = read_follow_bound(&config_slot)?;
+    let mut config = parse_existing_config_toml(&content)?;
+    let Some(legacy) = config.get("skills").cloned() else {
+        return Ok(());
+    };
+    if !legacy.is_table() {
+        return Err(anyhow::anyhow!("legacy [skills] is not a table"));
+    }
+    let skills_slot = grok_home.join(SKILLS_CONFIG_FILENAME);
+    let (skills_dest, skills_content) = read_follow_bound(&skills_slot)?;
+    if skills_content.trim().is_empty() {
+        atomic_write_follow_bound(
+            &skills_slot,
+            &skills_dest,
+            &toml::to_string_pretty(&legacy)?,
+        )?;
+    } else {
+        let skills = parse_existing_config_toml(&skills_content)?;
+        if !skills.is_table() {
+            return Err(anyhow::anyhow!(
+                "{} root is not a table",
+                skills_slot.display()
+            ));
+        }
+    }
+    config
+        .as_table_mut()
+        .expect("config is a table")
+        .remove("skills");
+    atomic_write_follow_bound(
+        &config_slot,
+        &config_dest,
+        &toml::to_string_pretty(&config)?,
+    )?;
+    Ok(())
 }
 #[cfg(test)]
 #[path = "persist_tests.rs"]

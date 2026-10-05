@@ -90,6 +90,9 @@ pub fn load_from_disk() -> std::io::Result<toml::Value> {
 /// User config filename (`$GROK_HOME/config.toml`), shared by the loaders here.
 pub const USER_CONFIG_FILENAME: &str = "config.toml";
 
+/// User skill preferences, separate from the main config.
+pub const SKILLS_CONFIG_FILENAME: &str = "skills.toml";
+
 /// Managed config filename, shared by the loaders in this module.
 pub const MANAGED_CONFIG_FILENAME: &str = "managed_config.toml";
 

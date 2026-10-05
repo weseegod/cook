@@ -356,7 +356,7 @@ sends the TUI `x.ai/queue/*` notifications for existing rows.
 | Id | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
 | C-sk-list | `x.ai/skills/list` | `/skills` | Settings Skills, topic groups (Game / Documents / …) with Project / User / Plugin wrappers when mixed | `ok` | surface |
-| C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle, persists `[skills].disabled`; group switch fans out sequential `{ name, enabled, cwd }` calls | `ok` | surface |
+| C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle, persists `disabled` in `~/.cook/skills.toml`; group switch fans out sequential `{ name, enabled, cwd }` calls | `ok` | surface |
 | C-sk-add | `x.ai/skills/add` / `remove` / `reset` / `config` | modal | Settings Skills add/remove/reset/config | `ok` (`refresh-baseline` still `gap`) | surface |
 | C-wf-list | `x.ai/workflows/list` | `/workflows` | Settings Skills workflow list (browse-only) | `partial` | surface |
 | C-pl-list | `x.ai/plugins/list` | `/plugins` | Settings list with enable/disable | `ok` | surface |

@@ -318,11 +318,13 @@ impl ConfigReloader {
         }
 
         // Skills config
-        let old_skills = parse_skills_config(&self.last_global_config);
-        let new_skills = parse_skills_config(&new_global);
-        if old_skills != new_skills {
-            info!("skills config change detected");
-            let _ = self.config_update_tx.send(ConfigUpdate::Skills(new_skills));
+        if let Some(ref new_effective) = accepted_effective {
+            let old_skills = parse_skills_config(&self.last_effective_config);
+            let new_skills = parse_skills_config(new_effective);
+            if old_skills != new_skills {
+                info!("skills config change detected");
+                let _ = self.config_update_tx.send(ConfigUpdate::Skills(new_skills));
+            }
         }
 
         // Compat config ([compat] vendor toggles)

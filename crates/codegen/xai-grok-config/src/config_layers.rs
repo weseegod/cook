@@ -57,6 +57,18 @@ impl ConfigLayers {
         let managed_campaigns = take_campaign_entries(&mut managed, "managed");
 
         let mut user = load_from_disk()?;
+        // Skill preferences live in a separate user file. Keep the old table as a
+        // fallback until it is migrated, but let the separate file win whenever present.
+        if let Some(home) = xai_dirs::resolve_grok_home() {
+            let skills_path = home.join(crate::SKILLS_CONFIG_FILENAME);
+            if skills_path.try_exists()? {
+                let skills = crate::loader::load_toml_file(&skills_path)?;
+                let Some(table) = user.as_table_mut() else {
+                    return Err(std::io::Error::other("user config root is not a table"));
+                };
+                table.insert("skills".to_owned(), skills);
+            }
+        }
         let user_campaigns = take_campaign_entries(&mut user, "user");
 
         let env_overlay = crate::env_overlay::load_env_overlay();

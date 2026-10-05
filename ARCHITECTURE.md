@@ -213,6 +213,7 @@ the workspace and is separate from the user home.
 | Path under `~/.cook` | Contents |
 |---|---|
 | `config.toml` | User config (model, keys, agents, permissions, UI). |
+| `skills.toml` | User skill discovery paths, exclusions, and disabled names. |
 | `managed_config.toml`, `requirements.toml` | Higher-priority config layers merged by `xai-grok-config` (managed > user > signed requirements > MDM). |
 | `auth.json` / credentials | Auth tokens (`xai-grok-auth`); MCP credentials in `mcp_credentials.json` (`xai-grok-mcp`). |
 | `bin/cook` | Managed entry point for the CLI. Normally a symlink to the versioned file in `downloads/` (`../downloads/cook-<version>-<platform>`). If a regular file occupies this path (older curl installs), the self-updater moves it aside and replaces it with that symlink. |

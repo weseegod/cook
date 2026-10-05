@@ -320,6 +320,9 @@ fn classify_watched_path(
         Some("config.toml") if parent == Some(grok_home) => {
             Some(ConfigChangeEvent::GlobalConfigChanged)
         }
+        Some("skills.toml") if parent == Some(grok_home) => {
+            Some(ConfigChangeEvent::GlobalConfigChanged)
+        }
         Some("models_cache.json") if parent == Some(grok_home) => {
             Some(ConfigChangeEvent::ModelsCacheChanged)
         }

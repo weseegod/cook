@@ -1590,12 +1590,12 @@ Repo-scoped skills (Local and Repo) respect `.gitignore` and are filtered out if
 
 ### Configuration
 
-Add extra skill directories or exclude paths via `[skills]` in config.toml:
+Add extra skill directories or exclude paths in `$GROK_HOME/skills.toml`:
 
 ```toml
-[skills]
 paths = ["~/my-team-skills"]          # additional directories to scan
 ignore = ["~/my-team-skills/wip"]     # paths to exclude
+disabled = ["review"]                 # discovered skills to turn off
 ```
 
 ### Creating a Skill

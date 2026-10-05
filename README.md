@@ -84,6 +84,12 @@ model = "your-model-id"
 model_provider = "local"
 ```
 
+Skill settings live in `~/.cook/skills.toml`. The file uses top-level keys,
+for example `disabled = ["review"]` or `paths = ["~/my-skills"]`.
+All discovered skills are enabled unless their name is in `disabled`.
+Cook moves an existing `[skills]` section from `config.toml` into this file
+when it starts; `skills.toml` takes priority if both files already exist.
+
 See [`docs/byok-models.md`](docs/byok-models.md) for provider examples,
 capability notes, and troubleshooting.
 

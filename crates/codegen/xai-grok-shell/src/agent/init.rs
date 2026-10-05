@@ -462,6 +462,11 @@ fn init_process(cfg: &AgentConfig, auth_manager: &AuthManager) {
         let limits = crate::util::limits::ProcessLimits::read();
         limits.log();
         let grok_home = crate::util::grok_home::grok_home();
+        if !cfg!(test)
+            && let Err(error) = crate::util::config::migrate_legacy_skills_config(&grok_home)
+        {
+            tracing::warn!(%error, "failed to migrate legacy skills config");
+        }
         crate::builtin::extract_builtin_files(&grok_home);
         if !cfg!(test) {
             crate::builtin::purge_stale_extracted_skills(&grok_home);
