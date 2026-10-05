@@ -60,6 +60,59 @@ if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
   exit 1
 fi
 
+# Resolved for both CLI and desktop installs. Skill seeding uses it even when
+# DESKTOP_ONLY skips the binary, and CLI_ONLY returns before the desktop block.
+grok_home="${GROK_HOME:-${COOK_HOME:-$HOME/.cook}}"
+
+# Fill missing default skills from the versioned release archive. Directories
+# that already exist, and an existing skills.toml, are left as they are.
+seed_default_skills() {
+  local skills_url="${INSTALL_ORIGIN}/v${version}/skills.tar.gz"
+  local dest_root="$grok_home/skills"
+  if [[ "$dry_run" == "1" ]]; then
+    echo "dry-run: would download ${skills_url}"
+    echo "dry-run: would fill missing skill directories under ${dest_root}"
+    echo "dry-run: would write ${grok_home}/skills.toml from default-skills.toml if missing"
+    return 0
+  fi
+
+  echo "==> Installing default skills from ${skills_url}"
+  if ! curl -fL --progress-bar "$skills_url" -o "$tmp/skills.tar.gz"; then
+    echo "error: failed to download ${skills_url}" >&2
+    exit 1
+  fi
+  mkdir -p "$tmp/skills-extract"
+  if ! tar -xzf "$tmp/skills.tar.gz" -C "$tmp/skills-extract"; then
+    echo "error: failed to extract skills archive" >&2
+    exit 1
+  fi
+
+  mkdir -p "$grok_home"
+  local entry name dest
+  for entry in "$tmp/skills-extract"/*; do
+    [[ -e "$entry" ]] || continue
+    [[ -d "$entry" ]] || continue
+    name="$(basename "$entry")"
+    case "$name" in
+      .|..) continue ;;
+    esac
+    dest="$dest_root/$name"
+    if [[ -e "$dest" || -L "$dest" ]]; then
+      continue
+    fi
+    mkdir -p "$dest_root"
+    cp -a "$entry" "$dest"
+  done
+
+  if [[ ! -e "$grok_home/skills.toml" && ! -L "$grok_home/skills.toml" ]]; then
+    if [[ ! -f "$tmp/skills-extract/default-skills.toml" ]]; then
+      echo "error: skills archive is missing default-skills.toml" >&2
+      exit 1
+    fi
+    cp "$tmp/skills-extract/default-skills.toml" "$grok_home/skills.toml"
+  fi
+}
+
 if [[ "$skip_cli" != "1" ]]; then
   cli_url="${INSTALL_ORIGIN}/cook-${version}-${cli_plat}"
   echo "==> Installing cook CLI v${version} (${cli_plat})"
@@ -72,7 +125,6 @@ if [[ "$skip_cli" != "1" ]]; then
       echo "error: downloaded cook failed --version" >&2
       exit 1
     fi
-    grok_home="${GROK_HOME:-${COOK_HOME:-$HOME/.cook}}"
     bin_dir="$grok_home/bin"
     downloads_dir="$grok_home/downloads"
     path_dir="${INSTALL_DIR:-$HOME/.local/bin}"
@@ -86,6 +138,8 @@ if [[ "$skip_cli" != "1" ]]; then
     echo "cook ${version} -> $path_dir/cook"
   fi
 fi
+
+seed_default_skills
 
 if [[ "$skip_desktop" == "1" ]]; then
   exit 0
