@@ -888,8 +888,7 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
         );
         drop(agent_config);
         let mut agent_config = agent.cfg.borrow_mut();
-        agent_config.models = toml_config.models.clone();
-        agent_config.config_models = toml_config.config_models.clone();
+        copy_reloaded_model_tables(&mut agent_config, &toml_config);
         agent_config.web_search_model = overrides.web_search;
         agent_config.session_summary_model = overrides.session_summary;
         agent_config.image_description_model = overrides.image_description;
@@ -911,6 +910,18 @@ fn handle_reload_models(agent: &MvpAgent) -> ExtResult {
     ExtMethodResult::success(serde_json::json!({ "models": count }))
         .to_ext_response()
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))
+}
+
+/// Model tables from the config just read off disk. `apply_config` resolves providers from this
+/// snapshot, so a header or API key edited while the agent is running has to replace the copy
+/// taken at startup.
+pub(crate) fn copy_reloaded_model_tables(
+    agent_config: &mut crate::agent::config::Config,
+    toml_config: &crate::agent::config::Config,
+) {
+    agent_config.models = toml_config.models.clone();
+    agent_config.config_models = toml_config.config_models.clone();
+    agent_config.model_providers = toml_config.model_providers.clone();
 }
 
 // internal/reload_models_cache
@@ -1042,6 +1053,44 @@ async fn handle_session_fork(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtRes
         .map_err(|e| acp::Error::internal_error().data(e.to_string()))?;
 
     to_raw_response(&response)
+}
+
+#[cfg(test)]
+mod reload_model_tables_tests {
+    use super::copy_reloaded_model_tables;
+    use crate::agent::config::Config;
+    use crate::agent::model_providers::ModelProviderConfig;
+
+    #[test]
+    fn reloaded_tables_replace_the_providers_held_since_startup() {
+        let disk: toml::Value = toml::from_str(
+            r#"
+            [model_providers.opencode]
+            base_url = "http://127.0.0.1:4096/v1"
+            api_key = "replaced-key"
+
+            [model_providers.opencode.extra_headers]
+            X-Test-Session = "sess-1"
+            "#,
+        )
+        .unwrap();
+        let parsed = Config::new_from_toml_cfg(&disk).expect("disk config");
+        let mut running = Config::default();
+        running.model_providers.insert(
+            "opencode".to_owned(),
+            ModelProviderConfig {
+                api_key: Some("stale-key".to_owned()),
+                ..ModelProviderConfig::default()
+            },
+        );
+        copy_reloaded_model_tables(&mut running, &parsed);
+        let provider = running.model_providers.get("opencode").expect("reloaded provider");
+        assert_eq!(provider.api_key.as_deref(), Some("replaced-key"));
+        assert_eq!(
+            provider.extra_headers.get("X-Test-Session").map(String::as_str),
+            Some("sess-1")
+        );
+    }
 }
 
 #[cfg(test)]

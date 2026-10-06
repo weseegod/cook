@@ -6,7 +6,7 @@
  */
 import { PROVIDER_PRESETS } from "./provider-presets";
 import { desktopCommand, isTauriRuntime, request } from "./host";
-import { modelCatalog, type ReasoningEffortOption } from "./xai";
+import { mergeConfiguredModels, modelCatalog, type ReasoningEffortOption } from "./xai";
 import { useCatalogStore } from "../state/catalog";
 
 export interface ProviderModelLink {
@@ -41,6 +41,8 @@ export interface ProviderList {
   /** Every explicit `[model.*]` row from config.toml, including xAI overrides. */
   models?: Array<ProviderModelLink & { provider: string }>;
   defaultModel?: string | null;
+  /** Built-in ids removed from Settings. They stay listed, inactive, until Connect. */
+  hiddenProviders?: string[];
 }
 
 export interface PresetModel {
@@ -128,10 +130,11 @@ export interface ProviderUpsertResponse {
 }
 
 export function listProviders() {
-  return desktopCommand("desktop_provider_list", {}, () => request<ProviderList>("x.ai/providers/list", {})).then(async (response) => {
+  return desktopCommand<ProviderList>("desktop_provider_list", {}, () => request<ProviderList>("x.ai/providers/list", {})).then(async (response) => {
     // The native list call also repairs legacy ChatGPT OAuth routes. Make the running agent
     // consume that migration before the picker exposes the provider's models.
     await reloadDesktopModels();
+    publishConfiguredModels(response);
     return response;
   });
 }
@@ -145,6 +148,16 @@ export function listProviders() {
 async function reloadDesktopModels(): Promise<void> {
   if (!isTauriRuntime()) return;
   await request("x.ai/internal/reload_models").catch(() => undefined);
+}
+
+/** Put `[model.*]` rows into the chat picker. Must not call `listProviders` — that already reloads. */
+function publishConfiguredModels(configured: ProviderList): void {
+  if (!configured?.providers) return;
+  const catalog = useCatalogStore.getState();
+  catalog.setModelCatalog(mergeConfiguredModels(
+    { currentModelId: catalog.currentModelId, models: catalog.models },
+    configured,
+  ));
 }
 
 export function providerPresets() {
@@ -161,6 +174,12 @@ export function upsertProvider(params: ProviderUpsertRequest) {
     await reloadDesktopModels();
     return response;
   });
+}
+
+export function unhideProvider(id: string) {
+  return desktopCommand<{ ok: boolean }>("desktop_provider_unhide", { id }, () =>
+    request("x.ai/providers/unhide", { id }),
+  );
 }
 
 export function deleteProvider(id: string, replacement?: string) {

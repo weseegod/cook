@@ -112,6 +112,11 @@ export function findPreset(id: string): ProviderPreset | undefined {
 export interface ProviderFormState {
   /** Preset id, or `custom` for a user URL. */
   presetId: string;
+  /**
+   * Config id for a hand-added endpoint. Unset on preset connects, which keep `presetId`.
+   * Settings → Add provider fills this from the name until the user edits it.
+   */
+  providerId?: string;
   providerName: string;
   baseUrl: string;
   apiBackend: string;
@@ -126,6 +131,22 @@ export interface ProviderFormState {
   /** Keep the existing secret when editing a provider that already has one. */
   keepExistingKey: boolean;
   setAsDefault: boolean;
+  /** HTTP headers sent with this provider's requests. Blank rows are ignored. */
+  extraHeaders: ProviderHeaderRow[];
+}
+
+export interface ProviderHeaderRow {
+  name: string;
+  value: string;
+}
+
+function headerRows(headers: Record<string, string> | undefined): ProviderHeaderRow[] {
+  return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }));
+}
+
+/** Rows with both sides blank are an unused Add click, not a header. */
+function filledHeaderRows(rows: ProviderHeaderRow[]): ProviderHeaderRow[] {
+  return rows.filter((row) => row.name.trim() || row.value.trim());
 }
 
 export function formFromPreset(preset: ProviderPreset): ProviderFormState {
@@ -141,6 +162,7 @@ export function formFromPreset(preset: ProviderPreset): ProviderFormState {
     customModelIds: [],
     keepExistingKey: false,
     setAsDefault: false,
+    extraHeaders: headerRows(preset.extraHeaders),
   };
 }
 
@@ -153,6 +175,7 @@ export function formFromProvider(
     inlineKey: boolean;
     name?: string | null;
     models?: Array<{ id: string }>;
+    extraHeaders?: Record<string, string>;
   },
 ): ProviderFormState {
   const base = findPreset(provider.id);
@@ -170,6 +193,7 @@ export function formFromProvider(
     customModelIds: configuredModelIds.filter((id) => !presetModelIds.has(id)),
     keepExistingKey: provider.inlineKey,
     setAsDefault: false,
+    extraHeaders: "extraHeaders" in provider ? headerRows(provider.extraHeaders) : headerRows(base?.extraHeaders),
   };
 }
 
@@ -180,15 +204,42 @@ export interface FormValidation {
 
 const MODEL_ID = /^[A-Za-z0-9._:/@+-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PROVIDER_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** RFC 9110 token, the production for an HTTP header name. */
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const HEADER_CONTROL = /[\u0000-\u001F\u007F]/;
+
+/** A pasted secret (`sk-…`) is an API key. Hyphens are valid there and invalid in an env var name. */
+function looksLikeApiKey(value: string): boolean {
+  const key = value.trim();
+  return /^sk[-_]/i.test(key) || (key.includes("-") && !/\s/.test(key));
+}
+
+/** Slug a display name into a config id (`OpenCode` → `opencode`). */
+export function providerIdFromName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+}
 
 /** Pure validation shared by the settings panel and the onboarding wizard. */
 export function validateProviderForm(
   form: ProviderFormState,
-  options: { requireKey: boolean; requireModels?: boolean },
+  options: { requireKey: boolean; requireModels?: boolean; providerId?: boolean; existingIds?: string[] },
 ): FormValidation {
   const errors: Record<string, string> = {};
   if (!form.providerName.trim()) errors.providerName = "Provider name is required";
   else if (form.providerName.trim().length > 80) errors.providerName = "Provider name must be 80 characters or fewer";
+  if (options.providerId) {
+    const id = form.providerId?.trim() ?? "";
+    if (!id) errors.providerId = "Provider id is required";
+    else if (id.length > 64 || !PROVIDER_ID.test(id)) errors.providerId = "Use a short id like opencode";
+    else if (PROVIDER_PRESETS.some((preset) => preset.id === id)) errors.providerId = "That id is reserved for a built-in provider";
+    else if (options.existingIds?.includes(id)) errors.providerId = "A provider with this id already exists";
+  }
   const baseUrl = form.baseUrl.trim();
   if (!baseUrl) {
     errors.baseUrl = "Base URL is required";
@@ -199,7 +250,7 @@ export function validateProviderForm(
     if (options.requireKey && !form.apiKey.trim()) errors.apiKey = "Paste the provider's API key";
   } else if (!form.envKey.trim()) {
     errors.envKey = "Name the environment variable holding the key";
-  } else if (!ENV_NAME.test(form.envKey.trim())) {
+  } else if (!ENV_NAME.test(form.envKey.trim()) && !looksLikeApiKey(form.envKey)) {
     errors.envKey = "Use a variable name: letters, digits and underscores";
   }
   if (options.requireModels !== false) {
@@ -210,7 +261,55 @@ export function validateProviderForm(
       errors.models = "Pick at least one model, or discover them from the provider";
     }
   }
+  const seenHeaders = new Set<string>();
+  for (const row of filledHeaderRows(form.extraHeaders)) {
+    const name = row.name.trim();
+    const value = row.value.trim();
+    if (!name || !HEADER_NAME.test(name)) {
+      errors.extraHeaders = name ? `“${name}” is not a valid HTTP header name` : "Header name is required";
+      break;
+    }
+    const lower = name.toLowerCase();
+    if (lower === "authorization" || lower === "x-api-key") {
+      errors.extraHeaders = `“${name}” is reserved for the API key`;
+      break;
+    }
+    if (seenHeaders.has(lower)) {
+      errors.extraHeaders = `“${name}” is listed more than once`;
+      break;
+    }
+    seenHeaders.add(lower);
+    if (!value) {
+      errors.extraHeaders = `“${name}” needs a value`;
+      break;
+    }
+    if (HEADER_CONTROL.test(row.value)) {
+      errors.extraHeaders = `“${name}” contains a control character`;
+      break;
+    }
+  }
   return { ok: Object.keys(errors).length === 0, errors };
+}
+
+/**
+ * Credential payload for save and for Test.
+ *
+ * A real env var name stays `envKey`. A pasted secret (`sk-…`) is stored as `apiKey` even if it
+ * was typed in the environment field — hyphens are not legal in a variable name.
+ * An edit that leaves the key field blank sends no credential, so the stored secret stays.
+ */
+export function credentialFields(form: ProviderFormState): { apiKey?: string; envKey?: string } {
+  const typedKey = form.apiKey.trim();
+  const envName = form.envKey.trim();
+  if (form.credential === "env") {
+    if (!envName) return {};
+    return ENV_NAME.test(envName) ? { envKey: envName } : { apiKey: envName };
+  }
+  if (typedKey) return { apiKey: typedKey };
+  if (form.keepExistingKey) return {};
+  if (envName && ENV_NAME.test(envName)) return { envKey: envName };
+  if (envName && looksLikeApiKey(envName)) return { apiKey: envName };
+  return {};
 }
 
 /**
@@ -234,29 +333,20 @@ export function formToUpsertRequest(
         ...seeds.map((seed) => ({ id: seed.id, model: seed.model, name: seed.name, input: [...seed.input] })),
         ...extraIds.map((id) => ({ id, model: id, name: id, input: ["text"] })),
       ];
-  const typedKey = form.apiKey.trim();
-  const envName = form.envKey.trim();
-  // An edit that leaves the key field blank sends no credential at all, so the stored secret
-  // stays untouched instead of silently switching the provider to an env var.
-  const credential: { apiKey?: string; envKey?: string } =
-    form.credential === "env"
-      ? envName
-        ? { envKey: envName }
-        : {}
-      : typedKey
-        ? { apiKey: typedKey }
-        : form.keepExistingKey
-          ? {}
-          : envName
-            ? { envKey: envName }
-            : {};
+  const credential = credentialFields(form);
+  const extraHeaders: Record<string, string> = {};
+  for (const row of filledHeaderRows(form.extraHeaders)) {
+    const name = row.name.trim();
+    if (!name) continue;
+    extraHeaders[name] = row.value.trim();
+  }
   return {
-    id: form.presetId,
+    id: form.providerId !== undefined ? form.providerId.trim() : form.presetId,
     ...(form.providerName.trim() ? { name: form.providerName.trim() } : {}),
     baseUrl: form.baseUrl.trim(),
     apiBackend: form.apiBackend,
     ...credential,
-    ...(Object.keys(preset?.extraHeaders ?? {}).length > 0 ? { extraHeaders: { ...preset!.extraHeaders } } : {}),
+    ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
     models,
     ...(form.setAsDefault ? { setAsDefault: true } : {}),
   };

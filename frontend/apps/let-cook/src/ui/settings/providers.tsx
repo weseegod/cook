@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, RefreshCw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { isOauthProvider, PROVIDER_PRESETS } from "../../acp/provider-presets";
+import { findPreset, isOauthProvider } from "../../acp/provider-presets";
 import { logoutProviderOauth } from "../../acp/provider-oauth";
 import { normalizeError } from "../../acp/errors";
 import {
@@ -12,14 +12,14 @@ import {
 } from "../../acp/providers";
 import { acpClient } from "../../acp/client";
 import type { ModelSummary } from "../../acp/xai";
-import { PresetGrid, ProviderEditor } from "./provider-form";
+import { ProviderEditor } from "./provider-form";
 import { ModelDialog } from "./model-dialog";
 import { Dialog } from "../components/dialog";
 import { LoadingState } from "../components/async-state";
 import { OauthDialog } from "./providers/oauth-dialog";
 import { ProviderCard } from "./providers/provider-card";
 import { RemoveModelDialog, RemoveProviderDialog, ReplacementModelDialog } from "./providers/provider-dialogs";
-import { modelFromLink, type ProviderRow } from "./providers/provider-rows";
+import { buildProviderRows, type ProviderRow } from "./providers/provider-rows";
 import { useAuthInfo, useProviderPresets, useProviders } from "./providers/use-provider-queries";
 
 export { useProviderPresets, useProviders };
@@ -120,50 +120,16 @@ export function ProvidersPanel({
   });
 
   const list = providers.data?.providers ?? [];
-  const rows = useMemo<ProviderRow[]>(() => {
-    const configured = new Map(list.map((provider) => [provider.id, provider]));
-    const explicitModels = providers.data?.models ?? [];
-    // Catalog entries only fill in metadata for a configured model; they never add one, or a
-    // model the user just removed would come straight back from the agent's cached catalog.
-    const catalog = new Map(models.map((model) => [model.id, model]));
-    const makeRow = (preset: ProviderPreset, provider?: ProviderSummary): ProviderRow => {
-      const merged = new Map<string, ModelSummary>();
-      for (const model of provider?.models ?? []) merged.set(model.id, modelFromLink(model, preset.id, selectedModel));
-      for (const model of explicitModels.filter((model) => model.provider === preset.id)) {
-        merged.set(model.id, modelFromLink(model, preset.id, selectedModel));
-      }
-      for (const [id, model] of merged) {
-        const known = catalog.get(id);
-        if (!known) continue;
-        merged.set(id, {
-          ...model,
-          apiModel: model.apiModel ?? known.apiModel,
-          contextWindow: model.contextWindow ?? known.contextWindow,
-          maxCompletionTokens: model.maxCompletionTokens ?? known.maxCompletionTokens,
-          inputModalities: model.inputModalities ?? known.inputModalities,
-          isDefault: model.isDefault || known.isDefault,
-        });
-      }
-      return {
-        preset,
-        provider,
-        models: [...merged.values()].sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id)),
-        oauthConnected: (preset.id === "xai" && Boolean(auth.data?.methodId)) || Boolean(provider?.oauth),
-        oauthEmail: preset.id === "xai" ? auth.data?.email : null,
-      };
-    };
-    const configuredRows = presets.flatMap((preset) => {
-      const provider = configured.get(preset.id);
-      return provider ? [makeRow(preset, provider)] : [];
-    });
-    const customPreset = PROVIDER_PRESETS.find((preset) => preset.id === "custom")!;
-    const extraConfiguredRows = list.flatMap((provider) => configured.has(provider.id) && !presets.some((preset) => preset.id === provider.id)
-      ? [makeRow({ ...customPreset, id: provider.id, label: provider.name ?? provider.id, baseUrl: provider.baseUrl ?? null, models: [] }, provider)]
-      : []);
-    const unconfiguredRows = presets.flatMap((preset) => configured.has(preset.id) ? [] : [makeRow(preset)]);
-    const isConnected = (row: ProviderRow) => Boolean(row.oauthConnected || row.provider?.inlineKey || (row.provider?.hasKey && row.provider.envKeyPresent));
-    return [...configuredRows, ...extraConfiguredRows, ...unconfiguredRows].sort((a, b) => Number(isConnected(b)) - Number(isConnected(a)));
-  }, [auth.data?.email, auth.data?.methodId, list, models, presets, providers.data?.models, selectedModel]);
+  const rows = useMemo<ProviderRow[]>(() => buildProviderRows({
+    presets,
+    providers: list,
+    explicitModels: providers.data?.models ?? [],
+    catalog: models,
+    selectedModel,
+    hiddenIds: providers.data?.hiddenProviders ?? [],
+    xaiAuthenticated: Boolean(auth.data?.methodId),
+    xaiEmail: auth.data?.email,
+  }), [auth.data?.email, auth.data?.methodId, list, models, presets, providers.data?.hiddenProviders, providers.data?.models, selectedModel]);
 
   /**
    * Every model the window can offer: the agent's catalog plus whatever `config.toml` added that
@@ -284,7 +250,17 @@ export function ProvidersPanel({
           row={deletingProvider}
           pending={removeProvider.isPending}
           onClose={() => setDeletingProvider(null)}
-          onConfirm={() => removeProvider.mutate({ provider: deletingProvider.provider! })}
+          onConfirm={() => removeProvider.mutate({
+            provider: deletingProvider.provider ?? {
+              id: deletingProvider.preset.id,
+              name: deletingProvider.preset.label,
+              hasKey: false,
+              inlineKey: false,
+              envKeyPresent: false,
+              extraHeaders: {},
+              models: [],
+            },
+          })}
         />
       )}
 
@@ -335,14 +311,24 @@ export function ProvidersPanel({
         />
       )}
 
-      {adding && !editing && (
+      {adding && !editing && findPreset("custom") && (
         <Dialog
           title="Add provider"
-          description="Connect a service to make its models available in chat."
+          description="Name a custom endpoint and point Cook at its API."
           size="wide"
           onClose={() => setAdding(false)}
         >
-          <PresetGrid presets={presets} onPick={(preset) => openConnect(preset)} />
+          <ProviderEditor
+            preset={findPreset("custom")!}
+            variant="connection"
+            createCustom
+            existingIds={list.map((provider) => provider.id)}
+            onSaved={() => {
+              setAdding(false);
+              refresh();
+            }}
+            onCancel={() => setAdding(false)}
+          />
         </Dialog>
       )}
 

@@ -283,6 +283,7 @@ test.describe("chat, attachments and the model picker", () => {
   });
 
   test("shows all supported providers and opens a closable add-provider dialog", async ({ page }) => {
+    const mock = api(page);
     await openWorkspace(page, CONNECTED_SEED);
     await page.getByLabel("Settings").click();
     await page.getByRole("tab", { name: "Models" }).click();
@@ -305,20 +306,27 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByTestId("provider-add").click();
     const dialog = page.getByRole("dialog", { name: "Add provider" });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByTestId("preset-openai").locator(".provider-logo-openai")).toBeVisible();
-    await expect(dialog.getByTestId("preset-anthropic").locator(".provider-logo-claude")).toBeVisible();
-    await expect(dialog.getByTestId("preset-xai").locator(".provider-logo-grok")).toBeVisible();
-    await expect(dialog.getByTestId("preset-deepseek").locator(".provider-logo-deepseek")).toBeVisible();
-    await expect(dialog.getByTestId("preset-openrouter").locator(".provider-logo-openrouter")).toBeVisible();
-    await expect(dialog.getByTestId("preset-xiaomi").locator(".provider-logo-xiaomi")).toBeVisible();
-    await expect(dialog.getByTestId("preset-zai").locator(".provider-logo-zai")).toBeVisible();
-    await expect(dialog.getByTestId("preset-google").locator(".provider-logo-google")).toBeVisible();
-    await expect(dialog.getByTestId("preset-moonshot").locator(".provider-logo-moonshot")).toBeVisible();
-    await expect(dialog.getByTestId("preset-xiaomi")).toBeVisible();
-    await expect(dialog.getByTestId("preset-xiaomi")).toContainText("Xiaomi MiMo");
+    await expect(dialog.getByTestId("preset-openai")).toHaveCount(0);
+    await expect(dialog.getByTestId("preset-xai")).toHaveCount(0);
+    await expect(dialog.getByLabel("Provider name")).toBeVisible();
+    await expect(dialog.getByLabel("Provider id")).toBeVisible();
+    await expect(dialog.getByLabel("Base URL")).toBeVisible();
+    await expect(dialog.getByLabel("API backend")).toBeVisible();
     await expect(dialog.getByText("Choose a provider")).toHaveCount(0);
-    await dialog.getByLabel("Close dialog").click();
+    await dialog.getByRole("button", { name: "Cancel" }).click();
     await expect(dialog).toHaveCount(0);
+
+    await page.getByTestId("provider-add").click();
+    const again = page.getByRole("dialog", { name: "Add provider" });
+    await again.getByLabel("Provider name").fill("OpenCode");
+    await expect(again.getByLabel("Provider id")).toHaveValue("opencode");
+    await again.getByLabel("Base URL").fill("http://127.0.0.1:4096/v1");
+    await again.getByLabel("API backend").selectOption("chat_completions");
+    await again.getByLabel("API key").fill("sk-opencode");
+    await again.getByTestId("provider-save").click();
+    await expect(page.getByTestId("provider-row-opencode")).toContainText("OpenCode");
+    const saved = (await mock.state()).providers as Array<{ id: string; baseUrl: string }>;
+    expect(saved).toEqual(expect.arrayContaining([expect.objectContaining({ id: "opencode", baseUrl: "http://127.0.0.1:4096/v1" })]));
   });
 
   test("Connect on Claude starts OAuth and records Connected · OAuth", async ({ page }) => {
@@ -478,6 +486,41 @@ test.describe("chat, attachments and the model picker", () => {
     await page.getByRole("dialog", { name: "Add model to xAI" }).getByRole("button", { name: "Cancel" }).click();
     await page.getByTestId("provider-signout-xai").click();
     await expect(page.getByTestId("provider-add-model-xai")).toHaveCount(0);
+    const signedOut = page.getByTestId("provider-row-xai");
+    await expect(signedOut).not.toContainText("Inactive");
+    await expect(page.getByTestId("provider-connect-xai")).toBeVisible();
+    await expect(page.getByTestId("provider-remove-xai")).toHaveCount(0);
+    await page.getByTestId("provider-connect-xai").click();
+    await expect(page.getByTestId("oauth-dialog-xai")).toBeVisible();
+  });
+
+  test("removing a Grok session with no provider block marks the card inactive", async ({ page }) => {
+    const mock = api(page);
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      authMethodId: "grok.com",
+      xaiModels: [{ id: "grok-4.5", name: "Grok 4.5", input: ["text"] }],
+    });
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+    await expect(page.getByTestId("provider-row-xai")).toContainText("Connected · OAuth");
+    await page.getByTestId("provider-remove-xai").click();
+    await page.getByRole("dialog", { name: "Remove xAI?" }).getByTestId("provider-remove-confirm").click();
+    const row = page.getByTestId("provider-row-xai");
+    await expect(row).toContainText("Inactive");
+    await expect(page.getByTestId("provider-connect-xai")).toBeVisible();
+    await expect(page.getByTestId("provider-remove-xai")).toHaveCount(0);
+    await expect(row.getByTestId("model-row-grok-4.5")).toHaveCount(0);
+    const order = await page.locator("[data-testid^='provider-row-']").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid")));
+    expect(order.at(-1)).toBe("provider-row-xai");
+    expect((await mock.state()).hiddenProviders).toEqual(["xai"]);
+    expect((await mock.state()).providers).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: "xai" })]));
+
+    await page.getByTestId("provider-connect-xai").click();
+    await mock.completeOAuth("xai");
+    await expect(row).toContainText("Connected · OAuth");
+    await expect(row).not.toContainText("Inactive");
+    expect((await mock.state()).hiddenProviders).toEqual([]);
   });
 
   test("Get models keeps the provider probe for xAI API-key connections", async ({ page }) => {
@@ -569,7 +612,12 @@ test.describe("chat, attachments and the model picker", () => {
     await replacement.getByRole("button", { name: "Remove provider" }).click();
 
     await expect(page.getByTestId("model-row-gpt-5")).toHaveCount(0);
+    const removedRow = page.getByTestId("provider-row-openai");
+    await expect(removedRow).toContainText("Inactive");
     await expect(page.getByTestId("provider-connect-openai")).toBeVisible();
+    await expect(page.getByTestId("provider-remove-openai")).toHaveCount(0);
+    const order = await page.locator("[data-testid^='provider-row-']").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-testid")));
+    expect(order.at(-1)).toBe("provider-row-openai");
     const removed = await mock.state();
     expect((removed.providers as Array<{ id: string }>).map((provider) => provider.id)).toEqual(["deepseek"]);
     expect(removed.defaultModel).toBe("deepseek-chat");

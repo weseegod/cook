@@ -30,9 +30,11 @@ export function ProviderCard({
   onEditModel,
   onRemoveModel,
 }: ProviderCardProps) {
-  const status = mergedProviderStatus(row.provider, row.oauthConnected);
+  const status = row.inactive
+    ? { label: "Inactive", tone: "warn" as const }
+    : mergedProviderStatus(row.provider, row.oauthConnected);
   const label = row.provider?.name ?? row.preset.label;
-  const connected = status.tone === "ok";
+  const connected = !row.inactive && status.tone === "ok";
   return (
     <article className="provider-model-card" data-testid={`provider-row-${row.preset.id}`}>
       <header className="provider-model-heading">
@@ -71,15 +73,13 @@ export function ProviderCard({
                   <LogOut size={13} /> Sign out
                 </button>
               )}
-              {row.provider && (
-                <button
-                  className="ghost-button danger-ghost-button provider-header-model-button"
-                  data-testid={`provider-remove-${row.preset.id}`}
-                  onClick={onRemove}
-                >
-                  <Trash2 size={13} /> Remove
-                </button>
-              )}
+              <button
+                className="ghost-button danger-ghost-button provider-header-model-button"
+                data-testid={`provider-remove-${row.preset.id}`}
+                onClick={onRemove}
+              >
+                <Trash2 size={13} /> Remove
+              </button>
             </>
           ) : (
             <button
