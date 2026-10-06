@@ -1269,7 +1269,10 @@ fn prompt_command_colliding_skill_keeps_its_qualified_name() {
     {
         // Prompt commands win the bare name and expand to an instruction, carrying no skill refs.
         SlashCommandOutcome::InvokeSkill { skills: refs, .. } => {
-            assert!(refs.is_empty(), "bare /commit must not resolve to the skill");
+            assert!(
+                refs.is_empty(),
+                "bare /commit must not resolve to the skill"
+            );
         }
         _ => panic!("expected InvokeSkill for bare /commit"),
     }
@@ -1801,7 +1804,10 @@ fn goal_batch_keeps_objective_and_provider_url_separate() {
         }
         other => panic!("expected GoalBatchSet, got {}", other.command_name()),
     }
-    assert_eq!(resolve_goal_batch("ship feature").command_name(), "goal_batch");
+    assert_eq!(
+        resolve_goal_batch("ship feature").command_name(),
+        "goal_batch"
+    );
 }
 
 #[test]
@@ -1965,7 +1971,10 @@ fn workflow_collision_policy_includes_aliases_and_ambiguous_skills() {
         listing("review"),
     ];
     let commands = available_commands(&skills, all_gated(), &workflows);
-    let names: Vec<String> = commands.iter().map(|command| command.name.clone()).collect();
+    let names: Vec<String> = commands
+        .iter()
+        .map(|command| command.name.clone())
+        .collect();
     assert!(!names.iter().any(|name| name == "status"));
     assert!(!names.iter().any(|name| name == "yolo"));
     assert!(!names.iter().any(|name| name == "sessions"));

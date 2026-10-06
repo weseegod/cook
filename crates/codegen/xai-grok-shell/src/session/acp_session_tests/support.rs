@@ -882,7 +882,12 @@ pub(crate) fn activate_plan_mode(actor: &SessionActor) {
 /// per episode, so tests must read the path instead of assuming `<session>/plan.md`.
 #[cfg(test)]
 pub(crate) fn plan_file_path(actor: &SessionActor) -> String {
-    actor.plan_mode.lock().plan_file_path().display().to_string()
+    actor
+        .plan_mode
+        .lock()
+        .plan_file_path()
+        .display()
+        .to_string()
 }
 #[cfg(test)]
 pub(crate) async fn tool_result_text(actor: &SessionActor, call_id: &str) -> String {

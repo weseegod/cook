@@ -225,7 +225,9 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                         "/tmp/test-session",
                     )),
                 )),
-                implementing_approved_plan: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                implementing_approved_plan: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
                 last_write_finish_reminder_surface: std::cell::Cell::new(None),
                 goal_enabled: false,
                 background_workflows_enabled: false,
@@ -766,7 +768,9 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                         "/tmp/test-session",
                     )),
                 )),
-                implementing_approved_plan: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                implementing_approved_plan: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
                 last_write_finish_reminder_surface: std::cell::Cell::new(None),
                 goal_enabled: false,
                 background_workflows_enabled: false,

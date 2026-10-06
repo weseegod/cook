@@ -716,6 +716,17 @@ impl SessionActor {
             creds.alpha_test_key.as_deref(),
             &cfg.base_url,
         );
+        // The conversation's id, so every request of this conversation carries the same value.
+        let opencode_session_key = cfg
+            .conversation_group_id
+            .as_ref()
+            .map(|group| group.as_ref())
+            .unwrap_or_else(|| self.session_info.id.0.as_ref());
+        crate::agent::config::inject_opencode_session_header(
+            &mut extra_headers,
+            &cfg.base_url,
+            Some(opencode_session_key),
+        );
         let compaction_at_tokens = self.compaction_at_tokens.get();
         let compactions_remaining = self.compactions_remaining.get();
         if compactions_remaining.is_some() || compaction_at_tokens.is_some() {

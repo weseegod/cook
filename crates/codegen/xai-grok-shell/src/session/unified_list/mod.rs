@@ -1439,7 +1439,8 @@ mod tests {
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0].legacy.session_id, "husk-1");
         assert!(result.rows[0].live);
-        let value = serde_json::to_value(result.rows[0].clone().into_ext_superset()).expect("serialize");
+        let value =
+            serde_json::to_value(result.rows[0].clone().into_ext_superset()).expect("serialize");
         assert_eq!(
             value
                 .get("_meta")
@@ -1452,9 +1453,10 @@ mod tests {
     #[test]
     fn inject_resident_marks_live_on_existing_row_without_duplicating() {
         let mut result = empty_page();
-        result
-            .rows
-            .push(merged_session_to_row(local("s1", "2026-06-18T20:10:00Z"), facet_registry()));
+        result.rows.push(merged_session_to_row(
+            local("s1", "2026-06-18T20:10:00Z"),
+            facet_registry(),
+        ));
         inject_resident_entries(
             &mut result,
             [ResidentListEntry {
@@ -1478,7 +1480,8 @@ mod tests {
         );
         assert_eq!(result.rows.len(), 1);
         assert!(!result.rows[0].live);
-        let value = serde_json::to_value(result.rows[0].clone().into_ext_superset()).expect("serialize");
+        let value =
+            serde_json::to_value(result.rows[0].clone().into_ext_superset()).expect("serialize");
         assert!(
             value
                 .get("_meta")

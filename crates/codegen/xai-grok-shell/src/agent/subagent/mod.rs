@@ -759,6 +759,18 @@ fn parent_catalog_model_id(ctx: &SubagentSpawnContext, routing_model: &str) -> a
         .or_else(|| resolve_catalog_key(&models, &acp::ModelId::new(routing_model)))
         .unwrap_or_else(|| ctx.model_id.clone())
 }
+/// OpenCode session id for a child request: the conversation's group id, so a child talks to the
+/// same OpenCode session as its parent. Falls back to the id the child session itself derives.
+fn opencode_session_key(
+    group: Option<&crate::sampling::ConversationGroupId>,
+    parent_session_id: &str,
+) -> String {
+    group.map(std::string::ToString::to_string).unwrap_or_else(|| {
+        crate::sampling::derive_conversation_group_id(parent_session_id)
+            .as_ref()
+            .to_string()
+    })
+}
 /// Read the parent session's actual current sampling config. Prefers the live state from `ChatStateHandle` (authoritative). Falls back to the baseline on `SubagentSpawnContext` if the actor is unavailable.
 /// The returned [`acp::ModelId`] is the parent session catalog id (`ctx.model_id`), not the process-global default or chat-state routing slug.
 #[tracing::instrument(level = "debug", skip_all)]
@@ -773,6 +785,13 @@ async fn read_parent_sampling_config(
                 &mut extra_headers,
                 creds.alpha_test_key.as_deref(),
                 &cfg.base_url,
+            );
+            let session_key =
+                opencode_session_key(cfg.conversation_group_id.as_ref(), &ctx.parent_session_id);
+            crate::agent::config::inject_opencode_session_header(
+                &mut extra_headers,
+                &cfg.base_url,
+                Some(&session_key),
             );
             let auth_scheme = crate::agent::config::try_resolve_model_credentials(&cfg.model, None)
                 .map(|r| r.auth_scheme)
@@ -891,6 +910,13 @@ async fn read_parent_sampling_config(
     fallback.compaction_at_tokens = ctx
         .models_manager
         .model_compaction_at_tokens(catalog_model_id.0.as_ref());
+    let session_key =
+        opencode_session_key(fallback.conversation_group_id.as_ref(), &ctx.parent_session_id);
+    crate::agent::config::inject_opencode_session_header(
+        &mut fallback.extra_headers,
+        &fallback.base_url,
+        Some(&session_key),
+    );
     (fallback, ctx.model_id.clone())
 }
 /// `AuthType` for a subagent: BYOK gets `ApiKey` (don't overwrite the BYOK key).

@@ -1,12 +1,12 @@
 //! Wiring tests for MCP tool-layer images through `handle_bridge_tool_success`.
 use super::support::*;
 use super::*;
+use crate::agent::config::{ModelEntry, ModelInfo};
 use base64::Engine;
+use xai_grok_sampling_types::InputModality;
 use xai_grok_sampling_types::{ContentPart, ConversationItem};
 use xai_grok_tools::types::output::{MCPOutput, ToolOutput, ToolRunResult};
 use xai_grok_tools::util::base64_images::{ExtractedImage, IMAGE_CONTENT_PLACEHOLDER};
-use crate::agent::config::{ModelEntry, ModelInfo};
-use xai_grok_sampling_types::InputModality;
 /// A 32×32 solid PNG, above the vision minimum side and area, so normalize keeps it.
 fn vision_ok_png_b64() -> String {
     use image::{ImageBuffer, Rgba};
@@ -144,14 +144,10 @@ async fn handle_bridge_tool_success_text_only_model_skips_image_followup() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let (gateway_tx, _) = tokio::sync::mpsc::unbounded_channel::<
-                xai_acp_lib::AcpClientMessage,
-            >();
-            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<
-                PersistenceMsg,
-            >();
-            let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx)
-                .await;
+            let (gateway_tx, _) =
+                tokio::sync::mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx).await;
             actor
                 .models_manager
                 .insert_test_entry("text-only-model", text_only_model_entry("text-only-model"));

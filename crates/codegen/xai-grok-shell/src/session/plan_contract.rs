@@ -38,8 +38,12 @@ fn checkbox_marked(before: &str, after: &str) -> bool {
     let Some(rest) = before.strip_prefix("- [ ] ") else {
         return false;
     };
-    after.strip_prefix("- [x] ").is_some_and(|next| next == rest)
-        || after.strip_prefix("- [X] ").is_some_and(|next| next == rest)
+    after
+        .strip_prefix("- [x] ")
+        .is_some_and(|next| next == rest)
+        || after
+            .strip_prefix("- [X] ")
+            .is_some_and(|next| next == rest)
 }
 
 fn checklist_status_only(old_body: &str, new_body: &str) -> bool {
@@ -190,8 +194,11 @@ mod tests {
             .is_err()
         );
         assert!(
-            progress_only_delta(PLAN, &PLAN.replace("A checkable result", "A different result"))
-                .is_err()
+            progress_only_delta(
+                PLAN,
+                &PLAN.replace("A checkable result", "A different result")
+            )
+            .is_err()
         );
     }
 

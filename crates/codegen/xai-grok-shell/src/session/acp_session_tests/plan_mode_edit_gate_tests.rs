@@ -70,11 +70,8 @@ async fn plan_mode_allows_plan_file_edit() {
             let actor = build_gate_actor().await;
             activate_plan_mode(&actor);
             let plan_path = plan_file_path(&actor);
-            let result = prepare(
-                &actor,
-                search_replace_call_at("call_plan_file", &plan_path),
-            )
-            .await;
+            let result =
+                prepare(&actor, search_replace_call_at("call_plan_file", &plan_path)).await;
             assert!(
                 result.is_ok(),
                 "plan-file edit must pass the gate and prepare; got {:?}",

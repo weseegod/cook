@@ -265,7 +265,9 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                         "/tmp/test-session",
                     )),
                 )),
-                implementing_approved_plan: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                implementing_approved_plan: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
                 last_write_finish_reminder_surface: std::cell::Cell::new(None),
                 goal_enabled: false,
                 background_workflows_enabled: false,
