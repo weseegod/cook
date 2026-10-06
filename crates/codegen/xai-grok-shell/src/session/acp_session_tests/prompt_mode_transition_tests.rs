@@ -79,7 +79,10 @@ fn plan_surface_keeps_research_and_coding_tools() {
         "spawn_subagent",
         "ask_user_question",
     ] {
-        assert!(kept.contains(&name), "plan surface missing {name}; got {kept:?}");
+        assert!(
+            kept.contains(&name),
+            "plan surface missing {name}; got {kept:?}"
+        );
     }
     assert!(!kept.contains(&"workflow"));
     assert!(!kept.contains(&"send_feedback"));

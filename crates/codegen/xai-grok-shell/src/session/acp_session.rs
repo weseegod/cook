@@ -1727,6 +1727,11 @@ mod permission_prompt_notification_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/plan_approval_resume_tests.rs"]
 mod plan_approval_resume_tests;
+/// Per-episode plan files: `enter_plan_mode` rotates before the tool seeds, and an active episode
+/// keeps its file.
+#[cfg(test)]
+#[path = "acp_session_tests/plan_episode_file_tests.rs"]
+mod plan_episode_file_tests;
 /// Mixed-batch plan.md write and exit_plan_mode snapshot.
 #[cfg(test)]
 #[path = "acp_session_tests/plan_exit_batch_barrier_tests.rs"]
@@ -1735,11 +1740,6 @@ mod plan_exit_batch_barrier_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/plan_mode_edit_gate_tests.rs"]
 mod plan_mode_edit_gate_tests;
-/// Per-episode plan files: `enter_plan_mode` rotates before the tool seeds, and an active episode
-/// keeps its file.
-#[cfg(test)]
-#[path = "acp_session_tests/plan_episode_file_tests.rs"]
-mod plan_episode_file_tests;
 /// Mid-turn plan-mode toggle: immediate activation and buffered reminder.
 #[cfg(test)]
 #[path = "acp_session_tests/plan_mode_midturn_tests.rs"]
@@ -2055,6 +2055,9 @@ mod media_gen_batch_limit_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/memory_config_tests.rs"]
 mod memory_config_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/opencode_session_header_tests.rs"]
+mod opencode_session_header_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/parallel_dispatch_tests.rs"]
 mod parallel_dispatch_tests;

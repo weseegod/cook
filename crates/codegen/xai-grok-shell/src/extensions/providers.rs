@@ -848,6 +848,12 @@ async fn handle_test(args: &acp::ExtRequest) -> ExtResult {
     to_raw_response(&probe)
 }
 
+/// A probe is not a conversation, so OpenCode only needs one stable id per provider.
+fn opencode_probe_session_key(provider_id: &str) -> String {
+    crate::sampling::derive_conversation_group_id(&format!("provider:{provider_id}"))
+        .as_ref()
+        .to_string()
+}
 /// Merge the request over the saved provider so the form can test before saving.
 fn resolve_probe_target(req: &TestRequest) -> anyhow::Result<ProbeTarget> {
     let snapshot = provider_snapshot()?;
@@ -890,6 +896,11 @@ fn resolve_probe_target(req: &TestRequest) -> anyhow::Result<ProbeTarget> {
             .entry(header.0.to_owned())
             .or_insert_with(|| header.1.to_owned());
     }
+    crate::agent::config::inject_opencode_session_header(
+        &mut extra_headers,
+        &base_url,
+        Some(&opencode_probe_session_key(&req.id)),
+    );
     let model = req
         .model
         .as_deref()

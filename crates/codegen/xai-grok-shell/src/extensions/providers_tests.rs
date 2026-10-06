@@ -16,17 +16,29 @@ fn upsert(id: &str, base_url: &str) -> UpsertRequest {
     }
 }
 
+/// OpenCode Go rejects a request without a session id, so Test and Discover must send one.
+#[test]
+fn probe_session_key_is_stable_per_provider() {
+    let key = opencode_probe_session_key("opencode");
+    assert_eq!(
+        key,
+        opencode_probe_session_key("opencode"),
+        "repeated probes of one provider must send the same id"
+    );
+    assert_ne!(key, opencode_probe_session_key("other"));
+    assert!(crate::util::is_opencode_url(
+        "https://opencode.ai/zen/go/v1"
+    ));
+    assert!(!crate::util::is_opencode_url("https://api.deepseek.com"));
+}
+
 #[test]
 fn validation_requires_a_base_url_and_one_credential_shape() {
     let mut req = upsert("deepseek", " ");
     assert!(req.validate().unwrap_err().contains("baseUrl is required"));
 
     req.base_url = Some("api.deepseek.com".to_owned());
-    assert!(
-        req.validate()
-            .unwrap_err()
-            .contains("must start with http")
-    );
+    assert!(req.validate().unwrap_err().contains("must start with http"));
 
     req.base_url = Some("https://api.deepseek.com".to_owned());
     req.api_key = Some("sk-a".to_owned());
@@ -92,7 +104,8 @@ fn parsed_models_reads_openai_and_ollama_shapes() {
     assert_eq!(models[0].id, "gpt-5");
     assert_eq!(models[1].name.as_deref(), Some("GPT-4.1"));
 
-    let ollama: serde_json::Value = serde_json::json!({"models": [{"name": "llama3", "model": "llama3"}]});
+    let ollama: serde_json::Value =
+        serde_json::json!({"models": [{"name": "llama3", "model": "llama3"}]});
     let models = parse_discovered_models(&ollama);
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "llama3");
@@ -117,7 +130,10 @@ fn parsed_models_reads_codex_slugs_and_skips_hidden_models() {
 
     let url = models_list_url("https://chatgpt.com/backend-api/codex/");
     assert!(url.starts_with("https://chatgpt.com/backend-api/codex/models?client_version="));
-    assert_eq!(models_list_url("https://api.openai.com/v1"), "https://api.openai.com/v1/models");
+    assert_eq!(
+        models_list_url("https://api.openai.com/v1"),
+        "https://api.openai.com/v1/models"
+    );
 }
 
 #[test]
@@ -144,7 +160,10 @@ fn presets_cover_every_documented_provider() {
     }
     let anthropic = PRESETS.iter().find(|p| p.id == "anthropic").unwrap();
     assert_eq!(anthropic.api_backend, "messages");
-    assert_eq!(anthropic.extra_headers, &[("anthropic-version", "2023-06-01")]);
+    assert_eq!(
+        anthropic.extra_headers,
+        &[("anthropic-version", "2023-06-01")]
+    );
     let ollama = PRESETS.iter().find(|p| p.id == "ollama").unwrap();
     assert!(ollama.env_key.is_none(), "Ollama needs no key");
     let xiaomi = PRESETS.iter().find(|p| p.id == "xiaomi").unwrap();
@@ -170,8 +189,16 @@ fn presets_cover_every_documented_provider() {
         ["glm-5.1", "glm-5", "glm-4.7"]
     );
     let custom = PRESETS.iter().find(|p| p.id == "custom").unwrap();
-    assert!(custom.base_url.is_none(), "the custom card takes a user URL");
-    assert_eq!(preset_api_version_header("anthropic", "messages").unwrap().0, "anthropic-version");
+    assert!(
+        custom.base_url.is_none(),
+        "the custom card takes a user URL"
+    );
+    assert_eq!(
+        preset_api_version_header("anthropic", "messages")
+            .unwrap()
+            .0,
+        "anthropic-version"
+    );
     assert!(preset_api_version_header("deepseek", "chat_completions").is_none());
 }
 
@@ -231,14 +258,23 @@ api_key = "sk-old"
         Ok(())
     });
 
-    assert!(out.contains("# my hand-written notes"), "comments survive: {out}");
+    assert!(
+        out.contains("# my hand-written notes"),
+        "comments survive: {out}"
+    );
     assert!(out.contains("theme = \"dark\""));
     assert!(out.contains("[mcp_servers.local]"));
-    assert!(out.contains("[model_providers.old]"), "other providers survive");
+    assert!(
+        out.contains("[model_providers.old]"),
+        "other providers survive"
+    );
     assert!(out.contains("api_key = \"sk-old\""));
     // A key with `/` (and any other non-bare character) must be rendered quoted, or the
     // dotted key would silently become nested tables.
-    assert!(out.contains("[model.\"deepseek/chat\"]"), "quoted catalog key: {out}");
+    assert!(
+        out.contains("[model.\"deepseek/chat\"]"),
+        "quoted catalog key: {out}"
+    );
     assert!(out.contains("default = \"deepseek/chat\""));
     let reparsed: toml::Value = toml::from_str(&out).expect("output is valid TOML");
     assert_eq!(
@@ -284,10 +320,16 @@ default = "keep"
         Ok(())
     });
     assert!(out.contains("# keep me"), "kept comment survives: {out}");
-    assert!(out.contains("theme = \"dark\""), "unrelated table survives: {out}");
+    assert!(
+        out.contains("theme = \"dark\""),
+        "unrelated table survives: {out}"
+    );
     assert!(!out.contains("[model_providers.deepseek]"));
     assert!(!out.contains("deepseek/chat"));
-    assert!(!out.contains("# deepseek notes"), "the removed table's decor goes with it: {out}");
+    assert!(
+        !out.contains("# deepseek notes"),
+        "the removed table's decor goes with it: {out}"
+    );
     assert!(out.contains("[model_providers.other]"));
     assert!(out.contains("[model.keep]"));
     assert!(out.contains("default = \"keep\""));
@@ -298,22 +340,30 @@ default = "keep"
 #[test]
 fn child_table_creates_implicit_parents_only_when_absent() {
     let out = edit("# notes\n[ui]\ntheme = \"dark\"\n", |doc| {
-        child_table(doc, "model_providers")?.insert(
-            "deepseek",
-            toml_edit::Item::Table(toml_edit::Table::new()),
-        );
+        child_table(doc, "model_providers")?
+            .insert("deepseek", toml_edit::Item::Table(toml_edit::Table::new()));
         Ok(())
     });
-    assert!(!out.contains("[model_providers]\n"), "no bare parent header: {out}");
+    assert!(
+        !out.contains("[model_providers]\n"),
+        "no bare parent header: {out}"
+    );
     assert!(out.contains("[model_providers.deepseek]"));
-    assert!(out.starts_with("# notes"), "leading comment survives: {out}");
-    assert!(out.contains("theme = \"dark\""), "existing table survives: {out}");
+    assert!(
+        out.starts_with("# notes"),
+        "leading comment survives: {out}"
+    );
+    assert!(
+        out.contains("theme = \"dark\""),
+        "existing table survives: {out}"
+    );
 }
 
 #[test]
 fn child_table_rejects_a_non_table_section() {
-    let mut doc: toml_edit::DocumentMut =
-        "model_providers = \"oops\"\n".parse().expect("valid fixture");
+    let mut doc: toml_edit::DocumentMut = "model_providers = \"oops\"\n"
+        .parse()
+        .expect("valid fixture");
     let err = child_table(&mut doc, "model_providers").unwrap_err();
     assert!(err.to_string().contains("not a table"), "{err}");
 }
@@ -324,11 +374,14 @@ fn presets_match_the_shared_desktop_fixture() {
     // against, so the cards can never advertise a provider the agent does not know.
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../frontend/apps/let-cook/src/acp/provider-presets.fixture.json");
-    let raw = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let raw =
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let fixture: serde_json::Value = serde_json::from_str(&raw).expect("fixture is JSON");
     let snapshot: serde_json::Value = serde_json::to_value(PRESETS).expect("presets serialize");
-    assert_eq!(snapshot, fixture, "the agent preset catalog drifted from the fixture");
+    assert_eq!(
+        snapshot, fixture,
+        "the agent preset catalog drifted from the fixture"
+    );
 }
 
 #[test]

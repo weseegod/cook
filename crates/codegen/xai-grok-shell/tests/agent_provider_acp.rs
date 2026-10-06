@@ -29,8 +29,8 @@ async fn ext(
     method: &str,
     params: Value,
 ) -> Result<Value, String> {
-    let raw = serde_json::value::RawValue::from_string(params.to_string())
-        .expect("serialize ext params");
+    let raw =
+        serde_json::value::RawValue::from_string(params.to_string()).expect("serialize ext params");
     match tokio::time::timeout(
         RPC_TIMEOUT,
         conn.ext_method(acp::ExtRequest::new(method, Arc::from(raw))),
@@ -87,8 +87,9 @@ fn provider_acp_round_trip() {
     acp_harness::run_agent_test_with_models(
         vec![MockModelEntry::new("test-model")],
         |_cwd, _server| async move {
-            let grok_home =
-                std::path::PathBuf::from(std::env::var("GROK_HOME").expect("harness sets GROK_HOME"));
+            let grok_home = std::path::PathBuf::from(
+                std::env::var("GROK_HOME").expect("harness sets GROK_HOME"),
+            );
             let config_path = grok_home.join("config.toml");
             std::fs::write(&config_path, PRE_SEEDED).expect("seed config.toml");
 
@@ -179,7 +180,10 @@ fn provider_acp_round_trip() {
                 "the seeded model is linked to its provider: {deepseek}"
             );
             let on_disk = std::fs::read_to_string(&config_path).unwrap();
-            assert!(on_disk.contains(&format!("api_key = \"{DEEPSEEK_KEY}\"")), "{on_disk}");
+            assert!(
+                on_disk.contains(&format!("api_key = \"{DEEPSEEK_KEY}\"")),
+                "{on_disk}"
+            );
             assert!(on_disk.contains("[model_providers.deepseek]"), "{on_disk}");
 
             // ── upsert with env_key writes no secret ────────────────
@@ -197,7 +201,10 @@ fn provider_acp_round_trip() {
             .await;
             let listed = ok(&conn, "x.ai/providers/list", json!({})).await;
             let openrouter = provider(&listed, "openrouter");
-            assert_eq!(openrouter["envKey"], json!("PROVIDER_ACP_TEST_OPENROUTER_KEY"));
+            assert_eq!(
+                openrouter["envKey"],
+                json!("PROVIDER_ACP_TEST_OPENROUTER_KEY")
+            );
             assert_eq!(openrouter["inlineKey"], json!(false));
             assert_eq!(openrouter["hasKey"], json!(true));
             assert_eq!(
@@ -208,14 +215,20 @@ fn provider_acp_round_trip() {
             assert_eq!(openrouter["keyHint"], json!(null));
             let on_disk = std::fs::read_to_string(&config_path).unwrap();
             assert!(on_disk.contains("env_key = \"PROVIDER_ACP_TEST_OPENROUTER_KEY\""));
-            assert!(on_disk.contains("[model.\"openrouter/model\"]"), "{on_disk}");
+            assert!(
+                on_disk.contains("[model.\"openrouter/model\"]"),
+                "{on_disk}"
+            );
 
             // ── credential probe against the provider's own URL ─────
             let tested = ok(&conn, "x.ai/providers/test", json!({"id": "deepseek"})).await;
             assert_eq!(tested["ok"], json!(true), "probe failed: {tested}");
             assert_eq!(tested["status"], json!(200));
             assert!(
-                tested["url"].as_str().unwrap_or_default().starts_with(&base_url),
+                tested["url"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .starts_with(&base_url),
                 "the probe must hit the provider's base URL: {tested}"
             );
             let probe = endpoint
@@ -249,8 +262,12 @@ fn provider_acp_round_trip() {
             assert!(!failed.to_string().contains(DEEPSEEK_KEY));
 
             // ── discover merges unknown ids into the catalog ────────
-            let discovered =
-                ok(&conn, "x.ai/providers/discover_models", json!({"id": "deepseek"})).await;
+            let discovered = ok(
+                &conn,
+                "x.ai/providers/discover_models",
+                json!({"id": "deepseek"}),
+            )
+            .await;
             assert_eq!(discovered["ok"], json!(true), "{discovered}");
             assert!(
                 endpoint.request_count_for("/v1/models") >= 1,
@@ -272,7 +289,10 @@ fn provider_acp_round_trip() {
                 "the discovered model row is written: {on_disk}"
             );
             let listed = ok(&conn, "x.ai/providers/list", json!({})).await;
-            assert!(model_ids(provider(&listed, "deepseek")).contains(&"provider-only-model".to_owned()));
+            assert!(
+                model_ids(provider(&listed, "deepseek"))
+                    .contains(&"provider-only-model".to_owned())
+            );
 
             // ── persist the default model through the agent ─────────
             // `x.ai/models/list` keeps the `ExtMethodResult` envelope; the client unwraps it.
@@ -285,8 +305,12 @@ fn provider_acp_round_trip() {
                     .any(|m| m["modelId"] == json!("deepseek-chat")),
                 "the seeded BYOK model is selectable: {models}"
             );
-            let defaulted =
-                ok(&conn, "x.ai/models/set_default", json!({"modelId": "deepseek-chat"})).await;
+            let defaulted = ok(
+                &conn,
+                "x.ai/models/set_default",
+                json!({"modelId": "deepseek-chat"}),
+            )
+            .await;
             assert_eq!(defaulted["ok"], json!(true), "{defaulted}");
             let on_disk = std::fs::read_to_string(&config_path).unwrap();
             assert!(on_disk.contains("default = \"deepseek-chat\""), "{on_disk}");
@@ -342,11 +366,15 @@ fn provider_acp_round_trip() {
 
             // ── pre-existing user content survived every write ──────
             let on_disk = std::fs::read_to_string(&config_path).unwrap();
-            assert!(on_disk.contains("# hand-written note: keep me"), "{on_disk}");
+            assert!(
+                on_disk.contains("# hand-written note: keep me"),
+                "{on_disk}"
+            );
             assert!(on_disk.contains("theme = \"dark\""), "{on_disk}");
             assert!(on_disk.contains("[mcp_servers.example]"), "{on_disk}");
             assert!(on_disk.contains("command = \"/bin/true\""), "{on_disk}");
-            let reparsed: toml::Value = toml::from_str(&on_disk).expect("config.toml stays valid TOML");
+            let reparsed: toml::Value =
+                toml::from_str(&on_disk).expect("config.toml stays valid TOML");
             assert_eq!(reparsed["ui"]["theme"].as_str(), Some("dark"));
         },
     );

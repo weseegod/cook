@@ -406,8 +406,9 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let (tx, spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
+            let (tx, spawn_count) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
+                body: VALID_PLAN_BODY.as_bytes(),
+            });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
             let baseline_path = actor.goal_tracker.lock().plan_baseline_path();
@@ -426,8 +427,14 @@ async fn planner_success_stamps_plan_file_on_orchestration() {
                 snap.plan_baseline_file.as_deref(),
                 Some(baseline_path.as_path())
             );
-            assert_eq!(std::fs::read_to_string(plan_path).unwrap(), committed_plan_body());
-            assert_eq!(std::fs::read_to_string(baseline_path).unwrap(), committed_plan_body());
+            assert_eq!(
+                std::fs::read_to_string(plan_path).unwrap(),
+                committed_plan_body()
+            );
+            assert_eq!(
+                std::fs::read_to_string(baseline_path).unwrap(),
+                committed_plan_body()
+            );
             assert!(
                 !actor
                     .goal_tracker
@@ -575,8 +582,9 @@ async fn planner_records_own_harness_trace_turn_with_footer() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let (tx, _spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
+            let (tx, _spawn_count) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
+                body: VALID_PLAN_BODY.as_bytes(),
+            });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
 
@@ -634,8 +642,9 @@ async fn planner_success_sets_then_clears_planning_flag() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let (tx, _spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
+            let (tx, _spawn_count) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
+                body: VALID_PLAN_BODY.as_bytes(),
+            });
             let (actor, _tmp, mut persistence_rx) =
                 make_planner_actor_capturing(Some(tx), true).await;
             create_test_goal(&actor);
@@ -665,8 +674,9 @@ async fn planner_clears_planning_latch_before_publishing_the_plan() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let (tx, _spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
+            let (tx, _spawn_count) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
+                body: VALID_PLAN_BODY.as_bytes(),
+            });
             let (actor, _tmp, mut persistence_rx) =
                 make_planner_actor_capturing(Some(tx), true).await;
             create_test_goal(&actor);
@@ -1070,8 +1080,9 @@ async fn planner_subagent_tokens_fold_into_goal_total() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
-            let (tx, spawn_count) =
-                spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone { body: VALID_PLAN_BODY.as_bytes() });
+            let (tx, spawn_count) = spawn_planner_coordinator(SpawnBehaviour::WritePlanThenDone {
+                body: VALID_PLAN_BODY.as_bytes(),
+            });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             create_test_goal(&actor);
             let goal_id = actor
@@ -1504,7 +1515,8 @@ async fn setup_goal_reminder_is_no_plan_when_planner_disabled() {
         .run_until(async {
             let (actor, _tmp) = make_planner_actor(None, false).await;
 
-            let GoalSetupOutcome::Inference { reminder } = actor.setup_goal("ship it", None, None).await
+            let GoalSetupOutcome::Inference { reminder } =
+                actor.setup_goal("ship it", None, None).await
             else {
                 panic!("a disabled planner must flow through to inference");
             };
@@ -1567,7 +1579,8 @@ async fn setup_goal_returns_message_when_planner_pauses() {
             });
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
 
-            let GoalSetupOutcome::Message(msg) = actor.setup_goal("ship it", None, None).await else {
+            let GoalSetupOutcome::Message(msg) = actor.setup_goal("ship it", None, None).await
+            else {
                 panic!("a planner pause must end the turn, not seed inference");
             };
 
@@ -1605,7 +1618,8 @@ async fn setup_goal_message_is_total_when_pause_message_missing() {
                 }
             });
 
-            let GoalSetupOutcome::Message(msg) = actor.setup_goal("ship it", None, None).await else {
+            let GoalSetupOutcome::Message(msg) = actor.setup_goal("ship it", None, None).await
+            else {
                 panic!("a goal paused mid-plan must end the turn");
             };
 

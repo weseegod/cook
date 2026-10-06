@@ -243,13 +243,15 @@ fn header_level(line: &str) -> usize {
 
 /// Deeper subheaders (e.g. `### Phase 1`) stay inside the section; only a header at the checklist's own level or shallower ends it.
 fn has_checklist_section(body: &str) -> bool {
-    body.lines().any(|line| {
-        is_section_header(line, "task checklist") || is_section_header(line, "steps")
-    })
+    body.lines()
+        .any(|line| is_section_header(line, "task checklist") || is_section_header(line, "steps"))
 }
 
 fn checklist_section_name(body: &str) -> Option<&'static str> {
-    if body.lines().any(|line| is_section_header(line, "task checklist")) {
+    if body
+        .lines()
+        .any(|line| is_section_header(line, "task checklist"))
+    {
         Some("task checklist")
     } else if body.lines().any(|line| is_section_header(line, "steps")) {
         Some("steps")
@@ -387,11 +389,7 @@ mod tests {
             first_pending_plan_item(&episode).as_deref(),
             Some("file item")
         );
-        std::fs::write(
-            &episode,
-            "# Plan\n\n## Task checklist\n- [x] done item\n",
-        )
-        .unwrap();
+        std::fs::write(&episode, "# Plan\n\n## Task checklist\n- [x] done item\n").unwrap();
         assert_eq!(first_pending_plan_item(&episode), None);
     }
 
