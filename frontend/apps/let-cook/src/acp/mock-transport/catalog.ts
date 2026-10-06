@@ -31,6 +31,7 @@ export function providerList() {
       ...state.xaiModels.map((model) => ({ ...model, provider: "xai" })),
     ],
     defaultModel: state.defaultModel,
+    hiddenProviders: state.hiddenProviders ?? [],
   };
 }
 

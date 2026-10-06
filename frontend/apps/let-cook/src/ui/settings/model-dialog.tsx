@@ -9,8 +9,6 @@ import { ToggleSwitch } from "../components/toggle-switch";
 /** The panel's baseline for a hand-added model: generous context, a conservative output. */
 export const SUGGESTED_CONTEXT = 300_000;
 export const SUGGESTED_OUTPUT = 64_000;
-/** How many unconfigured models the provider's own `/models` offers as quick picks. */
-const CANDIDATE_LIMIT = 5;
 const MODEL_ID = /^[A-Za-z0-9._:/@+-]+$/;
 
 /**
@@ -88,7 +86,7 @@ export function ModelDialog({
         return;
       }
       const known = new Set(existingIds);
-      setCandidates(result.models.filter((entry) => !known.has(entry.id)).slice(0, CANDIDATE_LIMIT));
+      setCandidates(result.models.filter((entry) => !known.has(entry.id)));
     } catch (caught) {
       setCandidates([]);
       setError(normalizeError(caught, "Could not load provider models"));

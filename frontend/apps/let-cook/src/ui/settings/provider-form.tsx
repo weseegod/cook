@@ -1,9 +1,11 @@
 import { CheckCircle2, Download, KeyRound, LoaderCircle, Plug, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  credentialFields,
   formFromPreset,
   formFromProvider,
   formToUpsertRequest,
+  providerIdFromName,
   validateProviderForm,
   type ProviderFormState,
 } from "../../acp/provider-presets";
@@ -29,6 +31,10 @@ interface EditorProps {
    * seeds the provider's suggested models so the next step has something to pick.
    */
   variant?: "full" | "connection";
+  /** Settings → Add provider: blank custom endpoint, with an id the user can edit. */
+  createCustom?: boolean;
+  /** Config ids already saved, so a new custom id cannot collide with one. */
+  existingIds?: string[];
   /** Called with the saved provider id. */
   onSaved: (id: string) => void;
   onCancel?: () => void;
@@ -38,10 +44,14 @@ interface EditorProps {
  * One provider's form: URL, credential (inline key or env var name), Test, save.
  * Shared by Settings → Models and the first-run connect flow.
  */
-export function ProviderEditor({ preset, provider, variant = "full", onSaved, onCancel }: EditorProps) {
-  const [form, setForm] = useState<ProviderFormState>(() =>
-    provider ? formFromProvider(provider) : formFromPreset(preset),
-  );
+export function ProviderEditor({ preset, provider, variant = "full", createCustom = false, existingIds, onSaved, onCancel }: EditorProps) {
+  const [form, setForm] = useState<ProviderFormState>(() => {
+    if (createCustom) {
+      return { ...formFromPreset(preset), providerName: "", providerId: "", baseUrl: "", selectedModels: [], customModelIds: [] };
+    }
+    return provider ? formFromProvider(provider) : formFromPreset(preset);
+  });
+  const [idTouched, setIdTouched] = useState(false);
   const [test, setTest] = useState<ProviderTestResult | null>(null);
   const [busy, setBusy] = useState<"test" | "discover" | "save" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,17 +61,19 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
   const validation = useMemo(
     // The connection-only popup hides model management, so it must not fail on model errors it
     // cannot show.
-    () => validateProviderForm(form, { requireKey: !form.keepExistingKey, requireModels: !connectionOnly }),
-    [form, connectionOnly],
+    () => validateProviderForm(form, {
+      requireKey: !form.keepExistingKey,
+      requireModels: !connectionOnly,
+      providerId: createCustom,
+      existingIds,
+    }),
+    [form, connectionOnly, createCustom, existingIds],
   );
   const patch = (next: Partial<ProviderFormState>) => setForm((current) => ({ ...current, ...next }));
 
   /** The credential as the probe needs it: only what the user actually typed. */
   function credentialParams() {
-    return {
-      ...(form.credential === "inline" && form.apiKey.trim() ? { apiKey: form.apiKey.trim() } : {}),
-      ...(form.credential === "env" && form.envKey.trim() ? { envKey: form.envKey.trim() } : {}),
-    };
+    return credentialFields(form);
   }
 
   async function runTest() {
@@ -112,8 +124,9 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
     try {
       // An edit from Settings may not round-trip configured model ids: the form derives them from
       // presets, so sending them back would rewrite ids it never showed.
-      await upsertProvider(formToUpsertRequest(form, preset_, { includeModels: !connectionOnly }));
-      onSaved(form.presetId);
+      const request = formToUpsertRequest(form, preset_, { includeModels: !connectionOnly });
+      await upsertProvider(request);
+      onSaved(request.id);
     } catch (caught) {
       setError(normalizeError(caught, "Could not save the provider"));
     } finally {
@@ -142,10 +155,32 @@ export function ProviderEditor({ preset, provider, variant = "full", onSaved, on
           <input
             value={form.providerName}
             aria-label="Provider name"
-            onChange={(event) => patch({ providerName: event.target.value })}
+            onChange={(event) => {
+              const providerName = event.target.value;
+              patch({
+                providerName,
+                ...(createCustom && !idTouched ? { providerId: providerIdFromName(providerName) } : {}),
+              });
+            }}
           />
           {validation.errors.providerName && <small className="field-error">{validation.errors.providerName}</small>}
         </label>
+
+        {createCustom && (
+          <label className="field">
+            <span>Provider id</span>
+            <input
+              value={form.providerId ?? ""}
+              aria-label="Provider id"
+              placeholder="opencode"
+              onChange={(event) => {
+                setIdTouched(true);
+                patch({ providerId: event.target.value.trim().toLowerCase() });
+              }}
+            />
+            {validation.errors.providerId && <small className="field-error">{validation.errors.providerId}</small>}
+          </label>
+        )}
 
         <div className="field">
           <span>API backend</span>

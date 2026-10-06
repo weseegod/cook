@@ -9,6 +9,7 @@ import {
   formFromProvider,
   formToUpsertRequest,
   mergedProviderStatus,
+  providerIdFromName,
   providerStatus,
   shouldShowConnectProvider,
   validateProviderForm,
@@ -142,6 +143,26 @@ describe("form → x.ai/providers/upsert params", () => {
     expect(request.extraHeaders).toBeUndefined();
   });
 
+  it("sends the edited custom provider id instead of the preset id", () => {
+    const preset = findPreset("custom")!;
+    const form = {
+      ...formFromPreset(preset),
+      providerName: "OpenCode",
+      providerId: providerIdFromName("OpenCode"),
+      apiKey: "k-123",
+      baseUrl: "http://127.0.0.1:4096/v1",
+    };
+    const request = formToUpsertRequest(form, preset, { includeModels: false });
+    expect(providerIdFromName("My Gateway")).toBe("my-gateway");
+    expect(request).toMatchObject({
+      id: "opencode",
+      name: "OpenCode",
+      baseUrl: "http://127.0.0.1:4096/v1",
+      apiBackend: "chat_completions",
+      models: [],
+    });
+  });
+
   it("omits model seeds for a connection-only edit so configured rows survive", () => {
     const preset = findPreset("openrouter")!;
     const form = formFromProvider({
@@ -192,6 +213,14 @@ describe("form validation", () => {
     expect(validateProviderForm({ ...base(), credential: "env", envKey: "GOOD_KEY" }, { requireKey: false }).ok).toBe(true);
   });
 
+  it("stores a pasted sk- secret as an API key instead of rejecting the env-var name", () => {
+    const form = { ...base(), credential: "env" as const, envKey: "sk-opencode-secret" };
+    expect(validateProviderForm(form, { requireKey: true }).errors.envKey).toBeUndefined();
+    const request = formToUpsertRequest(form, findPreset("deepseek")!, { includeModels: false });
+    expect(request.apiKey).toBe("sk-opencode-secret");
+    expect(request.envKey).toBeUndefined();
+  });
+
   it("requires at least one model and rejects unusable ids", () => {
     expect(validateProviderForm({ ...base(), selectedModels: [], customModelIds: [] }, { requireKey: true }).errors.models).toBeTruthy();
     expect(
@@ -202,6 +231,24 @@ describe("form validation", () => {
   it("skips the model requirement when the dialog does not show model fields", () => {
     const form = { ...base(), selectedModels: [], customModelIds: [] };
     expect(validateProviderForm(form, { requireKey: true, requireModels: false }).ok).toBe(true);
+  });
+
+  it("rejects a custom id that is empty, reserved, or already saved", () => {
+    const form = {
+      ...formFromPreset(findPreset("custom")!),
+      providerName: "OpenCode",
+      providerId: "opencode",
+      baseUrl: "http://127.0.0.1:4096/v1",
+      apiKey: "k-123",
+      selectedModels: [],
+      customModelIds: [],
+    };
+    const options = { requireKey: true, requireModels: false, providerId: true, existingIds: ["my-gateway"] };
+    expect(validateProviderForm(form, options).ok).toBe(true);
+    expect(validateProviderForm({ ...form, providerId: "" }, options).errors.providerId).toBe("Provider id is required");
+    expect(validateProviderForm({ ...form, providerId: "openai" }, options).errors.providerId).toContain("reserved");
+    expect(validateProviderForm({ ...form, providerId: "custom" }, options).errors.providerId).toContain("reserved");
+    expect(validateProviderForm({ ...form, providerId: "my-gateway" }, options).errors.providerId).toContain("already exists");
   });
 });
 

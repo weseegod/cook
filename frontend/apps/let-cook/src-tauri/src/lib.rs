@@ -417,6 +417,14 @@ async fn desktop_provider_upsert(request: ProviderUpsert) -> Result<Value, Strin
 }
 
 #[tauri::command]
+async fn desktop_provider_unhide(id: String) -> Result<Value, String> {
+    tauri::async_runtime::spawn_blocking(move || provider_config::unhide_provider(&id))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+#[tauri::command]
 async fn desktop_provider_delete(id: String, replacement: Option<String>) -> Result<Value, String> {
     let response_id = id.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -521,6 +529,7 @@ pub fn run() {
             os_notify,
             desktop_provider_list,
             desktop_provider_upsert,
+            desktop_provider_unhide,
             desktop_provider_delete,
             desktop_provider_models,
             desktop_model_upsert,

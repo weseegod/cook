@@ -164,6 +164,8 @@ export interface MockState {
   /** What the agent is holding, as `x.ai/session/info` reports it. */
   context: { used: number; turns: number; messageCount: number };
   providers: MockProvider[];
+  /** Built-in ids removed in Settings. Absent on older persisted seeds. */
+  hiddenProviders?: string[];
   /** User-added models routed through the built-in xAI account rather than a BYOK provider. */
   xaiModels: MockSeedModel[];
   /** Models the Grok OAuth catalog offers before they are saved in Settings. */
