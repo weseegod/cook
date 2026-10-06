@@ -185,6 +185,9 @@ export const settingsHandlers: Record<string, MethodHandler> = {
     // The host writes only the seeds it is given and leaves other `[model.*]` rows alone, so an
     // upsert that omits models (a connection-only edit) must not drop the configured ones.
     const seeded = new Set(seeds.map((model) => model.id));
+    const extraHeaders = p.extraHeaders && typeof p.extraHeaders === "object" && !Array.isArray(p.extraHeaders)
+      ? Object.fromEntries(Object.entries(p.extraHeaders).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : {};
     const next: MockProvider = {
       id,
       name: typeof p.name === "string" ? p.name : existing?.name,
@@ -194,6 +197,7 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       apiKeyPresent: Boolean(apiKey || (!envKey && (existing?.apiKey || existing?.apiKeyPresent))),
       envKey: envKey ?? (apiKey ? undefined : existing?.envKey),
       oauth: p.oauth === true,
+      extraHeaders,
       models: [...(existing?.models ?? []).filter((model) => !seeded.has(model.id)), ...seeds],
     };
     const providerIndex = state.providers.findIndex((provider) => provider.id === id);

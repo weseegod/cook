@@ -143,6 +143,39 @@ describe("form → x.ai/providers/upsert params", () => {
     expect(request.extraHeaders).toBeUndefined();
   });
 
+  it("sends only the headers typed on a custom provider", () => {
+    const preset = findPreset("custom")!;
+    const form = {
+      ...formFromPreset(preset),
+      providerName: "OpenCode",
+      providerId: "opencode",
+      apiKey: "k-123",
+      baseUrl: "http://127.0.0.1:4096/v1",
+      extraHeaders: [{ name: "x-opencode-session", value: "sess-1" }],
+    };
+    const request = formToUpsertRequest(form, preset, { includeModels: false });
+    expect(request.id).toBe("opencode");
+    expect(request.extraHeaders).toEqual({ "x-opencode-session": "sess-1" });
+    expect(formFromPreset(findPreset("anthropic")!).extraHeaders).toEqual([
+      { name: "anthropic-version", value: "2023-06-01" },
+    ]);
+  });
+
+  it("prefills an edit from saved headers, including when the user cleared them", () => {
+    const saved = formFromProvider({
+      id: "anthropic",
+      inlineKey: true,
+      extraHeaders: { "anthropic-version": "2024-01-01", "X-Trace": "1" },
+    });
+    expect(saved.extraHeaders).toEqual([
+      { name: "anthropic-version", value: "2024-01-01" },
+      { name: "X-Trace", value: "1" },
+    ]);
+    const cleared = formFromProvider({ id: "anthropic", inlineKey: true, extraHeaders: {} });
+    expect(cleared.extraHeaders).toEqual([]);
+    expect(formToUpsertRequest(cleared, findPreset("anthropic"), { includeModels: false }).extraHeaders).toBeUndefined();
+  });
+
   it("sends the edited custom provider id instead of the preset id", () => {
     const preset = findPreset("custom")!;
     const form = {
@@ -249,6 +282,14 @@ describe("form validation", () => {
     expect(validateProviderForm({ ...form, providerId: "openai" }, options).errors.providerId).toContain("reserved");
     expect(validateProviderForm({ ...form, providerId: "custom" }, options).errors.providerId).toContain("reserved");
     expect(validateProviderForm({ ...form, providerId: "my-gateway" }, options).errors.providerId).toContain("already exists");
+  });
+
+  it("accepts an x-opencode-session header and rejects credential header names", () => {
+    const options = { requireKey: true, requireModels: false };
+    const session = { ...base(), extraHeaders: [{ name: "x-opencode-session", value: "sess-1" }] };
+    expect(validateProviderForm(session, options).ok).toBe(true);
+    expect(validateProviderForm({ ...base(), extraHeaders: [{ name: "Authorization", value: "Bearer x" }] }, options).errors.extraHeaders).toContain("reserved");
+    expect(validateProviderForm({ ...base(), extraHeaders: [{ name: "X-Api-Key", value: "secret" }] }, options).errors.extraHeaders).toContain("reserved");
   });
 });
 

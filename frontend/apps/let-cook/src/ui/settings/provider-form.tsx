@@ -1,4 +1,4 @@
-import { CheckCircle2, Download, KeyRound, LoaderCircle, Plug, TriangleAlert } from "lucide-react";
+import { CheckCircle2, Download, KeyRound, LoaderCircle, Plug, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   credentialFields,
@@ -8,6 +8,7 @@ import {
   providerIdFromName,
   validateProviderForm,
   type ProviderFormState,
+  type ProviderHeaderRow,
 } from "../../acp/provider-presets";
 import {
   discoverProviderModels,
@@ -70,6 +71,9 @@ export function ProviderEditor({ preset, provider, variant = "full", createCusto
     [form, connectionOnly, createCustom, existingIds],
   );
   const patch = (next: Partial<ProviderFormState>) => setForm((current) => ({ ...current, ...next }));
+  const setHeaders = (update: (rows: ProviderHeaderRow[]) => ProviderHeaderRow[]) => {
+    setForm((current) => ({ ...current, extraHeaders: update(current.extraHeaders) }));
+  };
 
   /** The credential as the probe needs it: only what the user actually typed. */
   function credentialParams() {
@@ -237,6 +241,50 @@ export function ProviderEditor({ preset, provider, variant = "full", createCusto
             {validation.errors.envKey && <small className="field-error">{validation.errors.envKey}</small>}
           </>
         )}
+      </div>
+
+      <div className="field">
+        <span>Headers</span>
+        <div className="provider-header-list">
+          {form.extraHeaders.map((row, index) => (
+            <div className="provider-header-row" key={index}>
+              <input
+                value={row.name}
+                aria-label={`Header ${index + 1} name`}
+                placeholder="Header name"
+                onChange={(event) => {
+                  const name = event.target.value;
+                  setHeaders((rows) => rows.map((entry, at) => (at === index ? { ...entry, name } : entry)));
+                }}
+              />
+              <input
+                value={row.value}
+                aria-label={`Header ${index + 1} value`}
+                placeholder="Value"
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setHeaders((rows) => rows.map((entry, at) => (at === index ? { ...entry, value } : entry)));
+                }}
+              />
+              <button
+                type="button"
+                className="ghost-button"
+                aria-label={`Remove header ${index + 1}`}
+                onClick={() => setHeaders((rows) => rows.filter((_, at) => at !== index))}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => setHeaders((rows) => [...rows, { name: "", value: "" }])}
+          >
+            <Plus size={14} /> Add header
+          </button>
+        </div>
+        {validation.errors.extraHeaders && <small className="field-error">{validation.errors.extraHeaders}</small>}
       </div>
 
       {!connectionOnly && preset_.models.length > 0 && (

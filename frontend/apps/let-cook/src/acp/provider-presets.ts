@@ -131,6 +131,22 @@ export interface ProviderFormState {
   /** Keep the existing secret when editing a provider that already has one. */
   keepExistingKey: boolean;
   setAsDefault: boolean;
+  /** HTTP headers sent with this provider's requests. Blank rows are ignored. */
+  extraHeaders: ProviderHeaderRow[];
+}
+
+export interface ProviderHeaderRow {
+  name: string;
+  value: string;
+}
+
+function headerRows(headers: Record<string, string> | undefined): ProviderHeaderRow[] {
+  return Object.entries(headers ?? {}).map(([name, value]) => ({ name, value }));
+}
+
+/** Rows with both sides blank are an unused Add click, not a header. */
+function filledHeaderRows(rows: ProviderHeaderRow[]): ProviderHeaderRow[] {
+  return rows.filter((row) => row.name.trim() || row.value.trim());
 }
 
 export function formFromPreset(preset: ProviderPreset): ProviderFormState {
@@ -146,6 +162,7 @@ export function formFromPreset(preset: ProviderPreset): ProviderFormState {
     customModelIds: [],
     keepExistingKey: false,
     setAsDefault: false,
+    extraHeaders: headerRows(preset.extraHeaders),
   };
 }
 
@@ -158,6 +175,7 @@ export function formFromProvider(
     inlineKey: boolean;
     name?: string | null;
     models?: Array<{ id: string }>;
+    extraHeaders?: Record<string, string>;
   },
 ): ProviderFormState {
   const base = findPreset(provider.id);
@@ -175,6 +193,7 @@ export function formFromProvider(
     customModelIds: configuredModelIds.filter((id) => !presetModelIds.has(id)),
     keepExistingKey: provider.inlineKey,
     setAsDefault: false,
+    extraHeaders: "extraHeaders" in provider ? headerRows(provider.extraHeaders) : headerRows(base?.extraHeaders),
   };
 }
 
@@ -186,6 +205,9 @@ export interface FormValidation {
 const MODEL_ID = /^[A-Za-z0-9._:/@+-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PROVIDER_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** RFC 9110 token, the production for an HTTP header name. */
+const HEADER_NAME = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
+const HEADER_CONTROL = /[\u0000-\u001F\u007F]/;
 
 /** A pasted secret (`sk-…`) is an API key. Hyphens are valid there and invalid in an env var name. */
 function looksLikeApiKey(value: string): boolean {
@@ -239,6 +261,33 @@ export function validateProviderForm(
       errors.models = "Pick at least one model, or discover them from the provider";
     }
   }
+  const seenHeaders = new Set<string>();
+  for (const row of filledHeaderRows(form.extraHeaders)) {
+    const name = row.name.trim();
+    const value = row.value.trim();
+    if (!name || !HEADER_NAME.test(name)) {
+      errors.extraHeaders = name ? `“${name}” is not a valid HTTP header name` : "Header name is required";
+      break;
+    }
+    const lower = name.toLowerCase();
+    if (lower === "authorization" || lower === "x-api-key") {
+      errors.extraHeaders = `“${name}” is reserved for the API key`;
+      break;
+    }
+    if (seenHeaders.has(lower)) {
+      errors.extraHeaders = `“${name}” is listed more than once`;
+      break;
+    }
+    seenHeaders.add(lower);
+    if (!value) {
+      errors.extraHeaders = `“${name}” needs a value`;
+      break;
+    }
+    if (HEADER_CONTROL.test(row.value)) {
+      errors.extraHeaders = `“${name}” contains a control character`;
+      break;
+    }
+  }
   return { ok: Object.keys(errors).length === 0, errors };
 }
 
@@ -285,13 +334,19 @@ export function formToUpsertRequest(
         ...extraIds.map((id) => ({ id, model: id, name: id, input: ["text"] })),
       ];
   const credential = credentialFields(form);
+  const extraHeaders: Record<string, string> = {};
+  for (const row of filledHeaderRows(form.extraHeaders)) {
+    const name = row.name.trim();
+    if (!name) continue;
+    extraHeaders[name] = row.value.trim();
+  }
   return {
     id: form.providerId !== undefined ? form.providerId.trim() : form.presetId,
     ...(form.providerName.trim() ? { name: form.providerName.trim() } : {}),
     baseUrl: form.baseUrl.trim(),
     apiBackend: form.apiBackend,
     ...credential,
-    ...(Object.keys(preset?.extraHeaders ?? {}).length > 0 ? { extraHeaders: { ...preset!.extraHeaders } } : {}),
+    ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
     models,
     ...(form.setAsDefault ? { setAsDefault: true } : {}),
   };

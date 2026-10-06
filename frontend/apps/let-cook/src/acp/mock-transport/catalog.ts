@@ -22,7 +22,7 @@ export function providerList() {
       inlineKey: Boolean(provider.apiKey) || Boolean(provider.apiKeyPresent),
       envKey: provider.envKey ?? null,
       envKeyPresent: false,
-      extraHeaders: presetFor(provider.id)?.extraHeaders ?? {},
+      extraHeaders: provider.extraHeaders ?? presetFor(provider.id)?.extraHeaders ?? {},
       oauth: provider.oauth === true,
       models: linkedModels(provider),
     })),

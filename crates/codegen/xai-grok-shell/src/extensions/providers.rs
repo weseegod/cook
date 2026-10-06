@@ -1428,8 +1428,7 @@ fn reload_models_from_disk(agent: &MvpAgent) -> Result<(), String> {
         );
         drop(agent_config);
         let mut agent_config = agent.cfg.borrow_mut();
-        agent_config.models = toml_config.models.clone();
-        agent_config.config_models = toml_config.config_models.clone();
+        super::session_admin::copy_reloaded_model_tables(&mut agent_config, &toml_config);
         agent_config.web_search_model = overrides.web_search;
         agent_config.session_summary_model = overrides.session_summary;
         agent_config.image_description_model = overrides.image_description;

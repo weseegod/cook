@@ -1438,6 +1438,23 @@
   margin-bottom: 0;
 }
 
+.provider-header-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.provider-header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.provider-header-row input {
+  margin: 0;
+}
+
 .credential-hint {
   margin-bottom: 5px;
   display: block;

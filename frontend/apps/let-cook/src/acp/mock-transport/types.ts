@@ -29,6 +29,7 @@ export interface MockProvider {
   apiKeyPresent?: boolean;
   envKey?: string;
   oauth?: boolean;
+  extraHeaders?: Record<string, string>;
   models: MockSeedModel[];
 }
 
