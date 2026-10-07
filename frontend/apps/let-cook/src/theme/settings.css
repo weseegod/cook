@@ -826,6 +826,53 @@
   color: var(--accent);
 }
 
+/* Skill name: opens the prompt viewer. Plugin and workflow rows keep their plain `strong`. */
+.skill-open {
+  display: block;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--settings-text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-open:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.skill-open:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: 2px;
+}
+
+.skill-viewer-heading {
+  overflow-wrap: anywhere;
+}
+
+/* The viewer's buttons ride in the dialog footer, so they carry no body gap of their own. */
+.skill-viewer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.skill-prompt,
+.skill-prompt-editor {
+  max-height: 52vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .provider-row-main > small:last-child {
   color: var(--text-soft);
 }

@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn merge_puts_workflows_under_skills() {
         let merged = merge_listing_sections(
-            Some("The following skills are available for use:\n\n- commit: Make a commit."),
+            Some("Optional skills. None is required.\n\n- commit: Make a commit."),
             Some("The following workflows are available:\n\n- review-pr: Review a PR."),
         )
         .unwrap();

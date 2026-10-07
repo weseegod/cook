@@ -17,28 +17,11 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 
 // ─── Description ─────────────────────────────────────────────────────
 
-const DESCRIPTION: &str = r#"Load a specialized skill that provides domain-specific instructions and workflows.
+const DESCRIPTION: &str = r#"Load an optional skill by name.
 
-When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.
+Skills are reference instructions, not requirements. The catalog already in the conversation lists names and what each one covers. Call this tool only when you choose to follow one of them. No task requires a skill.
 
-The skill will inject detailed instructions, workflows, and access to bundled resources into the conversation via a `<skill_content name="...">` block with the loaded content.
-
-The following skills provide specialized sets of instructions for particular tasks.
-Invoke this tool to load a skill when a task matches one of the available skills listed below:
-
-<available_skills>
-${%- if skills %}
-${%- for skill in skills %}
-  <skill>
-    <name>${{ skill.name }}</name>
-    <description>${{ skill.description|e }}</description>
-    <location>${{ skill.location }}</location>
-  </skill>
-${%- endfor %}
-${%- else %}
-(No skills available. Skills can be added in ~/.cook/skills/ or .grok/skills/)
-${%- endif %}
-</available_skills>"#;
+The loaded instructions come back in a `<skill_content name="...">` block, with up to 10 bundled files from that skill's directory."#;
 
 // ─── Input ───────────────────────────────────────────────────────────
 
@@ -391,9 +374,10 @@ mod tests {
         assert!(matches!(tool.kind(), ToolKind::Skill));
         assert!(matches!(tool.tool_namespace(), ToolNamespace::OpenCode));
         let desc = tool.description_template();
-        assert!(desc.contains("available_skills"));
-        assert!(desc.contains("${%- for skill in skills %}"));
-        assert!(desc.contains("${{ skill.name }}"));
+        assert!(desc.contains("optional skill"));
+        assert!(desc.contains("No task requires a skill"));
+        assert!(!desc.contains("No skills available"));
+        assert!(!desc.contains("${{ skill.name }}"));
     }
 
     #[test]

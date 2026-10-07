@@ -357,7 +357,8 @@ sends the TUI `x.ai/queue/*` notifications for existing rows.
 |---|---|---|---|---|---|
 | C-sk-list | `x.ai/skills/list` | `/skills` | Settings Skills, topic groups (Game / Documents / …) with Project / User / Plugin wrappers when mixed | `ok` | surface |
 | C-sk-tog | `x.ai/skills/toggle` | modal | Settings toggle, persists `disabled` in `~/.cook/skills.toml`; group switch fans out sequential `{ name, enabled, cwd }` calls | `ok` | surface |
-| C-sk-add | `x.ai/skills/add` / `remove` / `reset` / `config` | modal | Settings Skills add/remove/reset/config | `ok` (`refresh-baseline` still `gap`) | surface |
+| C-sk-add | `x.ai/skills/add` / `remove` / `reset` / `config` | modal | — (no skill-path setup: user skills are edited in `~/.cook/skills/`, see `C-sk-edit`) | `na` | surface |
+| C-sk-edit | `x.ai/fs/read_file` + `x.ai/fs/write_file` + `x.ai/skills/refresh-baseline` | — | Settings Skills: a skill's name opens its whole `SKILL.md` with Edit and Save; a bundled / server / plugin skill saves a user copy under `~/.cook/skills/` (project and user skills save in place), then re-baselines the agent's skill watch | `ok` | surface |
 | C-wf-list | `x.ai/workflows/list` | `/workflows` | Settings Skills workflow list (browse-only) | `partial` | surface |
 | C-pl-list | `x.ai/plugins/list` | `/plugins` | Settings list with enable/disable | `ok` | surface |
 | C-pl-act | `x.ai/plugins/action` | modal | Settings enable/disable | `ok` (install/uninstall/update still CLI) | surface |
@@ -524,7 +525,8 @@ Ties handshake + reverse + notifs + Settings.
 | Id | Item | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
 | SK-disc | Discovery: `x.ai/skills/list`, slash names from `available_commands_update`, `SKILL.md` as `Skill` rows | modal + slash | Settings Skills list grouped by source + search + toggle, `cwd` always sent; slash `ok-prompt` for invocable skills | `ok` | surface |
-| SK-mut | add/remove/config/reset/refresh-baseline | modal | add/remove/config/reset in Settings Skills | `partial` (`refresh-baseline` still `gap`) | surface |
+| SK-mut | add/remove/config/reset/refresh-baseline | modal | no path/config setup in Settings Skills; the skill editor saves to `~/.cook/skills/` and re-baselines (`SK-edit`) | `na` | surface |
+| SK-edit | `SKILL.md` through `x.ai/fs/{read,write}_file` | — | Settings Skills: open a skill's prompt, edit it, save to `~/.cook/skills/<name>/SKILL.md` (in place for user and project skills), then `refresh-baseline` | `ok` | surface |
 | PL-list | `x.ai/plugins/list` | `/plugins` | Settings list with enable/disable | `ok` | surface |
 | PL-act | `action` / `notify-updates` / `reload` | modal | enable/disable + reload in Settings Skills | `partial` (install/uninstall/update, notify-updates still `gap`) | surface |
 | WF-list | `x.ai/workflows/list`, `/workflow`, `ToolKind::Workflow` | `/workflows` + runs pane | `/workflow` as prompt only; no runs surface | `gap` | surface |

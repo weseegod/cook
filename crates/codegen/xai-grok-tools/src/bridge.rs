@@ -307,13 +307,9 @@ impl ToolBridge {
         // so listing headers and descriptions use the correct (possibly randomized) names.
         let renderer = res.get::<TemplateRenderer>();
         let skill_tool_name = renderer.and_then(|r| r.render("${{ tools.by_kind.skill }}").ok());
-        let read_tool_name = renderer.and_then(|r| r.render("${{ tools.by_kind.read }}").ok());
         let tracker = res.get_or_default::<crate::types::skill_discovery_tracker::SkillManager>();
         if let Some(name) = skill_tool_name {
             tracker.set_skill_tool_name(name);
-        }
-        if let Some(name) = read_tool_name {
-            tracker.set_read_tool_name(name);
         }
         tracker.set_compat(compat);
         tracker.seed(

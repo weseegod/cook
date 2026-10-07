@@ -213,7 +213,7 @@ export async function onFileDrop(handler: (paths: string[], phase: "over" | "dro
 }
 
 export async function getConfigSecurity(): Promise<ConfigSecurity> {
-  if (!isTauri()) return { path: "~/.cook/config.toml", exists: false, worldReadable: false };
+  if (!isTauri()) return { path: "/home/demo/.cook/config.toml", exists: false, worldReadable: false };
   return invokeDesktop<ConfigSecurity>("config_security", {});
 }
 

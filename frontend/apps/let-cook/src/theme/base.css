@@ -612,17 +612,6 @@ details[open] > summary > .row-chevron {
   letter-spacing: 0.04em;
 }
 
-.skills-mutate {
-  margin: 12px 0 18px;
-}
-
-.skills-config-message {
-  max-height: 160px;
-  overflow: auto;
-  white-space: pre-wrap;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
 .hook-event-log {
   display: flex;
   flex-direction: column;

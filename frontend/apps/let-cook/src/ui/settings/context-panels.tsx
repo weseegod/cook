@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Plus, Puzzle, RefreshCw, Save, Trash2 } from "lucide-react";
+import { FileText, Puzzle, RefreshCw, Save } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import {
   PROJECT_FILES,
@@ -11,22 +11,17 @@ import {
   writeProjectFile,
   type SkillView,
 } from "../../acp/extensions";
-import {
-  addSkill,
-  listWorkflows,
-  pluginsAction,
-  reloadPlugins,
-  removeSkill,
-  resetSkills,
-  skillsConfig,
-} from "../../acp/settings-ext";
+import { listWorkflows, pluginsAction, reloadPlugins } from "../../acp/settings-ext";
 import { normalizeError } from "../../acp/errors";
+import { getConfigSecurity } from "../../acp/host";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import { EmptyState, ErrorState, LoadingState } from "../components/async-state";
 import { InfoTip } from "../components/info-tip";
 import { ToggleSwitch } from "../components/toggle-switch";
 import { SettingsGroupHeader } from "./group-header";
+import { SkillViewerDialog } from "./skill-viewer";
+import { cookHomeFromConfigPath } from "./skill-target";
 import { groupEnabledCount, groupSkills, groupToggleTargets } from "./skills-groups";
 
 export { MemoryBrowserPanel as MemoryPanel } from "./memory-browser";
@@ -108,7 +103,12 @@ export function ProjectInstructionsPanel({ connected, onDirtyChange }: { connect
   );
 }
 
-/** Settings → Skills: toggle, add/remove/reset (+ config), plugins enable/reload, workflows list. */
+/**
+ * Settings → Skills: open and edit a skill's prompt, toggle, plugins enable/reload, workflows list.
+ *
+ * There is no skill-path setup: the editor converges every edit on `~/.cook/skills/`, which is the
+ * one place a user skill lives.
+ */
 export function SkillsPanel({ connected }: { connected: boolean }) {
   const cwd = useSessionStore((state) => state.cwd);
   const sessionId = useSessionStore((state) => state.sessionId);
@@ -118,9 +118,13 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
   const [expandedSkills, setExpandedSkills] = useState<Set<string>>(() => new Set());
   /** Groups the user folded shut. Groups start expanded; a search opens every group with a match. */
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => new Set());
-  const [skillPath, setSkillPath] = useState("");
   const [status, setStatus] = useState<string | null>(null);
-  const [configMessage, setConfigMessage] = useState<string | null>(null);
+  /** The skill whose prompt is open in the viewer. */
+  const [viewSkill, setViewSkill] = useState<SkillView | null>(null);
+
+  // Same key as the settings panel's own query, so the host is asked once per window.
+  const configSecurity = useQuery({ queryKey: ["config-security"], queryFn: getConfigSecurity });
+  const cookHome = cookHomeFromConfigPath(configSecurity.data?.path);
 
   const skills = useQuery({
     queryKey: ["skills", cwd],
@@ -183,32 +187,6 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
       setStatus(normalizeError(error, "Could not update skills"));
       void queryClient.invalidateQueries({ queryKey: ["skills"] });
     },
-  });
-
-  const mutateSkills = useMutation({
-    mutationFn: async (op: "add" | "remove" | "reset" | "config") => {
-      if (op === "add") {
-        if (!skillPath.trim()) throw new Error("Enter a skill path");
-        return addSkill(skillPath.trim(), cwd ?? undefined);
-      }
-      if (op === "remove") {
-        if (!skillPath.trim()) throw new Error("Enter a skill path to remove");
-        return removeSkill(skillPath.trim(), cwd ?? undefined);
-      }
-      if (op === "reset") return resetSkills(cwd ?? undefined);
-      return skillsConfig(cwd ?? undefined);
-    },
-    onSuccess: (result, op) => {
-      void queryClient.invalidateQueries({ queryKey: ["skills"] });
-      if (op === "config") {
-        setConfigMessage(typeof result === "object" && result && "message" in result ? normalizeError(result.message, "") : null);
-        setStatus("Config loaded");
-      } else {
-        setStatus(typeof result === "object" && result && "message" in result ? normalizeError(result.message, `${op} ok`) : `${op} ok`);
-        if (op === "add" || op === "remove") setSkillPath("");
-      }
-    },
-    onError: (error) => setStatus(normalizeError(error, "Could not update skills")),
   });
 
   const pluginMut = useMutation({
@@ -298,7 +276,17 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
                       return (
                         <li key={skill.path ?? `${group.label}:${skill.name}`} data-testid={`skill-${skill.name}`}>
                           <div>
-                            <strong title={skill.path}>{label}</strong>
+                            {/* The name opens the prompt; the description stays its own disclosure. */}
+                            <button
+                              type="button"
+                              className="skill-open"
+                              title={skill.path}
+                              aria-label={`Open prompt for ${skill.name}`}
+                              data-testid={`skill-open-${skill.name}`}
+                              onClick={() => setViewSkill(skill)}
+                            >
+                              {label}
+                            </button>
                             {skill.description && (
                               <button
                                 type="button"
@@ -336,33 +324,6 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
           })}
         </>
       )}
-
-      <div className="skills-mutate" data-testid="skills-mutate">
-        <label className="field">
-          <span>Skill path</span>
-          <input
-            value={skillPath}
-            onChange={(event) => setSkillPath(event.target.value)}
-            placeholder="~/skills/my-skill or path/to/SKILL.md"
-            data-testid="skill-path-input"
-          />
-        </label>
-        <div className="settings-actions">
-          <button className="ghost-button" disabled={!connected || mutateSkills.isPending} onClick={() => mutateSkills.mutate("add")} data-testid="skill-add">
-            <Plus size={15} /> Add
-          </button>
-          <button className="ghost-button" disabled={!connected || mutateSkills.isPending} onClick={() => mutateSkills.mutate("remove")} data-testid="skill-remove">
-            <Trash2 size={15} /> Remove
-          </button>
-          <button className="ghost-button" disabled={!connected || mutateSkills.isPending} onClick={() => mutateSkills.mutate("reset")} data-testid="skill-reset">
-            Reset
-          </button>
-          <button className="ghost-button" disabled={!connected || mutateSkills.isPending} onClick={() => mutateSkills.mutate("config")} data-testid="skill-config">
-            Config
-          </button>
-        </div>
-        {configMessage && <pre className="settings-note skills-config-message" data-testid="skills-config-message">{configMessage}</pre>}
-      </div>
 
       <h3>Plugins</h3>
       <div className="settings-actions">
@@ -427,6 +388,17 @@ export function SkillsPanel({ connected }: { connected: boolean }) {
 
       {status && skillList.length === 0 && (
         <p className="settings-note security-warning" data-testid="skills-status">{status}</p>
+      )}
+      {viewSkill && (
+        <SkillViewerDialog
+          // Remount per skill, so a draft never carries over from the last one opened.
+          key={viewSkill.path ?? viewSkill.name}
+          skill={viewSkill}
+          cookHome={cookHome}
+          connected={connected}
+          onClose={() => setViewSkill(null)}
+          onSaved={() => { void queryClient.invalidateQueries({ queryKey: ["skills", cwd] }); }}
+        />
       )}
     </div>
   );

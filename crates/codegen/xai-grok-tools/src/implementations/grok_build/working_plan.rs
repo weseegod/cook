@@ -30,8 +30,8 @@ pub const RUN_CHECKS_PROCEDURE: &str = run_checks_procedure!();
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
-    /// Full working-plan markdown: title, Goals, Acceptance criteria, and Task checklist. The host stores this text unchanged.
-    #[schemars(description = "Full working-plan markdown")]
+    /// Optional checklist markdown. The host stores this text unchanged.
+    #[schemars(description = "Working checklist markdown")]
     pub body: String,
 }
 
@@ -71,9 +71,9 @@ impl crate::types::tool_metadata::ToolMetadata for SaveWorkingPlanTool {
     }
 
     fn description_template(&self) -> &str {
-        "Save a passive working plan into the session plans list. Pass the full markdown as \
-         body, including ## Acceptance criteria and the ## Task checklist section. Then keep implementing on this turn. \
-         Edit the saved plan as work changes; mark a finished step `- [x]`. This does not enter \
+        "Save an optional working checklist into the session plans list. Pass the markdown as \
+         body, with a ## Task checklist. Then keep implementing on this turn. \
+         Edit the saved plan when the step list changes; mark a finished step `- [x]`. This does not enter \
          plan mode and does not ask for approval."
     }
 

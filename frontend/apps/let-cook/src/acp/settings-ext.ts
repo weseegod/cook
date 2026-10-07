@@ -1,10 +1,10 @@
 /**
- * P6–P8 ACP wrappers: memory browser, skills mutate, plugins action/reload,
+ * P6–P8 ACP wrappers: memory browser, skill baseline, plugins action/reload,
  * workflows list, hooks list/action. Kept separate from `extensions.ts` so P2
  * connector work can append there without merge conflict.
  */
 import { request } from "./host";
-import { skillCwd, type PluginView, type SkillView } from "./extensions";
+import type { PluginView } from "./extensions";
 
 // ---------------------------------------------------------------------------
 // Memory files (U-memf / MEM-ui)
@@ -26,38 +26,15 @@ export function memoryFileSize(file: MemoryFileView): number {
 }
 
 // ---------------------------------------------------------------------------
-// Skills mutate (C-sk-add)
+// Skills (C-sk-edit)
 // ---------------------------------------------------------------------------
 
-export function addSkill(path: string, cwd?: string) {
-  return request<{
-    addedCount?: number;
-    total?: number;
-    path?: string;
-    skills?: SkillView[];
-    message?: string;
-  }>("x.ai/skills/add", { path, cwd: skillCwd(cwd) });
-}
-
-export function removeSkill(path: string, cwd?: string) {
-  return request<{ path?: string; skills?: SkillView[]; message?: string }>("x.ai/skills/remove", {
-    path,
-    cwd: skillCwd(cwd),
-  });
-}
-
-export function resetSkills(cwd?: string) {
-  return request<{ skills?: SkillView[]; message?: string }>("x.ai/skills/reset", { cwd: skillCwd(cwd) });
-}
-
-export function skillsConfig(cwd?: string) {
-  return request<{
-    paths?: string[];
-    ignore?: string[];
-    totalSkills?: number;
-    message?: string;
-    skills?: SkillView[];
-  }>("x.ai/skills/config", { cwd: skillCwd(cwd) });
+/**
+ * Reset the agent's skill file-watch baseline. The pager sends this after every skill mutation so
+ * a write made through the API is not re-reported as an external edit. Takes no params.
+ */
+export function refreshSkillBaseline() {
+  return request<{ ok?: boolean }>("x.ai/skills/refresh-baseline", {});
 }
 
 // ---------------------------------------------------------------------------

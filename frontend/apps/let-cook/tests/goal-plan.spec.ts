@@ -511,4 +511,65 @@ test.describe("agent-driven surfaces", () => {
     await expect(page.getByTestId("memory-status")).toContainText("flush requested");
     await expect(page.getByTestId("memory-browser")).toBeVisible();
   });
+
+  test("opens a skill prompt, edits it, and saves it under ~/.cook/skills", async ({ page }) => {
+    const mock = api(page);
+    const REVIEW = "/home/demo/.cook/skills/review/SKILL.md";
+    const TILESETS = "/home/demo/.cook/bundled/skills/game-tilesets/SKILL.md";
+    // One unbreakable token, so a missing wrap shows up as horizontal scroll inside the viewer.
+    const LONG = "x".repeat(240);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      files: {
+        [REVIEW]: `---\nname: review\n---\n\nRead the diff twice.\n${LONG}\n`,
+        [TILESETS]: "---\nname: game-tilesets\n---\n\nTile the world.\n",
+      },
+    });
+    await page.getByRole("button", { name: "New chat" }).click();
+    await waitForCalls(page, "session/new");
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Skills" }).click();
+
+    // A user skill opens its own SKILL.md, whole.
+    await page.getByTestId("skill-open-review").click();
+    const viewer = page.getByRole("dialog", { name: "review" });
+    await expect(viewer).toBeVisible();
+    await expect(viewer.getByTestId("skill-prompt")).toContainText("Read the diff twice.");
+    await expect(viewer.getByTestId("skill-prompt")).toContainText(LONG);
+    // The prompt wraps rather than scrolling sideways, and the dialog stays inside the viewport.
+    const promptOverflow = await viewer.getByTestId("skill-prompt")
+      .evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(promptOverflow).toBeLessThanOrEqual(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1440);
+
+    await viewer.getByTestId("skill-edit").click();
+    const editor = viewer.getByTestId("skill-prompt-editor");
+    await expect(editor).toHaveValue(/Read the diff twice\./);
+    await editor.fill("---\nname: review\n---\n\nRead the diff three times.\n");
+    await viewer.getByTestId("skill-save").click();
+
+    const writes = await waitForCalls(page, "x.ai/fs/write_file");
+    expect(writes[0].params).toMatchObject({ path: REVIEW });
+    expect(writes[0].params.content).toContain("three times");
+    // The agent's skill file watch is re-baselined after the write.
+    await waitForCalls(page, "x.ai/skills/refresh-baseline");
+    await expect(viewer.getByTestId("skill-save-status")).toContainText(REVIEW);
+
+    // A bundled skill saves a user copy under ~/.cook/skills/ instead of the shipped file.
+    await viewer.getByTestId("skill-viewer-close").click();
+    await page.getByTestId("skill-open-game-tilesets").click();
+    const bundled = page.getByRole("dialog", { name: "Game tilesets" });
+    await bundled.getByTestId("skill-edit").click();
+    await expect(bundled.getByTestId("skill-fork-note")).toContainText("/home/demo/.cook/skills/game-tilesets/SKILL.md");
+    await bundled.getByTestId("skill-prompt-editor").fill("---\nname: game-tilesets\n---\n\nTile the whole world.\n");
+    await bundled.getByTestId("skill-save").click();
+
+    const forked = await waitForCalls(page, "x.ai/fs/write_file", 2);
+    expect(forked[1].params.path).toBe("/home/demo/.cook/skills/game-tilesets/SKILL.md");
+    const files = (await mock.state()).files as Record<string, string>;
+    expect(files["/home/demo/.cook/skills/game-tilesets/SKILL.md"]).toContain("Tile the whole world");
+    // The shipped bundled file keeps what the agent shipped.
+    expect(files[TILESETS]).toContain("Tile the world.");
+  });
 });

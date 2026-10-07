@@ -256,7 +256,7 @@ The TUI follows the same notification in
 | Models | `providers.tsx`, `providers/` (cards, dialogs, OAuth, logos), `model-dialog.tsx`, `provider-form.tsx` |
 | Connectors | `connectors.tsx`, grouping `connectors-groups.ts` |
 | Memory & project | `context-panels.tsx` (`MemoryPanel`, `ProjectInstructionsPanel`) |
-| Skills | `context-panels.tsx` `SkillsPanel`, grouping `skills-groups.ts` |
+| Skills | `context-panels.tsx` `SkillsPanel`, grouping `skills-groups.ts`. A skill's name opens `skill-viewer.tsx` (full `SKILL.md`, Edit → save); the save path rule is `skill-target.ts`. No skill-path setup: edits land in `~/.cook/skills/` |
 | Hooks | `hooks-panel.tsx` |
 | Data Controls | `data-controls.tsx` — delete all conversations (`x.ai/sessions/delete_all`). Rules: desktop-app §7 |
 | About | `settings-panel.tsx` `AboutUpdates`, backed by `src/updater.ts` (also drives the open-app banner in `update-banner.tsx`) |

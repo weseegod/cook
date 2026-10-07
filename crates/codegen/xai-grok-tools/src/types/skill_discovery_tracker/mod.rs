@@ -115,11 +115,6 @@ pub struct SkillManager {
     /// Falls back to `"Skill"` when not set.
     skill_tool_name: Option<String>,
 
-    /// Client-facing name of the read tool (resolved from `TemplateRenderer`).
-    /// Falls back to `"Read"` when not set. Used in the `<available_skills>`
-    /// description attribute of mid-session XML skill announcements.
-    read_tool_name: Option<String>,
-
     /// When true, `take_pending()` formats announcements as XML instead of
     /// markdown.
     use_xml_format: bool,
@@ -236,7 +231,6 @@ struct ListingRenderParams<'a> {
     display_prefix: Option<&'a str>,
     budget: Option<usize>,
     use_xml_format: bool,
-    read_tool_name: &'a str,
     skill_tool_name: &'a str,
 }
 
@@ -251,11 +245,10 @@ fn render_listing(
     if params.use_xml_format {
         // Same envelope as the startup preamble, so startup and
         // mid-session listings share one structure.
-        let read_tool = params.read_tool_name;
         let envelope_open = format!(
             "<agent_skills>\n\
-             <available_skills description=\"Newly discovered skills. \
-             Use the {read_tool} tool with the provided absolute path to fetch full contents.\">\n"
+             <available_skills description=\"Optional skills. None is required. \
+             Load one with the skill tool only when you choose to.\">\n"
         );
         let envelope_close = "</available_skills>\n</agent_skills>";
         format_announcement_xml(
@@ -288,11 +281,6 @@ impl SkillManager {
     /// Set the client-facing name of the skill tool.
     pub fn set_skill_tool_name(&mut self, name: String) {
         self.skill_tool_name = Some(name);
-    }
-
-    /// Set the client-facing name of the read tool.
-    pub fn set_read_tool_name(&mut self, name: String) {
-        self.read_tool_name = Some(name);
     }
 
     /// Enable XML formatting for skill announcements.
@@ -645,7 +633,6 @@ impl SkillManager {
             display_prefix: self.display_cwd.as_deref(),
             budget: self.listing_budget_chars,
             use_xml_format: self.use_xml_format,
-            read_tool_name: self.read_tool_name.as_deref().unwrap_or("Read"),
             skill_tool_name: self
                 .skill_tool_name
                 .as_deref()

@@ -42,7 +42,7 @@ const TRIGGER_PREFIXES: &[&str] = &[
 pub(super) const DEFAULT_SKILL_TOOL_NAME: &str = "Skill";
 
 fn listing_header(_tool_name: &str) -> String {
-    "The following skills are available for use:\n\n".to_string()
+    "Optional skills. None is required.\n\n".to_string()
 }
 
 /// Whether a skill belongs in the model-facing listing. Native, bundled, and
