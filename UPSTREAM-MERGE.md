@@ -314,7 +314,7 @@ runs fully isolated from an official grok install that keeps `~/.grok`.
 Release assets on Cloudflare R2 (`https://download.letcook.dev`) are named
 `cook-<version>-<os>-<arch>` (e.g. `cook-1.0.37-macos-aarch64`), plus
 plain-text `stable` / `alpha` channel pointers that the built-in updater
-(Ctrl+U / `cook update`) reads from `{base}/stable` and `{base}/cook-<ver>-<os>-<arch>`.
+(Ctrl+U / `cook update`) reads from `{base}/stable` and `{base}/v<ver>/cook-<ver>-<os>-<arch>`.
 
 Rules:
 

@@ -16,10 +16,14 @@ const NPM_PACKAGE: &str = "@xai-official/grok";
 pub const GH_RELEASE_REPO: &str = "weseegod/cook";
 
 /// Primary CLI base URL: Cloudflare R2 behind https://download.letcook.dev.
-/// Assets are `stable` / `alpha` channel pointers (plain-text semver) plus
-/// `cook-<version>-<os>-<arch>` binaries at the bucket root, so
-/// `{base}/{channel}` and `{base}/{object}` keep working.
+/// Channel pointers (`stable`, `alpha`) live at the bucket root; immutable
+/// release objects (CLI, desktop, skills) live under `v<semver>/`.
 pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://download.letcook.dev";
+
+/// Prefix for version-scoped release objects: `{base}/v{version}`.
+pub(crate) fn release_prefix(base_url: &str, version: &str) -> String {
+    format!("{}/v{}", base_url.trim_end_matches('/'), version)
+}
 
 /// CLI base URLs in preference order. The fork publishes to a single GitHub
 /// Releases feed, so there is no separate fallback mirror; callers
@@ -577,6 +581,14 @@ pub fn channel_label() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn release_prefix_trims_base_and_adds_version_directory() {
+        assert_eq!(
+            super::release_prefix("https://download.letcook.dev/", "1.2.3"),
+            "https://download.letcook.dev/v1.2.3"
+        );
+    }
+
     #[test]
     fn loopback_base_rejects_userinfo_and_non_loopback() {
         use super::is_loopback_base;

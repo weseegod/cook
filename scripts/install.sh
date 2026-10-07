@@ -114,7 +114,7 @@ seed_default_skills() {
 }
 
 if [[ "$skip_cli" != "1" ]]; then
-  cli_url="${INSTALL_ORIGIN}/cook-${version}-${cli_plat}"
+  cli_url="${INSTALL_ORIGIN}/v${version}/cook-${version}-${cli_plat}"
   echo "==> Installing cook CLI v${version} (${cli_plat})"
   if [[ "$dry_run" == "1" ]]; then
     echo "dry-run: would download ${cli_url}"

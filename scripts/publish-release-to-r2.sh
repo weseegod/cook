@@ -141,9 +141,8 @@ remote_has() {
 }
 
 if [[ "$mode" == "finalize" ]]; then
-  # Do not download the whole version prefix (GB of installers). List keys,
-  # pull only tiny .sig files for latest.json, and server-side-copy CLI
-  # binaries to the bucket root.
+  # Do not download the whole version prefix (GB of installers). List keys and
+  # pull only tiny .sig files for latest.json.
   echo "==> Listing v${version}/ on R2"
   # Avoid `mapfile` (bash 4+); macOS ships bash 3.2 as /bin/bash.
   remote_keys=()
@@ -214,13 +213,15 @@ upload_version_objects() {
   done < <(find "$version_dir" -type f -print0)
 }
 
-echo "==> Packing skills/"
-if [[ ! -f "$ROOT/skills/default-skills.toml" ]]; then
-  echo "error: missing skills/default-skills.toml" >&2
-  exit 1
-fi
-# Top-level archive entries are the skill directories and default-skills.toml.
-tar -C "$ROOT/skills" -czf "$version_dir/skills.tar.gz" .
+pack_skills() {
+  echo "==> Packing skills/"
+  if [[ ! -f "$ROOT/skills/default-skills.toml" ]]; then
+    echo "error: missing skills/default-skills.toml" >&2
+    exit 1
+  fi
+  # Top-level archive entries are the skill directories and default-skills.toml.
+  tar -C "$ROOT/skills" -czf "$version_dir/skills.tar.gz" .
+}
 
 if [[ "$mode" == "objects" ]]; then
   [[ -n "$(find "$version_dir" -type f -print -quit)" ]] || {
@@ -234,6 +235,7 @@ if [[ "$mode" == "objects" ]]; then
 fi
 
 if [[ "$mode" != "finalize" ]]; then
+  pack_skills
   upload_version_objects
 fi
 
@@ -283,34 +285,21 @@ fi
 printf '%s\n' "$version" > "$staging/stable"
 printf '%s\n' "$version" > "$staging/alpha"
 
-echo "==> Flipping pointers + CLI copies at bucket root"
+echo "==> Flipping release pointers at bucket root"
 r2_put "$staging/latest.json" "latest.json" "public, max-age=60, must-revalidate"
 r2_put "$staging/stable" "stable" "public, max-age=60, must-revalidate"
 r2_put "$staging/alpha" "alpha" "public, max-age=60, must-revalidate"
-# Publish the skills archive for this version before install.sh. The installer
-# downloads v<version>/skills.tar.gz and fails closed if it is missing.
-r2_put "$version_dir/skills.tar.gz" "v${version}/skills.tar.gz"
 r2_put "$ROOT/scripts/install.sh" "install.sh" "public, max-age=60, must-revalidate"
-
-for cli in "$cli_linux" "$cli_mac_arm" "$cli_mac_intel" "$cli_windows"; do
-  if [[ "$mode" == "finalize" ]]; then
-    r2_copy "v${version}/${cli}" "$cli"
-    if remote_has "${cli}.sha256"; then
-      r2_copy "v${version}/${cli}.sha256" "${cli}.sha256"
-    fi
-  else
-    r2_put "$version_dir/$cli" "$cli"
-    if [[ -f "$version_dir/${cli}.sha256" ]]; then
-      r2_put "$version_dir/${cli}.sha256" "${cli}.sha256"
-    fi
-  fi
-done
+# Publish the skills archive once at finalize (platform jobs use --objects-only).
+if [[ "$mode" == "finalize" ]]; then
+  pack_skills
+  r2_put "$version_dir/skills.tar.gz" "v${version}/skills.tar.gz"
+fi
 
 echo
 echo "Published cook v${version} to R2"
 echo "  latest:  ${PUBLIC_BASE}/latest.json"
-echo "  cli:     ${PUBLIC_BASE}/stable"
+echo "  stable:  ${PUBLIC_BASE}/stable"
 echo "  install: ${PUBLIC_BASE}/install.sh"
-echo "  skills:  ${PUBLIC_BASE}/v${version}/skills.tar.gz"
-echo "  objects: ${PUBLIC_BASE}/v${version}/"
+echo "  release: ${PUBLIC_BASE}/v${version}/"
 echo "Verify: curl -fsS ${PUBLIC_BASE}/latest.json | head"

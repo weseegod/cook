@@ -17,7 +17,7 @@ use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use common::{FakeBinGuard, reset_home, set_test_version, test_home};
+use common::{cook_artifact_path, FakeBinGuard, reset_home, set_test_version, test_home};
 use xai_grok_update::UpdateConfig;
 use xai_grok_update::auto_update::{
     auto_update_target, check_update_status, ensure_latest_on_disk, install_internal_from_base,
@@ -76,7 +76,7 @@ async fn mount_gcs_with_channels(
     }
 
     Mock::given(method("GET"))
-        .and(path(format!("/cook-{binary_version}-{platform}")))
+        .and(path(cook_artifact_path(binary_version, platform)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"#!/bin/sh\nexit 0\n".to_vec()))
         .mount(&server)
         .await;
@@ -200,7 +200,7 @@ async fn internal_install_alpha_rollback_pointer_resolves_correctly() {
     // The resolved version is max(0.2.7, 0.2.8-alpha.1) = 0.2.8-alpha.1.
     // Semver considers 0.2.8-alpha.1 < 0.2.8 but > 0.2.7
     Mock::given(method("GET"))
-        .and(path(format!("/cook-0.2.8-alpha.1-{platform}")))
+        .and(path(cook_artifact_path("0.2.8-alpha.1", &platform)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"#!/bin/sh\nexit 0\n".to_vec()))
         .mount(&server)
         .await;
@@ -240,7 +240,7 @@ async fn internal_install_alpha_user_gets_newer_stable_after_stable_passes_alpha
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path(format!("/cook-0.2.7-{platform}")))
+        .and(path(cook_artifact_path("0.2.7", &platform)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"#!/bin/sh\nexit 0\n".to_vec()))
         .mount(&server)
         .await;

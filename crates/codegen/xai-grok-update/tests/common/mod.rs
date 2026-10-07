@@ -83,6 +83,11 @@ pub fn set_test_version(v: &str) {
 // Install-test fixtures (shared by the blitz + convergence suites)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Wire path for the internal-installer CLI object on the release CDN.
+pub fn cook_artifact_path(version: &str, platform: &str) -> String {
+    format!("/v{version}/cook-{version}-{platform}")
+}
+
 /// Host `{os}-{arch}` string matching the versioned binary naming scheme
 /// (`cook-{version}-{platform}`).
 pub fn host_platform() -> String {

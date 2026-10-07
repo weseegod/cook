@@ -14,8 +14,7 @@ Public host: **https://download.letcook.dev** (Cloudflare R2 bucket `cook-releas
 
 ```
 latest.json / stable / alpha / install.sh     (pointers, rewritten last)
-v{ver}/   cook-*  let-cook-*                  (immutable objects)
-cook-{ver}-{os}-{arch}                        (CLI copies at bucket root)
+v{ver}/   cook-*  let-cook-*  skills.tar.gz   (immutable release objects)
 ```
 
 ```bash
@@ -37,6 +36,9 @@ and committed `frontend/apps/let-cook/src-tauri/updater.pubkey`.
 
 R2 credentials live in GitHub Actions secrets (`COOK_RELEASES_R2_*`). Local
 `.env` may use `COOK_S3_*` aliases (never commit `.env`).
+
+To wipe the bucket (destructive): `python3 scripts/r2_cp.py purge --yes`
+(requires the same env vars as publish).
 
 ### Self-hosted runners (same machines as quac)
 

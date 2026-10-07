@@ -22,7 +22,7 @@ use serial_test::serial;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use common::{reset_home, test_home};
+use common::{cook_artifact_path, reset_home, test_home};
 use xai_grok_telemetry::events::CliUpdateErrorKind;
 use xai_grok_update::UpdateConfig;
 use xai_grok_update::auto_update::{
@@ -70,7 +70,7 @@ async fn mount_gcs(version: &str, platform: &str) -> MockServer {
 
     // Main cook binary download.
     Mock::given(method("GET"))
-        .and(path(format!("/cook-{version}-{platform}")))
+        .and(path(cook_artifact_path(version, platform)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"#!/bin/sh\nexit 0\n".to_vec()))
         .mount(&server)
         .await;
@@ -344,7 +344,7 @@ async fn install_internal_alpha_channel_resolves_max_of_alpha_and_stable() {
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path(format!("/cook-0.1.181-{platform}")))
+        .and(path(cook_artifact_path("0.1.181", &platform)))
         .respond_with(ResponseTemplate::new(200).set_body_bytes(b"#!/bin/sh\nexit 0\n".to_vec()))
         .mount(&server)
         .await;
@@ -381,7 +381,7 @@ async fn install_internal_fails_on_binary_404() {
         .await;
     // The main binary returns 404, which must propagate as an error
     Mock::given(method("GET"))
-        .and(path(format!("/cook-0.1.181-{platform}")))
+        .and(path(cook_artifact_path("0.1.181", &platform)))
         .respond_with(ResponseTemplate::new(404))
         .mount(&server)
         .await;

@@ -1766,8 +1766,9 @@ async fn download_verified_from_base(
 
     eprintln!("  Downloading cook v{} ({})...", version, platform);
 
+    let release_base = crate::version::release_prefix(gcs_base_url, &version);
     // The downloaded binary is already +x (see `publish_downloaded_artifact`)
-    download_cli_artifact_from_gcs(gcs_base_url, &binary_name, &binary_path, true).await?;
+    download_cli_artifact_from_gcs(&release_base, &binary_name, &binary_path, true).await?;
 
     // Smoke-test: run the binary before activating it
     // A truncated or corrupt download is caught here and never becomes the active grok

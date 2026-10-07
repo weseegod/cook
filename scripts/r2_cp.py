@@ -374,6 +374,18 @@ def put_object(local: Path, key: str, *, content_type: str, cache_control: str) 
         _put_object_simple(local, key, **kwargs)
 
 
+def purge_objects(prefix: str) -> int:
+    """Delete every object under prefix (not pseudo-directory keys)."""
+    keys = list_keys(prefix)
+    deleted = 0
+    for key in keys:
+        if key.endswith("/"):
+            continue
+        delete_object(key)
+        deleted += 1
+    return deleted
+
+
 def delete_object(key: str) -> None:
     endpoint, access, secret, bucket = _require_env()
     key = key.lstrip("/")
@@ -537,6 +549,18 @@ def main(argv: list[str] | None = None) -> int:
     p_copy.add_argument("--content-type", default="application/octet-stream")
     p_copy.add_argument("--cache-control", default="public, max-age=31536000, immutable")
 
+    p_purge = sub.add_parser("purge", help="delete every object under a prefix")
+    p_purge.add_argument(
+        "--prefix",
+        default="",
+        help="key prefix to delete (default: entire bucket)",
+    )
+    p_purge.add_argument(
+        "--yes",
+        action="store_true",
+        help="required confirmation; deletes are irreversible",
+    )
+
     args = parser.parse_args(argv)
     if args.cmd == "put":
         put_object(Path(args.local), args.key, content_type=args.content_type, cache_control=args.cache_control)
@@ -556,6 +580,14 @@ def main(argv: list[str] | None = None) -> int:
             content_type=args.content_type,
             cache_control=args.cache_control,
         )
+    elif args.cmd == "purge":
+        if not args.yes:
+            raise SystemExit("error: pass --yes to confirm purge")
+        endpoint, _, _, bucket = _require_env()
+        label = args.prefix or "(entire bucket)"
+        print(f"==> Purging {label} on s3://{bucket}/")
+        count = purge_objects(args.prefix)
+        print(f"Deleted {count} object(s)")
     return 0
 
 
