@@ -82,6 +82,7 @@
   --settings-soft: #d7d7d7;
   --settings-muted: #b4b4b4;
   --settings-border: #484848;
+  --settings-card-border: #707070;
   --settings-input-bg: #2b2b2b;
   --settings-card-bg: #292929;
   --settings-tab-active: #30343a;
@@ -164,6 +165,7 @@
   --settings-soft: #343434;
   --settings-muted: #5b5b5b;
   --settings-border: #b8b8b8;
+  --settings-card-border: #8d8d8d;
   --settings-input-bg: #ffffff;
   --settings-card-bg: #ffffff;
   --settings-tab-active: #e1ebf1;

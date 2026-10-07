@@ -58,6 +58,7 @@ Keep a CSS class in sync with its markup: if the TSX no longer names a class, de
 | `--control-border` | The stroke that shows an input | Section dividers |
 | `--focus-border` | The 2px focus ring | Body text |
 | `--border` | Dividers between regions | Input edges |
+| `--settings-card-border` | Outline of a settings card (provider card, model list) | Input edges, dividers inside a card |
 | `--success`, `--danger`, `--warning` | Short status marks (dots, diff counts) | A sentence. Light `--success` is 4.33:1 on white |
 | `--success-soft-text`, `--danger-soft-text`, `--warning-soft-text` | Status sentences, on the page or on the matching `*-soft` fill | |
 | `--danger-button-fg` | Label on a translucent danger fill (Data Controls delete) | Body copy elsewhere |
@@ -96,6 +97,9 @@ Ratios are against the surface in the column. Recompute when a surface changes. 
 | `--danger` | `#f48771` | 6.71 | | `#c72e0f` | 5.49 |
 | `--danger-button-fg` | `#f48771` | 6.71 | | `#9e2638` | 8.59 |
 | `--warning` | `#cca700` | 7.14 | | `#8a6500` | 5.33 |
+| `--settings-card-border` | `#707070` | 3.33 | 3.09 | `#8d8d8d` | 3.32 |
+
+`--settings-card-border` outlines a card in the settings workspace, whose surface is `--settings-surface` (`#1e1e1e` dark, `#f8f8f8` light). It clears 3:1 against that surface too: 3.37:1 dark, 3.13:1 light. Keep it at or above that so a provider stays easy to pick out of the Models list.
 
 `--control-border` on the dark settings input (`#2b2b2b`) is 3.03:1. Do not lighten `#747474`.
 

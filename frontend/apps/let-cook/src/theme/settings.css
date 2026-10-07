@@ -1295,14 +1295,19 @@
 .provider-model-list {
   display: grid;
   min-width: 0;
-  gap: 8px;
+  gap: 10px;
 }
 
 .provider-model-card {
   min-width: 0;
   overflow: hidden;
-  border: 1px solid var(--settings-border, var(--border));
+  border: 1px solid var(--settings-card-border);
+  border-radius: 8px;
   background: var(--panel-elevated);
+}
+
+.provider-model-card:hover {
+  border-color: color-mix(in srgb, var(--settings-card-border), var(--text) 30%);
 }
 
 .provider-model-heading {
@@ -1311,8 +1316,8 @@
   justify-content: space-between;
   min-width: 0;
   gap: 14px;
-  padding: 9px 11px;
-  border-bottom: 1px solid var(--settings-border, var(--border));
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--settings-border);
   background: var(--raised);
 }
 
@@ -1321,7 +1326,7 @@
 }
 
 .provider-model-heading .provider-row-main strong {
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .provider-model-heading .provider-row-main small {
@@ -1347,45 +1352,22 @@
 }
 
 .provider-model-content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
   min-width: 0;
-  gap: 12px;
-  padding: 9px 11px;
+  padding: 10px 12px;
 }
 
 .provider-models-summary {
   min-width: 0;
 }
 
-.provider-models-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 5px;
-  color: var(--settings-soft, var(--text-soft));
-  font-size: 11px;
-}
-
-.provider-models-label svg {
-  color: var(--accent);
-}
-
-.provider-models-label small {
-  color: var(--settings-muted, var(--muted));
-  font-size: 10px;
-}
-
-/* Running thinking keeps the tail of the block inside a 3-line box (`render_truncated`). */
-
 .provider-models-summary .model-list {
-  border: 1px solid color-mix(in srgb, var(--settings-border, var(--border)), transparent 24%);
+  border: 1px solid var(--settings-border);
+  border-radius: 6px;
 }
 
-.provider-no-models {
-  margin: 8px 0 3px;
-  color: var(--settings-muted, var(--muted));
-  font-size: 11px;
+/* Beats `.settings-panel p` (0,1,1) so the empty state keeps even padding above and below. */
+.provider-models-summary .provider-no-models {
+  margin: 0;
 }
 
 /* Inherits the row's size so `4.5em` on the clip is exactly three lines. */
@@ -1580,10 +1562,6 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
-  }
-
-  .provider-model-content {
-    grid-template-columns: 1fr;
   }
 
   .provider-header-actions {

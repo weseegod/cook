@@ -1,4 +1,4 @@
-import { Check, CheckCircle2, Cpu, LogIn, LogOut, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
+import { Check, CheckCircle2, LogIn, LogOut, Pencil, Plus, Trash2, TriangleAlert } from "lucide-react";
 import { mergedProviderStatus } from "../../../acp/provider-presets";
 import type { ModelSummary } from "../../../acp/xai";
 import { ProviderLogo } from "./provider-logo";
@@ -95,10 +95,6 @@ export function ProviderCard({
 
       <div className="provider-model-content">
         <div className="provider-models-summary">
-          <div className="provider-models-label">
-            <Cpu size={14} /><strong>Models</strong>
-            <small>{row.models.length === 0 ? "none configured" : `${row.models.length} configured`}</small>
-          </div>
           {row.models.length > 0 ? (
             <ul className="model-list">
               {row.models.map((model) => (

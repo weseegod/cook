@@ -77,6 +77,47 @@ for (const theme of ["dark", "light"] as const) {
     expect(contrast.focus).toBeGreaterThanOrEqual(3);
     expect(contrast.focusWidth).toBeGreaterThanOrEqual(2);
   });
+
+  test(`${theme} settings provider cards stay pickable in the models list`, async ({ page }) => {
+    await page.addInitScript((value) => localStorage.setItem("cook.theme", value), theme);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openConversation(page, shellSeed());
+    await page.getByLabel("Settings").click();
+    await page.getByRole("tab", { name: "Models" }).click();
+
+    const row = page.getByTestId("provider-row-openai");
+    await expect(row).toBeVisible();
+    // The card lists its models directly: no separate "Models · n configured" summary line.
+    await expect(row.locator(".provider-models-label")).toHaveCount(0);
+    await expect(row.getByTestId("model-row-gpt-5")).toBeVisible();
+    await expect(row.getByTestId("model-row-o4-mini")).toBeVisible();
+
+    const card = await page.evaluate(() => {
+      const luminance = (value: string) => {
+        const channels = value.match(/\d+(?:\.\d+)?/g)!.slice(0, 3).map((part) => Number(part) / 255);
+        const linear = channels.map((channel) => channel <= 0.04045
+          ? channel / 12.92
+          : ((channel + 0.055) / 1.055) ** 2.4);
+        return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+      };
+      const ratio = (foreground: string, background: string) => {
+        const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+        return (lighter + 0.05) / (darker + 0.05);
+      };
+      const element = document.querySelector<HTMLElement>(".provider-model-card")!;
+      // The settings section itself is transparent; the cards sit on the settings panel surface.
+      const panel = element.closest<HTMLElement>(".settings-panel")!;
+      const style = getComputedStyle(element);
+      return {
+        onFill: ratio(style.borderColor, style.backgroundColor),
+        onPanel: ratio(style.borderColor, getComputedStyle(panel).backgroundColor),
+        radius: Number.parseFloat(style.borderTopLeftRadius),
+      };
+    });
+    expect(card.onFill).toBeGreaterThanOrEqual(3);
+    expect(card.onPanel).toBeGreaterThanOrEqual(3);
+    expect(card.radius).toBeGreaterThanOrEqual(4);
+  });
 }
 
 test("tools panel closes on an outside click and keeps interactions inside", async ({ page }) => {
