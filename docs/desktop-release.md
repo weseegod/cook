@@ -6,9 +6,10 @@ Mac mini + Ubuntu (same machines as quac). No Apple notarization.
 | Job | Runner | Artifacts |
 |-----|--------|-----------|
 | macOS arm64 | `macos-arm64` | `cook-<ver>-macos-aarch64`, `let-cook-<ver>-macos-aarch64.dmg` + `.app.tar.gz` + `.sig` |
-| macOS Intel | `macos-arm64` (cross) | `cook-<ver>-macos-x86_64`, `let-cook-<ver>-macos-x86_64.dmg` + `.app.tar.gz` + `.sig` |
-| Windows | `linux-x64` (xwin) | `cook-<ver>-windows-x86_64`, `let-cook-<ver>-windows-x86_64-setup.exe` + `.sig` |
 | Linux Ubuntu | `linux-x64` (native) | `cook-<ver>-linux-x86_64`, `.AppImage` + `.sig`, `.deb` + `.sig` |
+
+macOS Intel and Windows jobs are disabled in `.github/workflows/release.yml`
+(`if: false`) for now.
 
 Public host: **https://download.letcook.dev** (Cloudflare R2 bucket `cook-releases`).
 
@@ -28,7 +29,7 @@ curl -fsSL https://download.letcook.dev/install.sh | bash
 
 Updater endpoints baked into release binaries:
 
-- CLI (`cook update`): `https://download.letcook.dev/stable` + `cook-<ver>-<os>-<arch>`
+- CLI (`cook update`): `https://download.letcook.dev/stable` + `v<ver>/cook-<ver>-<os>-<arch>`
 - Desktop: `https://download.letcook.dev/latest.json`
 
 Signing: `~/.tauri/let-cook.key` (private, GitHub secret `TAURI_SIGNING_PRIVATE_KEY`)

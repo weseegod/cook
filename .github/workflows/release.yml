@@ -6,9 +6,10 @@ run-name: Release ${{ github.ref_name }}
 #   https://download.letcook.dev
 #
 #   - macOS Apple Silicon  — Mac mini (label: macos-arm64)
-#   - macOS Intel          — same Mac mini, cross x86_64-apple-darwin
-#   - Windows              — Ubuntu box (label: linux-x64, xwin cross)
-#   - Linux Ubuntu         — same Ubuntu box, native
+#   - Linux Ubuntu         — Ubuntu box (label: linux-x64), native
+#
+# macOS Intel and Windows builds are disabled for now (jobs kept with
+# `if: false` so they can be re-enabled later).
 #
 # Trigger is tag push only. Do not also fire on `release: published`.
 # No Apple notarization. Updater signing uses TAURI_SIGNING_PRIVATE_KEY.
@@ -135,7 +136,8 @@ jobs:
 
   release-macos-x64:
     name: Release (macOS Intel)
-    if: github.repository == 'weseegod/cook'
+    # Disabled: shipping Linux + Apple Silicon only for now.
+    if: false
     runs-on: [self-hosted, macos-arm64]
     needs: setup
     timeout-minutes: 60
@@ -167,7 +169,8 @@ jobs:
 
   release-windows:
     name: Release (Windows)
-    if: github.repository == 'weseegod/cook'
+    # Disabled: shipping Linux + Apple Silicon only for now.
+    if: false
     runs-on: [self-hosted, linux-x64]
     needs: setup
     timeout-minutes: 90
@@ -231,11 +234,9 @@ jobs:
       needs.setup.result == 'success' &&
       needs.release-linux.result == 'success' &&
       needs.release-macos-arm.result == 'success' &&
-      needs.release-macos-x64.result == 'success' &&
-      needs.release-windows.result == 'success' &&
       github.ref == format('refs/tags/v{0}', needs.setup.outputs.version)
     runs-on: [self-hosted, linux-x64]
-    needs: [setup, release-linux, release-macos-arm, release-macos-x64, release-windows]
+    needs: [setup, release-linux, release-macos-arm]
     timeout-minutes: 15
     permissions:
       contents: read

@@ -239,22 +239,18 @@ if [[ "$mode" != "finalize" ]]; then
   upload_version_objects
 fi
 
+# Required platforms for the current release matrix: Linux + Apple Silicon.
+# macOS Intel and Windows jobs are disabled in .github/workflows/release.yml;
+# their artifacts remain optional when present.
 missing=()
 [[ -n "$cli_linux" ]] || missing+=("cook-${version}-linux-x86_64")
 [[ -n "$cli_mac_arm" ]] || missing+=("cook-${version}-macos-aarch64")
-[[ -n "$cli_mac_intel" ]] || missing+=("cook-${version}-macos-x86_64")
-[[ -n "$cli_windows" ]] || missing+=("cook-${version}-windows-x86_64")
 [[ -n "$appimage" ]] || missing+=("let-cook-${version}-linux-x86_64.AppImage")
 [[ -n "$appimage_sig" ]] || missing+=("let-cook-${version}-linux-x86_64.AppImage.sig")
 [[ -n "$deb" ]] || missing+=("let-cook-${version}-linux-x86_64.deb")
 [[ -n "$dmg_arm" ]] || missing+=("let-cook-${version}-macos-aarch64.dmg")
 [[ -n "$archive_arm" ]] || missing+=("let-cook-${version}-macos-aarch64.app.tar.gz")
 [[ -n "$archive_arm_sig" ]] || missing+=("let-cook-${version}-macos-aarch64.app.tar.gz.sig")
-[[ -n "$dmg_intel" ]] || missing+=("let-cook-${version}-macos-x86_64.dmg")
-[[ -n "$archive_intel" ]] || missing+=("let-cook-${version}-macos-x86_64.app.tar.gz")
-[[ -n "$archive_intel_sig" ]] || missing+=("let-cook-${version}-macos-x86_64.app.tar.gz.sig")
-[[ -n "$nsis" ]] || missing+=("let-cook-${version}-windows-x86_64-setup.exe")
-[[ -n "$nsis_sig" ]] || missing+=("let-cook-${version}-windows-x86_64-setup.exe.sig")
 if [[ "${#missing[@]}" -gt 0 ]]; then
   echo "error: incomplete release v${version}: ${missing[*]}" >&2
   exit 1
@@ -267,13 +263,21 @@ latest_args=(
   --out "$staging/latest.json"
   --platform "linux-x86_64:$version_dir/$appimage_sig:$appimage"
   --platform "darwin-aarch64:$version_dir/$archive_arm_sig:$archive_arm"
-  --platform "darwin-x86_64:$version_dir/$archive_intel_sig:$archive_intel"
-  --platform "windows-x86_64:$version_dir/$nsis_sig:$nsis"
   --installer "linux-appimage:$appimage"
   --installer "mac-arm:$dmg_arm"
-  --installer "mac-intel:$dmg_intel"
-  --installer "windows:$nsis"
 )
+if [[ -n "$archive_intel" && -n "$archive_intel_sig" ]]; then
+  latest_args+=(--platform "darwin-x86_64:$version_dir/$archive_intel_sig:$archive_intel")
+fi
+if [[ -n "$nsis" && -n "$nsis_sig" ]]; then
+  latest_args+=(--platform "windows-x86_64:$version_dir/$nsis_sig:$nsis")
+fi
+if [[ -n "$dmg_intel" ]]; then
+  latest_args+=(--installer "mac-intel:$dmg_intel")
+fi
+if [[ -n "$nsis" ]]; then
+  latest_args+=(--installer "windows:$nsis")
+fi
 if [[ -n "$deb_sig" ]]; then
   latest_args+=(--installer "linux:$version_dir/$deb_sig:$deb")
 else
