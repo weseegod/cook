@@ -1,0 +1,37 @@
+paths = []
+ignore = []
+server_skill_dirs = []
+bundled_skill_dirs = []
+inject = true
+
+[status]
+bug-fix = true
+build-with-ai = false
+code-review = false
+create-skill = false
+create-workflow = false
+design = false
+execute-plan = false
+game-animation-frames = false
+game-asset-core = false
+game-assets = false
+game-character-consistency = false
+game-tilesets = false
+game-ui-icons = false
+imagine = false
+implement = false
+learn = false
+long-running-background-tasks = false
+neon = false
+neon-postgres = false
+neon-postgres-branches = false
+pr-babysit = false
+resume-claude = false
+resume-codex = false
+resume-cursor = false
+review = false
+run-checks = true
+skill-design-principles = false
+statusline = false
+threejs-frame-conventions = false
+working-plan = true

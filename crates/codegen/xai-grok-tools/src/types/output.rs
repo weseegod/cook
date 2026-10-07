@@ -1213,8 +1213,9 @@ impl xai_tool_runtime::ToolOutput for BashOutput {
         if self.truncated {
             let shown = crate::util::truncate::format_bytes(self.output.len() as u64);
             let total = crate::util::truncate::format_bytes(self.total_bytes as u64);
+            let window = crate::util::truncate::truncated_output_window(&stdout);
             stdout.push_str(&format!(
-                "\n[truncated: showing first/last {shown} of {total} - full output at: {}]",
+                "\n[truncated: showing {window} {shown} of {total} - full output at: {}]",
                 self.output_file
             ));
             extra.insert("truncated".into(), serde_json::Value::Bool(true));

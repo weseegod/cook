@@ -172,6 +172,7 @@ mod tests {
         .try_into();
         assert_eq!(rf.unwrap().path, "x");
         let bash: Result<BashToolInput, _> = ToolInput::Bash(BashToolInput {
+            workdir: None,
             command: "ls".into(),
             timeout: None,
             description: "list files".into(),

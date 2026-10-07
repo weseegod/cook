@@ -333,10 +333,7 @@ mod terminal_dedup_tests {
                 "second",
                 r#"{"description":"two","background":true,"command":"./job.sh"}"#,
             ),
-            call(
-                "foreground",
-                r#"{"command":"./job.sh","background":false}"#,
-            ),
+            call("foreground", r#"{"command":"./job.sh","background":false}"#),
             call("other", r#"{"command":"echo done","background":true}"#),
         ];
         let unique = collapse_duplicate_calls(calls);
@@ -1063,7 +1060,10 @@ mod tests {
             SamplingEvent::Completed { response, .. } => {
                 assert_eq!(response.stop_reason, Some(StopReason::Length));
                 assert!(
-                    response.assistant().map(|a| a.tool_calls.is_empty()).unwrap_or(true),
+                    response
+                        .assistant()
+                        .map(|a| a.tool_calls.is_empty())
+                        .unwrap_or(true),
                     "non-JSON arguments must be dropped, not fail the response"
                 );
             }

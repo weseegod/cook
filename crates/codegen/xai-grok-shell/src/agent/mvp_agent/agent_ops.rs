@@ -4704,12 +4704,16 @@ impl MvpAgent {
         let subagent_toggle = self.cfg.borrow().subagent_toggle.clone();
         let handle_display_cwd = prompt_display_cwd.clone();
         let auth_manager = Some(self.auth_manager.clone());
-        let bash_params_json = {
+        let mut bash_params_json = {
             let cfg = self.cfg.borrow();
             cfg.toolset
                 .bash
                 .to_bash_params_json_with_remote(cfg.remote_settings.as_ref())
         };
+        crate::tools::config::apply_headless_bash_params(
+            &mut bash_params_json,
+            startup_hints.non_interactive,
+        );
         let ask_user_question_params_json = {
             let cfg = self.cfg.borrow();
             let params = crate::util::config::resolve_ask_user_question_params_from_disk(

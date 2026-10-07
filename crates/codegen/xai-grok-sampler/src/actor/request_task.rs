@@ -15,8 +15,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
 use xai_grok_sampling_types::{
-    ApiErrorCode, ConversationRequest, ConversationResponse, EmptyResponseContext, SamplingError,
-    SentCredential, error::Result as SamplingResult,
+    ApiErrorCode, ConversationItem, ConversationRequest, ConversationResponse, EmptyReason,
+    EmptyResponseContext, SamplingError, SentCredential, error::Result as SamplingResult,
 };
 
 use crate::actor::request_metadata::{
@@ -40,6 +40,10 @@ use crate::types::RequestId;
 /// That is long enough for cold-start reasoning and short enough to detect dead streams before the user gives up.
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 
+/// Guidance for the single resample of a sample that finished with reasoning and no visible answer or tool call.
+/// The whole string is the synthetic user message; actor tests match it on the wire.
+pub const REASONING_ONLY_RETRY_REMINDER: &str = "<system_reminder>The previous sample contained only reasoning; continue with a tool call or a visible answer.</system_reminder>";
+
 /// Public result returned by `SamplerHandle::submit_and_collect`.
 pub type CompletionResult = Result<(ConversationResponse, InferenceLatencyStats), SamplingError>;
 
@@ -51,7 +55,8 @@ enum AttemptOutcome {
         metrics: InferenceLatencyStats,
     },
     /// Stream emitted [`SamplingEvent::Completed`] but the response was empty (no text, no tool calls).
-    /// The retry loop treats this as a transient failure (the model returned reasoning-only or the stream was truncated).
+    /// [`EmptyReason::ReasoningOnly`] is one guided resample with a reminder, not a transport error.
+    /// [`EmptyReason::NoVisibleContent`] stays on the transport retry ladder.
     /// Metrics from the empty attempt are discarded; a successful retry produces fresh ones.
     Empty {
         context: EmptyResponseContext,
@@ -126,6 +131,8 @@ pub(crate) async fn run_request_task(
     let doom_policy = config.doom_loop_recovery;
     let doom_max_retries = doom_policy.map_or(0, |p| p.max_retries);
     let mut doom_retry_count: u32 = 0;
+    // One guided resample for a reasoning-only sample. Independent of the transport `retry_count`.
+    let mut reasoning_only_resampled = false;
     let output_observed = Arc::new(AtomicBool::new(false));
 
     loop {
@@ -225,6 +232,34 @@ pub(crate) async fn run_request_task(
                     "empty response from model: {reason} (retrying)",
                     reason = context.reason,
                 );
+                // Reasoning-only is one guided resample, not a transport error.
+                // A second reasoning-only sample fails even when the transport budget remains.
+                if context.reason == EmptyReason::ReasoningOnly {
+                    let err = SamplingError::EmptyResponse { context };
+                    if effective_max_retries <= 1 || reasoning_only_resampled {
+                        let terminal_event_queued = emit_failed(&event_tx, &request_id, &err);
+                        send_completion(&mut completion, Err(err), terminal_event_queued);
+                        return request_id;
+                    }
+                    reasoning_only_resampled = true;
+                    request.push(ConversationItem::system_reminder(
+                        REASONING_ONLY_RETRY_REMINDER,
+                    ));
+                    tracing::warn!(
+                        target: crate::sampling_log::TARGET,
+                        attempt = 1,
+                        max_retries = 1,
+                        outcome = "resampled_with_reminder",
+                        "reasoning-only recovery: retrying once with guidance"
+                    );
+                    emit_retrying(&event_tx, &request_id, 1, 1, &err);
+                    let backoff = retry_mod::doom_loop_backoff(1);
+                    if sleep_or_cancel(backoff, &cancel_token, 1, &sampling_span).await {
+                        continue;
+                    }
+                    handle_cancellation(&event_tx, &request_id, &mut completion);
+                    return request_id;
+                }
                 let err = SamplingError::EmptyResponse { context };
                 if !apply_retry_decision(
                     &err,

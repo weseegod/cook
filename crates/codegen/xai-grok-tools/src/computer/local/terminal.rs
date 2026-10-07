@@ -368,6 +368,8 @@ struct ProcessState {
     /// Scopes kill operations so subagent teardown only kills its own tasks.
     owner_session_id: Option<String>,
     description: Option<String>,
+    /// Over-budget output keeps the tail and leaves `front_buffer` empty.
+    tail_only: bool,
 }
 
 impl ProcessState {
@@ -404,6 +406,19 @@ impl ProcessState {
         if char_count <= self.output_byte_limit {
             return;
         }
+        if self.tail_only {
+            let tail_start_char = char_count.saturating_sub(self.output_byte_limit);
+            let tail_start_byte = s
+                .char_indices()
+                .nth(tail_start_char)
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            self.output_buffer = s.get(tail_start_byte..).unwrap_or("").as_bytes().to_vec();
+            self.front_buffer = None;
+            self.truncated = true;
+            return;
+        }
+
         let half = self.output_byte_limit / 2;
 
         if self.front_buffer.is_none() {
@@ -1312,6 +1327,7 @@ impl LocalTerminalActor {
             state_dump_handle,
             owner_session_id: request.owner_session_id.clone(),
             description: request.description.filter(|d| !d.trim().is_empty()),
+            tail_only: request.tail_only,
         };
 
         // Initial empty notification so the TUI shows the execution timer
@@ -1479,6 +1495,7 @@ impl LocalTerminalActor {
             },
             owner_session_id: request.owner_session_id.clone(),
             description: request.description.filter(|d| !d.trim().is_empty()),
+            tail_only: request.tail_only,
         };
 
         let pid = process_state.child.id();
@@ -3559,6 +3576,7 @@ mod tests {
             kind: TaskKind::Bash,
             owner_session_id: None,
             description: None,
+            tail_only: false,
         }
     }
 
@@ -3819,6 +3837,7 @@ mod tests {
             std::env::temp_dir().join(format!("terminal-test-timeout-{}.out", std::process::id()));
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -3850,6 +3869,7 @@ mod tests {
         let tool_call_id = "test-auto-bg";
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -3897,6 +3917,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tail_only_keeps_the_tail_and_names_the_log_file() {
+        let backend = LocalTerminalBackend::new();
+        let tmp = tempfile::TempDir::new().unwrap();
+        let output_file = tmp.path().join("headless.log");
+        let request = TerminalRunRequest {
+            command: "head -c 400 /dev/zero | tr '\\0' 'H'; head -c 400 /dev/zero | tr '\\0' 'T'"
+                .to_string(),
+            working_directory: tmp.path().to_path_buf(),
+            env: HashMap::new(),
+            timeout: Duration::from_secs(10),
+            output_byte_limit: 100,
+            output_file: output_file.clone(),
+            notification_handle: ToolNotificationHandle::noop(),
+            tool_call_id: "tail-only".to_string(),
+            display_command: None,
+            auto_background_on_timeout: false,
+            foreground_block_budget: None,
+            kind: TaskKind::Bash,
+            owner_session_id: None,
+            description: None,
+            tail_only: true,
+        };
+
+        let result = backend.run(request).await.unwrap();
+        assert!(result.truncated);
+        assert!(
+            result.combined_output.chars().all(|c| c == 'T'),
+            "headless buffer should be the tail, got {:?}",
+            result.combined_output
+        );
+        assert_eq!(result.combined_output.chars().count(), 100);
+        assert!(!result.combined_output.contains("output truncated"));
+        assert_eq!(result.output_file, output_file);
+        let full = std::fs::read_to_string(&output_file).unwrap();
+        assert!(
+            full.contains('H') && full.contains('T'),
+            "full log keeps both halves"
+        );
+
+        let bash = crate::types::output::BashOutput {
+            output: result.combined_output.as_bytes().to_vec(),
+            output_for_prompt: String::new(),
+            exit_code: 0,
+            command: "head".into(),
+            truncated: true,
+            signal: None,
+            timed_out: false,
+            description: None,
+            current_dir: tmp.path().display().to_string(),
+            output_file: result.output_file.display().to_string(),
+            total_bytes: result.total_bytes,
+            output_delta: None,
+            was_bare_echo: false,
+        };
+        let prompt = crate::implementations::grok_build::bash::format_default_prompt(&bash);
+        assert!(prompt.contains("showing last"), "{prompt}");
+        assert!(prompt.contains(&bash.output_file), "{prompt}");
+        assert!(!prompt.contains("showing first/last"), "{prompt}");
+        let completion = xai_tool_runtime::ToolOutput::chat_completion_output(&bash)
+            .unwrap()
+            .result
+            .unwrap()
+            .code_execution_result
+            .unwrap();
+        assert!(completion.stdout.contains("showing last"));
+        assert!(completion.stdout.contains(&bash.output_file));
+    }
+
+    #[tokio::test]
     async fn test_background_foreground_commands_keeps_process_alive() {
         let backend = std::sync::Arc::new(LocalTerminalBackend::new());
 
@@ -3905,6 +3994,7 @@ mod tests {
         let tool_call_id = "test-bg-all";
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -3979,6 +4069,7 @@ mod tests {
         let tool_call_id = "test-fg-budget";
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4041,6 +4132,7 @@ mod tests {
         ));
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4083,6 +4175,7 @@ mod tests {
         let tool_call_id = "test-per-req-budget";
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4132,6 +4225,7 @@ mod tests {
         let tool_call_id = "test-max-budget";
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4179,6 +4273,7 @@ mod tests {
             std::env::temp_dir().join(format!("terminal-test-size-{}.out", std::process::id()));
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "yes".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4225,6 +4320,7 @@ mod tests {
             std::env::temp_dir().join(format!("terminal-test-bg-{}.out", std::process::id()));
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "echo background_test && sleep 0.1".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4263,6 +4359,7 @@ mod tests {
             std::env::temp_dir().join(format!("terminal-test-kill-{}.out", std::process::id()));
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4296,6 +4393,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "for i in 1 2 3; do echo chunk_$i; sleep 0.15; done".to_string(),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
@@ -4363,6 +4461,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             // ~1.8 KB against a 200-char limit: truncation fires early and keeps firing.
             command: "for i in $(seq 1 60); do printf 'LINE%03d-XXXXXXXXXXXXXXXXXXXX\\n' \"$i\"; sleep 0.03; done".to_string(),
             working_directory: tmp.path().to_path_buf(),
@@ -4427,6 +4526,7 @@ mod tests {
         let output_file = tmp.path().join("output.log");
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: format!("head -c {output_amount} /dev/zero | tr '\\0' 'x'"),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
@@ -4461,6 +4561,7 @@ mod tests {
         let output_file = tmp.path().join("output.log");
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "head -c 200000 /dev/zero | tr '\\0' 'x'".to_string(),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
@@ -4494,6 +4595,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "echo hello".to_string(),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
@@ -4524,6 +4626,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "echo test; sleep 0.15; echo done".to_string(),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
@@ -4563,6 +4666,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "echo once; sleep 0.5".to_string(),
             working_directory: tmp.path().to_path_buf(),
             env: HashMap::new(),
@@ -4603,6 +4707,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4632,6 +4737,7 @@ mod tests {
         let tmp = tempfile::TempDir::new().unwrap();
 
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "echo before_timeout; sleep 60".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),
@@ -4662,6 +4768,7 @@ mod tests {
         // `sleep 300 &` inherits the pipe — without drain timeout this blocks forever.
         let backend = LocalTerminalBackend::new();
         let request = TerminalRunRequest {
+            tail_only: false,
             command: "sleep 300 &\nsleep 1\necho done".to_string(),
             working_directory: PathBuf::from("/tmp"),
             env: HashMap::new(),

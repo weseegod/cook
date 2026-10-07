@@ -964,6 +964,7 @@ pub(crate) fn terminal_run_request(
         kind: xai_grok_tools::computer::types::TaskKind::Bash,
         owner_session_id: None,
         description: None,
+        tail_only: false,
     }
 }
 /// Start a `sleep 30` background task on `session`'s owned backend and return its handle.

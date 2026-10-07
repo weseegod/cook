@@ -673,9 +673,44 @@ fn install_sh_shell_rc_rewrite_matrix() {
     }
 }
 
+/// Small skills archive: two skill directories plus `default-skills.toml`.
+fn write_seed_skills_archive(dir: &Path) -> PathBuf {
+    let src = dir.join("skills-src");
+    std::fs::create_dir_all(src.join("bug-fix")).unwrap();
+    std::fs::write(
+        src.join("bug-fix/SKILL.md"),
+        "---\nname: bug-fix\n---\nseed body\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(src.join("learn")).unwrap();
+    std::fs::write(
+        src.join("learn/SKILL.md"),
+        "---\nname: learn\n---\nlearn body\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("default-skills.toml"),
+        "paths = []\ninject = true\n\n[status]\nbug-fix = true\nlearn = false\nworking-plan = true\n",
+    )
+    .unwrap();
+    let archive = dir.join("skills.tar.gz");
+    let status = Command::new("tar")
+        .arg("-C")
+        .arg(&src)
+        .arg("-czf")
+        .arg(&archive)
+        .arg(".")
+        .status()
+        .expect("tar skills archive");
+    assert!(status.success(), "tar skills archive");
+    archive
+}
+
 /// Fork curl installer (`scripts/install.sh`): CLI-only install must leave
 /// `bin/cook` as a relative symlink into `downloads/`, with `~/.local/bin/cook`
-/// pointing at that managed entry point.
+/// pointing at that managed entry point. An empty home also receives default
+/// skills and `skills.toml`. A second install keeps edited skill directories
+/// and `skills.toml`, and fills a skill directory that is missing.
 #[test]
 fn cook_install_sh_cli_only_uses_symlink_layout() {
     let install_sh = match workspace_file("scripts/install.sh") {
@@ -687,9 +722,10 @@ fn cook_install_sh_cli_only_uses_symlink_layout() {
     };
     let platform = host_platform();
     let fakedir = tempfile::tempdir().unwrap();
-    // Cook's installer fetches `stable` (version text) then the binary; the
-    // shared grok fake curl always writes the script body on -o, so use a
-    // cook-aware stub here.
+    let skills_tar = write_seed_skills_archive(fakedir.path());
+    // Cook's installer fetches `stable` (version text), the binary, and
+    // `v<version>/skills.tar.gz`. The shared grok fake curl always writes the
+    // script body on -o, so use a cook-aware stub here.
     let fake_curl = format!(
         r#"#!/bin/bash
 out=""; url=""
@@ -704,6 +740,7 @@ done
 if [ -n "$out" ]; then
   case "$url" in
     */stable|*/stable/) printf '0.1.181' > "$out" ;;
+    */skills.tar.gz) cp '{skills_tar}' "$out" || exit 1 ;;
     *) printf '%s' '{good}' > "$out" ;;
   esac
   exit 0
@@ -711,6 +748,7 @@ fi
 printf '0.1.181'
 exit 0
 "#,
+        skills_tar = skills_tar.display(),
         good = GOOD_SCRIPT,
     );
     let curl_path = fakedir.path().join("curl");
@@ -729,15 +767,18 @@ exit 0
     std::fs::write(bin_dir.join("cook"), b"old-regular").unwrap();
 
     let path_env = format!("{}:/usr/bin:/bin", fakedir.path().display());
-    let status = Command::new("/bin/bash")
-        .arg(&install_sh)
-        .env_clear()
-        .env("HOME", home.path())
-        .env("PATH", path_env)
-        .env("CLI_ONLY", "1")
-        .env("INSTALL_DIR", &path_dir)
-        .status()
-        .expect("spawn scripts/install.sh");
+    let run_install = || {
+        Command::new("/bin/bash")
+            .arg(&install_sh)
+            .env_clear()
+            .env("HOME", home.path())
+            .env("PATH", &path_env)
+            .env("CLI_ONLY", "1")
+            .env("INSTALL_DIR", &path_dir)
+            .status()
+            .expect("spawn scripts/install.sh")
+    };
+    let status = run_install();
     assert!(status.success(), "CLI_ONLY install must succeed");
 
     let managed = bin_dir.join("cook");
@@ -768,5 +809,64 @@ exit 0
     assert_eq!(
         path_target, managed,
         "~/.local/bin/cook must point at the managed bin/cook"
+    );
+
+    let bug_fix = cook_home.join("skills/bug-fix/SKILL.md");
+    let learn = cook_home.join("skills/learn/SKILL.md");
+    let skills_toml = cook_home.join("skills.toml");
+    assert!(
+        bug_fix.is_file(),
+        "empty home must receive skills/bug-fix/SKILL.md"
+    );
+    assert!(
+        learn.is_file(),
+        "empty home must receive each skill directory from the archive"
+    );
+    let toml = std::fs::read_to_string(&skills_toml).unwrap();
+    assert!(
+        toml.contains("bug-fix = true"),
+        "skills.toml must enable bug-fix: {toml}"
+    );
+    assert!(
+        toml.contains("working-plan = true"),
+        "skills.toml must enable working-plan: {toml}"
+    );
+    assert!(
+        toml.contains("learn = false"),
+        "other skills in the archive stay disabled: {toml}"
+    );
+
+    std::fs::write(&bug_fix, "user-edited-skill\n").unwrap();
+    std::fs::write(&skills_toml, "user-edited-toml\nworking-plan = false\n").unwrap();
+    std::fs::remove_dir_all(cook_home.join("skills/learn")).unwrap();
+    let custom = cook_home.join("skills/custom-skill");
+    std::fs::create_dir_all(&custom).unwrap();
+    std::fs::write(custom.join("SKILL.md"), "user-custom\n").unwrap();
+
+    let status = run_install();
+    assert!(status.success(), "second CLI_ONLY install must succeed");
+    assert_eq!(
+        std::fs::read_to_string(&bug_fix).unwrap(),
+        "user-edited-skill\n",
+        "reinstall must not overwrite an existing skill directory"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&skills_toml).unwrap(),
+        "user-edited-toml\nworking-plan = false\n",
+        "reinstall must not overwrite skills.toml"
+    );
+    assert_eq!(
+        std::fs::read_to_string(custom.join("SKILL.md")).unwrap(),
+        "user-custom\n",
+        "reinstall must leave an unknown user skill in place"
+    );
+    assert!(
+        learn.is_file(),
+        "reinstall must fill a skill directory that is not already present"
+    );
+    assert_eq!(
+        std::fs::read_link(&managed).unwrap(),
+        std::path::PathBuf::from(format!("../downloads/cook-0.1.181-{platform}")),
+        "second install must keep the managed symlink"
     );
 }
