@@ -575,21 +575,23 @@ pub struct Usage {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct PromptTokensDetails {
-    #[serde(default)]
+    // NVIDIA (and some OpenAI-compatible hosts) emit explicit JSON null for unused
+    // detail counters; `#[serde(default)]` alone only covers a missing key.
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub cached_tokens: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub audio_tokens: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct CompletionTokensDetails {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub reasoning_tokens: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub audio_tokens: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub accepted_prediction_tokens: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_null_default")]
     pub rejected_prediction_tokens: u32,
 }
 // ============ Streaming types ============
@@ -1848,6 +1850,51 @@ mod tests {
         assert_eq!(
             chunk.choices[0].finish_reason,
             Some(FinishReason::Unknown("repetition_truncation".to_string()))
+        );
+    }
+
+    #[test]
+    fn usage_details_accept_explicit_null_counters() {
+        // Captured from integrate.api.nvidia.com chat.completion.chunk usage trailer
+        // for nvidia/nemotron-3-super-120b-a12b (2026-10-07).
+        let usage: Usage = serde_json::from_str(
+            r#"{
+              "prompt_tokens": 290,
+              "completion_tokens": 54,
+              "total_tokens": 344,
+              "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0},
+              "completion_tokens_details": {
+                "accepted_prediction_tokens": null,
+                "audio_tokens": null,
+                "reasoning_tokens": 21,
+                "rejected_prediction_tokens": null
+              }
+            }"#,
+        )
+        .expect("NVIDIA null usage detail counters must parse");
+        let prompt = usage.prompt_tokens_details.expect("prompt details");
+        assert_eq!(prompt.cached_tokens, 0);
+        assert_eq!(prompt.audio_tokens, 0);
+        let completion = usage.completion_tokens_details.expect("completion details");
+        assert_eq!(completion.reasoning_tokens, 21);
+        assert_eq!(completion.audio_tokens, 0);
+        assert_eq!(completion.accepted_prediction_tokens, 0);
+        assert_eq!(completion.rejected_prediction_tokens, 0);
+
+        let chunk: ChatCompletionChunk = serde_json::from_str(
+            r#"{"id":"chatcmpl-x","choices":[],"created":0,"model":"nvidia/nemotron-3-super-120b-a12b","object":"chat.completion.chunk","usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3,"prompt_tokens_details":{"audio_tokens":null,"cached_tokens":0},"completion_tokens_details":{"accepted_prediction_tokens":null,"audio_tokens":null,"reasoning_tokens":1,"rejected_prediction_tokens":null}}}"#,
+        )
+        .expect("NVIDIA usage trailer chunk must parse");
+        assert_eq!(
+            chunk
+                .usage
+                .as_ref()
+                .unwrap()
+                .completion_tokens_details
+                .as_ref()
+                .unwrap()
+                .reasoning_tokens,
+            1
         );
     }
 

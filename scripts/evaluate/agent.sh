@@ -74,8 +74,15 @@ run_agent() {
         CONTEXT_WINDOW="$CONTEXT_WINDOW" python3 - <<'PY' >"$dir/home/cook/config.toml"
 import json
 import os
+import uuid
 
 quote = json.dumps
+base_url = os.environ["BASE_URL"]
+# OpenCode Zen/Go rejects requests without x-opencode-session (routing).
+extra_headers = ""
+if "opencode.ai/zen" in base_url:
+    session = f"cook-eval-{uuid.uuid4()}"
+    extra_headers = f'\nextra_headers = {{ "x-opencode-session" = {quote(session)} }}'
 print(f'''[model.{quote("local/" + os.environ["MODEL"])}]
 model = {quote(os.environ["WIRE"])}
 model_provider = "local"
@@ -87,9 +94,9 @@ supports_reasoning_effort = true
 reasoning_efforts = ["none", "medium"]
 
 [model_providers.local]
-base_url = {quote(os.environ["BASE_URL"])}
+base_url = {quote(base_url)}
 api_key = {quote(os.environ["LLAMA_API_KEY"])}
-api_backend = "chat_completions"
+api_backend = "chat_completions"{extra_headers}
 
 [privacy]
 privacy_banner_acked = "2026-01-01T00:00:00Z"
