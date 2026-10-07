@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use crate::implementations::grok_build::task::model_policy::TaskModelSelection;
 
 /// Context for resolving tool description templates. `tools`: canonical name → `Some(model_facing_name)` if enabled,
-/// `None` if disabled. `params`: canonical tool name → { canonical param → model_facing param }. The skill
-/// catalog is a conversation reminder, not a field of this context.
+/// `None` if disabled. `params`: canonical tool name → { canonical param → model_facing param }. `skills`: available
+/// skills for the skill tool description.
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct DescriptionContext {
     /// Canonical tool name → `Some(model_facing_name)` (enabled) or `None` (disabled).

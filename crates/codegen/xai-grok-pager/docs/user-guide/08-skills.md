@@ -185,11 +185,11 @@ Typing `/login` in the slash menu shows both rows, with a right-aligned **built-
 
 `cook inspect` tags colliding skills with `[collides with /login → /acme:login]`.
 
-### Optional invocation
+### Automatic Invocation
 
-The skill catalog is shown to the model as optional reference. No skill is required before a task. The model may load a skill with the skill tool when it decides those instructions will change the work. A slash command such as `/commit` still loads that skill directly.
+Cook can invoke a skill on its own when it recognizes a relevant task. Cook matches your prompt against the skill's `description` and `when-to-use` fields, so write both to describe the triggering situation.
 
-Write `description` and `when-to-use` so a person browsing the catalog can tell when the skill is useful. To keep a skill out of the catalog and require an explicit slash command, set `disable-model-invocation: true` in the frontmatter.
+For example, if a skill's description says "Use when the user wants to commit changes," then saying "commit my changes" can trigger that skill automatically. To require an explicit slash command and prevent automatic invocation, set `disable-model-invocation: true` in the frontmatter.
 
 ---
 
