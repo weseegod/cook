@@ -68,6 +68,7 @@ export async function cancelProviderOauth(id: string): Promise<void> {
 }
 
 export async function logoutProviderOauth(id: string): Promise<void> {
+  // Sign-out clears the session only. Remove is what marks a built-in inactive.
   if (id === "xai") {
     await request("x.ai/auth/logout", {});
     return;
@@ -104,7 +105,7 @@ async function pollGrokOauth(): Promise<OauthStatus> {
   const pending = grokAuth;
   if (!pending) {
     const info = await request<{ methodId?: string | null }>("x.ai/auth/info", {});
-    return { status: info.methodId ? "connected" : "pending" };
+    return finishGrokConnect(info.methodId ? { status: "connected" } : { status: "pending" });
   }
   const winner = await Promise.race([
     pending.done.then(() => "done" as const).catch((error: unknown) => error),
@@ -115,7 +116,20 @@ async function pollGrokOauth(): Promise<OauthStatus> {
   if (winner !== "done") {
     return { status: "error", error: winner instanceof Error ? winner.message : String(winner) };
   }
-  return { status: "connected" };
+  return finishGrokConnect({ status: "connected" });
+}
+
+/** Connect restores a removed xAI card. Sign-out does not write the hide list. */
+async function finishGrokConnect(status: OauthStatus): Promise<OauthStatus> {
+  if (status.status !== "connected") return status;
+  try {
+    await desktopCommand("desktop_provider_unhide", { id: "xai" }, () =>
+      request("x.ai/providers/unhide", { id: "xai" }),
+    );
+    return status;
+  } catch (error) {
+    return { status: "error", error: error instanceof Error ? error.message : "Could not restore xAI" };
+  }
 }
 
 function userCodeFromUrl(url: string): string | null {

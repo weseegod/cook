@@ -144,9 +144,8 @@ impl CompactionSampler for ShellCompactionSampler {
             self.compaction_tool_tokens,
         );
         if !self.accepts_images {
-            let stripped = xai_grok_sampling_types::strip_image_parts_for_text_only(
-                &mut chat_history.items,
-            );
+            let stripped =
+                xai_grok_sampling_types::strip_image_parts_for_text_only(&mut chat_history.items);
             if stripped > 0 {
                 tracing::info!(
                     session_id = %self.session_id,

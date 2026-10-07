@@ -168,9 +168,11 @@ impl SessionActor {
         let hosted_tools = self.hosted_tools_for_turn();
         let (cancel, _cancel_scope) = self.compaction.cancel.enter();
         let mut history = history;
-        if !self.models_manager.model_accepts_images(&sampling_config.model) {
-            let stripped =
-                xai_grok_sampling_types::strip_image_parts_for_text_only(&mut history);
+        if !self
+            .models_manager
+            .model_accepts_images(&sampling_config.model)
+        {
+            let stripped = xai_grok_sampling_types::strip_image_parts_for_text_only(&mut history);
             if stripped > 0 {
                 tracing::info!(
                     session_id = %self.session_info.id,
@@ -1111,11 +1113,11 @@ impl SessionActor {
                 "{COMPACTION_FAILED_GUARD_PREFIX}no system message in simplified conversation"
             )));
         }
-        let (sampling_client, sampling_config) =
-            match self.prepare_compaction_sampling(false).await {
-                Ok(pair) => pair,
-                Err(e) => return Err(e),
-            };
+        let (sampling_client, sampling_config) = match self.prepare_compaction_sampling(false).await
+        {
+            Ok(pair) => pair,
+            Err(e) => return Err(e),
+        };
         let backend_search_active = self.backend_search_active();
         let effective_tool_defs: Vec<xai_grok_sampling_types::ToolDefinition> = self
             .prepare_tool_definitions()

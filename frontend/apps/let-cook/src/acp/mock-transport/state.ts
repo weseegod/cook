@@ -9,6 +9,7 @@ function defaultState(): MockState {
     // A fresh session already holds its system prompt and tool definitions, as the real one does.
     context: { used: 1474, turns: 0, messageCount: 1 },
     providers: [],
+    hiddenProviders: [],
     xaiModels: [],
     xaiApiKeyPresent: false,
     discoverable: [{ id: "mock-discovered-model", name: "Mock Discovered" }],

@@ -1,4 +1,4 @@
-import { PROVIDER_PRESETS } from "../../provider-presets";
+import { PROVIDER_PRESETS, VISIBLE_PROVIDER_IDS } from "../../provider-presets";
 import { modelCatalog, providerList } from "../catalog";
 import { isRecord } from "../events";
 import {
@@ -38,6 +38,7 @@ export function completeMockOauth(id: string): void {
   approvedOauth.add(id);
   if (id === "xai") {
     state.authMethodId = "grok.com";
+    state.hiddenProviders = (state.hiddenProviders ?? []).filter((entry) => entry !== "xai");
     grokAuthResolve?.();
     setGrokAuthResolve(null);
     notify("x.ai/models/update", modelCatalog());
@@ -184,6 +185,9 @@ export const settingsHandlers: Record<string, MethodHandler> = {
     // The host writes only the seeds it is given and leaves other `[model.*]` rows alone, so an
     // upsert that omits models (a connection-only edit) must not drop the configured ones.
     const seeded = new Set(seeds.map((model) => model.id));
+    const extraHeaders = p.extraHeaders && typeof p.extraHeaders === "object" && !Array.isArray(p.extraHeaders)
+      ? Object.fromEntries(Object.entries(p.extraHeaders).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : {};
     const next: MockProvider = {
       id,
       name: typeof p.name === "string" ? p.name : existing?.name,
@@ -193,6 +197,7 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       apiKeyPresent: Boolean(apiKey || (!envKey && (existing?.apiKey || existing?.apiKeyPresent))),
       envKey: envKey ?? (apiKey ? undefined : existing?.envKey),
       oauth: p.oauth === true,
+      extraHeaders,
       models: [...(existing?.models ?? []).filter((model) => !seeded.has(model.id)), ...seeds],
     };
     const providerIndex = state.providers.findIndex((provider) => provider.id === id);
@@ -200,21 +205,33 @@ export const settingsHandlers: Record<string, MethodHandler> = {
       ? [...state.providers, next]
       : state.providers.map((provider, index) => index === providerIndex ? next : provider);
     if (p.setAsDefault && seeds[0]) state.defaultModel = seeds[0].id;
+    state.hiddenProviders = (state.hiddenProviders ?? []).filter((entry) => entry !== id);
     notify("x.ai/models/update", modelCatalog());
     return respond({ ok: true, id, models: next.models.map((model) => model.id), defaultModel: state.defaultModel });
+  },
+  "x.ai/providers/unhide": ({ p, respond }) => {
+    const id = String(p.id ?? "");
+    state.hiddenProviders = (state.hiddenProviders ?? []).filter((entry) => entry !== id);
+    return respond({ ok: true });
   },
   "x.ai/providers/delete": ({ p, respond }) => {
     const id = String(p.id ?? "");
     const provider = state.providers.find((entry) => entry.id === id);
-    if (!provider) return respond({ error: `no provider \`${id}\` is configured` });
-    const removed = provider.models.map((model) => model.id);
+    const builtin = VISIBLE_PROVIDER_IDS.has(id);
+    if (!provider && !builtin) return respond({ error: `no provider \`${id}\` is configured` });
+    const removed = [
+      ...(provider?.models.map((model) => model.id) ?? []),
+      ...(id === "xai" ? state.xaiModels.map((model) => model.id) : []),
+    ];
     if (state.defaultModel && removed.includes(state.defaultModel) && !p.replacement) {
       return respond({
         error: `refusing to delete \`${id}\`: [models] default = \`${state.defaultModel}\` would dangle; pass a replacement model id`,
       });
     }
     state.providers = state.providers.filter((entry) => entry.id !== id);
+    if (id === "xai") state.xaiModels = [];
     if (typeof p.replacement === "string" && p.replacement) state.defaultModel = p.replacement;
+    if (builtin) state.hiddenProviders = [...new Set([...(state.hiddenProviders ?? []), id])];
     notify("x.ai/models/update", modelCatalog());
     return respond({ ok: true, id, removedModels: removed, defaultModel: state.defaultModel });
   },

@@ -158,12 +158,14 @@ async fn handle_get_url(agent: &MvpAgent) -> ExtResult {
     }))
 }
 
-async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
-    #[derive(Deserialize)]
-    struct LogoutParams {
-        scope: Option<String>,
-    }
+/// Absent `scope` is a full logout. Desktop and the TUI both send `{}`.
+#[derive(Debug, Deserialize)]
+struct LogoutParams {
+    #[serde(default)]
+    scope: Option<String>,
+}
 
+async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     let params: LogoutParams = serde_json::from_str(args.params.get())
         .map_err(|e| acp::Error::invalid_params().data(format!("invalid params: {e}")))?;
 
@@ -268,4 +270,17 @@ fn handle_info(agent: &MvpAgent) -> ExtResult {
             .map(|a| a.coding_data_retention_opt_out)
             .unwrap_or_else(xai_grok_login::default_coding_data_retention_opt_out),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogoutParams;
+
+    #[test]
+    fn empty_logout_params_mean_full_logout() {
+        let params: LogoutParams = serde_json::from_str("{}").expect("empty object");
+        assert!(params.scope.is_none());
+        let scoped: LogoutParams = serde_json::from_str(r#"{"scope":"team"}"#).expect("scoped");
+        assert_eq!(scoped.scope.as_deref(), Some("team"));
+    }
 }

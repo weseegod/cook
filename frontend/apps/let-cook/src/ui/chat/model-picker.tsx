@@ -88,22 +88,32 @@ export function ModelPicker({
       if (!trigger || !menu) return;
 
       const triggerRect = trigger.getBoundingClientRect();
-      const menuRect = menu.getBoundingClientRect();
       const gutter = 6;
+      const maxHeight = Math.min(520, window.innerHeight - gutter * 2, Math.max(160, triggerRect.top - gutter - 4));
+      menu.style.maxHeight = `${maxHeight}px`;
+      const list = menu.querySelector<HTMLElement>(".composer-model-picker-list");
+      if (list) list.style.maxHeight = `${Math.max(120, maxHeight - 8)}px`;
+      const menuRect = menu.getBoundingClientRect();
       const left = Math.min(
         Math.max(gutter, triggerRect.left),
         Math.max(gutter, window.innerWidth - menuRect.width - gutter),
       );
       const top = Math.max(gutter, triggerRect.top - menuRect.height - 4);
-      setMenuPosition({ top, left });
+      setMenuPosition((current) => (current?.top === top && current.left === left ? current : { top, left }));
+    };
+
+    const onScroll = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Node && (menuRef.current?.contains(target) || submenuRef.current?.contains(target))) return;
+      updateMenuPosition();
     };
 
     updateMenuPosition();
     window.addEventListener("resize", updateMenuPosition);
-    window.addEventListener("scroll", updateMenuPosition, true);
+    window.addEventListener("scroll", onScroll, true);
     return () => {
       window.removeEventListener("resize", updateMenuPosition);
-      window.removeEventListener("scroll", updateMenuPosition, true);
+      window.removeEventListener("scroll", onScroll, true);
     };
   }, [open, models.length, selectedModelKnown]);
 

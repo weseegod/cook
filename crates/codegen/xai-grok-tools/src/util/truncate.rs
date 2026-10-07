@@ -243,6 +243,16 @@ pub fn soft_wrap_lines(text: &str, wrap_width: usize) -> String {
 /// Separator between the retained head and tail of a truncated output.
 pub(crate) const FRONT_BACK_TRUNCATION_MARKER: &str = "\n\n... (output truncated) ...\n\n";
 
+/// `first/last` when `output` still contains the front/back marker. A tail-only
+/// buffer leaves that marker out, so the note says `last`.
+pub(crate) fn truncated_output_window(output: &str) -> &'static str {
+    if output.contains(FRONT_BACK_TRUNCATION_MARKER.trim()) {
+        "first/last"
+    } else {
+        "last"
+    }
+}
+
 /// Truncate a string keeping the first half and last half of the character budget, inserting a
 /// separator in the middle. Returns `(result, was_truncated)`. When `s.len() <= max_chars` the
 /// original string is returned unchanged and `was_truncated` is `false`.

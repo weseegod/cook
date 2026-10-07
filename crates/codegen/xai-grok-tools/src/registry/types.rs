@@ -2815,6 +2815,7 @@ mod tests {
             .finalize(config, test_session_context(&tmp))
             .expect("toolset should finalize");
         let bash = ToolInput::Bash(crate::implementations::BashToolInput {
+            workdir: None,
             command: "ls".into(),
             timeout: None,
             description: "list files".into(),

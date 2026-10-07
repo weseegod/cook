@@ -912,18 +912,10 @@ mod tests {
         assert!(context < approach);
         assert!(approach < non_goals);
         assert!(deviations < checklist);
-        assert!(full.contains(
-            "required; its body is exactly `(none yet)` before approval"
-        ));
-        assert!(full.contains(
-            "The final step verifies the acceptance criteria."
-        ));
-        assert!(full.contains(
-            "Before approval, treat the plan as a working draft"
-        ));
-        assert!(full.contains(
-            "After approval, the plan is frozen as the task specification."
-        ));
+        assert!(full.contains("required; its body is exactly `(none yet)` before approval"));
+        assert!(full.contains("The final step verifies the acceptance criteria."));
+        assert!(full.contains("Before approval, treat the plan as a working draft"));
+        assert!(full.contains("After approval, the plan is frozen as the task specification."));
         assert!(full.contains("replace `(none yet)` with the first bullet"));
         assert!(full.contains("ask the user to re-enter `/plan`"));
         assert!(full.contains("The plan file is the only file you may edit."));
@@ -931,9 +923,7 @@ mod tests {
         assert!(
             reentry.find("## Deviations").unwrap() < reentry.find("## Task checklist").unwrap()
         );
-        assert!(
-            reentry.contains("After approval, the plan is frozen as the task specification.")
-        );
+        assert!(reentry.contains("After approval, the plan is frozen as the task specification."));
         assert!(reentry.contains("ask the user to re-enter `/plan`"));
     }
     #[test]

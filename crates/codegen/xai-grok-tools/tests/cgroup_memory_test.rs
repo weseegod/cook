@@ -67,6 +67,7 @@ fn make_request(command: &str, timeout_secs: u64) -> TerminalRunRequest {
         kind: Default::default(),
         owner_session_id: None,
         description: None,
+        tail_only: false,
     }
 }
 

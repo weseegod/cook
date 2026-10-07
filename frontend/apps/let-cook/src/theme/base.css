@@ -1362,8 +1362,6 @@ body {
 .model-candidate-list {
   display: grid;
   gap: 4px;
-  max-height: 232px;
-  overflow-y: auto;
 }
 
 .model-candidate-list button {

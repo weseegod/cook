@@ -162,6 +162,15 @@ fn is_xai_api_url_impl(url: &str, require_https: bool) -> bool {
         .and_then(|url| url.host_str().map(str::to_owned))
         .is_some_and(|host| host == "x.ai" || host.ends_with(".x.ai"))
 }
+/// True for OpenCode's own endpoints (`opencode.ai`, including the `/zen` routes).
+/// OpenCode Go requires a stable per-conversation `x-opencode-session` header; other hosts must not
+/// receive it. Exact host match, so a lookalike domain fails.
+pub fn is_opencode_url(url: &str) -> bool {
+    reqwest::Url::parse(url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .is_some_and(|host| host == "opencode.ai")
+}
 fn is_loopback_host(parsed: &reqwest::Url) -> bool {
     match parsed.host() {
         Some(url::Host::Domain(host)) => host == "localhost",
@@ -381,6 +390,16 @@ pub fn is_grok_process_strict(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn test_is_opencode_url() {
+        assert!(is_opencode_url("https://opencode.ai/zen/go/v1"));
+        assert!(is_opencode_url("https://opencode.ai/zen/v1"));
+        assert!(is_opencode_url("https://opencode.ai"));
+        assert!(!is_opencode_url("https://opencode.ai.evil.example/v1"));
+        assert!(!is_opencode_url("https://api.opencode.ai/v1"));
+        assert!(!is_opencode_url("https://api.anthropic.com/v1"));
+        assert!(!is_opencode_url("not a url"));
+    }
     #[test]
     fn test_is_cli_chat_proxy_url_accepts_proxy_subpath() {
         assert!(is_cli_chat_proxy_url(

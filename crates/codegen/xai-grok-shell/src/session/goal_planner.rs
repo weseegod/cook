@@ -715,7 +715,10 @@ mod tests {
     #[tokio::test]
     async fn success_path_emits_fired_and_completed_and_returns_planned() {
         let plan_file = tmp_plan_file("happy");
-        let spawner = Arc::new(MockSpawner::ok_writes(&plan_file, VALID_PLAN_BODY.as_bytes()));
+        let spawner = Arc::new(MockSpawner::ok_writes(
+            &plan_file,
+            VALID_PLAN_BODY.as_bytes(),
+        ));
         let (log, emit) = collect_events();
 
         let outcome = run_goal_planner(
@@ -991,7 +994,10 @@ mod tests {
     #[tokio::test]
     async fn prompt_substitutes_plan_file_path_and_carries_objective() {
         let plan_file = tmp_plan_file("prompt");
-        let spawner = Arc::new(MockSpawner::ok_writes(&plan_file, VALID_PLAN_BODY.as_bytes()));
+        let spawner = Arc::new(MockSpawner::ok_writes(
+            &plan_file,
+            VALID_PLAN_BODY.as_bytes(),
+        ));
         let spawner_obs = spawner.clone();
         let (_, emit) = collect_events();
 

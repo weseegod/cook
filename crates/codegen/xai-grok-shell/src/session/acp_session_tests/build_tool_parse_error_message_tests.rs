@@ -74,7 +74,8 @@ fn test_empty_arguments_no_extra_content() {
 #[test]
 fn test_empty_json_object_gets_no_empty_retry() {
     let err = xai_tool_runtime::ToolError::invalid_arguments(
-        "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}".to_string(),
+        "use exactly one of {tool_name,tool_input}, {tool_name,tool_input_file}, or {file}"
+            .to_string(),
     );
     let msg = build_tool_parse_error_message("use_tool", &err, "{}");
 

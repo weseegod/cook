@@ -42,9 +42,8 @@ fn the_static_bearer_is_the_configured_key_and_nothing_else() {
 /// video download locally.
 #[test]
 fn a_zdr_config_without_a_bucket_restricts_video_on_every_host() {
-    let cfg = config(
-        "[features]\nvideo_gen = true\n\n[tools]\ndisable_zdr_incompatible_tools = true\n",
-    );
+    let cfg =
+        config("[features]\nvideo_gen = true\n\n[tools]\ndisable_zdr_incompatible_tools = true\n");
 
     let VideoGenConfig::Enabled {
         zdr_restricted,

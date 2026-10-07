@@ -87,6 +87,29 @@ impl BashToolConfig {
     }
 }
 
+/// Headless sessions wait two minutes and return output. Interactive sessions are unchanged.
+/// An explicit `default_block_until_ms` already in `map` is left as configured.
+pub(crate) const HEADLESS_DEFAULT_BLOCK_UNTIL_MS: u64 = 120_000;
+
+pub(crate) fn apply_headless_bash_params(
+    map: &mut serde_json::Map<String, serde_json::Value>,
+    non_interactive: bool,
+) {
+    if !non_interactive {
+        return;
+    }
+    map.insert(
+        "return_output_on_block".into(),
+        serde_json::Value::Bool(true),
+    );
+    if !map.contains_key("default_block_until_ms") {
+        map.insert(
+            "default_block_until_ms".into(),
+            serde_json::Value::from(HEADLESS_DEFAULT_BLOCK_UNTIL_MS),
+        );
+    }
+}
+
 /// User configurable settings for the ask_user_question tool (`[toolset.ask_user_question]`). Consumed by `crate::util::config::resolve_ask_user_question_params_from_disk`, which reads the raw config layers directly.
 /// That keeps the documented precedence (requirements > env > user > managed > remote). This struct exists so the keys are recognized in `config.toml` and round-trip through `AgentConfig`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -728,6 +751,40 @@ mod tests {
         assert_eq!(
             default_block_until(&local.to_bash_params_json(None, None)),
             Some(15_000)
+        );
+    }
+
+    #[test]
+    fn headless_bash_params_carry_return_output_and_two_minute_block() {
+        let mut headless = BashToolConfig::default().to_bash_params_json(None, None);
+        apply_headless_bash_params(&mut headless, true);
+        assert_eq!(
+            headless.get("return_output_on_block"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert_eq!(
+            headless.get("default_block_until_ms"),
+            Some(&serde_json::Value::from(HEADLESS_DEFAULT_BLOCK_UNTIL_MS))
+        );
+
+        let mut interactive = BashToolConfig::default().to_bash_params_json(None, None);
+        apply_headless_bash_params(&mut interactive, false);
+        assert!(interactive.get("return_output_on_block").is_none());
+        assert!(interactive.get("default_block_until_ms").is_none());
+
+        let mut explicit = BashToolConfig {
+            default_block_until_ms: Some(15_000),
+            ..BashToolConfig::default()
+        }
+        .to_bash_params_json(None, None);
+        apply_headless_bash_params(&mut explicit, true);
+        assert_eq!(
+            explicit.get("default_block_until_ms"),
+            Some(&serde_json::Value::from(15_000))
+        );
+        assert_eq!(
+            explicit.get("return_output_on_block"),
+            Some(&serde_json::Value::Bool(true))
         );
     }
 }

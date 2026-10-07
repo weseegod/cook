@@ -4519,6 +4519,7 @@ mod plan_mode_edit_gate_tests {
                     description: "write via bash".into(),
                     is_background: false,
                     block_until_ms: None,
+                    workdir: None,
                 })
             ),
             PlanEditGate::Allow,

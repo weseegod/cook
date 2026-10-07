@@ -25,6 +25,22 @@ const PROBE_MODEL_LIMIT: usize = 200;
 const CHATGPT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const OPENAI_API_BASE_URL: &str = "https://api.openai.com/v1";
 const XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
+/// Settings cards that stay on screen after Remove. Mirrors `VISIBLE_PROVIDER_IDS`.
+const BUILTIN_PROVIDER_IDS: &[&str] = &[
+    "openai",
+    "anthropic",
+    "openrouter",
+    "deepseek",
+    "zai",
+    "xai",
+    "google",
+    "moonshot",
+    "xiaomi",
+];
+
+fn is_builtin_provider(id: &str) -> bool {
+    BUILTIN_PROVIDER_IDS.contains(&id)
+}
 
 fn models_list_url(base_url: &str) -> String {
     let base_url = base_url.trim_end_matches('/');
@@ -41,6 +57,8 @@ pub struct ProviderList {
     providers: Vec<ProviderView>,
     models: Vec<ModelView>,
     default_model: Option<String>,
+    /// Built-in ids the user removed. The card stays in Settings, inactive, until Connect.
+    hidden_providers: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -622,7 +640,44 @@ fn list_document(doc: &DocumentMut) -> ProviderList {
         providers,
         models: all_models,
         default_model,
+        hidden_providers: hidden_provider_ids(doc),
     }
+}
+
+fn hidden_provider_ids(doc: &DocumentMut) -> Vec<String> {
+    let Some(table) = doc
+        .get("desktop_hidden_providers")
+        .and_then(Item::as_table)
+    else {
+        return Vec::new();
+    };
+    table
+        .iter()
+        .filter_map(|(id, item)| match item.as_bool() {
+            Some(false) => None,
+            _ => Some(id.to_owned()),
+        })
+        .collect()
+}
+
+fn clear_hidden_provider(doc: &mut DocumentMut, id: &str) {
+    let Some(hidden) = doc
+        .get_mut("desktop_hidden_providers")
+        .and_then(Item::as_table_mut)
+    else {
+        return;
+    };
+    hidden.remove(id);
+}
+
+/// Drop a built-in from `[desktop_hidden_providers]` without writing a provider block.
+/// Grok Connect only finishes OAuth, so it cannot go through `upsert_provider`.
+pub fn unhide_provider(id: &str) -> Result<(), String> {
+    let id = checked_id(id, "provider id")?.to_owned();
+    update(|doc| {
+        clear_hidden_provider(doc, &id);
+        Ok(())
+    })
 }
 
 fn default_reasoning_enabled() -> bool {
@@ -652,88 +707,91 @@ pub fn clear_oauth(id: &str) -> Result<(), String> {
 
 pub fn upsert_provider(request: ProviderUpsert) -> Result<(), String> {
     validate_provider(&request)?;
-    update(|doc| {
-        let providers = child_table(doc, "model_providers")?;
-        if !providers.contains_key(&request.id) {
-            providers.insert(&request.id, Item::Table(Table::new()));
-        }
-        let provider = providers
-            .get_mut(&request.id)
-            .and_then(Item::as_table_mut)
-            .ok_or_else(|| format!("[model_providers.{}] must be a table", request.id))?;
-        provider.insert("base_url", toml_edit::value(request.base_url.trim()));
-        provider.insert(
-            "api_backend",
-            toml_edit::value(request.api_backend.as_str()),
-        );
-        if request.extra_headers.is_empty() {
-            provider.remove("extra_headers");
-        } else {
-            let mut headers = Table::new();
-            for (name, value) in &request.extra_headers {
-                headers.insert(name, toml_edit::value(value.as_str()));
-            }
-            provider.insert("extra_headers", Item::Table(headers));
-        }
-        if request.oauth {
-            provider.insert("auth_method", toml_edit::value("oauth"));
-        } else {
-            provider.remove("auth_method");
-        }
-        if let Some(key) = request
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|key| !key.is_empty())
-        {
-            provider.insert("api_key", toml_edit::value(key));
-            provider.remove("env_key");
-        } else if let Some(name) = request
-            .env_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        {
-            provider.insert("env_key", toml_edit::value(name));
-            provider.remove("api_key");
-        }
+    update(|doc| upsert_provider_in(doc, &request))
+}
 
-        let names = child_table(doc, "desktop_provider_names")?;
-        match request
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|name| !name.is_empty())
-        {
-            Some(name) => {
-                names.insert(&request.id, toml_edit::value(name));
-            }
-            None => {
-                names.remove(&request.id);
-            }
+fn upsert_provider_in(doc: &mut DocumentMut, request: &ProviderUpsert) -> Result<(), String> {
+    clear_hidden_provider(doc, &request.id);
+    let providers = child_table(doc, "model_providers")?;
+    if !providers.contains_key(&request.id) {
+        providers.insert(&request.id, Item::Table(Table::new()));
+    }
+    let provider = providers
+        .get_mut(&request.id)
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| format!("[model_providers.{}] must be a table", request.id))?;
+    provider.insert("base_url", toml_edit::value(request.base_url.trim()));
+    provider.insert(
+        "api_backend",
+        toml_edit::value(request.api_backend.as_str()),
+    );
+    if request.extra_headers.is_empty() {
+        provider.remove("extra_headers");
+    } else {
+        let mut headers = Table::new();
+        for (name, value) in &request.extra_headers {
+            headers.insert(name, toml_edit::value(value.as_str()));
         }
+        provider.insert("extra_headers", Item::Table(headers));
+    }
+    if request.oauth {
+        provider.insert("auth_method", toml_edit::value("oauth"));
+    } else {
+        provider.remove("auth_method");
+    }
+    if let Some(key) = request
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+    {
+        provider.insert("api_key", toml_edit::value(key));
+        provider.remove("env_key");
+    } else if let Some(name) = request
+        .env_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        provider.insert("env_key", toml_edit::value(name));
+        provider.remove("api_key");
+    }
 
-        let models = child_table(doc, "model")?;
-        for seed in &request.models {
-            write_model(
-                models,
-                &seed.id,
-                &seed.model,
-                Some(&request.id),
-                Some(&seed.name),
-                &seed.input,
-                seed.context_window,
-                seed.max_completion_tokens,
-                None,
-            )?;
+    let names = child_table(doc, "desktop_provider_names")?;
+    match request
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => {
+            names.insert(&request.id, toml_edit::value(name));
         }
-        if request.set_as_default {
-            if let Some(first) = request.models.first() {
-                child_table(doc, "models")?.insert("default", toml_edit::value(first.id.as_str()));
-            }
+        None => {
+            names.remove(&request.id);
         }
-        Ok(())
-    })
+    }
+
+    let models = child_table(doc, "model")?;
+    for seed in &request.models {
+        write_model(
+            models,
+            &seed.id,
+            &seed.model,
+            Some(&request.id),
+            Some(&seed.name),
+            &seed.input,
+            seed.context_window,
+            seed.max_completion_tokens,
+            None,
+        )?;
+    }
+    if request.set_as_default {
+        if let Some(first) = request.models.first() {
+            child_table(doc, "models")?.insert("default", toml_edit::value(first.id.as_str()));
+        }
+    }
+    Ok(())
 }
 
 pub fn upsert_model(request: ModelUpsert) -> Result<(), String> {
@@ -809,47 +867,66 @@ pub fn delete_model(model_id: &str) -> Result<(), String> {
 
 pub fn delete_provider(id: &str, replacement: Option<&str>) -> Result<(), String> {
     let id = checked_id(id, "provider id")?.to_owned();
-    update(|doc| {
-        let removed: Vec<String> = read_models(doc)
-            .into_iter()
-            .filter(|model| model.provider == id)
-            .map(|model| model.id)
-            .collect();
-        let current = doc
-            .get("models")
-            .and_then(Item::as_table)
-            .and_then(|models| models.get("default"))
-            .and_then(Item::as_str)
-            .map(str::to_owned);
-        if current
-            .as_ref()
-            .is_some_and(|current| removed.contains(current))
-        {
-            let replacement = replacement.map(str::trim).filter(|value| !value.is_empty()).ok_or_else(|| {
+    update(|doc| delete_provider_in(doc, &id, replacement))
+}
+
+fn delete_provider_in(doc: &mut DocumentMut, id: &str, replacement: Option<&str>) -> Result<(), String> {
+    let builtin = is_builtin_provider(id);
+    let removed: Vec<String> = read_models(doc)
+        .into_iter()
+        .filter(|model| model.provider == id)
+        .map(|model| model.id)
+        .collect();
+    let current = doc
+        .get("models")
+        .and_then(Item::as_table)
+        .and_then(|models| models.get("default"))
+        .and_then(Item::as_str)
+        .map(str::to_owned);
+    if current
+        .as_ref()
+        .is_some_and(|current| removed.contains(current))
+    {
+        let replacement = replacement
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
                 format!("removing `{id}` would leave the default model dangling; choose a replacement")
             })?;
-            child_table(doc, "models")?.insert("default", toml_edit::value(replacement));
+        child_table(doc, "models")?.insert("default", toml_edit::value(replacement));
+    }
+    let providers_present = doc.get("model_providers").and_then(Item::as_table).is_some();
+    let configured = doc
+        .get("model_providers")
+        .and_then(Item::as_table)
+        .is_some_and(|providers| providers.contains_key(id));
+    if !builtin {
+        if !providers_present {
+            return Err("no configured providers".to_owned());
         }
-        let providers = doc
-            .get_mut("model_providers")
-            .and_then(Item::as_table_mut)
-            .ok_or_else(|| "no configured providers".to_owned())?;
-        if providers.remove(&id).is_none() {
+        if !configured {
             return Err(format!("provider `{id}` is not configured"));
         }
-        if let Some(models) = doc.get_mut("model").and_then(Item::as_table_mut) {
-            for model in removed {
-                models.remove(&model);
-            }
+    }
+    if let Some(providers) = doc.get_mut("model_providers").and_then(Item::as_table_mut) {
+        providers.remove(id);
+    }
+    if let Some(models) = doc.get_mut("model").and_then(Item::as_table_mut) {
+        for model in &removed {
+            models.remove(model);
         }
-        if let Some(names) = doc
-            .get_mut("desktop_provider_names")
-            .and_then(Item::as_table_mut)
-        {
-            names.remove(&id);
-        }
-        Ok(())
-    })
+    }
+    if let Some(names) = doc
+        .get_mut("desktop_provider_names")
+        .and_then(Item::as_table_mut)
+    {
+        names.remove(id);
+    }
+    if builtin {
+        let hidden = child_table(doc, "desktop_hidden_providers")?;
+        hidden.insert(id, toml_edit::value(true));
+    }
+    Ok(())
 }
 
 pub fn set_default_model(model_id: &str) -> Result<(), String> {
@@ -1147,8 +1224,8 @@ fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table,
 #[cfg(test)]
 mod tests {
     use super::{
-        child_table, list_document, models_list_url, parse_models_listing,
-        probe_target_from_document, redact, write_model,
+        child_table, delete_provider_in, list_document, models_list_url, parse_models_listing,
+        probe_target_from_document, redact, upsert_provider_in, write_model, ProviderUpsert,
     };
 
     #[test]
@@ -1336,5 +1413,115 @@ api_backend = "chat_completions"
             rendered.contains("deepseek = \"Work DeepSeek\""),
             "{rendered}"
         );
+    }
+
+    fn sample_upsert(id: &str) -> ProviderUpsert {
+        ProviderUpsert {
+            id: id.to_owned(),
+            name: Some("OpenAI".to_owned()),
+            base_url: "https://api.openai.com/v1".to_owned(),
+            api_backend: "chat_completions".to_owned(),
+            api_key: Some("sk-test".to_owned()),
+            env_key: None,
+            extra_headers: std::collections::BTreeMap::new(),
+            models: Vec::new(),
+            set_as_default: false,
+            oauth: false,
+        }
+    }
+
+    #[test]
+    fn delete_of_a_missing_builtin_writes_only_the_hide_entry() {
+        let source = r#"
+# keep me
+[models]
+default = "gpt-5"
+
+[model."gpt-5"]
+model = "gpt-5"
+model_provider = "openai"
+name = "GPT-5"
+input = ["text"]
+
+[model_providers.openai]
+base_url = "https://api.openai.com/v1"
+api_backend = "chat_completions"
+
+[desktop_provider_names]
+openai = "OpenAI"
+"#;
+        let mut doc: toml_edit::DocumentMut = source.parse().expect("fixture");
+        delete_provider_in(&mut doc, "xai", None).expect("hide missing xAI");
+        let rendered = doc.to_string();
+        assert!(rendered.contains("# keep me"), "{rendered}");
+        assert!(rendered.contains("[model_providers.openai]"), "{rendered}");
+        assert!(rendered.contains("[model.\"gpt-5\"]"), "{rendered}");
+        assert!(rendered.contains("openai = \"OpenAI\""), "{rendered}");
+        assert!(rendered.contains("default = \"gpt-5\""), "{rendered}");
+        assert!(rendered.contains("[desktop_hidden_providers]"), "{rendered}");
+        assert!(rendered.contains("xai = true"), "{rendered}");
+        assert!(!rendered.contains("model_providers.xai"), "{rendered}");
+        let snapshot = list_document(&doc);
+        assert_eq!(snapshot.hidden_providers, vec!["xai".to_owned()]);
+        assert!(snapshot.providers.iter().any(|provider| provider.id == "openai"));
+
+        let err = delete_provider_in(&mut doc, "opencode", None).unwrap_err();
+        assert!(err.contains("not configured"), "{err}");
+    }
+
+    #[test]
+    fn delete_builtin_wipes_its_block_models_and_name_then_hides_it() {
+        let source = r#"
+[models]
+default = "grok-4.5"
+
+[model."grok-4.5"]
+model = "grok-4.5"
+name = "Grok 4.5"
+input = ["text"]
+
+[model."gpt-5"]
+model = "gpt-5"
+model_provider = "openai"
+name = "GPT-5"
+input = ["text"]
+
+[model_providers.xai]
+base_url = "https://api.x.ai/v1"
+api_backend = "chat_completions"
+
+[desktop_provider_names]
+xai = "xAI"
+"#;
+        let mut doc: toml_edit::DocumentMut = source.parse().expect("fixture");
+        let err = delete_provider_in(&mut doc, "xai", None).unwrap_err();
+        assert!(err.contains("choose a replacement"), "{err}");
+
+        delete_provider_in(&mut doc, "xai", Some("gpt-5")).expect("wipe xAI");
+        let rendered = doc.to_string();
+        assert!(!rendered.contains("[model_providers.xai]"), "{rendered}");
+        assert!(!rendered.contains("[model.\"grok-4.5\"]"), "{rendered}");
+        assert!(!rendered.contains("xai = \"xAI\""), "{rendered}");
+        assert!(rendered.contains("[model.\"gpt-5\"]"), "{rendered}");
+        assert!(rendered.contains("xai = true"), "{rendered}");
+        assert_eq!(list_document(&doc).default_model.as_deref(), Some("gpt-5"));
+        assert!(list_document(&doc).providers.iter().all(|provider| provider.id != "xai"));
+    }
+
+    #[test]
+    fn upsert_and_unhide_clear_a_hidden_builtin() {
+        let mut doc: toml_edit::DocumentMut = "[desktop_hidden_providers]\nxai = true\nopenai = true\n"
+            .parse()
+            .expect("fixture");
+        super::clear_hidden_provider(&mut doc, "xai");
+        let rendered = doc.to_string();
+        assert!(!rendered.contains("xai = true"), "{rendered}");
+        assert!(rendered.contains("openai = true"), "{rendered}");
+        assert_eq!(list_document(&doc).hidden_providers, vec!["openai".to_owned()]);
+
+        upsert_provider_in(&mut doc, &sample_upsert("openai")).expect("upsert");
+        let restored = list_document(&doc);
+        assert!(restored.hidden_providers.is_empty(), "{:?}", restored.hidden_providers);
+        assert!(restored.providers.iter().any(|provider| provider.id == "openai"));
     }
 }

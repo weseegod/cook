@@ -93,9 +93,10 @@ impl SessionActor {
         } else {
             None
         };
-        if let Some(body) =
-            crate::session::workflow::listing::merge_listing_sections(skill_text, workflow_listing.as_deref())
-        {
+        if let Some(body) = crate::session::workflow::listing::merge_listing_sections(
+            skill_text,
+            workflow_listing.as_deref(),
+        ) {
             let tag = self.reminder_wrapper_tag();
             conversation.push(ConversationItem::system_reminder(format!(
                 "<{tag}>\n{body}\n</{tag}>"

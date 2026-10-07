@@ -619,10 +619,8 @@ impl SessionActor {
                 xai_chat_state::compaction_utils::prepare_conversation_for_summarization(
                     conversation,
                 );
-            let recent = crate::session::helpers::memory_flush_window::select_flush_window(
-                chat_history,
-                20,
-            );
+            let recent =
+                crate::session::helpers::memory_flush_window::select_flush_window(chat_history, 20);
             force_flush_content = Some(Self::force_flush_content_from_window(&recent));
         }
 
@@ -732,10 +730,9 @@ impl SessionActor {
         let (outcome, response_len, accepted_len, was_truncated, flush_path) = match result {
             Ok(response_text) => {
                 let resp_len = response_text.len();
-                let mut processed = process_flush_response(&response_text, &self.memory.flush_config);
-                if matches!(processed, FlushResult::NothingToStore)
-                    && force_write_on_no_reply
-                {
+                let mut processed =
+                    process_flush_response(&response_text, &self.memory.flush_config);
+                if matches!(processed, FlushResult::NothingToStore) && force_write_on_no_reply {
                     if let Some(forced) = force_flush_content.clone() {
                         tracing::info!(
                             "memory flush: NO_REPLY on explicit flush with content; forcing a write"
@@ -797,13 +794,9 @@ impl SessionActor {
                             let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
                             let session_id = &self.session_info.id.0;
                             // Durable: ephemeral `/tmp` cwd must not skip an explicit flush.
-                            match storage.write_daily_log_durable(
-                                &date,
-                                trigger,
-                                session_id,
-                                &content,
-                                true,
-                            ) {
+                            match storage
+                                .write_daily_log_durable(&date, trigger, session_id, &content, true)
+                            {
                                 Ok(path) => {
                                     tracing::info!("memory flush wrote session log");
                                     self.reindex_and_embed(&path, "session").await;
@@ -1045,11 +1038,23 @@ mod tests {
 
     #[test]
     fn explicit_no_reply_force_write_requires_content() {
-        assert!(SessionActor::force_flush_write_for_trigger("user_requested", 1));
-        assert!(SessionActor::force_flush_write_for_trigger("slash_command", 2));
-        assert!(!SessionActor::force_flush_write_for_trigger("user_requested", 0));
+        assert!(SessionActor::force_flush_write_for_trigger(
+            "user_requested",
+            1
+        ));
+        assert!(SessionActor::force_flush_write_for_trigger(
+            "slash_command",
+            2
+        ));
+        assert!(!SessionActor::force_flush_write_for_trigger(
+            "user_requested",
+            0
+        ));
         assert!(!SessionActor::force_flush_write_for_trigger("interval", 3));
-        assert!(!SessionActor::force_flush_write_for_trigger("pre_compaction", 3));
+        assert!(!SessionActor::force_flush_write_for_trigger(
+            "pre_compaction",
+            3
+        ));
     }
 
     #[test]

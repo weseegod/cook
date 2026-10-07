@@ -255,6 +255,39 @@ fn inject_url_derived_headers_does_not_overwrite_existing_entries() {
     );
 }
 #[test]
+fn inject_opencode_session_header_adds_the_conversation_id() {
+    let mut headers = IndexMap::new();
+    inject_opencode_session_header(&mut headers, "https://opencode.ai/zen/go/v1", Some("conv-1"));
+    assert_eq!(
+        headers.get(OPENCODE_SESSION_HEADER).map(String::as_str),
+        Some("conv-1")
+    );
+}
+#[test]
+fn inject_opencode_session_header_keeps_a_caller_set_value() {
+    let mut headers = IndexMap::new();
+    headers.insert(OPENCODE_SESSION_HEADER.to_string(), "typed-by-user".to_string());
+    inject_opencode_session_header(&mut headers, "https://opencode.ai/zen/go/v1", Some("conv-1"));
+    assert_eq!(
+        headers.get(OPENCODE_SESSION_HEADER).map(String::as_str),
+        Some("typed-by-user")
+    );
+}
+#[test]
+fn inject_opencode_session_header_skips_other_hosts() {
+    for base_url in ["https://api.anthropic.com/v1", "https://api.x.ai/v1"] {
+        let mut headers = IndexMap::new();
+        inject_opencode_session_header(&mut headers, base_url, Some("conv-1"));
+        assert!(
+            headers.get(OPENCODE_SESSION_HEADER).is_none(),
+            "{base_url} must not receive an OpenCode session header"
+        );
+    }
+    let mut missing_key = IndexMap::new();
+    inject_opencode_session_header(&mut missing_key, "https://opencode.ai/zen/go/v1", None);
+    assert!(missing_key.get(OPENCODE_SESSION_HEADER).is_none());
+}
+#[test]
 fn parses_toolset_overrides() {
     let raw_config: toml::Value = toml::from_str(
         r#"
@@ -614,6 +647,32 @@ fn session_resolver_is_not_stamped_onto_third_party_samplers() {
             .map(|id| id.as_ref()),
         Some("root-group")
     );
+}
+#[test]
+fn stamp_session_local_sampler_fields_carries_the_opencode_session_header() {
+    let session_cfg = SamplerConfig {
+        conversation_group_id: Some("root-group".into()),
+        ..SamplerConfig::default()
+    };
+    let mut routed_to_opencode = SamplerConfig {
+        base_url: "https://opencode.ai/zen/go/v1".into(),
+        ..SamplerConfig::default()
+    };
+    stamp_session_local_sampler_fields(&mut routed_to_opencode, &session_cfg, None, None);
+    assert_eq!(
+        routed_to_opencode
+            .extra_headers
+            .get(OPENCODE_SESSION_HEADER)
+            .map(String::as_str),
+        Some("root-group"),
+        "a routed aux model on OpenCode needs the conversation's id"
+    );
+    let mut routed_elsewhere = SamplerConfig {
+        base_url: "https://api.anthropic.com/v1".into(),
+        ..SamplerConfig::default()
+    };
+    stamp_session_local_sampler_fields(&mut routed_elsewhere, &session_cfg, None, None);
+    assert!(routed_elsewhere.extra_headers.get(OPENCODE_SESSION_HEADER).is_none());
 }
 /// A cold cache disables web search rather than sending an unauthenticated request.
 #[tokio::test]

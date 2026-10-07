@@ -346,12 +346,13 @@ impl MvpAgent {
             path_not_found_hints: self.cfg.borrow().path_not_found_hints,
             tool_params_json: {
                 let cfg = self.cfg.borrow();
+                let mut bash = cfg
+                    .toolset
+                    .bash
+                    .to_bash_params_json_with_remote(cfg.remote_settings.as_ref());
+                crate::tools::config::apply_headless_bash_params(&mut bash, parent_non_interactive);
                 crate::session::agent_rebuild::ResolvedToolParamsJson {
-                    bash: Some(
-                        cfg.toolset
-                            .bash
-                            .to_bash_params_json_with_remote(cfg.remote_settings.as_ref()),
-                    ),
+                    bash: Some(bash),
                     ask_user_question: None,
                 }
             },

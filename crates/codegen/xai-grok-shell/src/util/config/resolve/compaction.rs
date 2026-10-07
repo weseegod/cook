@@ -226,12 +226,10 @@ mod user_context_window_override_tests {
 
     #[test]
     fn catalog_key_pin() {
-        let c = cfg(
-            r#"
+        let c = cfg(r#"
             [model."grok-4.6"]
             context_window = 300000
-            "#,
-        );
+            "#);
         assert_eq!(
             user_context_window_override(&c, "grok-4.6").map(|n| n.get()),
             Some(300_000)
@@ -241,13 +239,11 @@ mod user_context_window_override_tests {
 
     #[test]
     fn routing_slug_pin() {
-        let c = cfg(
-            r#"
+        let c = cfg(r#"
             [model."deepseek/flash"]
             model = "deepseek-v4-flash"
             context_window = 128000
-            "#,
-        );
+            "#);
         assert_eq!(
             user_context_window_override(&c, "deepseek-v4-flash").map(|n| n.get()),
             Some(128_000)
@@ -260,12 +256,10 @@ mod user_context_window_override_tests {
 
     #[test]
     fn missing_field_is_not_a_pin() {
-        let c = cfg(
-            r#"
+        let c = cfg(r#"
             [model."grok-4.6"]
             input = ["text"]
-            "#,
-        );
+            "#);
         assert_eq!(user_context_window_override(&c, "grok-4.6"), None);
     }
 }

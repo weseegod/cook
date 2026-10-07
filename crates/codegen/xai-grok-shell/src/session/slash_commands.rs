@@ -494,7 +494,9 @@ const PROMPT_COMMANDS: &[BuiltinCommand] = &[
         model_authored_eligibility: ModelAuthoredEligibility::Denied,
         gate: BuiltinGate::AlwaysOn,
         workflow_projection: WorkflowProjection::None,
-        resolve: |_| unreachable!("/commit is dispatched via the PROMPT_COMMANDS path in resolve()"),
+        resolve: |_| {
+            unreachable!("/commit is dispatched via the PROMPT_COMMANDS path in resolve()")
+        },
     },
     BuiltinCommand {
         name: "commit-and-push",
@@ -1805,8 +1807,7 @@ fn build_loop_prompt_blocks(args: &str) -> Vec<acp::ContentBlock> {
 /// question, not a usage error.
 fn build_commit_prompt_blocks(args: &str, push: bool) -> Vec<acp::ContentBlock> {
     use xai_grok_tools::implementations::grok_build::{
-        commit_and_push_usage_message, commit_instruction, commit_usage_message,
-        parse_commit_args,
+        commit_and_push_usage_message, commit_instruction, commit_usage_message, parse_commit_args,
     };
     let parsed = parse_commit_args(args, push);
     let text = if parsed.help {

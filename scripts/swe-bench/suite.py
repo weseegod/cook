@@ -44,10 +44,35 @@ def read_levels(path):
     return data
 
 
-def sample(data, seed):
+def parse_only_levels(text):
+    """Comma-separated subset of LEVELS; order follows LEVELS, not the input."""
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError('levels must be a non-empty comma-separated list')
+    wanted = []
+    seen = set()
+    for item in text.split(','):
+        level = item.strip()
+        if not level:
+            raise ValueError('levels list has an empty entry')
+        if level not in LEVELS:
+            raise ValueError(f'invalid level: {level}; expected one of {", ".join(LEVELS)}')
+        if level in seen:
+            raise ValueError(f'duplicate level: {level}')
+        seen.add(level)
+        wanted.append(level)
+    return tuple(level for level in LEVELS if level in seen)
+
+
+def sample(data, seed, only_levels=None):
     rng = random.Random(seed)
+    # Always draw one ID per LEVELS entry so subsetting keeps the same
+    # easy/medium/... picks as a full four-level sample for that seed.
+    drawn = [dict(level=k, instance_id=rng.choice(data['levels'][k])) for k in LEVELS]
+    levels = only_levels or LEVELS
+    wanted = set(levels)
     return dict(dataset=data['dataset'], revision=data['revision'], seed=seed,
-                instances=[dict(level=k, instance_id=rng.choice(data['levels'][k])) for k in LEVELS])
+                levels=list(levels),
+                instances=[row for row in drawn if row['level'] in wanted])
 
 
 def git(*args, cwd=None):
@@ -104,6 +129,7 @@ def grade_label(patch, report_dir, iid, no_grade):
 
 
 def grading_report_dir(bundle, run, iid):
+    run = run.get('instances', {}).get(iid, run)
     relative = Path(run.get('run_id', '')) / run.get('model_name_or_path', '').replace('/', '__') / iid
     candidates = [bundle / 'logs/run_evaluation' / relative,
                   bundle / 'logs/evaluation' / relative]
@@ -245,6 +271,83 @@ def render_report(bundle, agents, model, no_grade):
     print(bundle / 'report.md')
 
 
+def task_summary(bundle, row, agent, no_grade, usage):
+    directory = bundle / f"{row['level']}-{row['instance_id']}" / agent
+    def number(filename, convert):
+        try:
+            return convert((directory / filename).read_text().strip())
+        except (OSError, ValueError):
+            return None
+    path = directory / 'patch.diff'
+    patch = path.read_text(errors='replace') if path.exists() else None
+    runs = json.loads((bundle / 'grading.json').read_text())
+    report_dir = grading_report_dir(bundle, runs.get(agent, {}), row['instance_id'])
+    metrics = getattr(usage, 'usage_' + ('cook' if agent == 'cook-main' else agent))(directory / 'stdout.json')
+    return dict(seed=json.loads((bundle / 'selection.json').read_text())['seed'],
+                level=row['level'], instance_id=row['instance_id'], agent=agent,
+                state='complete' if patch is not None and (directory / 'exit-code.txt').exists() else 'failed',
+                label=grade_label(patch, report_dir, row['instance_id'], no_grade),
+                exit_code=number('exit-code.txt', int), grade_exit_code=number('grade-exit-code.txt', int),
+                wall_seconds=number('elapsed-seconds.txt', float), calls=metrics['calls'], tools=metrics['tools'],
+                input=metrics['input'], output=metrics['output'], cache_read=metrics['read'], cache_write=metrics['write'])
+
+
+def render_batch_report(bundle, agents, model, no_grade):
+    config = json.loads((bundle / 'config.json').read_text())
+    usage = load_summarizer()
+    tasks = {}
+    seeds = {}
+    for seed in config['seeds']:
+        directory = bundle / f'seed-{seed}'
+        selection = json.loads((directory / 'selection.json').read_text())
+        summaries = [task_summary(directory, row, agent, no_grade, usage)
+                     for row in selection['instances'] for agent in agents]
+        for task in summaries:
+            tasks[f"{seed}:{task['level']}:{task['agent']}"] = task
+        seeds[str(seed)] = dict(state='complete' if all(t['state']=='complete' for t in summaries) else 'failed',
+                                attempted=len(summaries), resolved=sum(t['label']=='resolved' for t in summaries))
+    rows = list(tasks.values())
+    import datetime
+    finished = datetime.datetime.now(datetime.timezone.utc)
+    config['finished_at_utc'] = finished.isoformat()
+    config['wall_seconds'] = (finished - datetime.datetime.fromisoformat(config['started_at_utc'])).total_seconds()
+    summary = dict(attempted=len(rows), resolved=sum(t['label']=='resolved' for t in rows),
+                   runner_failures=sum(t['state']=='failed' or t['grade_exit_code'] not in (None, 0) for t in rows),
+                   grade_errors=sum(t['label']=='error' for t in rows))
+    (bundle / 'run-status.json').write_text(json.dumps(dict(config=config, tasks=tasks, seeds=seeds, summary=summary), indent=2)+'\n')
+    lines = [f'# SWE-bench batch: {model}', '', f"Wire model: `{config['wire']}`",
+             f"Thinking: `{config['thinking']}`", f"Global parallel pool: `{config['parallel']}` (agent runs and grading share slots)",
+             'Seeds: `' + ', '.join(map(str, config['seeds'])) + '`',
+             f"Grading: `{'disabled' if no_grade else 'enabled'}`", '',
+             f"Resolved: **{summary['resolved']}/{summary['attempted']}** task-agent runs", '',
+             '| Agent | Resolved | Task wall s | Model calls | Tool calls | Uncached input | Output | Cache read | Cache write | Reported total tokens |',
+             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    def total(group, key):
+        values = [t[key] for t in group if t[key] is not None]
+        return str(sum(values)) + (f' ({len(values)}/{len(group)} reported)' if len(values)!=len(group) else '')
+    for agent in agents:
+        group = [t for t in rows if t['agent']==agent]
+        tokens = sum(t[key] or 0 for t in group for key in ('input','output','cache_read','cache_write'))
+        fields = [agent, f"{sum(t['label']=='resolved' for t in group)}/{len(group)}",
+                  f"{sum(t['wall_seconds'] or 0 for t in group):.2f}"]
+        fields += [total(group, key) for key in ('calls','tools','input','output','cache_read','cache_write')]
+        fields.append(str(tokens))
+        lines.append('| ' + ' | '.join(fields) + ' |')
+    lines += ['', 'Total tokens sums available uncached input, output, cache read, and cache write; missing fields make it a lower bound.',
+              'Task wall time is summed across tasks, not elapsed batch time.', '',
+              '| Seed | Level | Instance | Agent | Result | Wall s | Exit | Model calls | Tool calls | Uncached input | Output | Cache read | Detail |',
+              '| ---: | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |']
+    for task in rows:
+        values = [task[k] for k in ('seed','level','instance_id','agent','label','wall_seconds','exit_code','calls','tools','input','output','cache_read')]
+        link = f"seed-{task['seed']}/{task['level']}-{task['instance_id']}/report.md"
+        values.append(f'[task report]({link})')
+        lines.append('| ' + ' | '.join('unreported' if v is None else str(v) for v in values) + ' |')
+    lines += ['', 'Each seed has a comparison report; each task report contains the full request, usage metrics, and artifact checks.',
+              'Per-task grader logs, predictions, patches, agent output, and selections remain in this bundle.', '']
+    (bundle / 'report.md').write_text('\n'.join(lines))
+    print(bundle / 'report.md')
+
+
 def self_test():
     rows = [dict(instance_id=f'org__repo-{i}', patch=('diff --git a/x b/x\n' * (i//2+1))) for i in range(8)]
     data = build_levels(rows, 'a'*40)
@@ -252,6 +355,13 @@ def self_test():
     assert [data['levels'][k] for k in LEVELS] == [[f'org__repo-{i}' for i in range(j,j+2)] for j in range(0,8,2)]
     assert sample(data, 1) == sample(data, 1)
     assert len({r['instance_id'] for r in sample(data, 1)['instances']}) == 4
+    assert sample(data, 1)['levels'] == list(LEVELS)
+    subset = sample(data, 1, only_levels=parse_only_levels('medium,easy'))
+    assert subset['levels'] == ['easy', 'medium']
+    assert [r['level'] for r in subset['instances']] == ['easy', 'medium']
+    full = sample(data, 1)
+    assert subset['instances'] == [r for r in full['instances'] if r['level'] in ('easy', 'medium')]
+    assert parse_only_levels('easy,medium') == ('easy', 'medium')
     assert build_prompt('issue') == 'issue' + SUFFIX
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -323,6 +433,8 @@ def main():
     b.add_argument('--revision')
     s = sub.add_parser('sample')
     s.add_argument('--levels', type=Path, default=DEFAULT_LEVELS)
+    s.add_argument('--only', dest='only_levels',
+                   help='comma-separated subset of easy,medium,hard,very-hard')
     s.add_argument('--seed', type=int, default=1)
     s.add_argument('--output', type=Path)
     s.add_argument('--hydrate', action='store_true')
@@ -342,10 +454,17 @@ def main():
     p.add_argument('--agents', required=True)
     p.add_argument('--model', required=True)
     p.add_argument('--stamp', required=True)
-    p = sub.add_parser('report')
+    p.add_argument('--per-task', action='store_true')
+    for command in ('report', 'batch-report'):
+        p = sub.add_parser(command)
+        p.add_argument('--bundle', type=Path, required=True)
+        p.add_argument('--agents', required=True)
+        p.add_argument('--model', required=True)
+        p.add_argument('--no-grade', action='store_true')
+    p = sub.add_parser('result')
     p.add_argument('--bundle', type=Path, required=True)
-    p.add_argument('--agents', required=True)
-    p.add_argument('--model', required=True)
+    p.add_argument('--agent', required=True)
+    p.add_argument('--instance-id', required=True)
     p.add_argument('--no-grade', action='store_true')
     a = parser.parse_args()
     if a.self_test:
@@ -361,7 +480,8 @@ def main():
         revision = HfApi().dataset_info(DATASET, revision=a.revision).sha
         a.output.write_text(json.dumps(build_levels(load_verified(revision), revision), indent=2) + '\n')
     elif a.command == 'sample':
-        selection = sample(read_levels(a.levels), a.seed)
+        only = parse_only_levels(a.only_levels) if a.only_levels else None
+        selection = sample(read_levels(a.levels), a.seed, only_levels=only)
         if a.hydrate:
             wanted = {r['instance_id'] for r in selection['instances']}
             rows = {r['instance_id']: {k: r[k] for k in ('instance_id', 'repo', 'base_commit', 'problem_statement')} for r in load_verified(selection['revision']) if r['instance_id'] in wanted}
@@ -387,6 +507,9 @@ def main():
         for agent in a.agents.split(','):
             name = a.model + '/' + agent
             runs[agent] = dict(run_id=f'cook-swe-{a.stamp}-{agent}', model_name_or_path=name)
+            if a.per_task:
+                runs[agent]['instances'] = {row['instance_id']: dict(run_id=f"cook-swe-{a.stamp}-{agent}-{row['instance_id']}",
+                                           model_name_or_path=name) for row in selection['instances']}
             with (a.bundle / 'predictions' / f'{agent}.jsonl').open('w') as f:
                 for row in selection['instances']:
                     path = a.bundle / f"{row['level']}-{row['instance_id']}" / agent / 'patch.diff'
@@ -395,6 +518,16 @@ def main():
         (a.bundle / 'grading.json').write_text(json.dumps(runs, indent=2) + '\n')
     elif a.command == 'report':
         render_report(a.bundle, a.agents.split(','), a.model, a.no_grade)
+    elif a.command == 'batch-report':
+        render_batch_report(a.bundle, a.agents.split(','), a.model, a.no_grade)
+    elif a.command == 'result':
+        selection = json.loads((a.bundle / 'selection.json').read_text())
+        row = next(r for r in selection['instances'] if r['instance_id']==a.instance_id)
+        task = task_summary(a.bundle, row, a.agent, a.no_grade, load_summarizer())
+        print(f"Completed seed {task['seed']}, {task['level']} ({a.agent}): {task['label']}; "
+              f"uncached input={task['input']}, output={task['output']}, cache read={task['cache_read']}")
+        if task['label']=='error' or task['state']=='failed':
+            raise SystemExit(1)
     else:
         parser.error('choose a command or --self-test')
 

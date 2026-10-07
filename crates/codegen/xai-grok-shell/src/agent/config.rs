@@ -4792,6 +4792,12 @@ pub(crate) fn stamp_session_local_sampler_fields(
         cfg.bearer_resolver = active_session_config.bearer_resolver.clone();
     }
     cfg.max_retries = max_retries;
+    // A routed aux model on OpenCode needs the conversation's id too; keyed on its own base_url.
+    let session_key = cfg
+        .conversation_group_id
+        .as_ref()
+        .map(std::string::ToString::to_string);
+    inject_opencode_session_header(&mut cfg.extra_headers, &cfg.base_url, session_key.as_deref());
 }
 /// Finalize the image-describe model and sampler config for user attachments. Shared so the aux resolve happy path and the `None` fallback cannot diverge between those entry points.
 /// On aux resolve `Some`, stamp session-local fields onto the helper config. On `None`, fall back to the active session model and full config.
@@ -4975,6 +4981,29 @@ pub(crate) fn inject_url_derived_headers(
         .entry(crate::http::CLIENT_MODE_HEADER.to_string())
         .or_insert_with(|| crate::http::process_client_mode().to_string());
     let _ = (alpha_test_key, base_url);
+}
+/// Conversation id OpenCode Go reads to route and cache a conversation's requests.
+/// Its docs ask for "a stable session ID in x-opencode-session for each conversation"; a request
+/// without it is rejected with `400 MissingSessionID`.
+pub(crate) const OPENCODE_SESSION_HEADER: &str = "x-opencode-session";
+/// Fold the conversation's OpenCode session id into `extra_headers`.
+/// The value must not change between requests of one conversation, or routing and prompt caching
+/// lose their anchor, so callers pass the conversation group id. A value the user typed in the
+/// provider's headers wins.
+pub(crate) fn inject_opencode_session_header(
+    headers: &mut IndexMap<String, String>,
+    base_url: &str,
+    session_key: Option<&str>,
+) {
+    let Some(key) = session_key.filter(|key| !key.is_empty()) else {
+        return;
+    };
+    if !crate::util::is_opencode_url(base_url) {
+        return;
+    }
+    headers
+        .entry(OPENCODE_SESSION_HEADER.to_string())
+        .or_insert_with(|| key.to_string());
 }
 fn resolve_hidden_default_web_search_sampling_config(
     model_id: &str,

@@ -2165,6 +2165,33 @@ async fn read_parent_sampling_config_keeps_catalog_threshold_when_routing_slug_i
     assert_eq!(config.rate_limit_retry_threshold, Some(6));
     assert_eq!(config.conversation_group_id, Some(expected_group));
 }
+/// The child talks to the same OpenCode session as its parent, so its requests must carry the
+/// conversation's id rather than one derived from the child session.
+#[tokio::test]
+async fn read_parent_sampling_config_gives_the_child_the_conversations_opencode_session_id() {
+    let mut models = indexmap::IndexMap::new();
+    models.insert("auto".to_string(), test_model_entry("grok-4.5"));
+    let ctx = ctx_with_parent_chat_state("auto", "grok-4.5", "composer-2-fast", models);
+    let expected_group = crate::sampling::derive_conversation_group_id(&ctx.parent_session_id);
+    let mut parent_config = ctx
+        .parent_chat_state
+        .as_ref()
+        .unwrap()
+        .get_sampling_config()
+        .await
+        .unwrap();
+    parent_config.base_url = "https://opencode.ai/zen/go/v1".to_owned();
+    parent_config.conversation_group_id = Some(expected_group.clone());
+    ctx.parent_chat_state.as_ref().unwrap().update_sampling_config(parent_config);
+    let (config, _) = read_parent_sampling_config(&ctx).await;
+    assert_eq!(
+        config
+            .extra_headers
+            .get(crate::agent::config::OPENCODE_SESSION_HEADER)
+            .map(String::as_str),
+        Some(expected_group.as_ref())
+    );
+}
 /// Also pins the per-route fields the inherit path derives from the parent's base URL
 /// (`extra_response_includes`, `request_compression`), which a `Default::default()` would silently drop.
 #[tokio::test]

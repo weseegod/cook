@@ -223,6 +223,7 @@ impl From<BashInput> for ToolInput {
             description: value.description,
             is_background: false,
             block_until_ms: None,
+            workdir: value.workdir,
         })
     }
 }
@@ -385,6 +386,7 @@ impl xai_tool_runtime::Tool for BashTool {
 
         // --- Foreground execution ---
         let request = TerminalRunRequest {
+            tail_only: false,
             command: input.command.clone(),
             working_directory: cwd.clone(),
             env,

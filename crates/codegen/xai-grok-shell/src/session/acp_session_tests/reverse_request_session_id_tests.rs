@@ -38,7 +38,9 @@ fn exit_plan_mode_request_carries_session_id() {
     assert_eq!(json.get("sessionId"), Some(&serde_json::json!("sess-xyz")));
     assert_eq!(
         json.get("planFilePath"),
-        Some(&serde_json::json!("/sessions/sess-xyz/plans/2026-09-19T14-30-22Z.md"))
+        Some(&serde_json::json!(
+            "/sessions/sess-xyz/plans/2026-09-19T14-30-22Z.md"
+        ))
     );
     assert!(
         json.get("sessionId")

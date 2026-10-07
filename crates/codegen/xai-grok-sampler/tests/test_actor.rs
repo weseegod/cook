@@ -18,12 +18,12 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use xai_grok_sampler::{
-    ApiBackend, RequestId, RetryPolicy, SamplerActor, SamplerConfig, SamplingChannel,
-    SamplingErrorKind, SamplingEvent, StripReason,
+    ApiBackend, REASONING_ONLY_RETRY_REMINDER, RequestId, RetryPolicy, SamplerActor, SamplerConfig,
+    SamplingChannel, SamplingErrorKind, SamplingEvent, StripReason,
 };
 use xai_grok_sampling_types::{
-    ConversationItem, ConversationRequest, DoomLoopRecoveryPolicy, INVALID_IMAGE_ERROR_CODE,
-    StopReason, SyntheticReason, UserItem,
+    ConversationItem, ConversationRequest, DoomLoopRecoveryPolicy, EmptyReason,
+    INVALID_IMAGE_ERROR_CODE, StopReason, SyntheticReason, UserItem,
 };
 use xai_grok_test_support::{SseEvent, sse};
 
@@ -1555,6 +1555,60 @@ async fn responses_doom_loop_does_not_resample_after_output_when_retry_only_befo
     );
 }
 
+/// Responses API zero-arg tool call: `function_call` on `output_item.added`, no arguments delta.
+/// Index 2 is `response.completed`; the actor test rewrites that frame.
+/// The shared helper left `xai-grok-test-support` in the monorepo sync and this call site remained.
+fn responses_api_zero_arg_tool_call_events(
+    call_id: &str,
+    name: &str,
+    model: &str,
+) -> Vec<SseEvent> {
+    vec![
+        SseEvent::data(
+            json!({
+                "type": "response.created",
+                "sequence_number": 0,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "in_progress", "output": []
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {
+                    "type": "function_call", "call_id": call_id, "name": name, "arguments": ""
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data(
+            json!({
+                "type": "response.completed",
+                "sequence_number": 2,
+                "response": {
+                    "id": "resp_test", "object": "response", "created_at": 1234567890,
+                    "model": model, "status": "completed",
+                    "output": [{
+                        "type": "function_call", "call_id": call_id, "name": name, "arguments": ""
+                    }],
+                    "usage": {
+                        "input_tokens": 10, "output_tokens": 1, "total_tokens": 11,
+                        "input_tokens_details": { "cached_tokens": 0 },
+                        "output_tokens_details": { "reasoning_tokens": 0 }
+                    }
+                }
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ]
+}
+
 /// A completed tool item omitted from the terminal Response must reach the actor once, without
 /// triggering an empty-response retry on a normal Responses backend.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1568,7 +1622,7 @@ async fn responses_completed_item_empty_terminal_executes_once_without_retry() {
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
                 let mut frames =
-                    sse::responses_api_zero_arg_tool_call_events("call_ping", "ping", "model");
+                    responses_api_zero_arg_tool_call_events("call_ping", "ping", "model");
                 let mut terminal: serde_json::Value =
                     serde_json::from_str(&frames[2].data).unwrap();
                 terminal["response"]["output"] = json!([]);
@@ -1639,13 +1693,14 @@ async fn responses_streamed_text_empty_terminal_completes_without_retry() {
             let counter = Arc::clone(&counter_handler);
             async move {
                 counter.fetch_add(1, Ordering::SeqCst);
-                let events = sse_events_to_axum(sse::responses_api_streamed_text_empty_terminal_events(
-                    &[
-                        "Hi! How can I help you today?",
-                        "Hi! What would you like to work on?",
-                    ],
-                    "gpt-5.6-luna",
-                ));
+                let events =
+                    sse_events_to_axum(sse::responses_api_streamed_text_empty_terminal_events(
+                        &[
+                            "Hi! How can I help you today?",
+                            "Hi! What would you like to work on?",
+                        ],
+                        "gpt-5.6-luna",
+                    ));
                 Sse::new(stream::iter(
                     events.into_iter().map(Ok::<_, std::convert::Infallible>),
                 ))
@@ -1660,7 +1715,10 @@ async fn responses_streamed_text_empty_terminal_completes_without_retry() {
         event_tx,
     );
 
-    handle.submit(RequestId::from("req-luna-empty-terminal"), user_request("hi"));
+    handle.submit(
+        RequestId::from("req-luna-empty-terminal"),
+        user_request("hi"),
+    );
     let events = drain_until_terminal(&mut event_rx, Duration::from_secs(10)).await;
     server.shutdown();
 
@@ -1704,6 +1762,243 @@ async fn responses_streamed_text_empty_terminal_completes_without_retry() {
         1,
         "exactly one sample attempt"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Reasoning-only: one guided resample. No-content stays on the transport ladder.
+// ---------------------------------------------------------------------------
+
+const REASONING_ONLY_TRACE: &str = "reasoning-trace-not-replayed";
+
+/// Chat Completions turn with `reasoning_content` and `finish_reason: stop`, and no visible text or tool call.
+fn reasoning_only_chat_events(reasoning: &str) -> Vec<Event> {
+    sse_events_to_axum(vec![
+        SseEvent::data(
+            json!({
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1234567890,
+                "model": "test-model",
+                "choices": [{
+                    "index": 0,
+                    "delta": { "role": "assistant", "reasoning_content": reasoning },
+                    "finish_reason": "stop"
+                }]
+            })
+            .to_string(),
+        ),
+        SseEvent::data("[DONE]"),
+    ])
+}
+
+async fn submit_scripted_chat(
+    max_retries: u32,
+    request_id: &str,
+    respond: Arc<dyn Fn(u32) -> Vec<Event> + Send + Sync>,
+) -> (Vec<String>, Vec<SamplingEvent>, u32) {
+    let counter = Arc::new(AtomicU32::new(0));
+    let counter_handler = Arc::clone(&counter);
+    let bodies = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let bodies_handler = Arc::clone(&bodies);
+    let respond_handler = Arc::clone(&respond);
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |body: String| {
+            let counter = Arc::clone(&counter_handler);
+            let bodies = Arc::clone(&bodies_handler);
+            let respond = Arc::clone(&respond_handler);
+            async move {
+                bodies.lock().unwrap().push(body);
+                let attempt = counter.fetch_add(1, Ordering::SeqCst);
+                let events = respond(attempt);
+                Sse::new(stream::iter(
+                    events.into_iter().map(Ok::<_, std::convert::Infallible>),
+                ))
+            }
+        }),
+    );
+    let server = MockServer::spawn(app).await;
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    let mut cfg = test_config(server.base_url(), "test-model");
+    cfg.max_retries = Some(max_retries);
+    let handle = SamplerActor::spawn(cfg, RetryPolicy::default(), event_tx);
+    handle.submit(RequestId::from(request_id), user_request("hi"));
+    let events = drain_until_terminal(&mut event_rx, Duration::from_secs(20)).await;
+    server.shutdown();
+    let hits = counter.load(Ordering::SeqCst);
+    let bodies = bodies.lock().unwrap().clone();
+    (bodies, events, hits)
+}
+
+fn assert_failed_empty(events: &[SamplingEvent], reason: EmptyReason) {
+    match events.last() {
+        Some(SamplingEvent::Failed { error, .. }) => {
+            assert_eq!(error.kind, SamplingErrorKind::EmptyResponse);
+            assert_eq!(
+                error.empty_response_context.as_ref().map(|ctx| ctx.reason),
+                Some(reason),
+                "failed empty context: {error:?}"
+            );
+        }
+        other => panic!("expected Failed({reason:?}), got {other:?}"),
+    }
+}
+
+fn assert_one_guided_retry(events: &[SamplingEvent]) {
+    let retries: Vec<_> = events
+        .iter()
+        .filter(|event| matches!(event, SamplingEvent::Retrying { .. }))
+        .collect();
+    assert_eq!(
+        retries.len(),
+        1,
+        "expected exactly one Retrying: {events:?}"
+    );
+    match retries[0] {
+        SamplingEvent::Retrying {
+            attempt,
+            max_retries,
+            ..
+        } => {
+            assert_eq!(*attempt, 1);
+            assert_eq!(*max_retries, 1);
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn assert_reminder_on_second_body_only(bodies: &[String]) {
+    assert_eq!(bodies.len(), 2);
+    assert!(
+        !bodies[0].contains(REASONING_ONLY_RETRY_REMINDER),
+        "the first request must not carry the reminder"
+    );
+    assert!(
+        bodies[1].contains(REASONING_ONLY_RETRY_REMINDER),
+        "the resample body must contain the reminder verbatim: {}",
+        bodies[1]
+    );
+    assert_eq!(
+        bodies[1].matches(REASONING_ONLY_RETRY_REMINDER).count(),
+        1,
+        "the reminder is appended once"
+    );
+    assert!(
+        !bodies[1].contains(REASONING_ONLY_TRACE),
+        "the resample must not replay the first sample's reasoning: {}",
+        bodies[1]
+    );
+}
+
+/// `max_retries` above 2 still resamples a reasoning-only sample only once, then fails.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_only_resamples_once_then_fails() {
+    let (bodies, events, hits) = submit_scripted_chat(
+        6,
+        "req-reasoning-only-fail",
+        Arc::new(|_| reasoning_only_chat_events(REASONING_ONLY_TRACE)),
+    )
+    .await;
+
+    assert_eq!(hits, 2, "one guided resample, then fail");
+    assert_reminder_on_second_body_only(&bodies);
+    assert_one_guided_retry(&events);
+    assert_failed_empty(&events, EmptyReason::ReasoningOnly);
+}
+
+/// The same reasoning-only first sample succeeds when the resample returns visible text.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_only_resample_completes_with_visible_text() {
+    let (bodies, events, hits) = submit_scripted_chat(
+        6,
+        "req-reasoning-only-ok",
+        Arc::new(|attempt| {
+            if attempt == 0 {
+                reasoning_only_chat_events(REASONING_ONLY_TRACE)
+            } else {
+                sse::chat_completion_events("visible answer", "test-model")
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(hits, 2);
+    assert_reminder_on_second_body_only(&bodies);
+    assert_one_guided_retry(&events);
+    match events.last() {
+        Some(SamplingEvent::Completed { response, .. }) => {
+            assert_eq!(
+                response
+                    .assistant()
+                    .map(|assistant| assistant.content.as_ref()),
+                Some("visible answer")
+            );
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
+}
+
+/// A retry budget of 0 or 1 has no extra attempt, so the reminder never reaches the wire.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_only_max_retries_zero_or_one_fails_without_reminder() {
+    for max_retries in [0, 1] {
+        let (bodies, events, hits) = submit_scripted_chat(
+            max_retries,
+            "req-reasoning-only-budget",
+            Arc::new(|_| reasoning_only_chat_events(REASONING_ONLY_TRACE)),
+        )
+        .await;
+
+        assert_eq!(hits, 1, "max_retries={max_retries} must not resample");
+        assert_eq!(bodies.len(), 1);
+        assert!(
+            !bodies[0].contains(REASONING_ONLY_RETRY_REMINDER),
+            "max_retries={max_retries} must not put the reminder on the wire"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SamplingEvent::Retrying { .. })),
+            "max_retries={max_retries} must not emit Retrying: {events:?}"
+        );
+        assert_failed_empty(&events, EmptyReason::ReasoningOnly);
+    }
+}
+
+/// A finished sample with no content and no reasoning keeps the transport retry and the original body.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_visible_content_keeps_transport_retry_without_reasoning_reminder() {
+    let (bodies, events, hits) = submit_scripted_chat(
+        2,
+        "req-no-visible-content",
+        Arc::new(|_| sse_events_to_axum(sse::chat_completions_no_content_events("test-model"))),
+    )
+    .await;
+
+    assert_eq!(hits, 2, "empty content still takes the one transport retry");
+    assert!(
+        bodies
+            .iter()
+            .all(|body| !body.contains(REASONING_ONLY_RETRY_REMINDER)),
+        "transport retry must not attach the reasoning-only reminder: {bodies:?}"
+    );
+    let retries: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            SamplingEvent::Retrying {
+                attempt,
+                max_retries,
+                ..
+            } => Some((*attempt, *max_retries)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        retries,
+        vec![(1, 2)],
+        "transport ladder, not the guided resample: {events:?}"
+    );
+    assert_failed_empty(&events, EmptyReason::NoVisibleContent);
 }
 
 // ---------------------------------------------------------------------------

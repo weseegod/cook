@@ -143,6 +143,8 @@ pub struct TerminalRunRequest {
     pub owner_session_id: Option<String>,
     /// Model-supplied label for task UI / snapshots.
     pub description: Option<String>,
+    /// When true, over-budget captured output keeps the tail only. The output file is unchanged.
+    pub tail_only: bool,
 }
 
 /// Distinguishes different types of background tasks.
