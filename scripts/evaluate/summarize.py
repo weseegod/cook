@@ -95,13 +95,25 @@ def usage_opencode(path):
     tokens = [s.get("tokens", {}) for s in steps if isinstance(s, dict)]
     token = lambda key: total(t.get(key) for t in tokens if isinstance(t, dict))
     cache = [t.get("cache", {}) for t in tokens if isinstance(t, dict)]
+    # OpenCode reports completion as separate visible `output` and `reasoning`
+    # fields. Cook's `output_tokens` already includes reasoning, so fold both
+    # into output for an apples-to-apples comparison.
+    def completion(entry):
+        if not isinstance(entry, dict):
+            return None
+        visible = number(entry.get("output"))
+        reasoning = number(entry.get("reasoning"))
+        if visible is None and reasoning is None:
+            return None
+        return (visible or 0) + (reasoning or 0)
     tool_ids = set()
     for row in rows:
         part = row.get("part") or {}
         if row.get("type") == "tool_use" or isinstance(part, dict) and part.get("type") == "tool":
             tool_ids.add(part.get("id") or part.get("callID") or json.dumps(part, sort_keys=True))
     return dict(calls=len(steps), tools=len(tool_ids), input=token("input"),
-                output=token("output"), read=total(c.get("read") for c in cache if isinstance(c, dict)),
+                output=total(completion(t) for t in tokens),
+                read=total(c.get("read") for c in cache if isinstance(c, dict)),
                 write=total(c.get("write") for c in cache if isinstance(c, dict)))
 
 
@@ -276,6 +288,10 @@ def self_test():
                       + json.dumps({"type": "tool_use", "part": {"id": "call-1"}}) + "\n")
         assert usage_opencode(oc)["read"] == 0 and usage_opencode(oc)["write"] is None
         assert usage_opencode(oc)["tools"] == 1
+        assert usage_opencode(oc)["output"] == 4
+        oc.write_text(json.dumps({"type": "step_finish", "part": {
+            "tokens": {"input": 3, "output": 4, "reasoning": 5, "cache": {"read": 0}}}}) + "\n")
+        assert usage_opencode(oc)["output"] == 9
         pi = root / "pi.jsonl"
         pi.write_text(json.dumps({"type": "message_end", "message": {"role": "assistant", "usage": {"input": 3, "output": 4}}}) + "\n")
         assert usage_pi(pi)["read"] is None
