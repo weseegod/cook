@@ -23,6 +23,9 @@ const COMMIT_SUBAGENT_TYPE: &str = "general-purpose";
 /// Label shown in the pager's subagent strip.
 const COMMIT_SUBAGENT_DESCRIPTION: &str = "commit";
 
+/// Reasoning effort for the commit child: committing needs no deep reasoning.
+const COMMIT_SUBAGENT_REASONING_EFFORT: &str = "low";
+
 /// Wall-clock budget for each host-side git probe.
 const COMMIT_GIT_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -290,7 +293,9 @@ pub(crate) fn build_commit_child_prompt(
 }
 
 /// The subagent request the commit flow sends: a fresh child with write and execute capability,
-/// never a fork of the parent conversation.
+/// never a fork of the parent conversation. `/commit` and `/commit-and-push` are mechanical, so
+/// the child runs at low reasoning effort; the spawn gate drops the override for a model without
+/// reasoning-effort support and clamps it to the model default when `low` is not offered.
 pub(crate) fn commit_subagent_request(
     prompt: String,
     parent_session_id: String,
@@ -308,6 +313,7 @@ pub(crate) fn commit_subagent_request(
         cwd,
         runtime_overrides: SubagentRuntimeOverrides {
             capability_mode: Some(xai_tool_types::SubagentCapabilityMode::All),
+            reasoning_effort: Some(COMMIT_SUBAGENT_REASONING_EFFORT.to_string()),
             ..Default::default()
         },
         run_in_background: false,
@@ -695,6 +701,11 @@ mod tests {
         assert_eq!(
             request.runtime_overrides.capability_mode,
             Some(xai_tool_types::SubagentCapabilityMode::All)
+        );
+        assert_eq!(
+            request.runtime_overrides.reasoning_effort.as_deref(),
+            Some("low"),
+            "the commit child must not inherit the session's reasoning effort"
         );
         assert_eq!(request.subagent_type, "general-purpose");
     }

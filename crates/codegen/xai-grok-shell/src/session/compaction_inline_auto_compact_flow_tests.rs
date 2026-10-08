@@ -2254,3 +2254,120 @@ async fn get_transcript_path_returns_some_when_file_exists() {
         })
         .await;
 }
+
+/// `/compact` samples its summary at low reasoning effort, while automatic compaction keeps the
+/// session's effort. The summarizer model advertises effort support, so the override applies.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compact_samples_at_low_effort_and_auto_keeps_the_session_effort() {
+    use crate::agent::config::{EndpointsConfig, ModelEntry};
+    use xai_grok_sampling_types::ReasoningEffort;
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let actor =
+                Arc::new(create_test_actor(50_000, 200_000, 85, gateway_tx, persistence_tx).await);
+            let mut entry = ModelEntry::fallback("test", &EndpointsConfig::default());
+            entry.info.supports_reasoning_effort = true;
+            actor.models_manager.insert_test_entry("test", entry);
+            let (base_url, requests) = spawn_capturing_status_body_server(
+                400,
+                r#"{"error":{"type":"invalid_request_error","message":"bad schema"}}"#,
+            )
+            .await;
+            let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            cfg.base_url = base_url;
+            cfg.reasoning_effort = Some(ReasoningEffort::High);
+            actor.chat_state_handle.update_sampling_config(cfg);
+            actor.chat_state_handle.replace_conversation(vec![
+                ConversationItem::system("sys"),
+                ConversationItem::user("hello"),
+            ]);
+
+            actor
+                .run_compact()
+                .await
+                .expect_err("mock 400 must fail the manual compaction");
+            let manual = requests.lock().unwrap().clone();
+            assert!(
+                !manual.is_empty(),
+                "the manual compaction must reach the request stage"
+            );
+            for body in &manual {
+                assert!(
+                    body.contains(r#""reasoning_effort":"low""#),
+                    "manual /compact must sample at low effort: {body}"
+                );
+            }
+
+            requests.lock().unwrap().clear();
+            actor
+                .run_compact_only(
+                    AutoCompactTriggerInfo {
+                        tokens_used: 180_000,
+                        context_window: 200_000,
+                        percentage: 90,
+                        reason_override: None,
+                    },
+                    false,
+                )
+                .await
+                .expect_err("mock 400 must fail auto-compaction");
+            let auto = requests.lock().unwrap().clone();
+            assert!(
+                !auto.is_empty(),
+                "auto-compaction must reach the request stage"
+            );
+            for body in &auto {
+                assert!(
+                    body.contains(r#""reasoning_effort":"high""#),
+                    "auto-compaction must keep the session effort: {body}"
+                );
+            }
+        })
+        .await;
+}
+
+/// A model without reasoning-effort support keeps its config untouched, so `/compact` adds no
+/// effort field the endpoint would reject.
+#[tokio::test(flavor = "current_thread")]
+async fn manual_compact_skips_the_effort_override_without_model_support() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) = mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel();
+            let actor =
+                Arc::new(create_test_actor(50_000, 200_000, 85, gateway_tx, persistence_tx).await);
+            let (base_url, requests) = spawn_capturing_status_body_server(
+                400,
+                r#"{"error":{"type":"invalid_request_error","message":"bad schema"}}"#,
+            )
+            .await;
+            let mut cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            cfg.base_url = base_url;
+            actor.chat_state_handle.update_sampling_config(cfg);
+            actor.chat_state_handle.replace_conversation(vec![
+                ConversationItem::system("sys"),
+                ConversationItem::user("hello"),
+            ]);
+
+            actor
+                .run_compact()
+                .await
+                .expect_err("mock 400 must fail the manual compaction");
+            let bodies = requests.lock().unwrap().clone();
+            assert!(
+                !bodies.is_empty(),
+                "the manual compaction must reach the request stage"
+            );
+            for body in &bodies {
+                assert!(
+                    !body.contains("reasoning_effort"),
+                    "a model without effort support must receive no effort field: {body}"
+                );
+            }
+        })
+        .await;
+}

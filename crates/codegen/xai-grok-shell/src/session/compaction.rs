@@ -29,7 +29,7 @@ use xai_chat_state::compaction_utils::{
     prepare_conversation_for_verbatim_summarization, sanitize_compacted_history,
     validate_compacted_history,
 };
-use xai_grok_sampling_types::{ApiBackend, ConversationItem};
+use xai_grok_sampling_types::{ApiBackend, ConversationItem, ReasoningEffort};
 /// Prefix on the early-guard failure payloads below; the user-facing normalizer strips it (the renderer prepends its own headline).
 const COMPACTION_FAILED_GUARD_PREFIX: &str = "Compaction failed: ";
 /// Human-readable "next fire" for a scheduled loop in the compaction reminder.
@@ -134,6 +134,16 @@ pub(crate) fn verbatim_plan_on_compact(
     matches!(trigger, xai_grok_telemetry::events::CompactionTrigger::Auto)
 }
 
+/// The effort a compaction pass samples at. `/compact` summarizes the history mechanically, so the
+/// command runs it at low effort; automatic compaction keeps the session's effort. The model's
+/// advertised support still gates the value in `prepare_compaction_sampling`.
+fn compaction_effort_override(
+    trigger: xai_grok_telemetry::events::CompactionTrigger,
+) -> Option<ReasoningEffort> {
+    matches!(trigger, xai_grok_telemetry::events::CompactionTrigger::Manual)
+        .then_some(ReasoningEffort::Low)
+}
+
 impl SessionActor {
     /// Two-pass is active for this session when the flag resolved on at build and the agent is not one that keeps its single short self-summary.
     pub(crate) fn two_pass_active(&self) -> bool {
@@ -149,8 +159,12 @@ impl SessionActor {
         &self,
         history: Vec<ConversationItem>,
         purpose: xai_chat_state::CallPurpose,
+        effort_override: Option<ReasoningEffort>,
     ) -> Option<CompactOutput> {
-        let (client, sampling_config) = match self.prepare_compaction_sampling(false).await {
+        let (client, sampling_config) = match self
+            .prepare_compaction_sampling(false, effort_override)
+            .await
+        {
             Ok(pair) => pair,
             Err(e) => {
                 tracing::warn!(error = %e, "two_pass: failed to prepare sampling client");
@@ -309,8 +323,13 @@ impl SessionActor {
         let prompt = build_compaction_prompt(None, false);
         let pass1_history = build_two_pass_pass1_history(&prefix_prepared, &prompt);
         let started = std::time::Instant::now();
+        // Prefire runs before any command arrives, so it keeps the session effort.
         let out = self
-            .two_pass_sample(pass1_history, xai_chat_state::CallPurpose::CompactPass1)
+            .two_pass_sample(
+                pass1_history,
+                xai_chat_state::CallPurpose::CompactPass1,
+                None,
+            )
             .await;
         let pass1_latency_ms = started.elapsed().as_millis() as u64;
         let attempted = |outcome: PrefireOutcome, note1_chars: Option<usize>| PrefirePass1Run {
@@ -354,6 +373,7 @@ impl SessionActor {
         &self,
         user_context: Option<&str>,
         strips_reasoning: bool,
+        effort_override: Option<ReasoningEffort>,
     ) -> Option<CompactOutput> {
         if !self.two_pass_active() {
             return None;
@@ -408,7 +428,11 @@ impl SessionActor {
             build_two_pass_pass2_history(prefix, &prepared_tail, &cache.note1, &prompt);
         let started = std::time::Instant::now();
         let mut out = self
-            .two_pass_sample(pass2_history, xai_chat_state::CallPurpose::CompactPass2)
+            .two_pass_sample(
+                pass2_history,
+                xai_chat_state::CallPurpose::CompactPass2,
+                effort_override,
+            )
             .await?;
         if is_degenerate_summary(&out.content) {
             tracing::Span::current().record("compaction_prefire_stale", true);
@@ -974,6 +998,7 @@ impl SessionActor {
     ) -> Result<(), acp::Error> {
         let (cancel, _cancel_scope) = self.compaction.cancel.enter();
         let tokens_before = self.chat_state_handle.get_total_tokens().await;
+        let effort_override = compaction_effort_override(trigger);
         tracing::Span::current().record("compaction_tokens_before", tokens_before as i64);
         self.signals_handle().record_compaction(tokens_before);
         let trigger_str = match trigger {
@@ -1113,7 +1138,9 @@ impl SessionActor {
                 "{COMPACTION_FAILED_GUARD_PREFIX}no system message in simplified conversation"
             )));
         }
-        let (sampling_client, sampling_config) = match self.prepare_compaction_sampling(false).await
+        let (sampling_client, sampling_config) = match self
+            .prepare_compaction_sampling(false, effort_override)
+            .await
         {
             Ok(pair) => pair,
             Err(e) => return Err(e),
@@ -1215,7 +1242,11 @@ impl SessionActor {
         let mut request_turns = simplified_messages.clone();
         let mut input_overflow_rejections: u32 = 0;
         let two_pass_output = self
-            .try_two_pass_pass2_apply(user_context.as_deref(), summary_strips_reasoning)
+            .try_two_pass_pass2_apply(
+                user_context.as_deref(),
+                summary_strips_reasoning,
+                effort_override,
+            )
             .await;
         let two_pass_used = two_pass_output.is_some();
         let mut compact_summary: Option<String> =
@@ -2594,5 +2625,25 @@ mod verbatim_plan_on_compact_tests {
     #[test]
     fn manual_compact_does_not_reattach_the_plan() {
         assert!(!verbatim_plan_on_compact(CompactionTrigger::Manual));
+    }
+}
+
+#[cfg(test)]
+mod compaction_effort_override_tests {
+    use super::compaction_effort_override;
+    use xai_grok_sampling_types::ReasoningEffort;
+    use xai_grok_telemetry::events::CompactionTrigger;
+
+    #[test]
+    fn manual_compact_samples_at_low_effort() {
+        assert_eq!(
+            compaction_effort_override(CompactionTrigger::Manual),
+            Some(ReasoningEffort::Low)
+        );
+    }
+
+    #[test]
+    fn auto_compact_keeps_the_session_effort() {
+        assert_eq!(compaction_effort_override(CompactionTrigger::Auto), None);
     }
 }

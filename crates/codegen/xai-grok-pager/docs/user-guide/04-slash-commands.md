@@ -47,6 +47,8 @@ Compress conversation history to reclaim context-window space. Pass a note to te
 
 Cook also auto-compacts once the context window hits 85% (tune it with `[session] auto_compact_threshold_percent`).
 
+The summary is sampled at low reasoning effort, because compacting is mechanical. A model that does not offer `low` keeps its own default effort, and one without reasoning-effort support receives no effort field. Automatic compaction keeps the session's effort.
+
 ### `/context`
 
 Show the context window split into System prompt, Messages, Reasoning/overhead, and Free.
@@ -320,7 +322,7 @@ Commit the current changes with a message Cook writes from the conversation so f
 /commit --push
 ```
 
-The message follows the style of recent history (`git log -5 --oneline`), so conventional-commit prefixes are used only when the log already uses them. An optional argument steers the subject; when it already reads as a complete subject line it is used as-is. `--push` is shorthand for `/commit-and-push`.
+The message follows the style of recent history (`git log -5 --oneline`), so conventional-commit prefixes are used only when the log already uses them. An optional argument steers the subject; when it already reads as a complete subject line it is used as-is. `--push` is shorthand for `/commit-and-push`. The commit runs in an isolated child session at low reasoning effort, since writing the commit needs no deep reasoning; a model that does not offer `low` keeps its own default effort.
 
 Cook probes the tree with `git status --porcelain` and `git diff --stat HEAD` rather than reading every diff again, stages the changes that belong in the commit, and leaves secrets, dependencies, and build output out of it. Nothing staged or modified reports "nothing to commit" and stops. An in-progress merge, rebase, cherry-pick, or bisect stops the command instead of committing on top of it.
 

@@ -4,6 +4,7 @@
 use super::*;
 use crate::session::persistence::{PersistedAgent, PersistenceMsg};
 use xai_grok_login::backend::{ActiveAuthBackend, AuthBackend};
+use xai_grok_sampling_types::ReasoningEffort;
 use xai_grok_telemetry::region;
 use xai_grok_telemetry::region::Parent;
 
@@ -1043,9 +1044,14 @@ impl SessionActor {
         Ok(sampling_client)
     }
     /// Build a compaction sampler, optionally routing through `[compactions] model`.
+    ///
+    /// `effort_override` carries the manual `/compact` low-effort choice. The model's advertised
+    /// support gates it: a model without reasoning-effort support keeps its config untouched, and
+    /// one whose menu lacks the value is clamped to its advertised default.
     pub(super) async fn prepare_compaction_sampling(
         &self,
         force_http1: bool,
+        effort_override: Option<ReasoningEffort>,
     ) -> Result<
         (
             xai_grok_sampler::SamplingClient,
@@ -1064,6 +1070,7 @@ impl SessionActor {
                     Some(self.max_retries),
                 );
                 cfg.force_http1 = force_http1;
+                self.apply_compaction_effort_override(&mut cfg, effort_override);
                 let client = xai_grok_sampler::SamplingClient::new(cfg.clone())
                     .map_err(|e| self.to_acp_error(e))?;
                 return Ok((client, cfg));
@@ -1075,9 +1082,27 @@ impl SessionActor {
         }
         let mut full_config = active_session_config;
         full_config.force_http1 = force_http1;
+        self.apply_compaction_effort_override(&mut full_config, effort_override);
         let sampling_client = xai_grok_sampler::SamplingClient::new(full_config.clone())
             .map_err(|e| self.to_acp_error(e))?;
         Ok((sampling_client, full_config))
+    }
+    /// Apply a compaction-path effort override through the shared support gate.
+    /// `/compact` samples its summary at low effort; `None` leaves the resolved config alone.
+    fn apply_compaction_effort_override(
+        &self,
+        config: &mut xai_grok_sampler::SamplerConfig,
+        effort: Option<ReasoningEffort>,
+    ) {
+        let Some(effort) = effort else {
+            return;
+        };
+        self.models_manager.apply_supported_effort(
+            config,
+            Some(effort),
+            &self.session_info.id,
+            crate::sampling::EffortTarget::SummaryClient,
+        );
     }
     /// Push a fresh `SamplerConfig` into the per-session sampler actor
     /// before each turn. Mirrors `prepare_chat_completion`'s
