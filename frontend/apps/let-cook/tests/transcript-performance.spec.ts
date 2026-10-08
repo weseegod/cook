@@ -157,12 +157,15 @@ test("stays manual when a scroll lands on the tail, and resumes follow on the ne
   await page.mouse.wheel(0, -400);
   await expect.poll(() => bottomGap(page)).toBeGreaterThan(40);
 
-  // A clamped landing on the tail is still the user's own position, so follow stays off.
+  // A clamped landing on the tail is still the user's own position, so follow stays off: the tail
+  // grows away from the viewport instead of being pinned back under the wheel.
   await page.mouse.wheel(0, 4_000);
   await expect.poll(() => bottomGap(page)).toBeLessThan(12);
-  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+  await streamChunks(page, 1, "\n\nGrow the tail under the clamped landing. ");
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(20);
 
   // One more scroll-down at the tail is the overscroll gesture; follow resumes and glues the tail.
+  await page.mouse.wheel(0, 4_000);
   await page.mouse.wheel(0, 120);
   await expect(page.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
   await streamChunks(page, 6, "\n\nKeep streaming after follow resumed. ");
@@ -218,4 +221,84 @@ test("holds the position a wheel leaves mid-turn while the tail keeps streaming"
     expect(await bottomGap(page)).toBeGreaterThan(40);
   }
   await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+});
+
+test("keeps the position a scrollbar-style scroll leaves while the tail streams", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ historyUpdates, promptDelayMs: 12_000 }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+
+  await page.getByTestId("composer-input").fill("Continue the conversation");
+  await page.getByTestId("send-button").click();
+  await expect(page.locator(".message-assistant").last()).toContainText("Mock assistant reply.");
+  await streamChunks(page, 4, "\n\nGrow the tail before the user scrolls back. ");
+
+  const transcript = page.locator(".transcript");
+  // A scrollbar drag, a key, or any other driver the wheel path does not see: the pane gets no
+  // wheel/touch/pointer event on `.transcript`, so the guard has to come from the scroll event
+  // itself, and the pane must leave a position it did not write alone.
+  const parked = await transcript.evaluate((element) => {
+    element.scrollTop = Math.max(0, element.scrollTop - 1_200);
+    return element.scrollTop;
+  });
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+  await page.waitForTimeout(300);
+  const settled = await transcript.evaluate((element) => element.scrollTop);
+  const top = await topVisibleRowId(page);
+
+  await streamChunks(page, 8, "\n\nKeep streaming under the parked position ");
+  expect(settled).toBeGreaterThanOrEqual(parked - 8);
+  expect(settled).toBeLessThanOrEqual(parked + 8);
+  expect(await transcript.evaluate((element) => element.scrollTop)).toBeGreaterThanOrEqual(settled - 8);
+  expect(await transcript.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(settled + 8);
+  expect(await topVisibleRowId(page)).toBe(top);
+});
+
+test("keeps a wheel position near the tail on an idle transcript", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ historyUpdates }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+
+  const transcript = page.locator(".transcript");
+  await transcript.hover();
+  await page.mouse.wheel(0, -120);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(40);
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+
+  // No turn is running, so nothing streams; the only thing that changes is the virtualizer mounting
+  // and measuring the rows the wheel brought on screen. That measurement must not move the reader.
+  const parked = await transcript.evaluate((element) => element.scrollTop);
+  const top = await topVisibleRowId(page);
+  await page.waitForTimeout(500);
+  await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBeGreaterThanOrEqual(parked - 8);
+  expect(await transcript.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(parked + 8);
+  expect(await topVisibleRowId(page)).toBe(top);
+});
+
+test("Jump to latest reaches the tail when the click follows a drag", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ historyUpdates, promptDelayMs: 12_000 }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+
+  await page.getByTestId("composer-input").fill("Continue the conversation");
+  await page.getByTestId("send-button").click();
+  await expect(page.locator(".message-assistant").last()).toContainText("Mock assistant reply.");
+  await streamChunks(page, 4, "\n\nGrow the tail before the user scrolls back. ");
+
+  const transcript = page.locator(".transcript");
+  await transcript.hover();
+  await page.mouse.wheel(0, -150);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(40);
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+
+  // The click lands while the wheel's gesture window is still warm. It has to win: the tail belongs
+  // on screen and the button has to go, even though the commit that swaps the window changes the
+  // scroll extent under a guard that was armed for the user's drag.
+  await page.getByRole("button", { name: "Jump to latest" }).click();
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
+  await expect.poll(() => bottomGap(page)).toBeLessThan(4);
+
+  await streamChunks(page, 6, "\n\nKeep streaming after the jump landed. ");
+  await expect.poll(() => bottomGap(page)).toBeLessThan(4);
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
 });

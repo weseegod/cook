@@ -13,6 +13,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type WheelEvent as ReactWheelEvent,
 } from "react";
@@ -22,12 +23,10 @@ import { TranscriptRow } from "./transcript-row";
 import { hasContentBelow, hasResponseTopAbove, resolveFollow, responseTopIndex, stickyPromptIndex } from "./transcript-nav";
 import { isLiveTool, projectTranscript, type DisplayBlock } from "./transcript-projection";
 import {
-  captureContentAnchor,
-  contentAnchorScrollTop,
+  domAnchorScrollTop,
   estimateRowHeight,
   rowOffset,
   windowRange,
-  type ContentAnchor,
 } from "./transcript-window";
 
 const WINDOW_ESTIMATE = 72;
@@ -62,13 +61,62 @@ function cancelFrame(handle: number): void {
  * all stand aside for this window: a write over the user's own scroll is what made a live turn's
  * transcript feel like it was fighting the wheel — and the fight is invisible to `scroll` events,
  * because the event then reports the position the pane wrote instead of the one the user asked for.
+ * Wheel, touch, and pointer events arm it, and so does every scroll event the pane did not write:
+ * a scrollbar drag, a key, and a scroll started outside the pane fire none of the others.
  */
 function scrollGestureActive(gestureAt: number): boolean {
   return performance.now() - gestureAt < SCROLL_GUARD_MS;
 }
 
+/** How long after the pane's own write a scroll event still counts as the browser answering it. */
+const CLAMP_AFTER_WRITE_MS = 32;
+/** A trailing clamp lands within this many pixels of the tail the pin asked for. */
+const CLAMP_SLACK_PX = 8;
+
+/** Keys the scroller itself handles; any of them means the user is driving the viewport. */
+const SCROLL_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+]);
+
 function rowDomId(id: string): string {
   return `transcript-row-${encodeURIComponent(id)}`;
+}
+
+/**
+ * The row under the viewport top plus the box it had when the pane last read the DOM. Restoring
+ * from this keeps a reader's line still: a spacer swap or a measurement that moves the row's
+ * `offsetTop` is compensated by exactly that movement, and a row that never moves writes nothing.
+ */
+interface DomAnchor {
+  rowId: string;
+  offsetTop: number;
+}
+
+/** `.transcript-row` and the scroller share `.transcript-shell` as offsetParent, so this is one box. */
+function rowOffsetTop(transcript: HTMLElement, rowId: string): number | null {
+  for (const row of transcript.querySelectorAll<HTMLElement>("[data-transcript-row]")) {
+    if (row.getAttribute("data-transcript-row") === rowId) return row.offsetTop;
+  }
+  return null;
+}
+
+/** The mounted row whose bottom passes the viewport top, i.e. the first one on screen. */
+function captureDomAnchor(transcript: HTMLElement): DomAnchor | null {
+  const top = transcript.getBoundingClientRect().top;
+  for (const row of transcript.querySelectorAll<HTMLElement>("[data-transcript-row]")) {
+    if (row.getBoundingClientRect().bottom > top + 1) {
+      const rowId = row.getAttribute("data-transcript-row");
+      if (!rowId) continue;
+      return { rowId, offsetTop: row.offsetTop };
+    }
+  }
+  return null;
 }
 
 function isLiveDisplayBlock(block: DisplayBlock): boolean {
@@ -115,11 +163,16 @@ export function TranscriptPane({
   const followRef = useRef(true);
   /** True for one scroll event after a pin / anchor restore, so follow does not drop on our write. */
   const programmaticScrollRef = useRef(false);
-  /** When the scroller last saw a wheel/touch/pointer event. Never-reached value: no gesture yet. */
+  /** When the pane last changed `scrollTop` itself; a clamp event trails our write closely. */
+  const wroteAtRef = useRef(Number.NEGATIVE_INFINITY);
+  /** When the user last drove the scroller: wheel, touch, pointer, key, or an unwritten scroll. */
   const gestureAtRef = useRef(Number.NEGATIVE_INFINITY);
+  /** When wheel / touch / pointer / key last showed the user's own intent. */
+  const userIntentAtRef = useRef(Number.NEGATIVE_INFINITY);
   /** Tail state as of the last scroll event. The pane starts pinned to the tail. */
   const atTailRef = useRef(true);
-  const contentAnchorRef = useRef<ContentAnchor | null>(null);
+  /** The row under the viewport top and the offsets it had when the last pass read the DOM. */
+  const domAnchorRef = useRef<DomAnchor | null>(null);
   const scrollMetricsFrame = useRef<number | null>(null);
   const pendingScrollMetrics = useRef<ScrollMetrics | null>(null);
   const rowHeights = useRef(new Map<string, number>());
@@ -155,27 +208,58 @@ export function TranscriptPane({
     setFollow(enabled);
   }, []);
 
+  /** Write `scrollTop` and mark it the pane's own, so the event it fires is not read as a move. */
+  const writeScrollTop = useCallback((element: HTMLDivElement, value: number) => {
+    if (element.scrollTop === value) return;
+    programmaticScrollRef.current = true;
+    wroteAtRef.current = performance.now();
+    element.scrollTop = value;
+  }, []);
+
   /** `force` is for the deliberate paths (the jump button): a live gesture never blocks those. */
   const pinToBottom = useCallback((element: HTMLDivElement, force = false) => {
     if (!force && scrollGestureActive(gestureAtRef.current)) return;
     const target = Math.max(0, element.scrollHeight - element.clientHeight);
     if (Math.abs(element.scrollTop - target) < 1) return;
-    programmaticScrollRef.current = true;
-    element.scrollTop = target;
-  }, []);
+    writeScrollTop(element, target);
+  }, [writeScrollTop]);
 
-  const updateScrollState = useCallback((element: HTMLDivElement) => {
+  /**
+   * One scroll tick. `writtenByPane` marks a call that follows the pane's own write within the same
+   * task, so it cannot be confused with the user leaving the tail.
+   */
+  const updateScrollState = useCallback((element: HTMLDivElement, writtenByPane = false) => {
     const programmatic = programmaticScrollRef.current;
     programmaticScrollRef.current = false;
+    const tailGap = element.scrollHeight - element.scrollTop - element.clientHeight;
     const atTail = !hasContentBelow(element.scrollHeight, element.scrollTop, element.clientHeight);
     atTailRef.current = atTail;
-    setFollowMode(resolveFollow(followRef.current, { programmatic, overscroll: false, atTail }));
-    contentAnchorRef.current = captureContentAnchor(
-      projectedRef.current,
-      element.scrollTop,
-      measureHeights(projectedRef.current, rowHeights.current),
-      WINDOW_ESTIMATE,
-    );
+    // The browser answers a pin with a clamped event a few pixels off the tail (WebKit reports less
+    // than `scrollHeight - clientHeight`, then nudges). While follow is on, the event trails our
+    // write, sits within a few pixels of the tail, and no wheel, touch, pointer, or key arrived
+    // after that write, it is the tail moving under the pin rather than the user leaving it; the
+    // next pin frame closes the gap. A real gesture is newer than the write, and a real scroll
+    // leaves the last screen, so both still drop follow.
+    const trailingClamp =
+      !programmatic &&
+      !writtenByPane &&
+      followRef.current &&
+      !atTail &&
+      tailGap <= CLAMP_SLACK_PX &&
+      !scrollGestureActive(userIntentAtRef.current) &&
+      userIntentAtRef.current < wroteAtRef.current &&
+      performance.now() - wroteAtRef.current <= CLAMP_AFTER_WRITE_MS;
+    // A scroll the pane did not write is the user's own, whatever drove it: a scrollbar drag, a
+    // key, or a scroll started outside the pane fires no wheel or pointer event on this element,
+    // and writing over that position is what sent the transcript back up under the user's hand.
+    if (!programmatic && !writtenByPane && !followRef.current) gestureAtRef.current = performance.now();
+    if (trailingClamp) {
+      setFollowMode(true);
+    } else {
+      setFollowMode(resolveFollow(followRef.current, { programmatic, overscroll: false, atTail }));
+    }
+    // Reading every row's box is a layout cost, and the anchor is only consulted with follow off.
+    if (!followRef.current) domAnchorRef.current = captureDomAnchor(element);
     pendingScrollMetrics.current = {
       scrollTop: element.scrollTop,
       viewportHeight: element.clientHeight,
@@ -190,16 +274,24 @@ export function TranscriptPane({
   }, [setFollowMode]);
 
   const enableFollow = useCallback(() => {
+    // The click that lands right after a drag is still inside the guard window. Treating it as the
+    // gesture's continuation would make the layout pass skip the pin, and the window swap to the
+    // tail slice would leave the tail off screen with no later pass to bring it back. The pane owns
+    // the position from here, so a clamp that trails the pin reads as ours, not as that drag.
+    gestureAtRef.current = Number.NEGATIVE_INFINITY;
+    userIntentAtRef.current = Number.NEGATIVE_INFINITY;
     setFollowMode(true);
     const transcript = transcriptRef.current;
     if (!transcript) return;
-    contentAnchorRef.current = null;
+    domAnchorRef.current = null;
     pinToBottom(transcript, true);
-    updateScrollState(transcript);
+    updateScrollState(transcript, true);
   }, [pinToBottom, setFollowMode, updateScrollState]);
 
   const markScrollGesture = useCallback(() => {
-    gestureAtRef.current = performance.now();
+    const now = performance.now();
+    gestureAtRef.current = now;
+    userIntentAtRef.current = now;
   }, []);
 
   // `scrollend` lands when momentum stops, so the guard is not cut short mid-gesture the way a
@@ -216,6 +308,10 @@ export function TranscriptPane({
     return () => transcript.removeEventListener("scrollend", onScrollEnd);
   }, []);
 
+  const onTranscriptKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (SCROLL_KEYS.has(event.key)) markScrollGesture();
+  }, [markScrollGesture]);
+
   const onTranscriptWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
     markScrollGesture();
     // A downward wheel that found the scroller already at the tail is the native form of the TUI's
@@ -230,9 +326,9 @@ export function TranscriptPane({
     const transcript = transcriptRef.current;
     if (!transcript) return;
     const distance = Math.max(1, transcript.clientHeight - 48);
-    transcript.scrollTop += direction === "up" ? -distance : distance;
-    updateScrollState(transcript);
-  }, [updateScrollState]);
+    writeScrollTop(transcript, transcript.scrollTop + (direction === "up" ? -distance : distance));
+    updateScrollState(transcript, true);
+  }, [updateScrollState, writeScrollTop]);
 
   const observeRow = useCallback((node: HTMLDivElement | null) => {
     if (!node || typeof ResizeObserver === "undefined") return;
@@ -311,19 +407,13 @@ export function TranscriptPane({
       const current = transcriptRef.current;
       if (!current) return;
       const mounted = document.getElementById(rowDomId(row.id));
-      programmaticScrollRef.current = true;
-      current.scrollTop = mounted?.offsetTop ?? rowOffset(index, heights, WINDOW_ESTIMATE);
-      contentAnchorRef.current = captureContentAnchor(
-        projectedRef.current,
-        current.scrollTop,
-        measureHeights(projectedRef.current, rowHeights.current),
-        WINDOW_ESTIMATE,
-      );
-      updateScrollState(current);
+      writeScrollTop(current, mounted?.offsetTop ?? rowOffset(index, heights, WINDOW_ESTIMATE));
+      domAnchorRef.current = captureDomAnchor(current);
+      updateScrollState(current, true);
     };
     snap();
     scheduleFrame(snap);
-  }, [heights, projected, setFollowMode, updateScrollState]);
+  }, [heights, projected, setFollowMode, updateScrollState, writeScrollTop]);
 
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
@@ -332,7 +422,7 @@ export function TranscriptPane({
     // restore after the gesture continues from where they left the transcript, not from where the
     // pane last pinned it.
     if (scrollGestureActive(gestureAtRef.current)) {
-      contentAnchorRef.current = captureContentAnchor(projected, transcript.scrollTop, heights, WINDOW_ESTIMATE);
+      domAnchorRef.current = captureDomAnchor(transcript);
       return;
     }
     if (followRef.current) {
@@ -344,15 +434,21 @@ export function TranscriptPane({
       pinToBottom(transcript);
       return;
     }
-    const anchor = contentAnchorRef.current;
+    // Restore from the row's own box, not from an estimate. The line the user is reading keeps its
+    // place: a spacer swap or a measurement that moved the row's `offsetTop` is compensated by
+    // exactly that movement, and a row that never moved leaves `scrollTop` alone.
+    const anchor = domAnchorRef.current ?? captureDomAnchor(transcript);
     if (!anchor) return;
-    const next = contentAnchorScrollTop(projected, anchor, heights, WINDOW_ESTIMATE);
-    if (next === null) return;
-    if (Math.abs(transcript.scrollTop - next) > 1) {
-      programmaticScrollRef.current = true;
-      transcript.scrollTop = next;
+    const next = domAnchorScrollTop(
+      transcript.scrollTop,
+      anchor.offsetTop,
+      rowOffsetTop(transcript, anchor.rowId),
+    );
+    if (next !== null && Math.abs(next - transcript.scrollTop) > 1) {
+      writeScrollTop(transcript, next);
     }
-  }, [follow, heights, measurementVersion, pinToBottom, projected, range.end, range.padBottom, range.padTop, range.start, range.tailStart, streaming]);
+    domAnchorRef.current = captureDomAnchor(transcript);
+  }, [follow, heights, measurementVersion, pinToBottom, projected, range.end, range.padBottom, range.padTop, range.start, range.tailStart, streaming, writeScrollTop]);
 
   useEffect(() => {
     const transcript = transcriptRef.current;
@@ -394,8 +490,10 @@ export function TranscriptPane({
             <div
               className="transcript"
               ref={transcriptRef}
+              tabIndex={0}
               onScroll={(event) => updateScrollState(event.currentTarget)}
               onWheel={onTranscriptWheel}
+              onKeyDown={onTranscriptKeyDown}
               onTouchStart={markScrollGesture}
               onTouchMove={markScrollGesture}
               onPointerDown={markScrollGesture}

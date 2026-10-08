@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   captureContentAnchor,
   contentAnchorScrollTop,
+  domAnchorScrollTop,
   estimateRowHeight,
   windowRange,
 } from "./transcript-window";
@@ -59,6 +60,22 @@ describe("content anchor", () => {
     const anchor = captureContentAnchor(rows, 80, [0, 0, 0, 0], 50);
     expect(anchor).toEqual({ rowId: "b", delta: 30 });
     expect(contentAnchorScrollTop(rows, anchor!, [0, 0, 0, 0], 50)).toBe(80);
+  });
+});
+
+describe("domAnchorScrollTop", () => {
+  it("keeps scrollTop when the row box did not move", () => {
+    expect(domAnchorScrollTop(1_200, 1_180, 1_180)).toBe(1_200);
+  });
+
+  it("adds the row's own movement, so the same line stays under the viewport top", () => {
+    // A spacer swap pushed everything down 40px; the reader's line must not move on screen.
+    expect(domAnchorScrollTop(1_200, 1_180, 1_220)).toBe(1_240);
+    expect(domAnchorScrollTop(1_200, 1_180, 1_100)).toBe(1_120);
+  });
+
+  it("returns null when the anchored row left the mounted window", () => {
+    expect(domAnchorScrollTop(1_200, 1_180, null)).toBeNull();
   });
 });
 

@@ -86,6 +86,22 @@ function rowHeight(value: number | undefined, estimate: number): number {
   return value !== undefined && value > 0 && Number.isFinite(value) ? value : estimate;
 }
 
+/**
+ * `scrollTop` that holds the row under the viewport top still, given the row box's own `offsetTop`
+ * before and after a layout change. A row that did not move returns `scrollTop` unchanged; a row
+ * that is gone returns `null`, so the caller leaves the position alone instead of guessing from the
+ * height model. Estimates are what made a restore near the tail write a different coordinate and
+ * send the viewport back up.
+ */
+export function domAnchorScrollTop(
+  scrollTop: number,
+  offsetTopThen: number,
+  offsetTopNow: number | null,
+): number | null {
+  if (offsetTopNow === null) return null;
+  return scrollTop + (offsetTopNow - offsetTopThen);
+}
+
 /** Return the estimated/measured top offset of a row. */
 export function rowOffset(index: number, heights: readonly number[], estimate = 72): number {
   let offset = 0;
