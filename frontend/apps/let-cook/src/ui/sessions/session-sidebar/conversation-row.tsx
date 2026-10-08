@@ -1,4 +1,4 @@
-import { Archive, ArchiveRestore, Clipboard, CopyPlus, Folder, MoreVertical, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
+import { Archive, ArchiveRestore, Clipboard, CopyPlus, Eraser, Folder, MoreVertical, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
 import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { basename } from "../../../acp/attachments";
 import type { SessionSummary } from "../../../acp/xai";
@@ -21,6 +21,7 @@ interface ConversationRowProps {
   onRename: () => void;
   onFork: () => void;
   onCopyPath: () => void;
+  onClear: () => void;
   onArchive: () => void;
   onRemove: () => void;
 }
@@ -42,6 +43,7 @@ export function ConversationRow({
   onRename,
   onFork,
   onCopyPath,
+  onClear,
   onArchive,
   onRemove,
 }: ConversationRowProps) {
@@ -105,6 +107,12 @@ export function ConversationRow({
             <Clipboard size={13} />
             <span>Copy session path</span>
           </button>
+          {active && (
+            <button type="button" role="menuitem" data-testid={`session-clear-${session.id}`} onClick={onClear}>
+              <Eraser size={13} />
+              <span>Clear</span>
+            </button>
+          )}
           <button type="button" role="menuitem" data-testid={`session-archive-${session.id}`} onClick={onArchive}>
             {session.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
             <span>{session.archived ? "Unarchive" : "Archive"}</span>

@@ -553,6 +553,7 @@ Three sources, one table. Desktop `CLIENT_COMMANDS` are the only client handlers
 | SL-plan | `/plan` | — | `ok` | surface |
 | SL-model | `/model` | — | `ok` | surface |
 | SL-new | `/new` | — | `ok` | surface |
+| SL-clear | `/clear` | — | `ok` | surface |
 | SL-ctx | `/context` | — | `ok` | surface |
 | SL-yolo | `/always-approve` | — | `ok` | surface |
 | SL-vplan | `/view-plan` | `show-plan`, `plan-view` | `ok` | surface |
@@ -574,7 +575,7 @@ Registry: `slash/commands/mod.rs` `builtin_commands()` (72 objects). Shell ACP n
 | `/effort` | — | forwarded | `ok-prompt` | surface |
 | `/model` | `m` | client | `ok` | surface |
 | `/context` | — | client | `ok` | surface |
-| `/clear` | — | — | `chrome` | chrome |
+| `/clear` | — | client | `ok` | surface |
 | `/compact` | — | forwarded (agent half) | `ok-prompt` | surface |
 | `/fork` | — | wrapper, no UI | `gap` | surface |
 | `/resume` | — | sidebar, no picker slash | `partial` | surface |

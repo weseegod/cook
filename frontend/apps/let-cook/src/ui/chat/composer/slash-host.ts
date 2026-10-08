@@ -23,6 +23,7 @@ export const SLASH_HOST: SlashCommandHost = {
     if (!markdown) throw new Error("Nothing to export yet.");
     downloadMarkdown(exportFilename(store.sessionTitle, store.sessionId), markdown);
   },
+  clearTranscript: () => acpClient.clearTranscript(),
   sendPrompt: (text) => acpClient.prompt(text),
   sessionInfo: () => acpClient.sessionInfo(),
   openPlan: () => {

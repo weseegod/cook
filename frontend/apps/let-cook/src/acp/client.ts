@@ -219,6 +219,15 @@ export class CookAcpClient {
     return response.sessionId;
   }
 
+  /**
+   * `/clear` and the conversation menu's Clear: wipe the painted transcript without touching the
+   * session. Pending updates are applied first so a queued frame cannot repaint what was cleared.
+   */
+  clearTranscript(): void {
+    this.sessionUpdates.flushNow();
+    useSessionStore.getState().clearTranscript();
+  }
+
   async loadSession(sessionId: string, cwd?: string): Promise<void> {
     const activeCwd = cwd ?? this.cwd;
     if (!activeCwd) throw new Error("Session has no workspace");

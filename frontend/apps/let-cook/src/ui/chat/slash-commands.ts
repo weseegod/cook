@@ -17,6 +17,8 @@ export interface SlashCommandHost {
   forkSession(): Promise<string>;
   /** Export the active transcript as Markdown (`/export`). */
   exportTranscript(): Promise<void>;
+  /** Wipe the painted transcript without ending the session (`/clear`, conversation menu Clear). */
+  clearTranscript(): void;
   sendPrompt(text: string): Promise<unknown>;
   /** `x.ai/session/info`, or `null` when the agent cannot report it. */
   sessionInfo(): Promise<SessionInfo | null>;
@@ -121,6 +123,17 @@ export const CLIENT_COMMANDS: SlashCommandSpec[] = [
       if (!context.sessionId) return "No active session to export.";
       await host.exportTranscript();
       return "Exported conversation as Markdown.";
+    },
+  },
+  {
+    // Map id `/clear`: the TUI's `ClearCommand` (`slash/commands/clear.rs`) only repaints its
+    // scrollback; the session and the agent's context stay exactly as they were.
+    name: "clear",
+    description: "Clear the transcript from the screen (keeps session context)",
+    run: async (host, context) => {
+      if (!context.sessionId) return "Start a conversation before clearing.";
+      host.clearTranscript();
+      return null;
     },
   },
   {

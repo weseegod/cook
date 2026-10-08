@@ -28,6 +28,7 @@ function host(info: SessionInfo | null = null): SlashCommandHost & { calls: stri
       return "forked-session";
     }),
     exportTranscript: vi.fn(async () => void calls.push("export")),
+    clearTranscript: vi.fn(() => void calls.push("clear")),
     sendPrompt: vi.fn(async (text: string) => void calls.push(`prompt:${text}`)),
     sessionInfo: vi.fn(async () => info),
     openPlan: vi.fn(() => void calls.push("open-plan")),
@@ -222,6 +223,29 @@ describe("/export", () => {
     const message = await clientCommand("export")!.run(h, context({ sessionId: null }), "");
     expect(h.calls).toEqual([]);
     expect(message).toContain("No active session");
+  });
+});
+
+describe("/clear", () => {
+  it("wipes the painted transcript and reports nothing", async () => {
+    const h = host();
+    const message = await clientCommand("clear")!.run(h, context(), "");
+    expect(h.calls).toEqual(["clear"]);
+    expect(message).toBeNull();
+  });
+
+  it("refuses when there is no session", async () => {
+    const h = host();
+    const message = await clientCommand("clear")!.run(h, context({ sessionId: null }), "");
+    expect(h.calls).toEqual([]);
+    expect(message).toContain("before clearing");
+  });
+
+  it("is offered as a window command the agent cannot shadow", async () => {
+    const entries = slashEntries([{ name: "clear", description: "Agent clear" }]);
+    expect(entries.filter((entry) => entry.name === "clear")).toEqual([
+      expect.objectContaining({ source: "client" }),
+    ]);
   });
 });
 

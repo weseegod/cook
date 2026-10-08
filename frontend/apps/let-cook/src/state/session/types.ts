@@ -240,6 +240,8 @@ export interface SessionState {
   savePlanComment: (...args: [text: string] | [id: number | null, lineRange: [number, number], text: string]) => void;
   removePlanComment: (id: number) => void;
   resetConversation: (sessionId?: string | null) => void;
+  /** `/clear`: wipe the painted transcript, keep the session, its context, and the open turn. */
+  clearTranscript: () => void;
   appendOptimisticUser: (text: string, images?: string[], promptId?: string) => void;
   applyNotification: (notification: SessionNotification) => void;
   applyNotifications: (notifications: SessionNotification[]) => void;

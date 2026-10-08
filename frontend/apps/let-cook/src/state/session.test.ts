@@ -458,6 +458,65 @@ describe("turn markers", () => {
   });
 });
 
+describe("clearing the transcript", () => {
+  /** The envelope `session/update` carries: the update plus the session it belongs to. */
+  const chunk = (sessionId: string, text: string) =>
+    ({ sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } }) as never;
+
+  it("wipes the painted rows and keeps the session, its context, and the open turn", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("sess-clear");
+    useSessionStore.getState().appendOptimisticUser("hello");
+    useSessionStore.getState().applyNotifications([chunk("sess-clear", "hi there")]);
+    useSessionStore.getState().set({
+      usage: { used: 12, size: 100 },
+      planFiles: [{
+        name: "2026-09-19T14-30-22Z.md",
+        title: "Plan",
+        path: "/p/plans/2026-09-19T14-30-22Z.md",
+        relativePath: "plans/2026-09-19T14-30-22Z.md",
+        sizeBytes: 10,
+        modifiedMs: 1,
+        active: true,
+        deletable: false,
+        content: "# Plan",
+      }],
+      queuedEntries: [{ id: "q1", version: 0, text: "queued" }],
+    });
+    expect(useSessionStore.getState().blocks).toHaveLength(2);
+
+    useSessionStore.getState().clearTranscript();
+
+    const cleared = useSessionStore.getState();
+    expect(cleared.blocks).toEqual([]);
+    expect(cleared.activity).toBeNull();
+    expect(cleared.sessionId).toBe("sess-clear");
+    expect(cleared.usage).toEqual({ used: 12, size: 100 });
+    expect(cleared.planFiles).toHaveLength(1);
+    expect(cleared.queuedEntries).toHaveLength(1);
+    expect(cleared.turnStartedAt).not.toBeNull();
+  });
+
+  it("keeps the turn identity so the rest of a running turn still paints and closes", () => {
+    useSessionStore.getState().resetConversation("sess-clear-turn");
+    useSessionStore.getState().appendOptimisticUser("start");
+    const turnId = useSessionStore.getState().transcriptCursor.turnId;
+    expect(turnId).toBeTruthy();
+
+    useSessionStore.getState().clearTranscript();
+    // The segment ids restart; the turn id is what the marker and the next chunk key off.
+    expect(useSessionStore.getState().transcriptCursor).toMatchObject({ turnId, assistantId: null, thoughtId: null });
+
+    useSessionStore.getState().applyNotifications([chunk("sess-clear-turn", "rest of the answer")]);
+    expect(useSessionStore.getState().blocks).toMatchObject([
+      { type: "message", role: "assistant", text: "rest of the answer", turnId },
+    ]);
+
+    useSessionStore.getState().finishTurn();
+    expect(useSessionStore.getState().blocks.at(-1)).toMatchObject({ type: "session-event", kind: "turn", turnId });
+  });
+});
+
 describe("goal notifications", () => {
   /** The extension envelope the shell ships goal state in (`x.ai/session_notification`). */
   const goalNotification = (update: Record<string, unknown>) =>

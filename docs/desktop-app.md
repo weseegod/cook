@@ -312,6 +312,13 @@ is the module map.
 
 Replay and live updates use the same reducer.
 
+Clearing (`/clear`, or **Clear** in the open conversation's row menu) is a
+display wipe in the window: it drops the painted rows and keeps the session,
+the agent's context, and the open turn. Nothing is written to the session record
+and nothing is sent over ACP, so a later `session/load` replays the full history
+— the TUI's `/clear` behaves the same way. A conversation the window has not
+loaded carries no transcript to wipe, so its row menu leaves **Clear** off.
+
 One surface reads a transcript that is not the open conversation's: a subagent
 runs its own ACP session, so its updates arrive under the child's session id and
 are routed to that child's transcript ahead of the parent's prompt correlation.

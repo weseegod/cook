@@ -281,6 +281,14 @@ export const useSessionStore = create<SessionState>((set) => ({
         error: null,
       };
     }),
+  clearTranscript: () =>
+    set((state) => ({
+      blocks: [],
+      activity: null,
+      // The turn keeps its identity so a running turn's next chunk paints under the real turn id
+      // and `finishTurn` still writes its marker; only the prose/thinking segments restart.
+      transcriptCursor: { ...state.transcriptCursor, assistantId: null, thoughtId: null },
+    })),
   appendOptimisticUser: (text, images = [], promptId) =>
     set((state) => {
       const localId = `local-${crypto.randomUUID()}`;

@@ -794,6 +794,31 @@ test.describe("slash commands", () => {
     expect((await mock.state()).sessionMode).toBe("plan");
   });
 
+  test("clears the transcript with /clear without talking to the agent", async ({ page }) => {
+    const mock = api(page);
+    // A replayed line proves the transcript the window shows is the agent's record.
+    await openWorkspace(page, {
+      ...CONNECTED_SEED,
+      historyUpdates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Replayed line." } }],
+    });
+
+    await composer(page).fill("hello");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await composer(page).fill("/clear");
+    await page.keyboard.press("Enter");
+
+    await expect(page.getByText("Mock assistant reply.")).toHaveCount(0);
+    await expect(page.locator(".empty-chat")).toBeVisible();
+    // The window answered it; nothing travelled to the agent.
+    expect(callsTo(await mock.requests(), "session/prompt")).toHaveLength(1);
+
+    // Like the TUI's `/clear`, this is a display wipe: reopening replays the agent's history.
+    await page.getByTestId("session-row-mock-session").locator(".session-open").click();
+    await expect(page.getByText("Replayed line.")).toBeVisible();
+  });
+
   test("opens context actions inside the composer and queues /compact", async ({ page }) => {
     await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 250 });
     await composer(page).fill("hello");

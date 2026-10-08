@@ -666,3 +666,51 @@ test.describe("conversation archives", () => {
     expect(errors).toEqual([]);
   });
 });
+
+test.describe("conversation clear", () => {
+  /** Two conversations plus a replayed line, so a load paints a row worth clearing. */
+  const CLEAR_SEED = {
+    ...CONNECTED_SEED,
+    historyUpdates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Replayed line." } }],
+    sessions: [
+      { id: "chat-one", title: "First chat", cwd: "/tmp/cook-demo", updatedAt: "2026-09-19T10:00:00Z", kind: "chat" as const },
+      { id: "chat-two", title: "Second chat", cwd: "/tmp/cook-demo", updatedAt: "2026-09-18T10:00:00Z", kind: "chat" as const },
+    ],
+  };
+
+  test("offers Clear above Archive on the open conversation and wipes its transcript", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    const mock = api(page);
+    await openWorkspace(page, CLEAR_SEED);
+
+    const row = page.getByTestId("session-row-chat-one");
+    await row.locator(".session-open").click();
+    await waitForCalls(page, "session/load");
+    await expect(page.getByText("Replayed line.")).toBeVisible();
+
+    // Clear exists only on the conversation the window is showing: a wipe has nothing to do on a row
+    // it has not loaded, so the other rows keep the menu they had (see the list test above).
+    const closed = page.getByTestId("session-row-chat-two");
+    await closed.hover();
+    await closed.getByTestId("session-menu-chat-two").click();
+    await expect(closed.getByRole("menuitem")).toHaveText([
+      "Pin to top", "Rename", "Fork", "Copy session path", "Archive", "Delete",
+    ]);
+    await page.keyboard.press("Escape");
+
+    await row.hover();
+    await row.getByTestId("session-menu-chat-one").click();
+    const menu = row.getByRole("menu");
+    await expect(menu.getByRole("menuitem")).toHaveText([
+      "Pin to top", "Rename", "Fork", "Copy session path", "Clear", "Archive", "Delete",
+    ]);
+
+    await menu.getByTestId("session-clear-chat-one").click();
+
+    await expect(page.getByText("Replayed line.")).toHaveCount(0);
+    await expect(page.locator(".empty-chat")).toBeVisible();
+    expect(callsTo(await mock.requests(), "session/prompt")).toHaveLength(0);
+    expect(errors).toEqual([]);
+  });
+});

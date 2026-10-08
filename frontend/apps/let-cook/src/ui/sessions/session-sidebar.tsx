@@ -202,6 +202,16 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     }
   }
 
+  /**
+   * Clear (`/clear`) is a display-only wipe of the open conversation: the agent keeps its context,
+   * and the window holds no transcript for a row it has not loaded, so there is nothing to clear.
+   */
+  function clear(session: SessionSummary) {
+    setRowMenu(null);
+    if (session.id !== useSessionStore.getState().sessionId) return;
+    acpClient.clearTranscript();
+  }
+
   function togglePin(session: SessionSummary) {
     setRowMenu(null);
     updatePrefs({ ...prefs, pinned: togglePinned(prefs.pinned, session.id) });
@@ -328,6 +338,7 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
                     onRename={() => void rename(session)}
                     onFork={() => void fork(session)}
                     onCopyPath={() => void copySessionPath(session)}
+                    onClear={() => clear(session)}
                     onArchive={() => void archive(session)}
                     onRemove={() => void remove(session)}
                   />

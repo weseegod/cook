@@ -251,7 +251,7 @@ The TUI follows the same notification in
 
 | Path | Role |
 |---|---|
-| `ui/sessions/session-sidebar.tsx` | Conversation list, pin, rename, delete, drag, resize |
+| `ui/sessions/session-sidebar.tsx` | Conversation list, pin, rename, delete, drag, resize. The open conversation's row menu also offers Clear (`/clear`), a display wipe of what the window is showing |
 | `ui/sessions/session-sidebar/` | Row, menus, dialogs |
 | `ui/utility-panel.tsx` | Right panel: Review, Files, Activity, Preview |
 | `ui/artifacts-panel.tsx` | Preview |
@@ -323,6 +323,7 @@ The updater plugin updates this app binary. It does not write
 | Change how a transcript row looks | `src/ui/chat/transcript-row.tsx` and `tool-card.tsx`. Projection: `transcript-projection.ts`. Paint rules: [`docs/tui-presentation.md`](../../../docs/tui-presentation.md). Forbidden chrome: desktop-app §7 |
 | Change what an agent update becomes in the transcript | `src/state/session/transcript.ts` |
 | Change the composer, Enter, or slash menu | `src/ui/chat/composer.tsx`, `slash-commands.ts`, `composer/` |
+| Change what `/clear` wipes (transcript only; the session and its context stay) | `src/state/session/store.ts` `clearTranscript`, `src/acp/client.ts` `clearTranscript` (flushes the update coalescer first) |
 | Change the model picker or which models appear | `src/ui/chat/model-picker.tsx`, `src/state/catalog.ts`. Saving a model is Settings → Models |
 | Change queue or Send now | §4 Prompt queue |
 | Change the status row (tokens/s, diffstat) | `src/ui/chat/composer-rails.tsx`, `composer-metrics.ts` |
