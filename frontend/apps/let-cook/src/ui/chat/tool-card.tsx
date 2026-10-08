@@ -24,6 +24,17 @@ import { verbGroupLabel } from "./verb-group";
 
 const DIFF_PREVIEW_LINES = 24;
 const EDIT_KINDS = ["edit", "write", "write_file"];
+/**
+ * Below this the header drops the duration: a thought that opened and closed inside one frame would
+ * otherwise paint `Thought for 0.0s`.
+ */
+const THOUGHT_DURATION_MIN_MS = 100;
+
+/** `Thought`, `Thought for 3.2s` — the TUI omits the duration when it is not worth reading. */
+function thinkingHeader(elapsedMs: number | null): string {
+  if (elapsedMs === null || elapsedMs < THOUGHT_DURATION_MIN_MS) return "Thought";
+  return `Thought for ${formatThinkingDuration(elapsedMs)}`;
+}
 
 /** Tool kinds that create or overwrite a whole file, painted as `Creating {path}` rows. */
 export const WRITE_TOOL_KINDS = ["write", "write_file"];
@@ -32,23 +43,90 @@ export function isWriteTool(kind: string | null | undefined): boolean {
   return WRITE_TOOL_KINDS.includes((kind ?? "").toLowerCase());
 }
 
-/** Header text for a tool row (`scrollback/blocks/tool/*`). */
+/**
+ * Header text for a tool row (`scrollback/blocks/tool/*` §7.4). The TUI paints a one-liner built
+ * from the kind and its target; the model's `description` is body copy, so it never reaches the
+ * collapsed summary except on an Execute row where the TUI itself shows it.
+ */
 export function toolHeader(tool: ToolBlock): { prefix?: string; text: string } {
-  if (tool.description) return { text: tool.description };
-  if (isExecute(tool) && tool.command) return { prefix: "$ ", text: tool.command };
-  const path = tool.paths[0] ? displayPath(tool.paths[0]) : null;
   const kind = (tool.kind ?? "").toLowerCase();
-  if (path && isGenericTitle(tool.title, kind)) {
-    if (EDIT_KINDS.includes(kind)) return { text: `${isWriteTool(kind) ? "Creating" : "Edit"} ${path}` };
-    if (["list", "list_dir", "list_directory"].includes(kind)) return { text: `List ${path}` };
-    if (["read", "file"].includes(kind)) return { text: `Read ${path}` };
+  const description = tool.description?.trim();
+  const title = tool.title?.trim() ?? "";
+  if (isExecute(tool)) {
+    // The TUI's `$ {command}` shell form; `description` is the model's own summary of it.
+    if (tool.command) return { prefix: "$ ", text: tool.command };
+    if (description) return { text: description };
+    return { text: title && !isWireName(title) ? title : "Run command" };
   }
-  return { text: tool.title };
+  const path = headerPath(tool);
+  if (kind === "search") {
+    const pattern = headerPattern(tool) ?? description ?? title;
+    return { text: pattern ? `Search ${quote(pattern)}` : "Search" };
+  }
+  if (kind === "web_search") {
+    const query = stripTitlePrefix(title, /^web search:?\s*/i) ?? description ?? title;
+    return { text: query ? `Web Search ${quote(query)}` : "Web Search" };
+  }
+  if (kind === "memory_search") {
+    const query = stripTitlePrefix(title, /^memory search:?\s*/i) ?? description ?? title;
+    return { text: query ? `Memory Search ${quote(query)}` : "Memory Search" };
+  }
+  if (kind === "fetch") {
+    const url = path ?? stripTitlePrefix(title, /^(web fetch|fetch):?\s*/i) ?? description ?? title;
+    return { text: url ? `Fetch ${url}` : "Fetch" };
+  }
+  if (EDIT_KINDS.includes(kind) && path) {
+    return { text: `${isWriteTool(kind) ? "Creating" : "Edit"} ${path}` };
+  }
+  if (kind === "list" && path) return { text: `List ${path}` };
+  if (kind === "read" && path) return { text: `Read ${path}` };
+  if (kind === "skill") {
+    const skill = stripTitlePrefix(title, /^skill:?\s*/i);
+    // A `SKILL.md` read paints `Skill {name}` in the TUI (`read.rs::collapsed_line`).
+    if (skill) return { text: `Skill ${skill}` };
+  }
+  return { text: title && !isWireName(title) ? title : description ?? "Tool" };
 }
 
-function isGenericTitle(title: string, kind: string): boolean {
-  const value = title.trim().toLowerCase();
-  return value.length === 0 || value === "tool" || value === kind || ["read", "edit", "write", "list", "file"].includes(value);
+/** Quote a search/query target unless the shell already wrapped it. */
+function quote(value: string): string {
+  return /^["']/.test(value) ? value : `"${value}"`;
+}
+
+/** The read/list/edit target: the recorded path, else `title` when the shell built `Read \`x\``. */
+function headerPath(tool: ToolBlock): string | null {
+  if (tool.paths[0]) return displayPath(tool.paths[0]);
+  const title = tool.title?.trim() ?? "";
+  if (!title || isWireName(title)) return null;
+  const stripped = stripTitlePrefix(title, /^(read|list|edit|creating)\s+/i);
+  return stripped && stripped !== title ? displayPath(stripped) : null;
+}
+
+/** The grep/glob pattern: the quoted or bare target in the shell title, else the model's description. */
+function headerPattern(tool: ToolBlock): string | null {
+  const title = tool.title?.trim() ?? "";
+  if (!title || isWireName(title)) return null;
+  const stripped = stripTitlePrefix(title, /^search:?\s*/i);
+  if (stripped && stripped !== title) return stripped;
+  return tool.description?.trim() || null;
+}
+
+function stripTitlePrefix(title: string, pattern: RegExp): string | null {
+  const match = pattern.exec(title);
+  if (!match) return null;
+  const rest = title.slice(match[0].length).trim();
+  if (rest.length === 0) return null;
+  // The shell wraps a path or query in backticks (`Read \`src/a.ts\``); the header paints it bare.
+  return rest.startsWith("`") && rest.endsWith("`") && rest.length > 2 ? rest.slice(1, -1).trim() : rest;
+}
+
+/**
+ * ACP/function wire names the shell sends on the early `tool_call` before the refined title lands
+ * (`read_file`, `grep`, …). They are ids, not display copy, so they never reach a header.
+ */
+function isWireName(title: string): boolean {
+  return /^(read_file|cursor_read|grep|glob|list_dir|list_directory|search_replace|apply_patch|hashline_edit|edit|write|bash|run_terminal_command|run_terminal_cmd|web_fetch|web_search|x_search|memory_search|search_tool|use_tool|task|skill)$/i
+    .test(title);
 }
 
 function isExecute(tool: ToolBlock): boolean {
@@ -162,7 +240,7 @@ export const ToolRow = memo(function ToolRow({ tool }: { tool: ToolBlock }) {
  */
 export const ThinkingRow = memo(function ThinkingRow({ block }: { block: { id: string; text: string; streaming: boolean; elapsedMs?: number | null } }) {
   const time = block.elapsedMs ?? null;
-  const header = block.streaming ? "Thinking…" : time === null ? "Thought" : `Thought for ${formatThinkingDuration(time)}`;
+  const header = block.streaming ? "Thinking…" : thinkingHeader(time);
   const streaming = block.streaming;
   const [expanded, setExpanded] = useState(false);
   // Finish collapses even a block the user had opened.
@@ -204,7 +282,7 @@ export const ThinkingGroupRow = memo(function ThinkingGroupRow({
   const duration = hasDurations
     ? thoughts.reduce((total, thought) => total + (thought.elapsedMs ?? 0), 0)
     : null;
-  const header = duration === null ? "Thoughts" : `Thought for ${formatThinkingDuration(duration)}`;
+  const header = duration === null ? "Thoughts" : duration < THOUGHT_DURATION_MIN_MS ? "Thought" : `Thought for ${formatThinkingDuration(duration)}`;
 
   return (
     <div

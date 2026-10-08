@@ -81,6 +81,12 @@ describe("ThinkingRow", () => {
     expect(screen.queryByText(/three/)).toBeNull();
   });
 
+  it("drops the duration when a thought opened and closed inside one frame", () => {
+    render(<ThinkingRow block={thought({ streaming: false, elapsedMs: 40 })} />);
+    expect(screen.getByText("Thought")).toBeInTheDocument();
+    expect(screen.queryByText(/Thought for/)).toBeNull();
+  });
+
   it("collapses a frozen block the user had opened", () => {
     const { rerender } = render(<ThinkingRow block={thought()} />);
     fireEvent.click(screen.getByRole("button"));

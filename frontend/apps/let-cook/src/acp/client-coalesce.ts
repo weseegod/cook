@@ -3,6 +3,12 @@ import type { SessionNotification } from "@agentclientprotocol/sdk";
 export type ScheduleFlush = (flush: () => void) => void;
 
 function scheduleOnNextFrame(flush: () => void): void {
+  // A hidden tab never receives `requestAnimationFrame`, so a background turn would bank its whole
+  // update stream and dump it in one paint on return. The timer bounds that to one frame's worth.
+  if (typeof window !== "undefined" && document.hidden) {
+    globalThis.setTimeout(flush, 50);
+    return;
+  }
   if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
     window.requestAnimationFrame(flush);
     return;

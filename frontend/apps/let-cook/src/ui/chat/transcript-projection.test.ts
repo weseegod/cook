@@ -67,6 +67,44 @@ describe("verb runs", () => {
     expect(rows([thought("t1", true), tool("read-1", "Read a.ts")])).toEqual(["message", "verb-group"]);
   });
 
+  it("folds a grep+read cluster, interleaved with finished thoughts, into one header", () => {
+    const projected = projectTranscript([
+      thought("t1"),
+      tool("grep-1", "Search pattern", "completed", { kind: "search" }),
+      thought("t2"),
+      tool("read-1", "read_file", "completed", { kind: "read", paths: ["src/a.ts"] }),
+      tool("read-2", "Read `src/b.ts`", "completed", { kind: "read", paths: ["src/b.ts"] }),
+    ]);
+    expect(projected).toHaveLength(1);
+    expect(projected[0]).toMatchObject({ type: "verb-group" });
+    if (projected[0].type === "verb-group") {
+      expect(projected[0].tools.map((entry) => entry.id)).toEqual(["grep-1", "read-1", "read-2"]);
+      expect(verbGroupLabel(projected[0].tools)).toBe("Searched 1 pattern, Read 2 files");
+    }
+    // The finished thoughts were claimed into the run, so no stray `Thought` rows.
+    expect(projected.some((row) => row.type === "message")).toBe(false);
+  });
+
+  it("keeps a streaming thought between two reads from splitting the run", () => {
+    const projected = projectTranscript([
+      tool("read-1", "read_file", "completed", { kind: "read", paths: ["src/a.ts"] }),
+      thought("t1", true),
+      tool("read-2", "read_file", "completed", { kind: "read", paths: ["src/b.ts"] }),
+    ]);
+    expect(projected.map((row) => row.type)).toEqual(["message", "verb-group"]);
+    if (projected[1].type === "verb-group") {
+      expect(projected[1].tools.map((entry) => entry.id)).toEqual(["read-1", "read-2"]);
+    }
+  });
+
+  it("keeps execute and edit as their own rows inside a read cluster", () => {
+    expect(rows([
+      tool("read-1", "read_file", "completed", { kind: "read", paths: ["src/a.ts"] }),
+      tool("edit-1", "Edit `src/b.ts`", "completed", { kind: "edit", paths: ["src/b.ts"] }),
+      tool("read-2", "read_file", "completed", { kind: "read", paths: ["src/c.ts"] }),
+    ])).toEqual(["verb-group", "tool", "verb-group"]);
+  });
+
   it("renders one finished thought as its existing message row", () => {
     expect(rows([thought("t1")])).toEqual(["message"]);
   });

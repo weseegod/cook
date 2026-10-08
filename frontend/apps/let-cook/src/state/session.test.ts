@@ -349,6 +349,75 @@ describe("thinking segments", () => {
   });
 });
 
+describe("normalized tool kind", () => {
+  it("reads the canonical kind off the early tool_call's `_meta`", () => {
+    // Hop 1: `kind: "other"` and a wire name; the real kind is in `x.ai/tool`.
+    const transcript = reduceTranscript(empty(), {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "read_file",
+      kind: "other",
+      status: "pending",
+      rawInput: { path: "src/state/session/transcript.ts", description: "Check chunk reducer behavior with an empty cursor" },
+      _meta: { "x.ai/tool": { name: "read_file", kind: "read", label: "Read" } },
+    });
+    expect(transcript.blocks[0]).toMatchObject({ kind: "read", paths: ["src/state/session/transcript.ts"] });
+  });
+
+  it("falls back to the envelope meta when the tool call carries none", () => {
+    const transcript = reduceTranscript(
+      empty(),
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "t1",
+        title: "grep",
+        kind: "other",
+        status: "pending",
+      },
+      { _meta: { "x.ai/tool": { name: "grep", kind: "search" } } },
+    );
+    expect(transcript.blocks[0]).toMatchObject({ kind: "search" });
+  });
+
+  it("upgrades the kind when the refined hop arrives", () => {
+    // Hop 2 from `send_tool_call_start`: `kind: "read"` and a `Read \`path\`` title.
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "read_file",
+      kind: "other",
+      status: "pending",
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      title: "Read `src/a.ts`",
+      kind: "read",
+      status: "completed",
+      rawInput: { path: "src/a.ts" },
+    });
+    expect(transcript.blocks[0]).toMatchObject({ kind: "read", title: "Read `src/a.ts`", paths: ["src/a.ts"] });
+  });
+
+  it("keeps a generic kind from clobbering the normalized one on a later update", () => {
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "tool_call",
+      toolCallId: "t1",
+      title: "Read `src/a.ts`",
+      kind: "read",
+      status: "pending",
+      rawInput: { path: "src/a.ts" },
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "tool_call_update",
+      toolCallId: "t1",
+      kind: "other",
+      status: "completed",
+    });
+    expect(transcript.blocks[0]).toMatchObject({ kind: "read" });
+  });
+});
+
 describe("turn markers", () => {
   it("formats the TUI marker strings", () => {
     expect(turnMarkerText({ kind: "completed" }, 5_200)).toBe("Worked for 5.2s");

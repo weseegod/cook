@@ -168,3 +168,54 @@ test("stays manual when a scroll lands on the tail, and resumes follow on the ne
   await streamChunks(page, 6, "\n\nKeep streaming after follow resumed. ");
   await expect.poll(() => bottomGap(page)).toBeLessThan(4);
 });
+
+test("paints each streamed chunk into the live tail before the turn ends", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ promptDelayMs: 20_000 }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await page.getByTestId("composer-input").fill("Answer in one growing paragraph");
+  await page.getByTestId("send-button").click();
+
+  const running = page.getByTestId("turn-status").locator(".turn-status-spinner");
+  await expect(running).toBeVisible();
+
+  const tail = page.locator(".message-assistant").last();
+  for (const piece of ["First sentence. ", "Second sentence. ", "Third sentence."]) {
+    await page.evaluate((text) => {
+      window.__cookMock!.sessionUpdate("session-login", {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text },
+      });
+    }, piece);
+    // The coalescer commits on the frame after the notify, so the chunk is on screen while the turn
+    // is still open — the tail grows chunk by chunk instead of only at the end.
+    await expect(tail).toContainText(piece.trim());
+    await expect(running).toBeVisible();
+  }
+  await expect(tail).toContainText(/First sentence\.\s+Second sentence\.\s+Third sentence\./);
+});
+
+test("holds the position a wheel leaves mid-turn while the tail keeps streaming", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ historyUpdates, promptDelayMs: 12_000 }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+  await page.getByTestId("composer-input").fill("Continue the conversation");
+  await page.getByTestId("send-button").click();
+  await expect(page.locator(".message-assistant").last()).toContainText("Mock assistant reply.");
+  await streamChunks(page, 4, "\n\nGrow the tail before the user scrolls. ");
+
+  const transcript = page.locator(".transcript");
+  await transcript.hover();
+  await page.mouse.wheel(0, -120);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(40);
+  const parked = await transcript.evaluate((element) => element.scrollTop);
+
+  // The wheel parked the pane above the tail. The streaming pin stands aside for the gesture and
+  // `scrollend`, so the viewport stays where the user left it for the whole stream instead of
+  // snapping back part way through.
+  for (let index = 0; index < 10; index += 1) {
+    await streamChunks(page, 1, `\n\nKeep streaming under the parked position ${index}. `);
+    expect(await transcript.evaluate((element) => element.scrollTop)).toBeLessThanOrEqual(parked + 8);
+    expect(await bottomGap(page)).toBeGreaterThan(40);
+  }
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+});

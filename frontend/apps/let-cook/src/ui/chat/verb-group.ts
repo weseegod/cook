@@ -45,11 +45,10 @@ export function verbKind(tool: ToolBlock): VerbKind | null {
   if (/^memory search/i.test(title) || kind === "memory_search") return "memory";
   if (/^search tools/i.test(title) || kind === "search_tool") return "mcpsearch";
   if (/^web search/i.test(title) || kind === "web_search") return "websearch";
-  if (/^web fetch/i.test(title) || /^fetch\b/i.test(title) || kind === "web_fetch") return "fetch";
-  if (/^list\b/i.test(title) || ["list", "list_dir", "list_directory"].includes(kind)) return "dir";
-  if (/^search\b/i.test(title) || ["search", "grep", "glob"].includes(kind)) return "search";
+  if (/^web fetch/i.test(title) || /^fetch\b/i.test(title) || kind === "web_fetch" || kind === "fetch") return "fetch";
+  if (/^list\b/i.test(title) || kind === "list" || ["list", "list_dir", "list_directory"].includes(kind)) return "dir";
+  if (/^search\b/i.test(title) || kind === "search" || ["search", "grep", "glob"].includes(kind)) return "search";
   if (/^read\b/i.test(title) || kind === "read") return "file";
-  if (kind === "fetch") return "fetch";
   return null;
 }
 

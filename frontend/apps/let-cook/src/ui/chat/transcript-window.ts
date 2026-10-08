@@ -18,12 +18,13 @@ export interface RowIdentity {
 
 /**
  * Stable pre-measure height for a projected row. Using a flat 72px for every kind made `padTop`
- * jump whenever the window slid over tools or short markers during a live turn.
+ * jump whenever the window slid over tools or short markers during a live turn; a collapsed tool
+ * or thought row is ~28px, so an estimate that overshoots it moves the transcript on every swap.
  */
 export function estimateRowHeight(block: { type: string; role?: string }): number {
-  if (block.type === "session-event") return 28;
-  if (block.type === "message" && block.role === "thought") return 48;
-  if (block.type === "tool" || block.type === "verb-group") return 52;
+  if (block.type === "session-event") return 22;
+  if (block.type === "message" && block.role === "thought") return 28;
+  if (block.type === "tool" || block.type === "verb-group" || block.type === "thought-group") return 28;
   return 72;
 }
 

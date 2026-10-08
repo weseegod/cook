@@ -271,4 +271,47 @@ test.describe("transcript rows", () => {
     await expect(page.locator(".message-user")).toContainText("Create the file.");
     await expect(page.getByTestId("prompt-fold-toggle")).toHaveCount(0);
   });
+
+  test("folds a search and two reads into one summary line", async ({ page }) => {
+    // The shell sends two hops: an early call whose kind is `other`, title is the wire name and
+    // description is the model's sentence, then a refined update. Only `_meta["x.ai/tool"]` carries
+    // the real kind on the early hop, which is what makes the run foldable.
+    const earlyCall = (toolCallId: string, title: string, rawInput: Record<string, unknown>, name: string, kind: string) => ({
+      sessionUpdate: "tool_call",
+      toolCallId,
+      kind: "other",
+      title,
+      rawInput,
+      _meta: { "x.ai/tool": { name, kind, input: rawInput } },
+      status: "pending",
+    });
+    await launch(page, {
+      promptUpdates: [
+        earlyCall("grep-1", "grep", { pattern: "chunk reducer", description: "Check chunk reducer behavior with an empty cursor" }, "grep", "search"),
+        { sessionUpdate: "tool_call_update", toolCallId: "grep-1", kind: "search", title: "Search `chunk reducer`", status: "completed" },
+        earlyCall("read-1", "read_file", { path: "src/state/session/transcript.ts", description: "Read transcript cursor type" }, "read_file", "read"),
+        { sessionUpdate: "tool_call_update", toolCallId: "read-1", kind: "read", title: "Read `src/state/session/transcript.ts`", status: "completed" },
+        earlyCall("read-2", "read_file", { path: "src/ui/chat/verb-group.ts", description: "Read verb group labels" }, "read_file", "read"),
+        { sessionUpdate: "tool_call_update", toolCallId: "read-2", kind: "read", title: "Read `src/ui/chat/verb-group.ts`", status: "completed" },
+        { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Both files read." } },
+      ],
+    });
+    await page.getByTestId("composer-input").fill("Fold the cluster.");
+    await page.getByTestId("send-button").click();
+
+    const group = page.getByTestId("verb-group");
+    await expect(group).toHaveCount(1);
+    // `> summary` is the group's own line; the member rows have their own nested summaries.
+    const summary = page.locator('[data-testid="verb-group"] > summary');
+    await expect(summary.locator("strong")).toHaveText("Searched 1 pattern, Read 2 files");
+    // The model's sentence and the wire names stay off the collapsed line.
+    await expect(summary).not.toContainText("Check chunk reducer behavior");
+    await expect(page.locator(".transcript")).not.toContainText("read_file");
+    await expect(group.getByTestId("tool-row-read-1")).toBeHidden();
+
+    await summary.click();
+    await expect(group.getByTestId("tool-row-grep-1").locator("summary strong")).toHaveText('Search "chunk reducer"');
+    await expect(group.getByTestId("tool-row-read-1").locator("summary strong")).toHaveText("Read src/state/session/transcript.ts");
+    await expect(group.getByTestId("tool-row-read-2").locator("summary strong")).toHaveText("Read src/ui/chat/verb-group.ts");
+  });
 });

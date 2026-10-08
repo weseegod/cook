@@ -34,7 +34,7 @@ const WINDOW_ESTIMATE = 72;
 const WINDOW_OVERSCAN = 8;
 const WINDOW_MIN_COUNT = 64;
 /** Programmatic writes pause this long after the last scroll-gesture event, momentum included. */
-const SCROLL_GUARD_MS = 150;
+const SCROLL_GUARD_MS = 200;
 
 interface ScrollMetrics {
   scrollTop: number;
@@ -202,6 +202,20 @@ export function TranscriptPane({
     gestureAtRef.current = performance.now();
   }, []);
 
+  // `scrollend` lands when momentum stops, so the guard is not cut short mid-gesture the way a
+  // fixed timeout is: an anchor restore that fired then would yank the viewport back under the
+  // user's finger. The timer above still covers engines without `scrollend`.
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    const onScrollEnd = (event: Event) => {
+      if (event.target !== transcript) return;
+      gestureAtRef.current = Number.NEGATIVE_INFINITY;
+    };
+    transcript.addEventListener("scrollend", onScrollEnd);
+    return () => transcript.removeEventListener("scrollend", onScrollEnd);
+  }, []);
+
   const onTranscriptWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
     markScrollGesture();
     // A downward wheel that found the scroller already at the tail is the native form of the TUI's
@@ -322,6 +336,11 @@ export function TranscriptPane({
       return;
     }
     if (followRef.current) {
+      // This pin is not a second writer fighting the rAF one: the pass that mounts or drops rows
+      // changes the scroll extent, and the browser answers with a scroll event that reads as the
+      // user leaving the tail, which drops follow before the next frame. Writing the bottom in the
+      // same pass keeps that event at the tail. `pinToBottom` stands aside mid-gesture, and it is a
+      // no-op once the rAF pin has already reached the bottom.
       pinToBottom(transcript);
       return;
     }

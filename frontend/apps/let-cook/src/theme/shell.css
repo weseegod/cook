@@ -509,7 +509,7 @@ img.brand-mark {
 
 .session-event {
   max-width: none;
-  margin: 2px 0 10px;
+  margin: 2px 0 3px;
   padding-left: 4px;
   color: var(--muted);
   font-size: 12px;

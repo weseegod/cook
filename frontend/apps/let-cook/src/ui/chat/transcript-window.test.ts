@@ -8,10 +8,11 @@ import {
 
 describe("estimateRowHeight", () => {
   it("prefers per-kind defaults over the flat 72px fallback", () => {
-    expect(estimateRowHeight({ type: "session-event" })).toBe(28);
-    expect(estimateRowHeight({ type: "message", role: "thought" })).toBe(48);
-    expect(estimateRowHeight({ type: "tool" })).toBe(52);
-    expect(estimateRowHeight({ type: "verb-group" })).toBe(52);
+    expect(estimateRowHeight({ type: "session-event" })).toBe(22);
+    expect(estimateRowHeight({ type: "message", role: "thought" })).toBe(28);
+    expect(estimateRowHeight({ type: "tool" })).toBe(28);
+    expect(estimateRowHeight({ type: "verb-group" })).toBe(28);
+    expect(estimateRowHeight({ type: "thought-group" })).toBe(28);
     expect(estimateRowHeight({ type: "message", role: "assistant" })).toBe(72);
     expect(estimateRowHeight({ type: "message", role: "user" })).toBe(72);
   });
@@ -40,6 +41,13 @@ describe("content anchor", () => {
     const anchor = captureContentAnchor(rows, 20, heights);
     expect(anchor).toEqual({ rowId: "a", delta: 20 });
     expect(contentAnchorScrollTop(rows, anchor!, heights)).toBe(20);
+  });
+
+  it("leaves scrollTop alone when only rows below the anchor change", () => {
+    const anchor = captureContentAnchor(rows, 50, [40, 40, 40, 40]);
+    expect(anchor).toEqual({ rowId: "b", delta: 10 });
+    // Rows `c` and `d` grow; `a`/`b` (and therefore the anchor) are untouched.
+    expect(contentAnchorScrollTop(rows, anchor!, [40, 40, 200, 200])).toBe(50);
   });
 
   it("returns null when the anchored row is gone", () => {

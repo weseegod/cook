@@ -170,10 +170,25 @@ and the rewind / recap / plan dialogs. A background command stays in
 one projection; `transcript-row.tsx` is the one switch that paints it (message,
 thought, tool, verb group, session event). A second switch is how a child view
 drifts from the parent chat. Tool and thinking rows are `tool-card.tsx`.
-Markdown is `markdown.tsx`. Follow mode mirrors the TUI's scrollback: any
+Markdown is `markdown.tsx`.
+
+The projection folds like the TUI's scrollback. Consecutive foldable tools
+collapse under one header (`Read 2 files, Searched 1 pattern`); a finished
+thought is claimed into that run at height 0, and a still-streaming thought keeps
+its own `Thinking…` row without breaking the run (`docs/tui-presentation.md` §8).
+Which tools fold, and the one-line collapsed header, come from the normalized
+`ToolBlock.kind`: `values.ts` collapses the ACP kind, the canonical
+`_meta["x.ai/tool"].kind` the early `tool_call` already carries, and the wire
+name (`read_file`, `grep`) onto one vocabulary.
+
+Follow mode mirrors the TUI's scrollback: any
 scroll back from the tail drops it, and it resumes from a wheel down at the
 tail, "Jump to latest", or sending a prompt. The pane writes `scrollTop` itself
-(the pin, the anchor restore) only while no scroll gesture is in flight.
+(the follow pin, the anchor restore) only while no scroll gesture is in flight;
+`scrollend`, not a fixed timeout, is what ends the gesture. During a live turn
+the pin runs in the frame loop and again in the layout pass that mounts rows,
+since that pass changes the scroll extent and the browser answers with a scroll
+event that would otherwise read as the user leaving the tail.
 
 ### Header
 

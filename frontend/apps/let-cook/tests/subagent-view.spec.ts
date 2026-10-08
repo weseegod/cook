@@ -174,8 +174,9 @@ test.describe("subagent view", () => {
 
     const transcript = page.locator(".subagent-takeover .transcript");
     // Both halves of the child's turn reached the row: its thinking (folded once the reply starts)
-    // and its reply.
-    await expect(transcript).toContainText(/Thought for \d/);
+    // and its reply. The thought closed within a frame of opening, and a duration that short is not
+    // worth reading, so the header stays `Thought`.
+    await expect(transcript.locator(".thinking-row strong")).toHaveText(/^Thought( for .+)?$/);
     await expect(transcript.locator(".message-assistant .markdown")).toContainText("# Plan: ship the header");
   });
 

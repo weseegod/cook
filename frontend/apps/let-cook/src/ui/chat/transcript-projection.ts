@@ -14,31 +14,53 @@ export type DisplayBlock =
   | { type: "verb-group"; id: string; tools: ToolBlock[] }
   | { type: "thought-group"; id: string; thoughts: MessageBlock[] };
 
+/** One entry inside an open verb run, in arrival order. */
+type RunEntry =
+  | { entry: "tool"; tool: ToolBlock }
+  | { entry: "thought"; thought: MessageBlock };
+
 export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBlock[] {
   const output: DisplayBlock[] = [];
-  let run: { tools: ToolBlock[]; thoughts: MessageBlock[] } | null = null;
+  let run: { entries: RunEntry[] } | null = null;
 
   const flush = () => {
     if (!run) return;
-    const current = run;
+    const entries = run.entries;
     run = null;
-    if (current.tools.length > 0) {
-      output.push({ type: "verb-group", id: `verb-${current.tools[0].id}`, tools: current.tools });
-      return;
+    const tools = entries.flatMap((item) => (item.entry === "tool" ? [item.tool] : []));
+    const group: DisplayBlock | null = tools.length > 0
+      ? { type: "verb-group", id: `verb-${tools[0].id}`, tools }
+      : null;
+    // Walk in arrival order so a live `Thinking…` row sits where it began. Finished thoughts are
+    // claimed into the group beside the tools and never paint a row of their own; with no tools
+    // they compact into one group, or one row when they are alone.
+    const thoughtRun: MessageBlock[] = [];
+    const liveRun: MessageBlock[] = [];
+    const emitGroup = () => {
+      // A live `Thinking…` row is Transparent: it keeps its own row rather than moving under the
+      // group header (`verb_group.rs::RunStep::Transparent`).
+      for (const thought of liveRun) output.push(thought);
+      if (group) {
+        output.push(group);
+        return;
+      }
+      if (thoughtRun.length > 1) output.push({ type: "thought-group", id: `thought-${thoughtRun[0].id}`, thoughts: [...thoughtRun] });
+      else if (thoughtRun.length === 1) output.push(thoughtRun[0]);
+    };
+    for (const item of entries) {
+      if (item.entry === "tool") continue;
+      if (item.thought.streaming) liveRun.push(item.thought);
+      else thoughtRun.push(item.thought);
     }
-    if (current.thoughts.length > 1) {
-      output.push({ type: "thought-group", id: `thought-${current.thoughts[0].id}`, thoughts: current.thoughts });
-      return;
-    }
-    for (const thought of current.thoughts) output.push(thought);
+    emitGroup();
   };
 
   for (const block of blocks) {
     if (block.type === "plan") continue;
     if (block.type === "tool") {
       if (verbKind(block)) {
-        run ??= { tools: [], thoughts: [] };
-        run.tools.push(block);
+        run ??= { entries: [] };
+        run.entries.push({ entry: "tool", tool: block });
         continue;
       }
       flush();
@@ -46,15 +68,11 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
       continue;
     }
     if (block.type === "message" && block.role === "thought") {
-      // Finished thoughts are claimed into an open run (height 0, never labeled) and can anchor one.
-      // A still-streaming thought is transparent: it keeps its own row and breaks the run.
-      if (block.streaming) {
-        flush();
-        output.push(block);
-        continue;
-      }
-      run ??= { tools: [], thoughts: [] };
-      run.thoughts.push(block);
+      // A still-streaming thought paints its own live row outside the group but never splits the
+      // run around it (`verb_group.rs::RunStep::Transparent`). A finished thought folds in at
+      // height 0 and is never labeled on the header (`RunStep::ThoughtMember`).
+      run ??= { entries: [] };
+      run.entries.push({ entry: "thought", thought: block });
       continue;
     }
     flush();

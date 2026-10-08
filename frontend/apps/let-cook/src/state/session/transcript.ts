@@ -18,9 +18,11 @@ import {
 } from "./types";
 import {
   asRecord,
+  canonicalToolMeta,
   contentImage,
   isTerminalToolStatus,
   isTurnActivity,
+  normalizeToolKind,
   numberOr,
   stringOr,
   toolContent,
@@ -36,6 +38,7 @@ const CONTEXT_CLEARED_MARKER = "context cleared";
 export function reduceTranscript(
   transcript: TranscriptState,
   update: SessionUpdate | Record<string, unknown>,
+  envelope: Record<string, unknown> | null = null,
 ): TranscriptState {
   const raw = update as Record<string, unknown>;
   const kind = String(raw.sessionUpdate ?? "");
@@ -43,7 +46,7 @@ export function reduceTranscript(
   if (kind === "user_message_chunk") return reduceUserChunk(transcript, raw);
   if (kind === "agent_message_chunk") return reduceMessageChunk(transcript, raw, "assistant");
   if (kind === "agent_thought_chunk") return reduceMessageChunk(transcript, raw, "thought");
-  if (kind === "tool_call" || kind === "tool_call_update") return reduceTool(transcript, raw);
+  if (kind === "tool_call" || kind === "tool_call_update") return reduceTool(transcript, raw, envelope);
   if (kind === "plan" || kind === "plan_update") return reducePlan(transcript, raw);
   if (kind === "plan_removed") {
     return { ...transcript, blocks: transcript.blocks.filter((block) => block.type !== "plan") };
@@ -212,7 +215,7 @@ export function reduceNotifications(state: SessionState, notifications: SessionN
       applyWorkflowUpdated(raw, notification.sessionId);
       continue;
     }
-    const next = reduceTranscript({ blocks, cursor }, raw);
+    const next = reduceTranscript({ blocks, cursor }, raw, notificationEnvelope(notification));
     blocks = next.blocks;
     cursor = next.cursor;
   }
@@ -373,7 +376,11 @@ function finishOpenThoughts(blocks: TranscriptBlock[]): TranscriptBlock[] {
   return changed ? next : blocks;
 }
 
-function reduceTool(transcript: TranscriptState, raw: Record<string, unknown>): TranscriptState {
+function reduceTool(
+  transcript: TranscriptState,
+  raw: Record<string, unknown>,
+  envelope: Record<string, unknown> | null = null,
+): TranscriptState {
   const isStart = raw.sessionUpdate === "tool_call";
   const id = String(raw.toolCallId ?? `tool-${transcript.blocks.length}`);
   const index = transcript.blocks.findIndex((block) => block.type === "tool" && block.id === id);
@@ -383,13 +390,16 @@ function reduceTool(transcript: TranscriptState, raw: Record<string, unknown>): 
   const status = stringOr(raw.status, previous?.status ?? "pending") ?? "pending";
   const elapsedMs = numberOr(raw.elapsedMs, previous?.elapsedMs ?? null)
     ?? (isTerminalToolStatus(status) ? Math.max(0, Date.now() - startedAt) : null);
-  const metadata = toolMetadata(raw, previous);
-  const next: ToolBlock = {
+  const metadata = toolMetadata(raw, previous, canonicalToolMeta(raw, envelope));
+  // The early `tool_call` carries `kind: "other"` and a wire name (`read_file`); the real kind is in
+  // `_meta["x.ai/tool"]` and arrives refined later. Normalize every spelling so the fold and the
+  // collapsed header do not depend on which hop the agent is on.
+  const kind = normalizeToolKind(raw, envelope) ?? previous?.kind;  const next: ToolBlock = {
     type: "tool",
     id,
     turnId,
     title: stringOr(raw.title, previous?.title ?? "Tool") ?? "Tool",
-    kind: stringOr(raw.kind, previous?.kind),
+    kind,
     status,
     content: toolContent(raw, previous),
     locations: Array.isArray(raw.locations) ? raw.locations : previous?.locations ?? [],
@@ -430,9 +440,22 @@ function reducePlan(transcript: TranscriptState, raw: Record<string, unknown>): 
 
 /** `_meta.totalTokens` on a session/update envelope (TUI `NotificationMeta::total_tokens`). */
 function stampedTotalTokens(notification: SessionNotification): number | null {
-  const envelope = notification as unknown as Record<string, unknown>;
-  const meta = asRecord(envelope._meta) ?? asRecord(envelope.meta);
+  const meta = notificationMeta(notification);
   return numberOr(meta?.totalTokens ?? meta?.total_tokens, null);
+}
+
+/**
+ * The notification envelope's `_meta`/`meta`. The shell stamps the canonical `x.ai/tool` object
+ * into the tool-call's own `_meta`, and a few keys onto the envelope; the fold reads both.
+ */
+function notificationMeta(notification: SessionNotification): Record<string, unknown> | null {
+  const envelope = notification as unknown as Record<string, unknown>;
+  return asRecord(envelope._meta) ?? asRecord(envelope.meta);
+}
+
+function notificationEnvelope(notification: SessionNotification): Record<string, unknown> | null {
+  const meta = notificationMeta(notification);
+  return meta ? { _meta: meta } : null;
 }
 
 /** The agent's clean-run marker text, streamed as one `agent_message_chunk`. */
