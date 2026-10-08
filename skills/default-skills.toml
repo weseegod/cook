@@ -30,7 +30,6 @@ resume-claude = false
 resume-codex = false
 resume-cursor = false
 review = false
-run-checks = true
 skill-design-principles = false
 statusline = false
 threejs-frame-conventions = false

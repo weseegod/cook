@@ -193,13 +193,6 @@ pub(super) fn render_goal_task_discipline(names: &GoalToolNames) -> String {
         .replace("{TODO_TOOL}", &names.todo)
 }
 
-fn expand_run_checks(text: String) -> String {
-    text.replace(
-        "{RUN_CHECKS}",
-        xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE,
-    )
-}
-
 /// Render the plan-aware reminder block.
 /// `Plan: <abs path>` renders on its own column-0 line.
 /// It is a pointer the model and any downstream consumer (debug log scraper, support tooling) can extract reliably, so keep the format stable.
@@ -211,11 +204,9 @@ pub(super) fn render_goal_plan_block(plan_path: &std::path::Path, names: &GoalTo
          cannot follow",
     );
     // Column-0 single-line `Plan: <abs>` contract; see the fn docs
-    expand_run_checks(
-        goal_template("goal/goal_plan_block.md", GOAL_PLAN_BLOCK_TEMPLATE)
-            .replace("{PLAN_PATH}", &plan_path.display().to_string())
-            .replace("{TODO_TOOL}", &names.todo),
-    )
+    goal_template("goal/goal_plan_block.md", GOAL_PLAN_BLOCK_TEMPLATE)
+        .replace("{PLAN_PATH}", &plan_path.display().to_string())
+        .replace("{TODO_TOOL}", &names.todo)
 }
 
 /// Plan path for the goal-mode reminder, or `None` on the legacy path.
@@ -278,28 +269,26 @@ pub(super) fn render_goal_rules(
         Some(path) => render_goal_plan_block(path, names),
         None => String::new(),
     };
-    expand_run_checks(
-        goal_template("goal/goal_rules.md", GOAL_RULES_TEMPLATE)
-            .replace("{OBJECTIVE}", objective)
-            .replace("{TASK_TOOL}", &names.task)
-            .replace("{TODO_TOOL}", &names.todo)
-            .replace("{PLAN_BLOCK}", &plan_block)
-            .replace("{BLOCK_RECAP}", block_recap)
-            .replace("{DISCIPLINE_BLOCK}", &discipline)
-            .replace("{GOAL_STATE}", goal_state)
-            // A literal `{SCRATCH_DIR}` in the objective WOULD be expanded here (harmless, astronomically unlikely)
-            // The `{SCRATCH}` placeholder the text references is a different token, left unreplaced
-            .replace("{SCRATCH_DIR}", scratch_dir)
-            // Only claim the dir exists when the harness actually created it.
-            .replace(
-                "{SCRATCH_STATUS}",
-                if scratch_ready {
-                    "The dir has been created for you."
-                } else {
-                    "Create it with `mkdir -p` if it does not already exist."
-                },
-            ),
-    )
+    goal_template("goal/goal_rules.md", GOAL_RULES_TEMPLATE)
+        .replace("{OBJECTIVE}", objective)
+        .replace("{TASK_TOOL}", &names.task)
+        .replace("{TODO_TOOL}", &names.todo)
+        .replace("{PLAN_BLOCK}", &plan_block)
+        .replace("{BLOCK_RECAP}", block_recap)
+        .replace("{DISCIPLINE_BLOCK}", &discipline)
+        .replace("{GOAL_STATE}", goal_state)
+        // A literal `{SCRATCH_DIR}` in the objective WOULD be expanded here (harmless, astronomically unlikely)
+        // The `{SCRATCH}` placeholder the text references is a different token, left unreplaced
+        .replace("{SCRATCH_DIR}", scratch_dir)
+        // Only claim the dir exists when the harness actually created it.
+        .replace(
+            "{SCRATCH_STATUS}",
+            if scratch_ready {
+                "The dir has been created for you."
+            } else {
+                "Create it with `mkdir -p` if it does not already exist."
+            },
+        )
 }
 
 pub(super) fn render_goal_rules_legacy(
@@ -316,26 +305,24 @@ pub(super) fn render_goal_rules_legacy(
         Some(path) => render_goal_plan_block(path, names),
         None => String::new(),
     };
-    expand_run_checks(
-        goal_template("goal/goal_rules_legacy.md", GOAL_RULES_TEMPLATE_LEGACY)
-            .replace("{OBJECTIVE}", objective)
-            .replace("{GOAL_TOOL}", &names.goal)
-            .replace("{TASK_TOOL}", &names.task)
-            .replace("{TODO_TOOL}", &names.todo)
-            .replace("{PLAN_BLOCK}", &plan_block)
-            .replace("{BLOCK_RECAP}", block_recap)
-            .replace("{DISCIPLINE_BLOCK}", &discipline)
-            .replace("{GOAL_STATE}", goal_state)
-            .replace("{SCRATCH_DIR}", scratch_dir)
-            .replace(
-                "{SCRATCH_STATUS}",
-                if scratch_ready {
-                    "The dir has been created for you."
-                } else {
-                    "Create it with `mkdir -p` if it does not already exist."
-                },
-            ),
-    )
+    goal_template("goal/goal_rules_legacy.md", GOAL_RULES_TEMPLATE_LEGACY)
+        .replace("{OBJECTIVE}", objective)
+        .replace("{GOAL_TOOL}", &names.goal)
+        .replace("{TASK_TOOL}", &names.task)
+        .replace("{TODO_TOOL}", &names.todo)
+        .replace("{PLAN_BLOCK}", &plan_block)
+        .replace("{BLOCK_RECAP}", block_recap)
+        .replace("{DISCIPLINE_BLOCK}", &discipline)
+        .replace("{GOAL_STATE}", goal_state)
+        .replace("{SCRATCH_DIR}", scratch_dir)
+        .replace(
+            "{SCRATCH_STATUS}",
+            if scratch_ready {
+                "The dir has been created for you."
+            } else {
+                "Create it with `mkdir -p` if it does not already exist."
+            },
+        )
 }
 
 /// Assemble a goal auto-pause message from the `headline` (why the goal paused), `pause_summary`, and the `details_path` pointer.
@@ -419,33 +406,31 @@ pub(super) fn render_goal_continuation_directive(
     let verifier_gaps = neutralize_directive_slot(verifier_gaps);
     let strategist_note = neutralize_directive_slot(strategist_note);
     let next_step = neutralize_directive_slot(next_step);
-    expand_run_checks(
-        goal_template(
-            "goal/goal_continuation_directive.md",
-            GOAL_CONTINUATION_DIRECTIVE_TEMPLATE,
-        )
-            .replace("{objective}", objective)
-            .replace("{tokens}", &tokens.to_string())
-            .replace("{elapsed}", elapsed)
-            .replace("{bail_preface}", &bail_preface)
-            .replace("{plan_pointer}", plan_pointer)
-            .replace("{verifier_gaps}", &verifier_gaps)
-            .replace("{reverify_block}", reverify_block)
-            .replace("{next_step}", &next_step)
-            .replace("{todo_tool}", todo_tool)
-            // `{SCRATCH}` is left literal; the model resolves it to this dir
-            .replace("{scratch_dir}", scratch_dir)
-            // Only claim the dir exists when the harness actually created it.
-            .replace(
-                "{scratch_status}",
-                if scratch_ready {
-                    "(created for you)"
-                } else {
-                    "(create with `mkdir -p` if missing)"
-                },
-            )
-            .replace("{strategist_note}", &strategist_note),
+    goal_template(
+        "goal/goal_continuation_directive.md",
+        GOAL_CONTINUATION_DIRECTIVE_TEMPLATE,
     )
+    .replace("{objective}", objective)
+    .replace("{tokens}", &tokens.to_string())
+    .replace("{elapsed}", elapsed)
+    .replace("{bail_preface}", &bail_preface)
+    .replace("{plan_pointer}", plan_pointer)
+    .replace("{verifier_gaps}", &verifier_gaps)
+    .replace("{reverify_block}", reverify_block)
+    .replace("{next_step}", &next_step)
+    .replace("{todo_tool}", todo_tool)
+    // `{SCRATCH}` is left literal; the model resolves it to this dir
+    .replace("{scratch_dir}", scratch_dir)
+    // Only claim the dir exists when the harness actually created it.
+    .replace(
+        "{scratch_status}",
+        if scratch_ready {
+            "(created for you)"
+        } else {
+            "(create with `mkdir -p` if missing)"
+        },
+    )
+    .replace("{strategist_note}", &strategist_note)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -473,32 +458,30 @@ pub(super) fn render_goal_continuation_directive_legacy(
     let verifier_gaps = neutralize_directive_slot(verifier_gaps);
     let strategist_note = neutralize_directive_slot(strategist_note);
     let next_step = neutralize_directive_slot(next_step);
-    expand_run_checks(
-        goal_template(
-            "goal/goal_continuation_directive_legacy.md",
-            GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY,
-        )
-            .replace("{objective}", objective)
-            .replace("{tokens}", &tokens.to_string())
-            .replace("{elapsed}", elapsed)
-            .replace("{bail_preface}", &bail_preface)
-            .replace("{plan_pointer}", plan_pointer)
-            .replace("{verifier_gaps}", &verifier_gaps)
-            .replace("{reverify_block}", reverify_block)
-            .replace("{next_step}", &next_step)
-            .replace("{todo_tool}", todo_tool)
-            .replace("{goal_tool}", goal_tool)
-            .replace("{scratch_dir}", scratch_dir)
-            .replace(
-                "{scratch_status}",
-                if scratch_ready {
-                    "(created for you)"
-                } else {
-                    "(create with `mkdir -p` if missing)"
-                },
-            )
-            .replace("{strategist_note}", &strategist_note),
+    goal_template(
+        "goal/goal_continuation_directive_legacy.md",
+        GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY,
     )
+    .replace("{objective}", objective)
+    .replace("{tokens}", &tokens.to_string())
+    .replace("{elapsed}", elapsed)
+    .replace("{bail_preface}", &bail_preface)
+    .replace("{plan_pointer}", plan_pointer)
+    .replace("{verifier_gaps}", &verifier_gaps)
+    .replace("{reverify_block}", reverify_block)
+    .replace("{next_step}", &next_step)
+    .replace("{todo_tool}", todo_tool)
+    .replace("{goal_tool}", goal_tool)
+    .replace("{scratch_dir}", scratch_dir)
+    .replace(
+        "{scratch_status}",
+        if scratch_ready {
+            "(created for you)"
+        } else {
+            "(create with `mkdir -p` if missing)"
+        },
+    )
+    .replace("{strategist_note}", &strategist_note)
 }
 
 /// Render the `{reverify_block}` slot.
@@ -1969,64 +1952,7 @@ mod compaction_goal_section_tests {
 }
 
 #[cfg(test)]
-mod run_checks_prompt_tests {
-    use super::super::GoalToolNames;
-    use xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
-
-    fn names() -> GoalToolNames {
-        GoalToolNames {
-            goal: "update_goal".to_string(),
-            task: "task".to_string(),
-            todo: "todo_write".to_string(),
-        }
-    }
-
-    #[test]
-    fn goal_rules_embed_the_shared_procedure() {
-        let rendered =
-            super::render_goal_rules("ship it", &names(), "", "", None, "/tmp/scratch", true);
-        assert!(rendered.contains(RUN_CHECKS_PROCEDURE));
-        assert!(!rendered.contains("run each change"));
-        assert!(!rendered.contains("{RUN_CHECKS}"));
-        assert!(!rendered.contains("two fixes"));
-        let legacy = super::render_goal_rules_legacy(
-            "ship it",
-            &names(),
-            "",
-            "",
-            None,
-            "/tmp/scratch",
-            true,
-        );
-        assert!(legacy.contains(RUN_CHECKS_PROCEDURE));
-        assert!(!legacy.contains("run each change"));
-        assert!(!legacy.contains("{RUN_CHECKS}"));
-    }
-
-    #[test]
-    fn plan_block_and_continuation_embed_the_shared_procedure() {
-        let plan = super::render_goal_plan_block(std::path::Path::new("/tmp/plan.md"), &names());
-        assert!(plan.contains(RUN_CHECKS_PROCEDURE));
-        assert!(!plan.contains("{RUN_CHECKS}"));
-        let continuation = super::render_goal_continuation_directive(
-            "ship it",
-            1,
-            "1s",
-            "",
-            "",
-            "",
-            "",
-            "",
-            "next",
-            "todo_write",
-            "/tmp/scratch",
-            true,
-        );
-        assert!(continuation.contains(RUN_CHECKS_PROCEDURE));
-        assert!(!continuation.contains("two fixes"));
-        assert!(!continuation.contains("{RUN_CHECKS}"));
-    }
-
+mod reverify_block_tests {
     #[test]
     fn reverify_asks_for_gating_tests() {
         let current = super::render_goal_reverify_block(3, true, 3);

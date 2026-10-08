@@ -2865,19 +2865,15 @@ impl SessionActor {
     async fn plan_approved_implement_message(&self) -> String {
         let path = self.plan_mode.lock().plan_file_path().display().to_string();
         let checklist = self.checklist_summary();
-        let checks =
-            xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
         format!(
-            "The user approved the plan. Implement the plan in {path}. The approved plan is frozen as the task specification. Do not change its goals, acceptance criteria, section order, or checklist text. Mark a finished step only by changing `- [ ]` to `- [x]`. If implementation requires a deviation, replace `(none yet)` with the first bullet under `## Deviations`, or append a new bullet after existing ones. Do not rewrite existing plan text or deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`. {checks}{checklist}",
+            "The user approved the plan. Implement the plan in {path}. The approved plan is frozen as the task specification. Do not change its goals, acceptance criteria, section order, or checklist text. Mark a finished step only by changing `- [ ]` to `- [x]`. If implementation requires a deviation, replace `(none yet)` with the first bullet under `## Deviations`, or append a new bullet after existing ones. Do not rewrite existing plan text or deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`. {checklist}",
         )
     }
     async fn clean_plan_anchor(&self, feedback: Option<&str>) -> String {
         let path = self.plan_mode.lock().plan_file_path().display().to_string();
         let checklist = self.checklist_summary();
-        let checks =
-            xai_grok_tools::implementations::grok_build::working_plan::RUN_CHECKS_PROCEDURE;
         let mut anchor = format!(
-            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The approved plan is frozen: do not change its goals, acceptance criteria, section order, or checklist text. Mark a finished step only by changing `- [ ]` to `- [x]`. If implementation requires a deviation, replace `(none yet)` with the first bullet under `## Deviations`, or append a new bullet after existing ones. Do not rewrite existing plan text or deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`. {checks} Do not infer requirements from the earlier conversation.{checklist}",
+            "Implement the approved plan at {path}. The plan file is the specification. Read it before editing. The approved plan is frozen: do not change its goals, acceptance criteria, section order, or checklist text. Mark a finished step only by changing `- [ ]` to `- [x]`. If implementation requires a deviation, replace `(none yet)` with the first bullet under `## Deviations`, or append a new bullet after existing ones. Do not rewrite existing plan text or deviation bullets. If goals or acceptance criteria need revision, ask the user to re-enter `/plan`. Do not infer requirements from the earlier conversation.{checklist}",
         );
         if let Some(notes) = feedback.filter(|notes| !notes.trim().is_empty()) {
             anchor.push_str("\n\nReview notes from the approval decision:\n");

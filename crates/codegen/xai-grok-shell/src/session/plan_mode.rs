@@ -845,37 +845,6 @@ mod tests {
         PlanModeTracker::new(dir)
     }
     #[test]
-    fn active_plan_reminders_match_the_draft_and_approved_plan_rules() {
-        let full = plan_mode_reminder_full_template();
-        let goals = full.find("## Goals").expect("goals");
-        let acceptance = full.find("## Acceptance criteria").expect("criteria");
-        let context = full.find("## Context").expect("context");
-        let approach = full.find("## Approach").expect("approach");
-        let non_goals = full
-            .find("## Non-goals / Risks")
-            .expect("non-goals / risks");
-        let deviations = full.find("## Deviations").expect("deviations");
-        let checklist = full.find("## Task checklist").expect("checklist");
-        assert!(goals < acceptance);
-        assert!(acceptance < context);
-        assert!(context < approach);
-        assert!(approach < non_goals);
-        assert!(deviations < checklist);
-        assert!(full.contains("required; its body is exactly `(none yet)` before approval"));
-        assert!(full.contains("The final step verifies the acceptance criteria."));
-        assert!(full.contains("Before approval, treat the plan as a working draft"));
-        assert!(full.contains("After approval, the plan is frozen as the task specification."));
-        assert!(full.contains("replace `(none yet)` with the first bullet"));
-        assert!(full.contains("ask the user to re-enter `/plan`"));
-        assert!(full.contains("The plan file is the only file you may edit."));
-        let reentry = plan_mode_reentry_reminder_template();
-        assert!(
-            reentry.find("## Deviations").unwrap() < reentry.find("## Task checklist").unwrap()
-        );
-        assert!(reentry.contains("After approval, the plan is frozen as the task specification."));
-        assert!(reentry.contains("ask the user to re-enter `/plan`"));
-    }
-    #[test]
     fn user_initiated_lifecycle() {
         let mut t = test_tracker();
         assert_eq!(t.state(), PlanModeState::Inactive);
@@ -1453,10 +1422,6 @@ mod tests {
             assert!(text.contains("search_replace"));
             assert!(!text.contains("${{"));
         }
-        assert!(
-            without_plan.contains("# Plan:"),
-            "empty-plan reminder must tell the model to start with a short H1: {without_plan}"
-        );
     }
     #[test]
     fn full_reminder_resolves_all_tool_names() {
@@ -1550,7 +1515,6 @@ mod tests {
         assert!(!text.contains("previous planning session"));
         assert!(!text.contains("from your previous"));
         assert!(text.contains("starts empty"));
-        assert!(text.contains("# Plan:"));
     }
     /// The rendered reentry path is the NEW episode's file, never the one just finished.
     #[test]

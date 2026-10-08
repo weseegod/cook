@@ -8,25 +8,6 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 
 pub const SAVE_WORKING_PLAN_TOOL_ID: &str = "save_working_plan";
 
-macro_rules! run_checks_procedure {
-    () => {
-        "Use the smallest set of checks that covers those outcomes. One integration check may cover related outcomes. \
-Add a focused check only for an outcome still uncovered. Do not require one script to drive the whole product to its end state.\n\
-\n\
-Run a check when the change it covers is ready, not after every edit. If other work can continue, run it in the background and do that work. \
-Do not sleep-loop or ask for that run's status again. Read the result once when it arrives, before relying on it. \
-If nothing else can continue, run it in the foreground. Do not start another run of a suite that is already running. \
-Rerun only the checks that failed. After the last edit, verify the acceptance criteria. \
-A check already run on that unchanged tree counts for the outcomes it covers. \
-Widen the run only when this project's practice requires it, or the change reaches behavior those checks miss. \
-Stop when a rerun shows the same failure and the same diagnosis. A reworded error is the same failure. \
-If the observation changed, continue. A list still headed `## Tests` is that same section."
-    };
-}
-
-/// Shared check loop for active prompts and the `run-checks` skill. English. The host does not enforce it.
-pub const RUN_CHECKS_PROCEDURE: &str = run_checks_procedure!();
-
 /// Markdown body of a passive working plan. The session allocates the path.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SaveWorkingPlanInput {
@@ -125,13 +106,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn run_checks_procedure_and_plan_save_description() {
-        assert!(RUN_CHECKS_PROCEDURE.contains("in the background"));
-        assert!(RUN_CHECKS_PROCEDURE.contains("Do not sleep-loop"));
-        assert!(RUN_CHECKS_PROCEDURE.contains("unchanged tree"));
-        assert!(
-            RUN_CHECKS_PROCEDURE.contains("A list still headed `## Tests` is that same section.")
-        );
+    fn plan_save_description_names_the_checklist() {
         assert!(
             <SaveWorkingPlanTool as crate::types::tool_metadata::ToolMetadata>::description_template(
                 &SaveWorkingPlanTool

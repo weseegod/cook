@@ -354,11 +354,9 @@ pub fn goal_instruction(objective: &str) -> String {
          TRACKING: break the objective into concrete steps and track them \
          (use your todo tool if one is available), marking each done as you \
          finish it.\n\n\
-         VERIFY AS YOU GO: do not start the test runner after each edit. \
-         If other work can continue, run the check in the background and read \
-         the result once when it arrives. Do not sleep-loop for status. A check \
-         already run on the unchanged final tree counts. A completion claim must be \
-         backed by evidence produced in this session, not assumptions.\n\n\
+         VERIFY AS YOU GO: test each change on the real path before moving on. \
+         A completion claim must be backed by evidence produced in this \
+         session, not assumptions.\n\n\
          Call update_goal(completed: true, message: \"summary\") ONLY when the \
          goal is fully achieved. Call update_goal(blocked_reason: \"reason\") \
          only when truly stuck after 3+ consecutive failed attempts at the \
@@ -535,8 +533,7 @@ mod tests {
             "expansions ride as user messages and must not claim reminder authority"
         );
         assert!(goal_usage_message().contains("Usage: /goal"));
-        assert!(!text.contains("test each change"));
-        assert!(text.contains("background"));
+        assert!(text.contains("test each change on the real path"));
         assert!(text.contains("evidence produced in this session"));
     }
 
