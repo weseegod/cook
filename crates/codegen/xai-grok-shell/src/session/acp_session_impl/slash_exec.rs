@@ -888,6 +888,18 @@ impl SessionActor {
             BuiltinAction::GoalResume => {
                 unreachable!("GoalResume is intercepted in handle_prompt")
             }
+            BuiltinAction::Commit { hint, push, help } => {
+                if help {
+                    let usage = if push {
+                        xai_grok_tools::implementations::grok_build::commit_and_push_usage_message()
+                    } else {
+                        xai_grok_tools::implementations::grok_build::commit_usage_message()
+                    };
+                    self.send_host_turn_slash_command_output(usage).await;
+                    return ok_end_turn(0, None);
+                }
+                self.run_commit_command(hint, push).await
+            }
             BuiltinAction::GoalClear => {
                 let (respond_to, deleted) = tokio::sync::oneshot::channel();
                 if self

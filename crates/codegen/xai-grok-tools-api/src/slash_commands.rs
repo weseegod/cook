@@ -167,26 +167,120 @@ pub fn commit_usage_message() -> &'static str {
 /// Usage hint for a bare `/commit-and-push --help`-style mistake.
 pub fn commit_and_push_usage_message() -> &'static str {
     "Usage: /commit-and-push [message hint]\n\
-     Commit the current changes, integrate the upstream branch, and push."
+     Commit the current changes and push them."
 }
 
-/// Integrate-then-push section appended when `push` is set.
+/// Push-only section appended when `push` is set.
+///
+/// The push never integrates the upstream branch: a rejection that needs a pull is reported, not
+/// resolved. That keeps the commit turn from turning into an unbounded conflict-resolution run.
 const COMMIT_PUSH_SECTION: &str = "\n## Then push\n\
-     After the commit, integrate the upstream branch and push:\n\
-     1. `git fetch` the tracked upstream of the current branch (`@{u}`); when the branch has no \
-        upstream, fetch `origin <branch>`.\n\
-     2. `git pull` with no extra flags so the user's `pull.rebase` / `pull.ff` setting is honored. \
-        Never add `--force` or `--force-with-lease`.\n\
-     3. A clean pull: push with `git push`, or `git push -u origin <branch>` when the branch has no \
-        upstream yet.\n\
-     4. A pull that left conflicts: do NOT abort. List them with \
-        `git diff --name-only --diff-filter=U`, read only those files, and resolve each so both this \
-        branch's intent and the incoming changes hold. Never blindly take \"ours\" or \"theirs\". Stage \
-        the resolved paths, then continue the sequence: `git commit --no-edit` for a merge, or \
-        `GIT_EDITOR=true git rebase --continue` for a rebase. Repeat until it finishes, then push.\n\
-     5. A push that fails on auth or network: report the error verbatim and leave the commit in \
-        place. If the remote moved again while resolving conflicts, retry the push once, then stop \
-        and report.\n";
+     After the commit, push it:\n\
+     1. `git push`; when the branch has no upstream yet, `git push -u origin HEAD`.\n\
+     2. Never add `--force` or `--force-with-lease`.\n\
+     3. A push rejected because the remote branch has commits this branch does not: do NOT pull, \
+        merge, rebase, or resolve conflicts. Leave the commit in place, report the rejection \
+        verbatim, and stop.\n\
+     4. A push that fails on auth or network: report the error verbatim and leave the commit in \
+        place.\n";
+
+/// How the plan for the current changes reaches the commit turn.
+///
+/// The commit turn never sees the parent conversation, so the plan is the only place the *reason*
+/// for the change survives. [`CommitPlan::Body`] inlines a small plan; [`CommitPlan::Path`] points
+/// at one too large to inline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommitPlan<'a> {
+    /// The plan body, inlined because it is small.
+    Body(&'a str),
+    /// The plan file's path, when the body is too large to inline.
+    Path(&'a str),
+}
+
+/// Build the model instruction that `/commit` (and `/commit-and-push`) expand into, with no plan.
+///
+/// See [`commit_instruction_with_plan`] for the plan-carrying variant.
+pub fn commit_instruction(hint: &str, push: bool) -> String {
+    commit_instruction_with_plan(hint, push, None)
+}
+
+/// Build the model instruction that `/commit` (and `/commit-and-push`) expand into.
+///
+/// `hint` is the user's optional steer for the message; `push` appends the push section; `plan`
+/// carries the plan for the current changes when the session has one.
+///
+/// The instruction runs in a fresh turn with no parent conversation: the model writes the message
+/// from the plan and the working tree, never from chat history it cannot see.
+pub fn commit_instruction_with_plan(
+    hint: &str,
+    push: bool,
+    plan: Option<CommitPlan<'_>>,
+) -> String {
+    let hint = hint.trim();
+    let hint_line = if hint.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nThe user supplied this steer for the message: \"{hint}\". When it already reads as a \
+             complete subject line, use it (fix only capitalization and punctuation); otherwise \
+             treat it as emphasis and still write the message from the actual changes.\n"
+        )
+    };
+    let plan_section = match plan {
+        Some(CommitPlan::Body(body)) => format!(
+            "\n## The plan for these changes\n\
+             This plan is the specification for the work being committed:\n\n{body}\n"
+        ),
+        Some(CommitPlan::Path(path)) => format!(
+            "\n## The plan for these changes\n\
+             Read the plan at {path} before writing the message; it is the specification for the \
+             work being committed.\n"
+        ),
+        None => "\n## The plan for these changes\n\
+                 No plan is attached to this session. Write the message from the diff.\n"
+            .to_string(),
+    };
+    let push_section = if push { COMMIT_PUSH_SECTION } else { "" };
+    format!(
+        "# /commit -- commit the current changes\n\n\
+         Commit the work in this workspace now. This is a fresh turn: you do NOT have the \
+         conversation that produced these changes, and nothing from it is available to you. \
+         Everything you need is the plan below (when present) and the working tree. Everything \
+         below is one turn: do not end it until the commit exists or you have reported why it \
+         cannot.{hint_line}{plan_section}\n\
+         ## Message\n\
+         - Write it from the plan and the actual diff: the plan says why the change exists, the \
+           diff says what changed. Do not guess beyond them.\n\
+         - Match the style of recent history (`git log -5 --oneline`): conventional-commit prefixes \
+           only when the log already uses them.\n\
+         - Subject: imperative, at most 72 characters, no trailing period. Add a body only when the \
+           reason is not obvious from the subject.\n\
+         - No attribution trailers (\"Made-with\", co-author) unless this repository already uses \
+           them.\n\n\
+         ## How to commit\n\
+         1. One compact probe, color off: `git -c color.ui=false -c color.diff=false status \
+            --porcelain`, `git -c color.ui=false -c color.diff=false diff --stat HEAD`, and \
+            `git log -5 --oneline`. Read a file's full diff only when the plan and the stat do not \
+            explain that file.\n\
+         2. Nothing modified or staged: say so and stop.\n\
+         3. A merge, rebase, cherry-pick, or bisect already in progress: report it and stop; do not \
+            start a commit on top of it.\n\
+         4. Stage the changes that belong in this commit. Keep secrets (`.env`), dependencies \
+            (`node_modules/`), and build output out of it.\n\
+         5. Write the message to a file with the write tool, then run `git commit -F <file>`. Do not \
+            pass a multi-line `-m`, and do not use a shell heredoc: `<<` is not portable and quoting \
+            breaks the message. Do not add `--no-verify`, `--amend`, or `--allow-empty` unless the \
+            user asked.\n\
+         6. Report the short hash, the subject, and the branch state (`git status -sb`).\n\
+         {push_section}\n\
+         ## Rules\n\
+         - Never force-push, never rewrite published history, and never drop a commit to make a \
+           command succeed.\n\
+         - Run git commands one at a time; do not start a second mutating command while one runs.\n\
+         - No subagents and no extra summary call: this command must not cost a model round-trip of \
+           its own.\n"
+    )
+}
 
 /// Parsed `/commit`-family arguments, shared by every front-end so the flag grammar cannot drift.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,61 +326,6 @@ fn split_trailing_push_flag(args: &str) -> (&str, bool) {
         return (head, true);
     }
     (args, false)
-}
-
-/// Build the model instruction that `/commit` (and `/commit-and-push`) expand into.
-///
-/// `hint` is the user's optional steer for the message; `push` appends the integrate-and-push
-/// section. The wording keeps the turn cheap: the conversation already describes the work, so the
-/// instruction asks for compact git probes and forbids the extra model calls a summary would cost.
-pub fn commit_instruction(hint: &str, push: bool) -> String {
-    let hint = hint.trim();
-    let hint_line = if hint.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nThe user supplied this steer for the message: \"{hint}\". When it already reads as a \
-             complete subject line, use it (fix only capitalization and punctuation); otherwise \
-             treat it as emphasis and still write the message from the actual changes.\n"
-        )
-    };
-    let push_section = if push { COMMIT_PUSH_SECTION } else { "" };
-    format!(
-        "# /commit -- commit the current changes\n\n\
-         Commit the work in this workspace now. Everything below is one turn: do not end it until \
-         the commit exists or you have reported why it cannot.{hint_line}\n\
-         ## Message\n\
-         - Write it from the conversation: what this session changed and why. Do not re-read files \
-           you just wrote.\n\
-         - Match the style of recent history (`git log -5 --oneline`): conventional-commit prefixes \
-           only when the log already uses them.\n\
-         - Subject: imperative, at most 72 characters, no trailing period. Add a body only when the \
-           reason is not obvious from the subject.\n\
-         - No attribution trailers (\"Made-with\", co-author) unless this repository already uses \
-           them.\n\n\
-         ## How to commit\n\
-         1. One compact probe, color off: `git -c color.ui=false -c color.diff=false status \
-            --porcelain`, `git -c color.ui=false -c color.diff=false diff --stat HEAD`, and \
-            `git log -5 --oneline`. Do NOT dump a full patch: the conversation already covers most \
-            of it. Read a file's full diff only when the conversation does not explain that file.\n\
-         2. Nothing modified or staged: say so and stop.\n\
-         3. A merge, rebase, cherry-pick, or bisect already in progress: report it and stop; do not \
-            start a commit on top of it.\n\
-         4. Stage the changes that belong in this commit. Keep secrets (`.env`), dependencies \
-            (`node_modules/`), and build output out of it.\n\
-         5. Write the message to a file with the write tool, then run `git commit -F <file>`. Do not \
-            pass a multi-line `-m`, and do not use a shell heredoc: `<<` is not portable and quoting \
-            breaks the message. Do not add `--no-verify`, `--amend`, or `--allow-empty` unless the \
-            user asked.\n\
-         6. Report the short hash, the subject, and the branch state (`git status -sb`).\n\
-         {push_section}\n\
-         ## Rules\n\
-         - Never force-push, never rewrite published history, and never drop a commit to make a \
-           command succeed.\n\
-         - Run git commands one at a time; do not start a second mutating command while one runs.\n\
-         - No subagents and no extra summary call: this command must not cost a model round-trip of \
-           its own.\n"
-    )
 }
 
 pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
@@ -355,14 +394,43 @@ mod tests {
         assert!(plain.contains("git commit -F <file>"));
         assert!(plain.contains("Never force-push"));
         assert!(plain.contains("no extra summary call"));
-        assert!(plain.contains("Do NOT dump a full patch"));
+        // The fresh-turn contract: no parent conversation, no full-patch dump.
+        assert!(plain.contains("you do NOT have the conversation"));
+        assert!(plain.contains("No plan is attached to this session"));
 
         let push = commit_instruction("ship the widget", true);
         assert!(push.contains("## Then push"));
-        assert!(push.contains("git diff --name-only --diff-filter=U"));
-        assert!(push.contains("GIT_EDITOR=true git rebase --continue"));
+        assert!(push.contains("git push -u origin HEAD"));
         assert!(push.contains("ship the widget"));
         assert!(!plain.contains("ship the widget"));
+    }
+
+    #[test]
+    fn commit_instruction_stops_push_when_it_needs_a_pull() {
+        let push = commit_instruction("", true);
+        assert!(push.contains("do NOT pull, "));
+        assert!(push.contains("report the rejection "));
+        assert!(push.contains("verbatim"));
+        // The retired integrate-then-push flow must not be referenced.
+        assert!(!push.contains("git pull"));
+        assert!(!push.contains("git fetch"));
+        assert!(!push.contains("--diff-filter=U"));
+        assert!(!push.contains("rebase --continue"));
+    }
+
+    #[test]
+    fn commit_instruction_attaches_the_plan_by_body_or_path() {
+        let body = commit_instruction_with_plan("", false, Some(CommitPlan::Body("# Plan: fix it")));
+        assert!(body.contains("# Plan: fix it"));
+        assert!(body.contains("This plan is the specification"));
+
+        let path = commit_instruction_with_plan(
+            "",
+            false,
+            Some(CommitPlan::Path("plans/fix-it.md")),
+        );
+        assert!(path.contains("Read the plan at plans/fix-it.md"));
+        assert!(!path.contains("No plan is attached"));
     }
 
     #[test]

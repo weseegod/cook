@@ -163,6 +163,8 @@ mod mcp_failed_reminder;
 mod model_switch;
 #[path = "acp_session_impl/slash_exec.rs"]
 mod slash_exec;
+#[path = "acp_session_impl/commit.rs"]
+mod commit;
 use super::PromptOrigin;
 use super::chat_persistence;
 use super::compaction_config;

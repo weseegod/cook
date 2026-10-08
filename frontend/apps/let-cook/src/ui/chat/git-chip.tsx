@@ -83,7 +83,7 @@ export function GitChip() {
   const hint = !inRepo ? "This folder is not a git repository" : dirty ? null : "Nothing to commit";
   const branchHint = `Branch: ${status.branch ?? "unavailable"}`;
   const commitHint = hint ?? `Commit to ${status.branch ?? "current branch"}`;
-  const pushHint = hint ?? `${branchHint} · Commit, merge the upstream branch, then push`;
+  const pushHint = hint ?? `${branchHint} · Commit and push`;
   const previewHint = !inRepo
     ? "This folder is not a git repository"
     : status.changedFiles > 0 ? filesChanged : "No changed files to preview";

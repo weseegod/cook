@@ -88,6 +88,7 @@ pub use working_plan::SaveWorkingPlanTool;
 // Canonical `/commit` wording lives in the light API crate so the pager can link it without the
 // tools implementation crate; re-exported to keep the pager/shell import path stable.
 pub use xai_grok_tools_api::slash_commands::{
-    COMMIT_AND_PUSH_COMMAND_NAME, COMMIT_COMMAND_NAME, CommitArgs, commit_and_push_usage_message,
-    commit_instruction, commit_usage_message, parse_commit_args,
+    COMMIT_AND_PUSH_COMMAND_NAME, COMMIT_COMMAND_NAME, CommitArgs, CommitPlan,
+    commit_and_push_usage_message, commit_instruction, commit_instruction_with_plan,
+    commit_usage_message, parse_commit_args,
 };

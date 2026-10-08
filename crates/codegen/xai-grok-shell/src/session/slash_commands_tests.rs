@@ -490,8 +490,8 @@ fn resolve_loop_without_args_uses_bare_command_display_text() {
     );
 }
 
-/// Expanded wire text and `displayText` for a commit-family invocation.
-fn commit_prompt(invocation: &str) -> (String, Option<String>) {
+/// The `BuiltinAction::Commit` a commit-family invocation resolves to: `(hint, push, help)`.
+fn commit_action(invocation: &str) -> (String, bool, bool) {
     let outcome = resolve(
         vec![text_block(invocation)],
         &[],
@@ -500,52 +500,40 @@ fn commit_prompt(invocation: &str) -> (String, Option<String>) {
         &[],
     )
     .unwrap_err();
-    let SlashCommandOutcome::InvokeSkill { blocks, skills } = outcome else {
-        panic!("expected InvokeSkill for {invocation}");
+    let SlashCommandOutcome::Builtin(BuiltinAction::Commit { hint, push, help }) = outcome else {
+        panic!("expected a Builtin Commit for {invocation}, got {outcome:?}");
     };
-    assert!(skills.is_empty(), "{invocation} is a prompt-only command");
-    let acp::ContentBlock::Text(tb) = blocks.first().expect("one block") else {
-        panic!("expected a text block");
-    };
-    let display = tb
-        .meta
-        .as_ref()
-        .and_then(|m| m.get("displayText"))
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    (tb.text.clone(), display)
+    (hint, push, help)
 }
 
 #[test]
-fn resolve_commit_expands_to_the_instruction() {
-    let (text, display) = commit_prompt("/commit fix the parser");
-    assert!(text.contains("fix the parser"));
-    assert!(!text.contains("## Then push"));
-    assert_eq!(display.as_deref(), Some("/commit fix the parser"));
+fn resolve_commit_runs_as_an_isolated_builtin() {
+    let (hint, push, help) = commit_action("/commit fix the parser");
+    assert_eq!(hint, "fix the parser");
+    assert!(!push);
+    assert!(!help);
 }
 
 #[test]
-fn resolve_commit_push_flag_and_alias_match_the_pager_wording() {
-    use xai_grok_tools::implementations::grok_build::{commit_instruction, parse_commit_args};
+fn resolve_commit_push_flag_and_alias_set_push() {
+    let (hint, push, _) = commit_action("/commit wire retries --push");
+    assert_eq!(hint, "wire retries");
+    assert!(push);
 
-    let (flag_text, flag_display) = commit_prompt("/commit wire retries --push");
-    assert_eq!(flag_display.as_deref(), Some("/commit wire retries --push"));
-    let parsed = parse_commit_args("wire retries --push", false);
-    assert_eq!(flag_text, commit_instruction(parsed.hint, parsed.push));
-    assert!(flag_text.contains("## Then push"));
-
-    let (alias_text, alias_display) = commit_prompt("/commit-and-push");
-    assert_eq!(alias_display.as_deref(), Some("/commit-and-push"));
-    assert_eq!(alias_text, commit_instruction("", true));
-    assert!(alias_text.contains("## Then push"));
+    let (hint, push, _) = commit_action("/commit-and-push");
+    assert_eq!(hint, "");
+    assert!(push);
 }
 
 #[test]
-fn resolve_commit_help_shows_usage() {
-    let (text, _) = commit_prompt("/commit --help");
-    assert!(text.contains("Usage: /commit "));
-    let (push_text, _) = commit_prompt("/commit-and-push --help");
-    assert!(push_text.contains("Usage: /commit-and-push "));
+fn resolve_commit_help_is_flagged_not_run() {
+    let (_, push, help) = commit_action("/commit --help");
+    assert!(help);
+    assert!(!push);
+
+    let (_, push, help) = commit_action("/commit-and-push --help");
+    assert!(help);
+    assert!(push);
 }
 
 #[test]
@@ -1267,14 +1255,9 @@ fn prompt_command_colliding_skill_keeps_its_qualified_name() {
     )
     .unwrap_err()
     {
-        // Prompt commands win the bare name and expand to an instruction, carrying no skill refs.
-        SlashCommandOutcome::InvokeSkill { skills: refs, .. } => {
-            assert!(
-                refs.is_empty(),
-                "bare /commit must not resolve to the skill"
-            );
-        }
-        _ => panic!("expected InvokeSkill for bare /commit"),
+        // The commit builtin wins the bare name and never resolves to the skill.
+        SlashCommandOutcome::Builtin(BuiltinAction::Commit { .. }) => {}
+        _ => panic!("expected a Builtin Commit for bare /commit"),
     }
     let outcome = resolve(
         vec![text_block("/local:commit")],
@@ -2009,10 +1992,8 @@ fn workflow_collision_policy_includes_aliases_and_ambiguous_skills() {
     .unwrap_err()
     {
         // The builtin beats both same-named skills and never carries a skill ref.
-        SlashCommandOutcome::InvokeSkill { skills: refs, .. } => {
-            assert!(refs.is_empty(), "bare /commit must not resolve to a skill");
-        }
-        _ => panic!("expected InvokeSkill for bare /commit"),
+        SlashCommandOutcome::Builtin(BuiltinAction::Commit { .. }) => {}
+        _ => panic!("expected a Builtin Commit for bare /commit"),
     }
     // `sessions` is a pager-only name with no shell builtin, so the bare form stays inert here.
     assert!(

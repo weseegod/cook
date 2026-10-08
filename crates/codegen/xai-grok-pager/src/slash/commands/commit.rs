@@ -1,13 +1,15 @@
-use agent_client_protocol as acp;
 use xai_grok_tools::implementations::grok_build::{
     COMMIT_AND_PUSH_COMMAND_NAME, COMMIT_COMMAND_NAME, commit_and_push_usage_message,
-    commit_instruction, commit_usage_message, parse_commit_args,
+    commit_usage_message, parse_commit_args,
 };
 
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand, slash_meta};
 
 /// `/commit` and `/commit-and-push` differ only in their default `push` value.
-/// Both expand to the same instruction from `xai-grok-tools`, so the pager and the shell cannot drift.
+///
+/// Both send the literal command text through to the shell, which runs the isolated commit turn.
+/// The pager never expands them into a prompt, so the parent conversation never carries the
+/// instruction.
 pub struct CommitCommand;
 
 pub struct CommitAndPushCommand;
@@ -22,25 +24,25 @@ impl SlashCommand for CommitCommand {
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
-        commit_result(args, false, COMMIT_COMMAND_NAME)
+        commit_result(args, false)
     }
 }
 
 impl SlashCommand for CommitAndPushCommand {
     slash_meta! {
         name: COMMIT_AND_PUSH_COMMAND_NAME,
-        description: "Commit the current changes and push, resolving pull conflicts",
+        description: "Commit the current changes and push them",
         usage: "/commit-and-push [message hint]",
         takes_args: true,
         arg_placeholder: "[message hint]",
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
-        commit_result(args, true, COMMIT_AND_PUSH_COMMAND_NAME)
+        commit_result(args, true)
     }
 }
 
-fn commit_result(args: &str, force_push: bool, name: &str) -> CommandResult {
+fn commit_result(args: &str, force_push: bool) -> CommandResult {
     let parsed = parse_commit_args(args, force_push);
     if parsed.help {
         return CommandResult::Message(
@@ -52,19 +54,8 @@ fn commit_result(args: &str, force_push: bool, name: &str) -> CommandResult {
             .to_string(),
         );
     }
-    let trimmed = args.trim();
-    CommandResult::InjectSkill {
-        display_text: if trimmed.is_empty() {
-            format!("/{name}")
-        } else {
-            format!("/{name} {trimmed}")
-        },
-        prompt_blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(
-            commit_instruction(parsed.hint, parsed.push),
-        ))],
-        display_as_skill: false,
-        scheduled_task_preview: None,
-    }
+    // Literal passthrough: the shell resolves and runs the isolated commit turn.
+    CommandResult::PassThrough(args.trim().to_string())
 }
 
 #[cfg(test)]
@@ -73,56 +64,35 @@ mod tests {
     use crate::acp::model_state::ModelState;
     use crate::slash::command::CommandExecCtx;
 
-    fn injected(result: CommandResult) -> (String, String) {
+    fn passed(result: CommandResult) -> String {
         match result {
-            CommandResult::InjectSkill {
-                display_text,
-                prompt_blocks,
-                display_as_skill,
-                ..
-            } => {
-                assert!(!display_as_skill, "the commit commands are not skills");
-                let text = prompt_blocks
-                    .iter()
-                    .find_map(|block| match block {
-                        acp::ContentBlock::Text(t) => Some(t.text.clone()),
-                        _ => None,
-                    })
-                    .expect("a text block");
-                (display_text, text)
-            }
-            other => panic!("expected InjectSkill, got {other:?}"),
+            CommandResult::PassThrough(text) => text,
+            other => panic!("expected PassThrough, got {other:?}"),
         }
     }
 
     #[test]
-    fn commit_commits_without_pushing() {
+    fn commit_sends_the_literal_command() {
         let models = ModelState::default();
         let mut ctx = super::super::tests::make_ctx(&models);
-        let (display, text) = injected(CommitCommand.run(&mut ctx, ""));
-        assert_eq!(display, "/commit");
-        assert!(!text.contains("## Then push"));
-        assert!(text.contains("git commit -F <file>"));
+        assert_eq!(passed(CommitCommand.run(&mut ctx, "")), "");
     }
 
     #[test]
-    fn commit_push_flag_switches_to_pushing() {
+    fn commit_keeps_the_hint_and_push_flag_verbatim() {
         let models = ModelState::default();
         let mut ctx = super::super::tests::make_ctx(&models);
-        let (display, text) = injected(CommitCommand.run(&mut ctx, "wire retries --push"));
-        assert_eq!(display, "/commit wire retries --push");
-        assert!(text.contains("## Then push"));
-        assert!(text.contains("wire retries"));
+        assert_eq!(
+            passed(CommitCommand.run(&mut ctx, "wire retries --push")),
+            "wire retries --push"
+        );
     }
 
     #[test]
-    fn commit_and_push_always_pushes() {
+    fn commit_and_push_sends_the_literal_command() {
         let models = ModelState::default();
         let mut ctx = super::super::tests::make_ctx(&models);
-        let (display, text) = injected(CommitAndPushCommand.run(&mut ctx, "ship it"));
-        assert_eq!(display, "/commit-and-push ship it");
-        assert!(text.contains("## Then push"));
-        assert!(text.contains("ship it"));
+        assert_eq!(passed(CommitAndPushCommand.run(&mut ctx, "ship it")), "ship it");
     }
 
     #[test]

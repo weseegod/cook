@@ -500,7 +500,7 @@ const PROMPT_COMMANDS: &[BuiltinCommand] = &[
     },
     BuiltinCommand {
         name: "commit-and-push",
-        description: "Commit the current changes and push, resolving pull conflicts",
+        description: "Commit the current changes and push them",
         argument_hint: Some("[message hint]"),
         aliases: &[],
         model_authored_eligibility: ModelAuthoredEligibility::Denied,
@@ -1411,6 +1411,13 @@ pub(super) enum BuiltinAction {
         name: String,
         input: String,
     },
+    /// `/commit` or `/commit-and-push`: an isolated host turn, never a parent-conversation prompt.
+    Commit {
+        hint: String,
+        push: bool,
+        /// `--help` / `-h`: print usage and end the turn without a model call.
+        help: bool,
+    },
 }
 impl BuiltinAction {
     pub(crate) fn command_name(&self) -> &'static str {
@@ -1445,6 +1452,13 @@ impl BuiltinAction {
             BuiltinAction::DeepResearch { .. } => "deep-research",
             BuiltinAction::WorkflowManage { .. } => "workflow",
             BuiltinAction::WorkflowLaunch { .. } => "workflow",
+            BuiltinAction::Commit { push, .. } => {
+                if *push {
+                    "commit-and-push"
+                } else {
+                    "commit"
+                }
+            }
         }
     }
     pub(crate) fn args_provided(&self) -> bool {
@@ -1478,6 +1492,7 @@ impl BuiltinAction {
             BuiltinAction::DeepResearch { .. } => true,
             BuiltinAction::WorkflowManage { .. } => true,
             BuiltinAction::WorkflowLaunch { input, .. } => !input.is_empty(),
+            BuiltinAction::Commit { hint, .. } => !hint.is_empty(),
         }
     }
 }
@@ -1721,30 +1736,42 @@ pub(super) fn resolve_human_intent(
         .find(|c| slash_key(c.name) == command_key)
         && availability.allows(prompt_cmd.gate)
     {
-        let mut blocks = match prompt_cmd.name {
-            "loop" => build_loop_prompt_blocks(args),
-            "commit" => build_commit_prompt_blocks(args, false),
-            "commit-and-push" => build_commit_prompt_blocks(args, true),
+        match prompt_cmd.name {
+            // `/commit` and `/commit-and-push` run as an isolated host turn: they never expand into
+            // a prompt on the parent conversation.
+            "commit" | "commit-and-push" => {
+                let push = prompt_cmd.name == "commit-and-push";
+                let parsed =
+                    xai_grok_tools::implementations::grok_build::parse_commit_args(args, push);
+                return Err(SlashCommandOutcome::Builtin(BuiltinAction::Commit {
+                    hint: parsed.hint.to_string(),
+                    push: parsed.push,
+                    help: parsed.help,
+                }));
+            }
+            "loop" => {
+                let mut blocks = build_loop_prompt_blocks(args);
+                let display_text = if args.is_empty() {
+                    format!("/{command_name}")
+                } else {
+                    format!("/{command_name} {args}")
+                };
+                if let Some(acp::ContentBlock::Text(tb)) = blocks.first_mut() {
+                    let map = tb.meta.get_or_insert_with(acp::Meta::new);
+                    map.insert(
+                        "displayText".to_string(),
+                        serde_json::Value::String(display_text),
+                    );
+                }
+                return Err(SlashCommandOutcome::InvokeSkill {
+                    blocks,
+                    skills: vec![],
+                });
+            }
             other => {
                 unreachable!("prompt-only command /{other} has no resolver wired in resolve()")
             }
-        };
-        let display_text = if args.is_empty() {
-            format!("/{command_name}")
-        } else {
-            format!("/{command_name} {args}")
-        };
-        if let Some(acp::ContentBlock::Text(tb)) = blocks.first_mut() {
-            let map = tb.meta.get_or_insert_with(acp::Meta::new);
-            map.insert(
-                "displayText".to_string(),
-                serde_json::Value::String(display_text),
-            );
         }
-        return Err(SlashCommandOutcome::InvokeSkill {
-            blocks,
-            skills: vec![],
-        });
     }
     let catalog = EffectiveCommandCatalog::build(skills, availability, workflows);
     if let Some(builtin) = catalog.builtins.iter().find(|builtin| {
@@ -1801,26 +1828,6 @@ fn build_loop_prompt_blocks(args: &str) -> Vec<acp::ContentBlock> {
     vec![acp::ContentBlock::Text(acp::TextContent::new(text))]
 }
 
-/// The wording (usage hints, flag parsing, and instructions) is sourced from `xai-grok-tools`.
-/// It stays identical to the pager's `CommitCommand`, so the two front-ends can't drift.
-/// Empty args still expand to the instruction: whether there is anything to commit is a git
-/// question, not a usage error.
-fn build_commit_prompt_blocks(args: &str, push: bool) -> Vec<acp::ContentBlock> {
-    use xai_grok_tools::implementations::grok_build::{
-        commit_and_push_usage_message, commit_instruction, commit_usage_message, parse_commit_args,
-    };
-    let parsed = parse_commit_args(args, push);
-    let text = if parsed.help {
-        if parsed.push {
-            commit_and_push_usage_message().to_string()
-        } else {
-            commit_usage_message().to_string()
-        }
-    } else {
-        commit_instruction(parsed.hint, parsed.push)
-    };
-    vec![acp::ContentBlock::Text(acp::TextContent::new(text))]
-}
 #[cfg(test)]
 #[path = "slash_commands_tests.rs"]
 mod tests;
