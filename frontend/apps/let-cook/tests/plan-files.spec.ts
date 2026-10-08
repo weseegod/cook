@@ -150,7 +150,7 @@ test.describe("plan list", () => {
     await expect(page.getByRole("dialog")).toContainText(`Delete ${MIDDLE}?`);
     await page.getByTestId("plan-delete-confirm").click();
 
-    await expect(page.getByTestId("notice-banner")).toContainText(`Deleted ${MIDDLE}`);
+    await expect(page.getByTestId("toast-stack")).toContainText(`Deleted ${MIDDLE}`);
     await expect(page.getByTestId(`plan-file-row-${MIDDLE}`)).toHaveCount(0);
     await expect(page.locator(".plan-menu-row")).toHaveCount(2);
     // The agent's own state lost the file, and the request carried the absolute path.

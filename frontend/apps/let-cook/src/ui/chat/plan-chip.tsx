@@ -121,12 +121,12 @@ export function PlanChip() {
     setRowMenu(null);
     const state = useSessionStore.getState();
     if (file.content === null) {
-      state.set({ notice: `${file.name} is too large to copy from here. Open it instead.` });
+      state.pushToast({ tone: "info", title: `${file.name} is too large to copy from here. Open it instead.` });
       return;
     }
     try {
       await copyText(file.content);
-      state.set({ notice: `Copied ${file.name}` });
+      state.pushToast({ tone: "success", title: `Copied ${file.name}` });
     } catch (error) {
       state.set({ error: normalizeError(error, "Could not copy the plan") });
     }
@@ -137,7 +137,7 @@ export function PlanChip() {
     const state = useSessionStore.getState();
     try {
       await copyText(file.path);
-      state.set({ notice: `Copied ${file.path}` });
+      state.pushToast({ tone: "success", title: `Copied ${file.path}` });
     } catch (error) {
       state.set({ error: normalizeError(error, "Could not copy the path") });
     }
@@ -168,7 +168,7 @@ export function PlanChip() {
       await deletePlanFile({ sessionId, cwd, path: file.path });
       setPendingDelete(null);
       await acpClient.refreshPlanFiles();
-      useSessionStore.getState().set({ notice: `Deleted ${file.name}` });
+      useSessionStore.getState().pushToast({ tone: "success", title: `Deleted ${file.name}` });
     } catch (error) {
       setDeleteError(normalizeError(error, "Could not delete the plan"));
     } finally {

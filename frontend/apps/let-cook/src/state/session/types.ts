@@ -40,6 +40,8 @@ export interface ToolBlock {
   elapsedMs: number | null;
   command?: string;
   description?: string;
+  /** User-initiated `!` shell (`tracker.rs` reads `_meta.bash_mode`). Keeps its own row; agent shell folds. */
+  bashMode?: boolean;
   paths: string[];
 }
 
@@ -110,6 +112,34 @@ export interface QueuedPromptEntry {
 export interface FollowUpsState {
   responseId: string;
   suggestions: string[];
+}
+
+export type ToastTone = "info" | "success" | "error";
+
+/**
+ * A transient message in the window's right-side stack. A toast that belongs to a conversation is
+ * the way the user hears about a turn that finished while another conversation was open.
+ */
+export interface Toast {
+  id: string;
+  tone: ToastTone;
+  title: string;
+  body?: string;
+  /** Conversation the message came from; the toast offers to open it when it is not the open one. */
+  sessionId?: string;
+  /** Errors wait for a dismissal or for the user to open their conversation. */
+  sticky?: boolean;
+}
+
+/** A blocking card parked beside the conversation that owns it. */
+export type StashedInteraction =
+  | { kind: "permission"; value: PendingPermission }
+  | { kind: "question"; value: PendingQuestion };
+
+/** The parked cards of one conversation: at most one permission and one question. */
+export interface StashedInteractions {
+  permission?: PendingPermission;
+  question?: PendingQuestion;
 }
 
 /**
@@ -203,6 +233,19 @@ export interface SessionState {
    */
   planReviewsBySession: Record<string, StashedPlanReview>;
   /**
+   * Unanswered permission/ask cards kept per conversation, the same way `planReviewsBySession`
+   * keeps plan decisions. The agent stays parked on the request while another conversation is
+   * open, so switching back must show the card instead of dropping it.
+   */
+  interactionsBySession: Record<string, StashedInteractions>;
+  /**
+   * A failure of a conversation that is not on screen, keyed by session id. Opening that
+   * conversation installs it into `error`, so the banner sits with the transcript it describes.
+   */
+  sessionAlerts: Record<string, string>;
+  /** Right-side messages. Newest first, capped at `MAX_TOASTS`. */
+  toasts: Toast[];
+  /**
    * Queue row currently loaded into the composer for edit (`hold_edit` active).
    * Null when the composer is composing a normal / queued send.
    */
@@ -210,10 +253,22 @@ export interface SessionState {
   /** Follow-up chips from `x.ai/follow_ups` (N-follow). */
   followUps: FollowUpsState | null;
   composerDraft: string;
-  notice: string | null;
   error: string | null;
   set: (patch: Partial<SessionState>) => void;
   setComposerDraft: (draft: string) => void;
+  /** Show a transient message. Identical copy replaces the toast already on screen. */
+  pushToast: (toast: Omit<Toast, "id">) => void;
+  dismissToast: (id: string) => void;
+  /** Park a blocking card for a conversation that is not on screen. */
+  stashInteraction: (sessionId: string, interaction: StashedInteraction) => void;
+  dropStashedInteraction: (sessionId: string, kind: StashedInteraction["kind"]) => void;
+  /**
+   * Reinstall a conversation's parked cards after `session/load` replay, the same way
+   * `restoreStashedPlanReview` reinstalls a plan decision.
+   */
+  restoreStashedInteractions: () => void;
+  /** Remember (or forget) a turn failure for a conversation that is not on screen. */
+  setSessionAlert: (sessionId: string, message: string | null) => void;
   /** Stash the plan body an `exit_plan_mode` request carried; comments are per-review, so they reset. */
   beginPlanReview: (body: string | null, fileName?: string) => void;
   /** The review was answered: it stops blocking, but the body stays viewable for the session. */

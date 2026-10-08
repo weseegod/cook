@@ -3,7 +3,7 @@ import { isLive } from "./status";
 import { useActivityStore } from "./store";
 
 /** Conversation an ext-notification envelope names, when it carries one. */
-function envelopeSession(params: Record<string, unknown>): string | undefined {
+export function notificationSessionId(params: Record<string, unknown>): string | undefined {
   return stringOr(params.sessionId) ?? stringOr(params.session_id) ?? undefined;
 }
 
@@ -28,7 +28,7 @@ export function applyTaskBackgrounded(params: Record<string, unknown>): void {
     detail: stringOr(update.command) ?? undefined,
     outputFile: stringOr(update.output_file ?? update.outputFile) ?? undefined,
     isMonitor: monitor,
-    sessionId: envelopeSession(params),
+    sessionId: notificationSessionId(params),
   });
 }
 
@@ -60,7 +60,7 @@ export function applyTaskCompleted(params: Record<string, unknown>): void {
     outputFile: stringOr(snap.output_file ?? snap.outputFile) ?? undefined,
     truncated: snap.truncated === true,
     endedAt: Date.now(),
-    sessionId: envelopeSession(params),
+    sessionId: notificationSessionId(params),
   });
 }
 
@@ -79,7 +79,7 @@ export function applyScheduledTask(params: Record<string, unknown>, status: "sch
     humanSchedule: stringOr(update.human_schedule ?? update.humanSchedule) ?? prev?.humanSchedule,
     nextFireAt: (stringOr(update.next_fire_at ?? update.nextFireAt) ?? prev?.nextFireAt) as string | null | undefined,
     detail: stringOr(update.human_schedule ?? update.humanSchedule) ?? undefined,
-    sessionId: envelopeSession(params),
+    sessionId: notificationSessionId(params),
   });
 }
 
@@ -106,7 +106,7 @@ export function applyMonitorEvent(params: Record<string, unknown>): void {
     startedAt: prev?.startedAt ?? Date.now(),
     detail: eventText ?? prev?.detail,
     isMonitor: true,
-    sessionId: envelopeSession(params),
+    sessionId: notificationSessionId(params),
   });
 }
 

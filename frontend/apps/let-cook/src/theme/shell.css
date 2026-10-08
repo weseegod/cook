@@ -1062,21 +1062,99 @@ img.brand-mark {
   border-radius: 6px;
 }
 
-.sidebar-notice {
-  position: absolute;
-  z-index: 5;
-  right: 10px;
-  bottom: 44px;
-  left: 10px;
-  padding: 8px 10px;
+.toast-stack {
+  position: fixed;
+  z-index: 140;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(340px, calc(100vw - 24px));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
   border: 1px solid var(--border-strong);
+  border-left-width: 2px;
   border-radius: 8px;
   color: var(--text-soft);
   background: var(--panel-elevated);
   box-shadow: var(--shadow);
   font-size: 11px;
   line-height: 1.4;
+  pointer-events: auto;
+}
+
+.toast > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.toast-info > svg {
+  color: var(--accent-text);
+}
+
+.toast-success {
+  border-left-color: var(--success);
+}
+
+.toast-success > svg {
+  color: var(--success);
+}
+
+.toast-error {
+  border-left-color: var(--danger);
+  color: var(--danger-soft-text);
+  background: var(--danger-soft);
+}
+
+.toast-error > svg {
+  color: var(--danger);
+}
+
+.toast-copy {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   overflow-wrap: anywhere;
+}
+
+.toast-copy strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.toast-error .toast-copy strong {
+  color: var(--danger-soft-strong);
+}
+
+.toast-open,
+.toast-dismiss {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.toast-open {
+  color: var(--accent-text);
+}
+
+.toast-open:hover,
+.toast-dismiss:hover {
+  background: var(--raised-2);
+  color: var(--text);
 }
 
 .sidebar {

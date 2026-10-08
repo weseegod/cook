@@ -41,3 +41,12 @@ export async function notifyTurnComplete(title: string, body: string): Promise<v
   const safeBody = sanitizeNotifyText(body) || "Turn completed";
   await osNotify(safeTitle, safeBody);
 }
+
+/**
+ * The same notification, but only while the window is not the user's focus. A conversation the
+ * user already has in front of them is covered by its own card and toast.
+ */
+export async function notifyWhileUnfocused(title: string, body: string): Promise<void> {
+  if (!shouldNotifyTurnComplete()) return;
+  await notifyTurnComplete(title, body);
+}

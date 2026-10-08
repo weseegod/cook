@@ -130,10 +130,19 @@ export class CookAcpClient {
       error: null,
       cwd,
       workingSessions: {},
-      ...(hadWorking
-        ? { notice: "Switching workspace stopped in-progress conversations." }
-        : {}),
+      // Session ids are scoped to a workspace, so the parked cards and alerts of the old one
+      // cannot be matched to anything here.
+      interactionsBySession: {},
+      sessionAlerts: {},
+      toasts: [],
     });
+    if (hadWorking) {
+      store.pushToast({
+        tone: "info",
+        title: "Workspace switched",
+        body: "Switching workspace stopped in-progress conversations.",
+      });
+    }
     await this.installListeners();
     try {
       this.stopping = true;
@@ -271,6 +280,8 @@ export class CookAcpClient {
     }
     // Restore a parked plan decision after replay; skip when load already installed a new waiter.
     useSessionStore.getState().restoreStashedPlanReview();
+    // Same for a parked question or permission card: replay may have cleared the slot it was in.
+    useSessionStore.getState().restoreStashedInteractions();
     this.cwd = activeCwd;
     useSessionStore.getState().set({ cwd: activeCwd, connection: "ready" });
     const catalog = await hydrateModelCatalog(modelCatalog(response?.models));
@@ -443,7 +454,15 @@ export class CookAcpClient {
     } catch (error) {
       const message = normalizeError(error, "The request failed");
       outcome = { kind: "failed", error: message };
-      useSessionStore.getState().set({ error: message });
+      const store = useSessionStore.getState();
+      // A prompt of a conversation the window has since left keeps its failure with that
+      // conversation; the open chat must not paint a banner for a transcript it is not showing.
+      if (store.sessionId === sessionId) {
+        store.set({ error: message });
+      } else {
+        store.setSessionAlert(sessionId, message);
+        store.pushToast({ tone: "error", title: "Turn failed", body: message, sessionId, sticky: true });
+      }
       throw new Error(message);
     } finally {
       await this.inboundMessages;

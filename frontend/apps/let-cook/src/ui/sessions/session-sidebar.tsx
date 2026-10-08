@@ -30,7 +30,6 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
   const activeId = useSessionStore((state) => state.sessionId);
   const activeTitle = useSessionStore((state) => state.sessionTitle);
   const workspace = useSessionStore((state) => state.cwd);
-  const notice = useSessionStore((state) => state.notice);
   const workingSessions = useSessionStore((state) => state.workingSessions);
   const queryClient = useQueryClient();
   const [dialog, setDialog] = useState<"rename" | "delete" | null>(null);
@@ -174,10 +173,12 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     try {
       const path = await sessionRecordPath(session.id, session.cwd);
       await copyText(path);
-      useSessionStore.getState().set({ notice: `Copied ${path}` });
+      useSessionStore.getState().pushToast({ tone: "success", title: `Copied ${path}` });
     } catch (caught) {
-      useSessionStore.getState().set({
-        notice: normalizeError(caught, "Could not copy the session path"),
+      useSessionStore.getState().pushToast({
+        tone: "error",
+        title: "Could not copy the session path",
+        body: normalizeError(caught, "Could not copy the session path"),
       });
     }
   }
@@ -188,10 +189,10 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
     try {
       if (nextArchived) {
         await acpClient.xai.archiveSession(session.id, session.kind);
-        useSessionStore.getState().set({ notice: "Conversation archived." });
+        useSessionStore.getState().pushToast({ tone: "success", title: "Conversation archived." });
       } else {
         await acpClient.xai.unarchiveSession(session.id, session.kind);
-        useSessionStore.getState().set({ notice: "Conversation unarchived." });
+        useSessionStore.getState().pushToast({ tone: "success", title: "Conversation unarchived." });
       }
       if (session.id === activeId) setActiveArchived(nextArchived);
       await queryClient.invalidateQueries({ queryKey: ["sessions"] });
@@ -357,7 +358,6 @@ export function SessionSidebar({ onOpenSettings, onOpenSearch }: { onOpenSetting
             </div>
           </footer>
         </div>
-        {notice && <div className="sidebar-notice" data-testid="notice-banner" role="status" aria-live="polite">{notice}</div>}
         <div
           className="sidebar-resizer"
           data-testid="sidebar-resizer"

@@ -9,7 +9,7 @@ import { useSessionStore } from "../../state/session";
 export async function openRecap(): Promise<void> {
   const sessionId = useSessionStore.getState().sessionId;
   if (!sessionId) {
-    useSessionStore.getState().set({ notice: "Start a conversation before asking for a recap." });
+    useSessionStore.getState().pushToast({ tone: "info", title: "Start a conversation before asking for a recap." });
     return;
   }
   useSessionStore.getState().beginRecap();

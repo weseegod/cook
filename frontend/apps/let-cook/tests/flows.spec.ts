@@ -785,7 +785,7 @@ test.describe("slash commands", () => {
     await composer(page).fill("/plan");
     await page.keyboard.press("Enter");
 
-    await expect(page.getByTestId("notice-banner")).toContainText("Plan mode is on");
+    await expect(page.getByTestId("toast-stack")).toContainText("Plan mode is on");
     await expect(page.getByTestId("composer-plan-flag")).toBeVisible();
     await expect(page.locator(".composer.plan-mode")).toBeVisible();
     await expect(page.locator(".plan-banner")).toHaveCount(0);
@@ -862,7 +862,7 @@ test.describe("slash commands", () => {
     await page.getByTestId("palette-input").fill("o4-mini");
     await page.getByTestId("palette-item-model-o4-mini").click();
 
-    await expect(page.getByTestId("notice-banner")).toContainText("applies to this window only");
+    await expect(page.getByTestId("toast-stack")).toContainText("applies to this window only");
     await expect(page.getByLabel("Model")).toContainText("o4-mini");
 
     await composer(page).fill("What changed?");

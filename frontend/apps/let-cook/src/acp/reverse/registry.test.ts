@@ -7,6 +7,7 @@ import { dispatchReverseRequest, lookupReverse, unknownReverseAnswer } from "./i
 describe("reverse-request policy (C2)", () => {
   beforeEach(() => {
     useSessionStore.getState().resetConversation();
+    useSessionStore.setState({ interactionsBySession: {}, sessionAlerts: {}, toasts: [], error: null });
     vi.restoreAllMocks();
   });
 
@@ -135,5 +136,79 @@ describe("reverse-request policy (C2)", () => {
       planReview: { body: "# Background plan", fileName: "background.md", pending: true },
       pendingQuestion: { rpcId: 21, kind: "plan" },
     });
+  });
+
+  it("parks a background ask with its conversation instead of the open card", async () => {
+    const respond = vi.spyOn(host, "respond").mockResolvedValue();
+    useSessionStore.getState().resetConversation("visible");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 20, kind: "question", questions: [], raw: {} },
+    });
+
+    const params = { sessionId: "background", toolCallId: "tc-bg", questions: [] };
+    await dispatchReverseRequest(
+      { id: 21, method: "x.ai/ask_user_question", params },
+      "x.ai/ask_user_question",
+      params,
+    );
+
+    expect(respond).not.toHaveBeenCalled();
+    // The open conversation keeps its own card; the background one waits with its session.
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(20);
+    expect(useSessionStore.getState().interactionsBySession.background?.question?.rpcId).toBe(21);
+    expect(useSessionStore.getState().toasts[0]).toMatchObject({
+      tone: "info",
+      sessionId: "background",
+    });
+  });
+
+  it("parks a background permission request without painting the open conversation", async () => {
+    vi.spyOn(host, "respond").mockResolvedValue();
+    useSessionStore.getState().resetConversation("visible");
+
+    const params = {
+      sessionId: "background",
+      toolCall: { title: "Run", kind: "execute" },
+      options: [{ optionId: "allow-once", name: "Allow once", kind: "allow_once" }],
+    };
+    await dispatchReverseRequest(
+      { id: 30, method: "session/request_permission", params },
+      "session/request_permission",
+      params,
+    );
+
+    expect(useSessionStore.getState().pendingPermission).toBeNull();
+    expect(useSessionStore.getState().interactionsBySession.background?.permission?.rpcId).toBe(30);
+  });
+
+  it("restores a parked card when its conversation is opened again", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("visible");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 20, kind: "question", questions: [], raw: {} },
+    });
+
+    // The agent is still parked on the request, so leaving the conversation must not drop it.
+    useSessionStore.getState().resetConversation("other");
+    expect(useSessionStore.getState().pendingQuestion).toBeNull();
+    expect(useSessionStore.getState().interactionsBySession.visible?.question?.rpcId).toBe(20);
+
+    useSessionStore.getState().resetConversation("visible");
+    useSessionStore.getState().restoreStashedInteractions();
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(20);
+    expect(useSessionStore.getState().interactionsBySession.visible).toBeUndefined();
+  });
+
+  it("keeps folder trust on screen across a conversation switch", () => {
+    const store = useSessionStore.getState();
+    store.resetConversation("visible");
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 40, kind: "trust", questions: [], raw: {} },
+    });
+
+    useSessionStore.getState().resetConversation("other");
+    // Trust is about the workspace, so it is neither parked nor dropped.
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(40);
+    expect(useSessionStore.getState().interactionsBySession.visible).toBeUndefined();
   });
 });

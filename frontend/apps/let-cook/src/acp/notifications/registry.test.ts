@@ -21,6 +21,7 @@ describe("notification registry (C3)", () => {
   beforeEach(() => {
     useCatalogStore.getState().setMcpServers([]);
     useSessionStore.getState().resetConversation("s1");
+    useSessionStore.setState({ interactionsBySession: {}, sessionAlerts: {}, toasts: [], error: null });
     notifyMocks.notifyTurnComplete.mockClear();
     notifyMocks.shouldNotifyTurnComplete.mockReset();
     notifyMocks.shouldNotifyTurnComplete.mockReturnValue(false);
@@ -148,8 +149,7 @@ describe("notification registry (C3)", () => {
     expect(state.blocks[0]).toMatchObject({ id: "m-active", streaming: true });
   });
 
-  it("releases only the completed background prompt when promptId is present", async () => {
-    const startedAt = Date.now() - 2_000;
+  it("releases only the completed background prompt when promptId is present", async () => {    const startedAt = Date.now() - 2_000;
     useSessionStore.setState({
       sessionId: "active",
       turnRunning: true,
@@ -180,6 +180,76 @@ describe("notification registry (C3)", () => {
       startedAt,
       activity: null,
       promptIds: ["bg-new"],
+    });
+  });
+
+  it("reports a background failure as an alert and a toast, not the open chat's banner", async () => {
+    useSessionStore.setState({
+      sessionId: "active",
+      turnRunning: true,
+      turnStartedAt: Date.now() - 500,
+      error: null,
+      workingSessions: {
+        background: { startedAt: Date.now() - 2_000, activity: null, promptIds: ["bg-1"] },
+      },
+    });
+
+    await dispatchNotification(
+      { method: "x.ai/session/prompt_complete", params: {} },
+      "x.ai/session/prompt_complete",
+      { sessionId: "background", stopReason: "error", error: "provider refused the request" },
+    );
+
+    const state = useSessionStore.getState();
+    expect(state.error).toBeNull();
+    expect(state.turnRunning).toBe(true);
+    expect(state.sessionAlerts.background).toBe("provider refused the request");
+    expect(state.toasts[0]).toMatchObject({
+      tone: "error",
+      title: "Turn failed",
+      sessionId: "background",
+    });
+  });
+
+  it("gives a background completion a toast without touching the open chat", async () => {
+    useSessionStore.setState({
+      sessionId: "active",
+      turnRunning: true,
+      turnStartedAt: Date.now() - 500,
+      workingSessions: {
+        background: { startedAt: Date.now() - 2_000, activity: null, promptIds: ["bg-1"] },
+      },
+    });
+
+    await dispatchNotification(
+      { method: "x.ai/session/prompt_complete", params: {} },
+      "x.ai/session/prompt_complete",
+      { sessionId: "background", stopReason: "end_turn" },
+    );
+
+    const state = useSessionStore.getState();
+    expect(state.error).toBeNull();
+    expect(state.sessionAlerts.background).toBeUndefined();
+    expect(state.toasts[0]).toMatchObject({ tone: "success", sessionId: "background" });
+  });
+
+  it("drops follow-up chips stamped for a turn this window is not painting", async () => {
+    useSessionStore.setState({ currentPromptId: "prompt-mine" });
+    await dispatchNotification(
+      { method: "x.ai/follow_ups", params: {} },
+      "x.ai/follow_ups",
+      { response_id: "resp-other", promptId: "prompt-theirs", suggestions: [{ label: "Wrong thread" }] },
+    );
+    expect(useSessionStore.getState().followUps).toBeNull();
+
+    await dispatchNotification(
+      { method: "x.ai/follow_ups", params: {} },
+      "x.ai/follow_ups",
+      { response_id: "resp-mine", promptId: "prompt-mine", suggestions: [{ label: "Open tests" }] },
+    );
+    expect(useSessionStore.getState().followUps).toEqual({
+      responseId: "resp-mine",
+      suggestions: ["Open tests"],
     });
   });
 

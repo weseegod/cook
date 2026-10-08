@@ -1,6 +1,7 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
-import { useSessionStore, type PendingQuestion } from "../../state/session";
+import { useSessionStore, type PendingQuestion, type StashedInteraction } from "../../state/session";
 import { planFileName } from "../../state/plan-review";
+import { parkBackgroundInteraction } from "../background-alerts";
 import type { ReverseContext, ReverseDisposition, ReverseEntry } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -114,6 +115,35 @@ function park(ctx: ReverseContext, build: (id: number | string) => void): Revers
   return { kind: "parked" };
 }
 
+/** The conversation a reverse-request belongs to. Some workspace-level ones carry none. */
+function ownerSessionId(params: Record<string, unknown>): string | null {
+  const raw = params.sessionId ?? params.session_id;
+  return typeof raw === "string" && raw !== "" ? raw : null;
+}
+
+/**
+ * Install a blocking card, or park it with its conversation. `request_permission` /
+ * `ask_user_question` / `mcp/elicit` arrive for the session that raised them: painting one on
+ * another conversation would let the user answer a request they cannot see the reason for.
+ */
+function parkWaiter(
+  ctx: ReverseContext,
+  interaction: StashedInteraction,
+  backgroundCopy: { title: string; body: string },
+): void {
+  const owner = ownerSessionId(ctx.params);
+  const active = useSessionStore.getState().sessionId;
+  if (owner && active && owner !== active) {
+    parkBackgroundInteraction(owner, interaction, backgroundCopy);
+    return;
+  }
+  if (interaction.kind === "permission") {
+    useSessionStore.getState().set({ pendingPermission: interaction.value });
+    return;
+  }
+  useSessionStore.getState().set({ pendingQuestion: interaction.value });
+}
+
 /** R-ask / R-plan / R-elicit / R-trust / session/request_permission — park UI cards. */
 export const interactionEntries: ReverseEntry[] = [
   {
@@ -121,12 +151,14 @@ export const interactionEntries: ReverseEntry[] = [
     method: "session/request_permission",
     handle: async (ctx) =>
       park(ctx, (rpcId) => {
-        useSessionStore.getState().set({
-          pendingPermission: {
-            rpcId,
-            request: ctx.params as unknown as RequestPermissionRequest,
+        parkWaiter(
+          ctx,
+          {
+            kind: "permission",
+            value: { rpcId, request: ctx.params as unknown as RequestPermissionRequest },
           },
-        });
+          { title: "Permission needed", body: "Another conversation is blocked until you answer." },
+        );
       }),
   },
   {
@@ -134,7 +166,11 @@ export const interactionEntries: ReverseEntry[] = [
     method: "x.ai/ask_user_question",
     handle: async (ctx) =>
       park(ctx, (rpcId) => {
-        useSessionStore.getState().set({ pendingQuestion: questionInteraction(rpcId, ctx.params) });
+        parkWaiter(
+          ctx,
+          { kind: "question", value: questionInteraction(rpcId, ctx.params) },
+          { title: "A question is waiting", body: "Another conversation is blocked until you answer." },
+        );
       }),
   },
   {
@@ -148,7 +184,7 @@ export const interactionEntries: ReverseEntry[] = [
         const planPath = typeof ctx.params.planFilePath === "string" ? ctx.params.planFilePath : null;
         const fileName = planFileName(planPath);
         const question = planInteraction(rpcId, ctx.params);
-        const ownerId = typeof ctx.params.sessionId === "string" ? ctx.params.sessionId : null;
+        const ownerId = ownerSessionId(ctx.params);
         const activeId = useSessionStore.getState().sessionId;
         // A request for a background conversation must not paint the open conversation's review.
         if (ownerId && activeId && ownerId !== activeId) {
@@ -173,6 +209,7 @@ export const interactionEntries: ReverseEntry[] = [
     method: "x.ai/folder_trust/request",
     handle: async (ctx) =>
       park(ctx, (rpcId) => {
+        // Folder trust is about the workspace, not a conversation, so it stays on screen.
         useSessionStore.getState().set({ pendingQuestion: trustInteraction(rpcId, ctx.params) });
       }),
   },
@@ -181,7 +218,11 @@ export const interactionEntries: ReverseEntry[] = [
     method: "x.ai/mcp/elicit",
     handle: async (ctx) =>
       park(ctx, (rpcId) => {
-        useSessionStore.getState().set({ pendingQuestion: elicitInteraction(rpcId, ctx.params) });
+        parkWaiter(
+          ctx,
+          { kind: "question", value: elicitInteraction(rpcId, ctx.params) },
+          { title: "A connector needs input", body: "Another conversation is blocked until you answer." },
+        );
       }),
   },
 ];

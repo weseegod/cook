@@ -24,7 +24,7 @@ beforeEach(() => {
   vi.mocked(acpClient.xai.deleteAllSessions).mockReset();
   vi.mocked(acpClient.xai.deleteAllSessions).mockResolvedValue({ deleted: 2, plansDeleted: 3, failed: 0 });
   localStorage.clear();
-  useSessionStore.setState({ sessionId: "sess-1", cwd: "/work", notice: null, error: null });
+  useSessionStore.setState({ sessionId: "sess-1", cwd: "/work", error: null, toasts: [] });
 });
 
 afterEach(cleanup);
@@ -53,7 +53,7 @@ describe("DataControlsPanel", () => {
 
     await waitFor(() => expect(vi.mocked(acpClient.xai.deleteAllSessions)).toHaveBeenCalledTimes(1));
 
-    expect(useSessionStore.getState().notice).toBe("Deleted 2 conversations and 3 plan files.");
+    expect(useSessionStore.getState().toasts[0]?.title).toBe("Deleted 2 conversations and 3 plan files.");
     // The open conversation went with the rest, so the window drops it.
     expect(useSessionStore.getState().sessionId).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -82,7 +82,7 @@ describe("DataControlsPanel", () => {
         "Deleted 3 conversations and 4 plan files; 2 could not be deleted.",
       ),
     );
-    expect(useSessionStore.getState().notice).toBeNull();
+    expect(useSessionStore.getState().toasts).toEqual([]);
   });
 
   it("keeps the confirmation open with the agent's error", async () => {

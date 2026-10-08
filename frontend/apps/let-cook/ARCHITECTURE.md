@@ -121,6 +121,7 @@ registry; everything else goes to the notification registry.
 | `client-coalesce.ts` | Coalesce `session/update` before the reducer |
 | `mock-transport.ts` | ACP stand-in for Playwright (`VITE_MOCK_ACP=1`) and unit tests |
 | `os-notify.ts` | Turn-complete OS notification copy |
+| `background-alerts.ts` | Park a blocking card, toast, and alert for a conversation the window is not showing |
 | `trace.ts` | `COOK_DESKTOP_TRACE=1` method/id trace |
 
 C→A wrappers are still the flat files above (`xai.ts`, `extensions.ts`,
@@ -156,9 +157,18 @@ and `notifications/registry.ts`.
 ### Frame
 
 `ui/app-shell.tsx` is the window: session sidebar, `ChatView`, utility panel,
-lazy Settings, command palette, shortcuts, welcome, and connect-provider.
+lazy Settings, command palette, shortcuts, welcome, and connect-provider, over
+`ui/toast-stack.tsx`.
 `MIN_CHAT_WIDTH_WITH_TOOLS` (600) collapses the sidebar when the tools panel
 would squeeze the chat.
+
+A conversation owns its blocking card and its outcome. `useSessionStore`
+carries the open one in `pendingQuestion` / `pendingPermission` / `error`;
+every other conversation's waiter lives in `interactionsBySession`, its failure
+in `sessionAlerts`, and both are restored when that conversation is loaded
+again. `ui/toast-stack.tsx` is the right-side message stack, and a message that
+names another conversation opens it instead of painting that conversation's
+transcript over the one on screen.
 
 `ui/chat/chat-view.tsx` is the chat column. A subagent `[view]` replaces that
 column with `subagent-takeover.tsx` (same `TranscriptPane` rows, no composer).

@@ -48,7 +48,7 @@ test.describe("data controls", () => {
     await capture(page, "data-controls-confirm");
     await page.getByTestId("delete-all-confirm").click();
 
-    await expect(page.getByTestId("notice-banner")).toContainText("Deleted 3 conversations and 2 plan files");
+    await expect(page.getByTestId("toast-stack")).toContainText("Deleted 3 conversations and 2 plan files");
     const stored = (await api(page).state()) as {
       sessions: Array<{ id: string }>;
       planFiles: Array<{ name: string }>;

@@ -97,7 +97,6 @@ async function beginEdit(sessionId: string, entry: QueuedPromptEntry) {
   store.set({
     editingQueueEntry: { id: entry.id, version: entry.version },
     composerDraft: entry.text,
-    notice: null,
     error: null,
   });
 }

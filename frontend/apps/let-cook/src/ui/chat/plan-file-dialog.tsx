@@ -23,12 +23,12 @@ export function PlanFileDialog() {
   async function copyPlan() {
     const state = useSessionStore.getState();
     if (planFile.content === null) {
-      state.set({ notice: `${planFile.name} is too large to copy from here. Open it instead.` });
+      state.pushToast({ tone: "info", title: `${planFile.name} is too large to copy from here. Open it instead.` });
       return;
     }
     try {
       await copyText(planFile.content);
-      state.set({ notice: `Copied ${planFile.name}` });
+      state.pushToast({ tone: "success", title: `Copied ${planFile.name}` });
     } catch (error) {
       state.set({ error: normalizeError(error, "Could not copy the plan") });
     }
@@ -38,7 +38,7 @@ export function PlanFileDialog() {
     const state = useSessionStore.getState();
     try {
       await copyText(planFile.path);
-      state.set({ notice: `Copied ${planFile.path}` });
+      state.pushToast({ tone: "success", title: `Copied ${planFile.path}` });
     } catch (error) {
       state.set({ error: normalizeError(error, "Could not copy the path") });
     }

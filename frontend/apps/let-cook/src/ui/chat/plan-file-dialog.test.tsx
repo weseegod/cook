@@ -29,8 +29,8 @@ beforeEach(() => {
   vi.mocked(copyText).mockClear();
   useSessionStore.setState({
     planFileView: null,
-    notice: null,
     error: null,
+    toasts: [],
   });
 });
 
@@ -47,11 +47,11 @@ describe("PlanFileDialog", () => {
 
     fireEvent.click(screen.getByTestId("plan-file-view-copy"));
     await vi.waitFor(() => expect(vi.mocked(copyText)).toHaveBeenCalledWith(file.content));
-    expect(useSessionStore.getState().notice).toBe(`Copied ${file.name}`);
+    expect(useSessionStore.getState().toasts[0]?.title).toBe(`Copied ${file.name}`);
 
     fireEvent.click(screen.getByTestId("plan-file-view-copy-path"));
     await vi.waitFor(() => expect(vi.mocked(copyText)).toHaveBeenLastCalledWith(file.path));
-    expect(useSessionStore.getState().notice).toBe(`Copied ${file.path}`);
+    expect(useSessionStore.getState().toasts[0]?.title).toBe(`Copied ${file.path}`);
   });
 
   it("offers the same actions when the current episode opens read-only", async () => {

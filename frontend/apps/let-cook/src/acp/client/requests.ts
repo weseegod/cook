@@ -99,8 +99,9 @@ export async function pushDefaultModel(modelId: string): Promise<void> {
     await setDefaultModelOnAgent(modelId);
   } catch (error) {
     const detail = normalizeError(error, "The request failed");
-    useSessionStore.getState().set({
-      notice: /-32601|method not found/i.test(detail)
+    useSessionStore.getState().pushToast({
+      tone: "info",
+      title: /-32601|method not found/i.test(detail)
         ? "This agent build cannot write [models] default, so the choice applies to this window only."
         : `${detail} — the default applies to this window only.`,
     });

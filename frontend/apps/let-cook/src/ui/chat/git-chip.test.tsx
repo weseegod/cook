@@ -37,13 +37,13 @@ beforeEach(() => {
   vi.mocked(loadGitStatus).mockResolvedValue(dirty);
   vi.mocked(acpClient.prompt).mockClear();
   vi.mocked(acpClient.queuePrompt).mockClear();
-  useSessionStore.setState({ cwd: "/workspace", turnRunning: false, notice: null, error: null });
+  useSessionStore.setState({ cwd: "/workspace", turnRunning: false, error: null });
 });
 
 afterEach(() => {
   vi.useRealTimers();
   publishGitStatus(null);
-  useSessionStore.setState({ cwd: null, turnRunning: false, notice: null, error: null });
+  useSessionStore.setState({ cwd: null, turnRunning: false, error: null });
 });
 
 describe("GitChip", () => {

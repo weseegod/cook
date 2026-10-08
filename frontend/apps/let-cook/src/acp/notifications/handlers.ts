@@ -2,6 +2,7 @@ import type { McpToolSummary, PluginView } from "../extensions";
 import { mergeMcpCatalog, mcpServersFromParams } from "../mcp-servers";
 import type { HookView, MemoryFileView } from "../settings-ext";
 import { activityPayload } from "../activity";
+import { reportBackgroundTurnOutcome } from "../background-alerts";
 import { notifyTurnComplete, shouldNotifyTurnComplete, turnCompleteNotifyCopy } from "../os-notify";
 import { modelCatalog } from "../xai";
 import { normalizeError } from "../errors";
@@ -11,6 +12,7 @@ import {
   applyScheduledTaskDeleted,
   applyTaskBackgrounded,
   applyTaskCompleted,
+  notificationSessionId,
 } from "../../state/activity";
 import { useCatalogStore } from "../../state/catalog";
 import { useSessionStore, type TurnOutcome } from "../../state/session";
@@ -19,6 +21,15 @@ import type { NotificationEntry } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** First non-empty string among `keys`; the wire mixes camelCase and snake_case. */
+function stringParam(params: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = params[key];
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return null;
 }
 
 function memoryFilesFromParams(params: Record<string, unknown>): MemoryFileView[] {
@@ -200,8 +211,10 @@ export const notificationEntries: NotificationEntry[] = [
       const completedPromptId = typeof ctx.params.promptId === "string" ? ctx.params.promptId : undefined;
       // Always release the prompt from the conversation list, even for the open session.
       if (sessionId) trackWorking(sessionId, null, completedPromptId);
-      // Background turn finished while another conversation is open — leave the composer alone.
+      // Background turn finished while another conversation is open — the outcome belongs to that
+      // conversation, so it becomes an alert there and a toast here.
       if (sessionId && store.sessionId && sessionId !== store.sessionId) {
+        reportBackgroundTurnOutcome(sessionId, outcomeFromPromptComplete(ctx.params));
         return;
       }
       if (!store.turnRunning && store.turnStartedAt === null) return;
@@ -275,10 +288,17 @@ export const notificationEntries: NotificationEntry[] = [
   {
     mapId: "N-mcp-elic",
     method: "x.ai/mcp/elicit_complete",
-    handle: () => {
-      const pending = useSessionStore.getState().pendingQuestion;
-      if (pending?.kind === "elicit") {
-        useSessionStore.getState().set({ pendingQuestion: null });
+    handle: (ctx) => {
+      const sessionId = stringParam(ctx.params, "session_id", "sessionId");
+      const store = useSessionStore.getState();
+      // A completion belongs to the elicitation that opened it: it must not dismiss a card the
+      // agent is still parked on in another conversation.
+      if (sessionId && store.sessionId && sessionId !== store.sessionId) {
+        store.dropStashedInteraction(sessionId, "question");
+        return;
+      }
+      if (store.pendingQuestion?.kind === "elicit") {
+        store.set({ pendingQuestion: null });
       }
     },
   },
@@ -317,7 +337,12 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/task_completed",
     handle: (ctx) => {
       applyTaskCompleted(ctx.params);
-      useSessionStore.getState().set({ notice: `${taskNoticeName(ctx.params)} completed` });
+      const sessionId = notificationSessionId(ctx.params);
+      useSessionStore.getState().pushToast({
+        tone: "success",
+        title: `${taskNoticeName(ctx.params)} completed`,
+        ...(sessionId ? { sessionId } : {}),
+      });
     },
   },
   {
@@ -325,7 +350,12 @@ export const notificationEntries: NotificationEntry[] = [
     method: "x.ai/task_backgrounded",
     handle: (ctx) => {
       applyTaskBackgrounded(ctx.params);
-      useSessionStore.getState().set({ notice: `${taskNoticeName(ctx.params)} running in background` });
+      const sessionId = notificationSessionId(ctx.params);
+      useSessionStore.getState().pushToast({
+        tone: "info",
+        title: `${taskNoticeName(ctx.params)} running in background`,
+        ...(sessionId ? { sessionId } : {}),
+      });
     },
   },
   {
@@ -419,6 +449,10 @@ export const notificationEntries: NotificationEntry[] = [
       if (ctx.params._meta && isRecord(ctx.params._meta) && ctx.params._meta["x.ai/replayed"] === true) {
         return;
       }
+      // The notification carries no session id, so the stamped `promptId` is the only identity it
+      // has: chips for a turn this window is not painting must not land in the open conversation.
+      const promptId = typeof ctx.params.promptId === "string" ? ctx.params.promptId : null;
+      if (promptId && promptId !== useSessionStore.getState().currentPromptId) return;
       const responseId = String(ctx.params.response_id ?? ctx.params.responseId ?? "");
       if (!responseId || responseId.length > 128) return;
       const raw = Array.isArray(ctx.params.suggestions) ? ctx.params.suggestions : [];

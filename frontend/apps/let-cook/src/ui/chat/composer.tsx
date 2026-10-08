@@ -124,7 +124,7 @@ export function Composer() {
    *
    * A leading `/name` the window owns (`/plan`, `/model`, `/new`) is executed here; every other
    * slash text travels as a prompt, which is how the agent's own commands and skills arrive.
-   * Commands that produce a line of their own park it in `notice`, since they never reach the
+   * Commands that produce a line of their own become a toast, since they never reach the
    * agent and so never appear in the transcript.
    */
   async function submit() {
@@ -201,7 +201,7 @@ export function Composer() {
       if (!sessionId) return;
       const question = slash.args.trim();
       if (!question) {
-        useSessionStore.getState().set({ notice: "Usage: /btw <question>" });
+        useSessionStore.getState().pushToast({ tone: "info", title: "Usage: /btw <question>" });
         return;
       }
       const finish = beginWork();
@@ -209,8 +209,9 @@ export function Composer() {
       setMenuClosed(false);
       try {
         const result = await askBtw(sessionId, question);
-        useSessionStore.getState().set({
-          notice: result.answer?.trim() ? `/btw: ${result.answer.trim()}` : "/btw answered.",
+        useSessionStore.getState().pushToast({
+          tone: "info",
+          title: result.answer?.trim() ? `/btw: ${result.answer.trim()}` : "/btw answered.",
         });
       } catch (error) {
         reportError(error);
@@ -227,7 +228,7 @@ export function Composer() {
     setText("");
     setAttachments([]);
     setMenuClosed(false);
-    useSessionStore.getState().set({ notice: null, error: null });
+    useSessionStore.getState().set({ error: null });
     try {
       if (command && slash) {
         const usage = useSessionStore.getState().usage;
@@ -236,7 +237,7 @@ export function Composer() {
           { sessionId, modelId, planMode, alwaysApprove, usage, models, hasPlan, cancelRewindEnabled, sessionRecapEnabled },
           slash.args,
         );
-        if (message) useSessionStore.getState().set({ notice: message });
+        if (message) useSessionStore.getState().pushToast({ tone: "success", title: message });
       } else if (turnRunning) {
         acpClient.queuePrompt(prompt, sending);
       } else {

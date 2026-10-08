@@ -34,11 +34,16 @@ export function DataControlsPanel({ connected }: { connected: boolean }) {
       setConfirming(false);
       const conversations = `${result.deleted} conversation${result.deleted === 1 ? "" : "s"}`;
       const plans = `${result.plansDeleted} plan file${result.plansDeleted === 1 ? "" : "s"}`;
-      useSessionStore.getState().set(
-        result.failed > 0
-          ? { error: `Deleted ${conversations} and ${plans}; ${result.failed} could not be deleted.` }
-          : { notice: `Deleted ${conversations} and ${plans}.` },
-      );
+      if (result.failed > 0) {
+        useSessionStore.getState().set({
+          error: `Deleted ${conversations} and ${plans}; ${result.failed} could not be deleted.`,
+        });
+      } else {
+        useSessionStore.getState().pushToast({
+          tone: "success",
+          title: `Deleted ${conversations} and ${plans}.`,
+        });
+      }
     } catch (caught) {
       setError(normalizeError(caught, "Could not delete the conversations"));
     } finally {

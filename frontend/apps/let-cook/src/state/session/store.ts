@@ -3,7 +3,17 @@ import { readLocal } from "../../ui/storage";
 import { emptyPlanSlice } from "../plan-review";
 import { emptyCursor } from "./cursor";
 import { appendTurnMarker, finishStreamingBlocks, reduceNotifications } from "./transcript";
-import { DEFAULT_SESSION_TITLE, EMPTY_PLAN_ENTRIES, type SessionState, type StashedPlanReview } from "./types";
+import {
+  DEFAULT_SESSION_TITLE,
+  EMPTY_PLAN_ENTRIES,
+  type SessionState,
+  type StashedInteraction,
+  type StashedInteractions,
+  type StashedPlanReview,
+} from "./types";
+
+/** How many toasts the right-side stack keeps before dropping the oldest. */
+export const MAX_TOASTS = 3;
 
 function dropPlanReviewStash(
   planReviewsBySession: Record<string, StashedPlanReview>,
@@ -15,7 +25,38 @@ function dropPlanReviewStash(
   return next;
 }
 
-export const useSessionStore = create<SessionState>((set) => ({
+function dropInteractionStash(
+  interactionsBySession: Record<string, StashedInteractions>,
+  sessionId: string | null,
+): Record<string, StashedInteractions> {
+  if (!sessionId || !(sessionId in interactionsBySession)) return interactionsBySession;
+  const next = { ...interactionsBySession };
+  delete next[sessionId];
+  return next;
+}
+
+function withoutInteraction(
+  stash: StashedInteractions | undefined,
+  kind: StashedInteraction["kind"],
+): StashedInteractions | undefined {
+  if (!stash || !(kind in stash)) return stash;
+  const next = { ...stash };
+  delete next[kind];
+  return next.permission || next.question ? next : undefined;
+}
+
+function removeFromStash(
+  interactionsBySession: Record<string, StashedInteractions>,
+  sessionId: string,
+  kind: StashedInteraction["kind"],
+): Record<string, StashedInteractions> {
+  const next = withoutInteraction(interactionsBySession[sessionId], kind);
+  return next
+    ? { ...interactionsBySession, [sessionId]: next }
+    : dropInteractionStash(interactionsBySession, sessionId);
+}
+
+export const useSessionStore = create<SessionState>((set, get) => ({
   connection: "idle",
   cwd: null,
   binaryVersion: null,
@@ -55,10 +96,12 @@ export const useSessionStore = create<SessionState>((set) => ({
   queuedEntries: [],
   queuesBySession: {},
   planReviewsBySession: {},
+  interactionsBySession: {},
+  sessionAlerts: {},
+  toasts: [],
   editingQueueEntry: null,
   followUps: null,
   composerDraft: "",
-  notice: null,
   error: null,
   set: (patch) =>
     set((state) => {
@@ -76,6 +119,75 @@ export const useSessionStore = create<SessionState>((set) => ({
       return next;
     }),
   setComposerDraft: (composerDraft) => set({ composerDraft }),
+  pushToast: (toast) =>
+    set((state) => {
+      const sameMessage = (item: SessionState["toasts"][number]) =>
+        item.tone === toast.tone
+        && item.title === toast.title
+        && item.body === toast.body
+        && item.sessionId === toast.sessionId;
+      // The agent can report one failure twice (the refused RPC and the turn's own completion),
+      // so a repeat of the message on screen replaces it instead of stacking a twin.
+      const rest = state.toasts.filter((item) => !sameMessage(item));
+      return { toasts: [{ id: crypto.randomUUID(), ...toast }, ...rest].slice(0, MAX_TOASTS) };
+    }),
+  dismissToast: (id) => set((state) => ({ toasts: state.toasts.filter((toast) => toast.id !== id) })),
+  stashInteraction: (sessionId, interaction) =>
+    set((state) => {
+      const stash = state.interactionsBySession[sessionId];
+      return {
+        interactionsBySession: {
+          ...state.interactionsBySession,
+          [sessionId]: interaction.kind === "permission"
+            ? { ...stash, permission: interaction.value }
+            : { ...stash, question: interaction.value },
+        },
+      };
+    }),
+  dropStashedInteraction: (sessionId, kind) =>
+    set((state) => {
+      const next = removeFromStash(state.interactionsBySession, sessionId, kind);
+      return next === state.interactionsBySession ? {} : { interactionsBySession: next };
+    }),
+  restoreStashedInteractions: () => {
+    const state = get();
+    const id = state.sessionId;
+    if (!id) return;
+    const stash = state.interactionsBySession[id];
+    if (!stash) return;
+    // A card this load's replay already installed is newer than the parked copy, so the parked
+    // one goes. A folder-trust card is not this conversation's: it keeps the slot and the parked
+    // card waits for a later load instead of being dropped.
+    const liveQuestion = state.pendingQuestion?.kind === "trust" ? null : state.pendingQuestion;
+    const liveTrust = state.pendingQuestion?.kind === "trust";
+    let interactionsBySession = state.interactionsBySession;
+    const patch: Partial<SessionState> = {};
+    if (state.pendingPermission) {
+      interactionsBySession = removeFromStash(interactionsBySession, id, "permission");
+    } else if (stash.permission) {
+      patch.pendingPermission = stash.permission;
+      interactionsBySession = removeFromStash(interactionsBySession, id, "permission");
+    }
+    if (liveQuestion) {
+      interactionsBySession = removeFromStash(interactionsBySession, id, "question");
+    } else if (stash.question && !liveTrust) {
+      patch.pendingQuestion = stash.question;
+      interactionsBySession = removeFromStash(interactionsBySession, id, "question");
+    }
+    if (interactionsBySession === state.interactionsBySession) return;
+    patch.interactionsBySession = interactionsBySession;
+    get().set(patch);
+  },
+  setSessionAlert: (sessionId, message) =>
+    set((state) => {
+      if (message === null) {
+        if (!(sessionId in state.sessionAlerts)) return {};
+        const next = { ...state.sessionAlerts };
+        delete next[sessionId];
+        return { sessionAlerts: next };
+      }
+      return { sessionAlerts: { ...state.sessionAlerts, [sessionId]: message } };
+    }),
   beginPlanReview: (body, fileName) =>
     set((state) => ({
       // A fresh request replaces any unanswered stash for this conversation.
@@ -220,6 +332,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   resetConversation: (sessionId = null) =>
     set((state) => {
       let planReviewsBySession = state.planReviewsBySession;
+      let interactionsBySession = state.interactionsBySession;
+      let sessionAlerts = state.sessionAlerts;
       const outgoing = state.sessionId;
       // Park the unanswered review with the conversation that owned it — same idea as queues.
       if (
@@ -241,6 +355,33 @@ export const useSessionStore = create<SessionState>((set) => ({
           },
         };
       }
+      // Park the outgoing conversation's blocking card and its error banner. The agent is still
+      // parked on the request, and the failure still belongs to that transcript.
+      if (outgoing && outgoing !== sessionId) {
+        const question = state.pendingQuestion?.kind === "plan" || state.pendingQuestion?.kind === "trust"
+          ? undefined
+          : state.pendingQuestion ?? undefined;
+        if (state.pendingPermission || question) {
+          interactionsBySession = {
+            ...interactionsBySession,
+            [outgoing]: {
+              ...interactionsBySession[outgoing],
+              ...(state.pendingPermission ? { permission: state.pendingPermission } : {}),
+              ...(question ? { question } : {}),
+            },
+          };
+        }
+        if (state.error) sessionAlerts = { ...sessionAlerts, [outgoing]: state.error };
+      }
+      // The conversation being opened gets its own failure back. A folder-trust card is about the
+      // workspace, not the conversation, so it stays on screen across the switch.
+      let incomingAlert: string | undefined;
+      if (sessionId && sessionAlerts[sessionId] !== undefined) {
+        incomingAlert = sessionAlerts[sessionId];
+        sessionAlerts = { ...sessionAlerts };
+        delete sessionAlerts[sessionId];
+      }
+      const trust = state.pendingQuestion?.kind === "trust" ? state.pendingQuestion : null;
       return {
         sessionId,
         blocks: [],
@@ -270,15 +411,16 @@ export const useSessionStore = create<SessionState>((set) => ({
         recapSummary: null,
         recapError: null,
         pendingPermission: null,
-        pendingQuestion: null,
+        pendingQuestion: trust,
+        interactionsBySession,
+        sessionAlerts,
         queuedPromptCount: (sessionId && state.queuesBySession[sessionId]?.length) || 0,
         queuedEntries: (sessionId && state.queuesBySession[sessionId]) || [],
         planReviewsBySession,
         editingQueueEntry: null,
         followUps: null,
         composerDraft: "",
-        notice: null,
-        error: null,
+        error: incomingAlert ?? null,
       };
     }),
   clearTranscript: () =>

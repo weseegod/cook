@@ -144,7 +144,7 @@ Desktop **discards** `InitializeResponse` (`client.ts` `initialize` awaits and d
 | ACP-model | `session/set_model` | C→A | `/model` | `client.ts` `setModel` | `ok` | protocol |
 | ACP-mode | `session/set_mode` | C→A | `/plan` | `xai.ts` `setMode` (`plan` / `default`) | `ok` | protocol |
 | ACP-upd | `session/update` | A→C notif | `acp_handler` + `tracker.rs` | `client/messages.ts` → `state/session/transcript.ts` | `partial` (several tags dropped; §4) | protocol |
-| ACP-perm | `session/request_permission` | A→C | `handle_permission_request` | `client.ts` parks `pendingPermission` | `ok` | protocol |
+| ACP-perm | `session/request_permission` | A→C | `handle_permission_request` | reverse registry parks `pendingPermission` for the open session, `interactionsBySession` for any other | `ok` | protocol |
 | ACP-fs-r | `fs/read_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `read_text_file` (Always approve off: cwd + `~/.cook/sessions`; on: TUI `LocalFs`; ignores line/limit) | `ok` | protocol |
 | ACP-fs-w | `fs/write_text_file` | A→C | not implemented; cap default false | `acp_host.rs` `write_text_file` (same conditional policy; **plan.md allow-path** when off) | `ok` | protocol |
 | ACP-t-c | `terminal/create` | A→C | not advertised by default; unhandled if it arrives | not advertised (`terminal: false`); no host stub | `ok` | protocol |
@@ -165,10 +165,10 @@ These block the agent until the client answers. A `-32601` is a user-visible fai
 
 | Id | Wire | TUI | Desktop | Status | Must |
 |---|---|---|---|---|---|
-| R-ask | `x.ai/ask_user_question` | `handle_ask_user_question` | `client.ts` `pendingQuestion` | `ok` | protocol |
+| R-ask | `x.ai/ask_user_question` | `handle_ask_user_question` | reverse registry parks `pendingQuestion` for the open session, `interactionsBySession` for any other | `ok` | protocol |
 | R-plan | `x.ai/exit_plan_mode` | `handle_exit_plan_mode` | `client.ts` `beginPlanReview` + plan card | `ok` | protocol |
-| R-elicit | `x.ai/mcp/elicit` | `handle_mcp_elicit` | reverse registry parks elicit card; `N-mcp-elic` clears | `ok` | protocol |
-| R-trust | `x.ai/folder_trust/request` | not handled (not advertised) | reverse registry parks trust card | `ok` | protocol |
+| R-elicit | `x.ai/mcp/elicit` | `handle_mcp_elicit` | reverse registry parks the elicit card with its session; `N-mcp-elic` clears that session's | `ok` | protocol |
+| R-trust | `x.ai/folder_trust/request` | not handled (not advertised) | reverse registry parks the workspace-scoped trust card, which stays on screen across a switch | `ok` | protocol |
 | R-sdk | `x.ai/mcp/sdk_call` | not handled; pager does not register SDK MCP | typed decline `{ ok: false }` (known-unimplemented) | `partial` | protocol |
 | R-hook | `x.ai/hooks/run` | not handled; pager does not stamp `_meta["x.ai/hooks"]` | typed decline `{ ok: false }` (known-unimplemented) | `partial` (latent) | protocol |
 
@@ -206,14 +206,14 @@ TUI match: `acp_handler/mod.rs` L605–628. Plus session-update carriers via `is
 |---|---|---|---|---|---|
 | N-sn | `x.ai/session_notification` | `handle_session_notification` | `client.ts` merged with `session/update` | `partial` | protocol |
 | N-su | `x.ai/session/update` | same | **not consumed** (only `session/update` and `x.ai/session_notification`) | `gap` | protocol |
-| N-follow | `x.ai/follow_ups` | `handle_follow_ups` | ignored | `gap` | surface |
-| N-tbg | `x.ai/task_backgrounded` | `handle_task_backgrounded` | notice toast (no dock yet) | `partial` | surface |
-| N-tdone | `x.ai/task_completed` | `handle_task_completed` | notice toast (no dock yet) | `partial` | surface |
+| N-follow | `x.ai/follow_ups` | `handle_follow_ups` | accepted only for the turn this window paints (`promptId`); the wire carries no session id | `partial` | surface |
+| N-tbg | `x.ai/task_backgrounded` | `handle_task_backgrounded` | toast, attributed to the conversation the envelope names (no dock yet) | `partial` | surface |
+| N-tdone | `x.ai/task_completed` | `handle_task_completed` | toast, attributed to the conversation the envelope names (no dock yet) | `partial` | surface |
 | N-models | `x.ai/models/update` | `handle_models_update` | `client.ts` catalog refresh | `ok` | protocol |
 | N-settings | `x.ai/settings/update` | `handle_settings_update` | ignored | `gap` | surface |
 | N-sessions | `x.ai/sessions/changed` | `handle_sessions_changed` | ignored (sidebar polls `session/list`) | `partial` | surface |
 | N-queue | `x.ai/queue/changed` | `handle_queue_changed` | syncs `queuedPromptCount` | `partial` (no queue list UI yet) | surface |
-| N-pcomplete | `x.ai/session/prompt_complete` | `handle_prompt_complete` | `finishTurn` via notification registry | `ok` | protocol |
+| N-pcomplete | `x.ai/session/prompt_complete` | `handle_prompt_complete` | `finishTurn` for the open session; a background turn becomes a right-side toast plus `sessionAlerts` | `ok` | protocol |
 | N-interject | `x.ai/session/interjection` | `handle_interjection` | ignored | `gap` | surface |
 | N-mon | `x.ai/monitor_event` | `handle_monitor_event` | ignored | `gap` | surface |
 | N-sched-c | `x.ai/scheduled_task_created` | handler | ignored | `gap` | surface |
@@ -226,7 +226,7 @@ TUI match: `acp_handler/mod.rs` L605–628. Plus session-update carriers via `is
 | N-mcp-tools | `x.ai/mcp/tools_changed` | `handle_mcp_tools_changed` | catalog tools patch; an empty catalog triggers a `connectors` refetch instead of dropping the push | `ok` | surface |
 | N-mcp-inited | `x.ai/mcp_initialized` | same handler | status → ready | `ok` | surface |
 | N-mcp-stat | `x.ai/mcp/server_status` | gated `handle_mcp_server_status` | catalog status patch | `ok` | surface |
-| N-mcp-elic | `x.ai/mcp/elicit_complete` | `handle_mcp_elicit_complete` | clears pending elicit | `ok` | protocol |
+| N-mcp-elic | `x.ai/mcp/elicit_complete` | `handle_mcp_elicit_complete` | clears that session's pending (or parked) elicit | `ok` | protocol |
 | N-mcp-srv | `x.ai/mcp/servers_updated` | `handle_mcp_servers_updated` | merges into MCP catalog (Connectors live; an unannotated payload keeps known tools) | `ok` | surface |
 | N-yolo | `x.ai/yolo_mode_changed` | settings path | consumed no-op | `ok` | protocol |
 | N-chunk | `x.ai/session/updates/chunk` | — | ignored | `na` | chrome |

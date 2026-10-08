@@ -16,7 +16,7 @@ export function viewPlan(): string | null {
     return null;
   }
   const notice = "No plan yet. Enter plan mode with /plan and let Cook write one.";
-  state.set({ notice });
+  state.pushToast({ tone: "info", title: notice });
   return notice;
 }
 

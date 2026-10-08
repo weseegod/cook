@@ -21,6 +21,7 @@ import type { PaletteItem } from "./palette/palette-items";
 import { SessionSidebar } from "./sessions/session-sidebar";
 import type { SettingsTab } from "./settings/settings-panel";
 import { ShortcutsSheet } from "./shortcuts/shortcuts-sheet";
+import { ToastStack } from "./toast-stack";
 import { UtilityPanel } from "./utility-panel";
 import { ConnectProvider } from "./welcome/connect-provider";
 import { Welcome } from "./welcome/welcome";
@@ -28,7 +29,6 @@ import { Welcome } from "./welcome/welcome";
 const SettingsPanel = lazy(() => import("./settings/settings-panel").then(({ SettingsPanel }) => ({ default: SettingsPanel })));
 
 const DISMISSED_KEY = "cook.connectProviderDismissed";
-const NOTICE_TIMEOUT_MS = 3_000;
 const MIN_CHAT_WIDTH_WITH_TOOLS = 600;
 const SETTINGS_TABS = new Set<SettingsTab>(["general", "models", "connectors", "context", "skills", "prompts", "hooks", "about"]);
 
@@ -44,22 +44,21 @@ function isTypingTarget(target: EventTarget | null): boolean {
 function exportActiveTranscript() {
   const store = useSessionStore.getState();
   if (!store.sessionId) {
-    store.set({ notice: "No active session to export." });
+    store.pushToast({ tone: "info", title: "No active session to export." });
     return;
   }
   const markdown = exportTranscriptMarkdown(store.blocks);
   if (!markdown) {
-    store.set({ notice: "Nothing to export yet." });
+    store.pushToast({ tone: "info", title: "Nothing to export yet." });
     return;
   }
   downloadMarkdown(exportFilename(store.sessionTitle, store.sessionId), markdown);
-  store.set({ notice: "Exported conversation as Markdown." });
+  store.pushToast({ tone: "success", title: "Exported conversation as Markdown." });
 }
 
 export function AppShell() {
   const cwd = useSessionStore((state) => state.cwd);
   const connection = useSessionStore((state) => state.connection);
-  const notice = useSessionStore((state) => state.notice);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarAutoCollapsed, setSidebarAutoCollapsed] = useState(false);
   const [utilityPanelOpen, setUtilityPanelOpen] = useState(false);
@@ -99,14 +98,6 @@ export function AppShell() {
       window.removeEventListener("resize", update);
     };
   }, [cwd, sidebarOpen, utilityPanelOpen, sidebarAutoCollapsed]);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timeout = window.setTimeout(() => {
-      useSessionStore.getState().set({ notice: null });
-    }, NOTICE_TIMEOUT_MS);
-    return () => window.clearTimeout(timeout);
-  }, [notice]);
 
   useEffect(() => {
     if (activityPanelNonce > 0) setUtilityPanelOpen(true);
@@ -300,6 +291,7 @@ export function AppShell() {
       )}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} onSelect={runPaletteAction} />}
       {shortcutsOpen && <ShortcutsSheet onClose={() => setShortcutsOpen(false)} />}
+      <ToastStack onOpenSession={(sessionId) => void acpClient.loadSession(sessionId).catch(() => undefined)} />
     </div>
   );
 }

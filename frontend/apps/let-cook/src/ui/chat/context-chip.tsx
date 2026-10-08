@@ -39,7 +39,7 @@ export function ContextChip() {
     if (compacting) return;
     setMenuOpen(false);
     setCompacting(true);
-    useSessionStore.getState().set({ notice: null, error: null });
+    useSessionStore.getState().set({ error: null });
     try {
       if (useSessionStore.getState().turnRunning) acpClient.queuePrompt("/compact");
       else await acpClient.prompt("/compact");

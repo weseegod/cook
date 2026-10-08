@@ -31,7 +31,7 @@ export function SessionMetaLine(
     if (!live) return <>{children}</>;
     return <LiveWithoutPhase />;
   }
-  return <TurnStatusLine turn={turn} active={active} />;
+  return <TurnStatusLine turn={turn} sessionId={sessionId} active={active} />;
 }
 
 function LiveWithoutPhase() {
@@ -51,7 +51,7 @@ function LiveWithoutPhase() {
   );
 }
 
-function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }) {
+function TurnStatusLine({ turn, sessionId, active }: { turn: SessionTurn; sessionId: string; active: boolean }) {
   const turnRunning = useSessionStore((state) => state.turnRunning);
   const derived = useSessionStore((state) => state.activity);
   const turnPausedMs = useSessionStore((state) => state.turnPausedMs);
@@ -59,6 +59,7 @@ function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }
   const goalVerifying = useSessionStore((state) => state.goal?.verifyingCompletion === true);
   const pendingQuestion = useSessionStore((state) => state.pendingQuestion);
   const pendingPermission = useSessionStore((state) => state.pendingPermission);
+  const parked = useSessionStore((state) => state.interactionsBySession[sessionId]);
   const frame = useSpinFrame(true);
 
   // The open conversation resolves its phase from the live stream, pauses included; any other shows
@@ -73,7 +74,12 @@ function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }
       })
     : turn.activity) ?? UNKNOWN_PHASE;
   const parts = activityParts(activity);
-  const blocked = live && Boolean(pendingPermission || pendingQuestion);
+  // A card parked for a conversation that is not on screen is answered inside that conversation,
+  // so the row says what it is waiting for instead of the phase it last streamed.
+  const blocked = live
+    ? Boolean(pendingPermission || pendingQuestion)
+    : Boolean(parked?.permission || parked?.question);
+  const label = blocked && !live ? "Needs input" : parts.text;
   // Always count from the session's busy start. Send now resets chat `turnStartedAt`, so the open
   // row must not read that field — only subtract open-question pause time when live.
   const elapsed = live
@@ -85,12 +91,12 @@ function TurnStatusLine({ turn, active }: { turn: SessionTurn; active: boolean }
       className="session-turn"
       data-testid="session-turn-status"
       data-live={live ? "true" : "false"}
-      title={parts.text}
+      title={blocked ? "Waiting for your answer" : parts.text}
     >
       <span className={`session-turn-spinner${blocked ? " blocked" : ""}`} aria-hidden="true">
         {blocked ? "◆" : BRAILLE_FRAMES[frame % BRAILLE_FRAMES.length]}
       </span>
-      <span className="session-turn-label">{parts.text}</span>
+      <span className="session-turn-label">{label}</span>
       <span className="session-turn-timer">{formatDuration(elapsed ?? 0)}</span>
     </span>
   );

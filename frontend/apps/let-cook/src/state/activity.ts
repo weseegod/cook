@@ -10,6 +10,7 @@ export {
   applyTaskBackgrounded,
   applyTaskCompleted,
   applyWorkflowUpdated,
+  notificationSessionId,
 } from "./activity/appliers";
 export {
   activeRows,

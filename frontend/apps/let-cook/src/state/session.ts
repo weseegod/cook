@@ -1,5 +1,5 @@
 export { emptyTranscriptCursor, turnElapsedMs, turnMarkerText } from "./session/cursor";
-export { useSessionStore } from "./session/store";
+export { MAX_TOASTS, useSessionStore } from "./session/store";
 export { reduceTranscript } from "./session/transcript";
 export { DEFAULT_SESSION_TITLE, EMPTY_PLAN_ENTRIES } from "./session/types";
 export type {
@@ -11,7 +11,11 @@ export type {
   QueuedPromptEntry,
   SessionEventBlock,
   SessionTurn,
+  StashedInteraction,
+  StashedInteractions,
   StashedPlanReview,
+  Toast,
+  ToastTone,
   ToolBlock,
   TranscriptBlock,
   TranscriptCursor,

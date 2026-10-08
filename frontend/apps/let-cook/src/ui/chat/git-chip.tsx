@@ -49,7 +49,7 @@ export function GitChip() {
     setMenuOpen(false);
     setHovered(false);
     setSending(true);
-    useSessionStore.getState().set({ notice: null, error: null });
+    useSessionStore.getState().set({ error: null });
     try {
       // Busy means the command queues and runs as its own turn, like `/compact`.
       if (useSessionStore.getState().turnRunning) acpClient.queuePrompt(command);

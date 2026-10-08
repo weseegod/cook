@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { useActivityStore } from "./activity";
 import {
+  MAX_TOASTS,
   reduceTranscript,
   turnElapsedMs,
   turnMarkerText,
@@ -939,5 +940,86 @@ describe("live context usage from _meta.totalTokens", () => {
 
     const kinds = useSessionStore.getState().blocks.map((block) => (block.type === "session-event" ? block.kind : block.type));
     expect(kinds).toEqual(["message", "context", "turn"]);
+  });
+});
+
+describe("toasts", () => {
+  it("keeps the newest messages and drops the oldest past the cap", () => {
+    useSessionStore.setState({ toasts: [] });
+    for (let index = 1; index <= MAX_TOASTS + 1; index += 1) {
+      useSessionStore.getState().pushToast({ tone: "info", title: `message ${index}` });
+    }
+    const titles = useSessionStore.getState().toasts.map((toast) => toast.title);
+    expect(titles).toHaveLength(MAX_TOASTS);
+    expect(titles[0]).toBe(`message ${MAX_TOASTS + 1}`);
+    expect(titles).not.toContain("message 1");
+  });
+
+  it("replaces an identical message instead of stacking a twin", () => {
+    useSessionStore.setState({ toasts: [] });
+    useSessionStore.getState().pushToast({ tone: "error", title: "Turn failed", body: "same", sessionId: "s1" });
+    useSessionStore.getState().pushToast({ tone: "error", title: "Turn failed", body: "same", sessionId: "s1" });
+    expect(useSessionStore.getState().toasts).toHaveLength(1);
+  });
+
+  it("forgets a conversation's alert once it has been shown there", () => {
+    useSessionStore.setState({ sessionAlerts: {} });
+    useSessionStore.getState().setSessionAlert("s-alert", "provider refused");
+    useSessionStore.getState().resetConversation("s-alert");
+    expect(useSessionStore.getState().error).toBe("provider refused");
+    expect(useSessionStore.getState().sessionAlerts["s-alert"]).toBeUndefined();
+
+    // Leaving again without answering keeps the banner with the conversation that owns it.
+    useSessionStore.getState().resetConversation("other");
+    expect(useSessionStore.getState().error).toBeNull();
+    useSessionStore.getState().resetConversation("s-alert");
+    expect(useSessionStore.getState().error).toBe("provider refused");
+  });
+});
+
+describe("parked interactions", () => {
+  it("keeps a parked card for the next load while a trust card holds the slot", () => {
+    useSessionStore.setState({
+      interactionsBySession: {},
+      sessionAlerts: {},
+      pendingQuestion: null,
+      pendingPermission: null,
+    });
+    useSessionStore.getState().resetConversation("s-open");
+    useSessionStore.getState().stashInteraction("s-open", {
+      kind: "question",
+      value: { rpcId: 7, kind: "question", questions: [], raw: {} },
+    });
+    useSessionStore.getState().set({
+      pendingQuestion: { rpcId: 40, kind: "trust", questions: [], raw: {} },
+    });
+
+    useSessionStore.getState().restoreStashedInteractions();
+
+    // Trust is workspace-scoped and keeps the slot; the parked card is not dropped with it.
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(40);
+    expect(useSessionStore.getState().interactionsBySession["s-open"]?.question?.rpcId).toBe(7);
+
+    useSessionStore.getState().set({ pendingQuestion: null });
+    useSessionStore.getState().restoreStashedInteractions();
+    expect(useSessionStore.getState().pendingQuestion?.rpcId).toBe(7);
+    expect(useSessionStore.getState().interactionsBySession["s-open"]).toBeUndefined();
+  });
+
+  it("lets a newer waiter from the same load win over the parked one", () => {
+    useSessionStore.setState({ interactionsBySession: {}, pendingQuestion: null, pendingPermission: null });
+    useSessionStore.getState().resetConversation("s-open");
+    useSessionStore.getState().stashInteraction("s-open", {
+      kind: "permission",
+      value: { rpcId: 3, request: { sessionId: "s-open", toolCall: { toolCallId: "t1" }, options: [] } },
+    });
+    useSessionStore.getState().set({
+      pendingPermission: { rpcId: 11, request: { sessionId: "s-open", toolCall: { toolCallId: "t1" }, options: [] } },
+    });
+
+    useSessionStore.getState().restoreStashedInteractions();
+
+    expect(useSessionStore.getState().pendingPermission?.rpcId).toBe(11);
+    expect(useSessionStore.getState().interactionsBySession["s-open"]).toBeUndefined();
   });
 });

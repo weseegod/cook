@@ -318,7 +318,8 @@ test.describe("conversation list", () => {
     await expect(status.locator(".session-turn-spinner")).not.toHaveClass(/blocked/);
 
     // An open ask card is the agent waiting on the user, which the TUI paints as a diamond.
-    await page.evaluate(() => void window.__cookMock!.question());
+    // The request names the conversation it blocks, so it lands on the row that raised the turn.
+    await page.evaluate(() => void window.__cookMock!.question({ sessionId: "s-alpha-new" }));
     await expect(status.locator(".session-turn-spinner")).toHaveText("◆");
     await expect(status.locator(".session-turn-spinner")).toHaveClass(/blocked/);
     await expect(status).toContainText("Waiting on answers for");
@@ -570,7 +571,7 @@ test.describe("session fork and copy path", () => {
     await expect
       .poll(() => page.evaluate(() => navigator.clipboard.readText()))
       .toBe("/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/session-login");
-    await expect(page.getByTestId("notice-banner")).toContainText(
+    await expect(page.getByTestId("toast-stack")).toContainText(
       "/tmp/cook-demo/.cook/sessions/%2Ftmp%2Fcook-demo/session-login",
     );
   });

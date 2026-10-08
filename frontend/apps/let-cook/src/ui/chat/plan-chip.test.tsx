@@ -55,8 +55,8 @@ beforeEach(() => {
     planDialogOpen: false,
     cwd: "/work",
     sessionId: "sess-1",
-    notice: null,
     error: null,
+    toasts: [],
   });
 });
 
@@ -150,12 +150,12 @@ describe("PlanChip", () => {
     fireEvent.click(screen.getByTestId(`plan-file-actions-${OLDER.name}`));
     fireEvent.click(screen.getByTestId("plan-file-copy"));
     await vi.waitFor(() => expect(vi.mocked(copyText)).toHaveBeenCalledWith("# First plan"));
-    expect(useSessionStore.getState().notice).toBe(`Copied ${OLDER.name}`);
+    expect(useSessionStore.getState().toasts[0]?.title).toBe(`Copied ${OLDER.name}`);
 
     fireEvent.click(screen.getByTestId(`plan-file-actions-${OLDER.name}`));
     fireEvent.click(screen.getByTestId("plan-file-copy-path"));
     await vi.waitFor(() => expect(vi.mocked(copyText)).toHaveBeenLastCalledWith(OLDER.path));
-    expect(useSessionStore.getState().notice).toBe(`Copied ${OLDER.path}`);
+    expect(useSessionStore.getState().toasts[0]?.title).toBe(`Copied ${OLDER.path}`);
   });
 
   it("reports a plan the agent withheld because it is too large", () => {
@@ -167,7 +167,7 @@ describe("PlanChip", () => {
     fireEvent.click(screen.getByTestId("plan-file-copy"));
 
     expect(vi.mocked(copyText)).not.toHaveBeenCalled();
-    expect(useSessionStore.getState().notice).toBe("big.md is too large to copy from here. Open it instead.");
+    expect(useSessionStore.getState().toasts[0]?.title).toBe("big.md is too large to copy from here. Open it instead.");
   });
 
   it("opens the current episode's review and an earlier plan read-only", () => {
@@ -235,6 +235,6 @@ describe("PlanChip", () => {
     await vi.waitFor(() => expect(vi.mocked(deletePlanFile)).toHaveBeenCalledTimes(1));
     expect(vi.mocked(deletePlanFile)).toHaveBeenCalledWith({ sessionId: "sess-1", cwd: "/work", path: OLDER.path });
     await vi.waitFor(() => expect(vi.mocked(acpClient.refreshPlanFiles)).toHaveBeenCalled());
-    expect(useSessionStore.getState().notice).toBe(`Deleted ${OLDER.name}`);
+    expect(useSessionStore.getState().toasts[0]?.title).toBe(`Deleted ${OLDER.name}`);
   });
 });
