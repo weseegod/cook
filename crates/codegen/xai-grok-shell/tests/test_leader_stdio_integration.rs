@@ -2862,7 +2862,7 @@ async fn raw_recv_acp(reader: &mut tokio::io::ReadHalf<UnixStream>) -> serde_jso
 }
 
 /// Count `unified.jsonl` orphan-drop entries for `request_id`. Namespaced request ids are unique per process (global `ClientId` counter). The pid filter fences off other test processes appending to the same shared log.
-/// This binary does not sandbox GROK_HOME, so on a dev machine these entries land in the real `~/.grok` log — accepted: the server already writes `leader.client.*` lines there from every test in this file, and the pid+request-id fence keeps the counting sound regardless of what else is in the file. (Bazel sandboxes HOME, so CI writes stay test-scoped.)
+/// This binary does not sandbox GROK_HOME, so on a dev machine these entries land in the real `~/.cook` log — accepted: the server already writes `leader.client.*` lines there from every test in this file, and the pid+request-id fence keeps the counting sound regardless of what else is in the file. (Bazel sandboxes HOME, so CI writes stay test-scoped.)
 fn orphan_log_count(request_id: &str) -> usize {
     let Some(bytes) = xai_grok_telemetry::unified_log::snapshot_log() else {
         return 0;

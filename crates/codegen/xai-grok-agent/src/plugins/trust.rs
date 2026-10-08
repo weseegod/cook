@@ -7,7 +7,7 @@
 //!
 //! **Trust key**: canonical absolute path of the plugin root directory, resolved via `dunce::canonicalize()`.
 //!
-//! **Trust storage**: `~/.grok/trusted-plugins` (one canonical path per line).
+//! **Trust storage**: `~/.cook/trusted-plugins` (one canonical path per line).
 //!
 //! **Behavior for untrusted plugins**:
 //! - Skills and agents are **discovered and listed** (metadata-only).
@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
-/// Name of the trust-store file under `~/.grok/`.
+/// Name of the trust-store file under `~/.cook/`.
 const TRUST_FILE_NAME: &str = xai_grok_config::TRUSTED_PLUGINS_FILENAME;
 
 #[derive(Debug, Clone)]
@@ -28,7 +28,7 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
-    /// If `~/.grok/trusted-plugins` does not exist, returns an empty store.
+    /// If `~/.cook/trusted-plugins` does not exist, returns an empty store.
     /// If the file cannot be read, logs a warning and returns an empty store.
     pub fn load() -> Self {
         // Gate on user_grok_home() so a project's `.grok/trusted-plugins` is never read as the user trust store
@@ -65,7 +65,7 @@ impl TrustStore {
         }
     }
 
-    /// Canonicalizes the path and appends it to `~/.grok/trusted-plugins`.
+    /// Canonicalizes the path and appends it to `~/.cook/trusted-plugins`.
     /// If the path is already trusted, this is a no-op and returns `Ok(())`.
     pub fn grant_trust(&mut self, plugin_root: &Path) -> Result<(), TrustError> {
         let canonical =
@@ -105,7 +105,7 @@ impl TrustStore {
     }
 
     /// Canonicalizes the path, removes it from the in-memory set, and
-    /// rewrites `~/.grok/trusted-plugins` without the revoked entry.
+    /// rewrites `~/.cook/trusted-plugins` without the revoked entry.
     /// If the path is not currently trusted, this is a no-op.
     pub fn revoke_trust(&mut self, plugin_root: &Path) -> Result<(), TrustError> {
         let canonical =
@@ -148,7 +148,7 @@ impl TrustStore {
 
     /// A `[plugins].paths` entry is auto-trusted if its canonicalized path
     /// is under the user's home directory.  Otherwise it requires explicit
-    /// trust via `~/.grok/trusted-plugins`.
+    /// trust via `~/.cook/trusted-plugins`.
     pub fn is_config_path_auto_trusted(plugin_root: &Path) -> bool {
         let Some(home) = xai_dirs::home_dir() else {
             return false;

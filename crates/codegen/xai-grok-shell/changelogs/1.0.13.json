@@ -11,7 +11,7 @@
   },
   {
     "category": "fixes",
-    "description": "**Windows users** can now correctly open ~/.grok and worktree sessions.",
+    "description": "**Windows users** can now correctly open ~/.cook and worktree sessions.",
     "breaking_change": false
   },
   {

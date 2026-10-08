@@ -2012,7 +2012,7 @@ impl MvpAgent {
     }
     /// Spawn a best-effort bundle sync. Re-fires on every call site (init, cached_token, grok.com/oidc); the cheap pre-checks below absorb repeats so reconnects are cheap.
     /// Pre-spawn gating order (cheapest first, all synchronous): Auth gate: avoid spawning a no-op task on every init.
-    /// Single-flight guard: if a previous sync is still in flight (e.g., initialize, cached_token, and oidc fired in quick succession before the first sync's tar extract finished), drop this call to avoid racing concurrent extracts that would interleave per-file writes against `~/.grok/bundled/` and the manifest.
+    /// Single-flight guard: if a previous sync is still in flight (e.g., initialize, cached_token, and oidc fired in quick succession before the first sync's tar extract finished), drop this call to avoid racing concurrent extracts that would interleave per-file writes against `~/.cook/bundled/` and the manifest.
     pub(crate) fn maybe_sync_bundle_in_background(&self, force: bool) {
         use crate::extensions::bundle::{
             BUNDLE_SYNC_TTL, bundle_cache_is_fresh, has_bundle_credentials,

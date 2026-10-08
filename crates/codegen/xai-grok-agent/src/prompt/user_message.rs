@@ -226,7 +226,7 @@ pub struct UserMessageContext {
     pub terminals_folder: Option<PathBuf>,
     /// Workspace-scoped rule files (cwd / repo root / optional workspace user dir).
     pub workspace_rules: Vec<RuleEntry>,
-    /// User-scoped rule files (~/.grok/, ~/.claude/).
+    /// User-scoped rule files (~/.cook/, ~/.claude/).
     pub user_rules: Vec<RuleEntry>,
     /// Skill registry snapshot (already deduped).
     /// Rendered through the shared budget-tier renderer.

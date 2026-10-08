@@ -89,7 +89,7 @@ On first launch, Grok opens your browser to authenticate with grok.com:
 grok
 ```
 
-Credentials are stored in `~/.grok/auth.json` and persist across sessions. Tokens expire after 7 days; Grok will prompt you to re-authenticate when needed.
+Credentials are stored in `~/.cook/auth.json` and persist across sessions. Tokens expire after 7 days; Grok will prompt you to re-authenticate when needed.
 
 ### Re-authenticate
 
@@ -122,7 +122,7 @@ Authenticate developers via your own Identity Provider (Okta, Azure AD, Auth0) i
 **2. Configure the CLI** (config file or env vars):
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [grok_com_config.oidc]
 issuer = "https://acme.okta.com"
 client_id = "0oa1b2c3d4e5f6g7h8i9"
@@ -139,7 +139,7 @@ Customers typically also override the API endpoint to point at their own proxy:
 export GROK_CLI_CHAT_PROXY_BASE_URL="https://grok-proxy.acme.com/v1"
 ```
 
-**3. Run `grok`.** The CLI discovers endpoints via `{issuer}/.well-known/openid-configuration`, opens the IdP login page, and stores tokens in `~/.grok/auth.json`. The OIDC token is sent as `Authorization: Bearer` to the configured proxy. Tokens auto-refresh silently via the stored `refresh_token`.
+**3. Run `grok`.** The CLI discovers endpoints via `{issuer}/.well-known/openid-configuration`, opens the IdP login page, and stores tokens in `~/.cook/auth.json`. The OIDC token is sent as `Authorization: Bearer` to the configured proxy. Tokens auto-refresh silently via the stored `refresh_token`.
 
 **Optional fields:**
 
@@ -169,7 +169,7 @@ Grok is provider-agnostic — it doesn't know or care how your binary authentica
 1. Grok runs your command via `sh -c "<command>"`
 2. Your binary does whatever auth flow it needs (SSO login, device code, cert exchange, etc.)
 3. **stderr** → displayed directly to the user (use for login URLs, status messages, progress)
-4. **stdout** → captured by Grok and saved to `~/.grok/auth.json` as the access token
+4. **stdout** → captured by Grok and saved to `~/.cook/auth.json` as the access token
 5. exit 0 → success; exit non-zero → Grok falls through to interactive login
 
 #### The stdout / stderr Contract
@@ -216,7 +216,7 @@ echo "eyJhbGciOiJSUzI1NiIs..."
 #### Configuration
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [auth]
 auth_provider_command = "/usr/local/bin/my-auth-provider"
 auth_provider_label = "Acme Corp"   # optional — customizes the TUI login button
@@ -301,7 +301,7 @@ echo "{\"access_token\": \"$TOKEN\", \"expires_in\": 3600}"
 
 Exiting promptly on `GROK_AUTH_EXPIRED=1` is what makes the handover to the sign-in screen fast: a binary that blocks instead pays the whole refresh timeout on every start with an expired token.
 
-One case stays ambiguous, and only in **leader mode** (`--leader`, or `[cli] use_leader = true`; off by default): with no credential at all, the leader makes one extra attempt in the background just after startup, and that run has the variable unset, like a sign-in. A binary that mints without help (service account, keytab, mounted token) succeeds there and the session heals itself. One that must prompt just sits, up to the 300s sign-in ceiling — nothing waits on it, the sign-in screen is already up, and its stderr goes to `~/.grok/leader.log` rather than to the user.
+One case stays ambiguous, and only in **leader mode** (`--leader`, or `[cli] use_leader = true`; off by default): with no credential at all, the leader makes one extra attempt in the background just after startup, and that run has the variable unset, like a sign-in. A binary that mints without help (service account, keytab, mounted token) succeeds there and the session heals itself. One that must prompt just sits, up to the 300s sign-in ceiling — nothing waits on it, the sign-in screen is already up, and its stderr goes to `~/.cook/leader.log` rather than to the user.
 
 `GROK_AUTH_EXPIRED` is optional — if your binary ignores it, Grok still works. It just runs the same flow for both login and refresh, and a flow that prompts will be killed on the headless run before it can finish.
 
@@ -356,7 +356,7 @@ Common log messages:
 `auth_provider_command` above replaces Grok's *session* auth: it mints the token sent to xAI's backend. If you instead want xAI models on normal xAI login while **other models** route through a gateway (LiteLLM, corporate proxy) whose bearer tokens rotate, use a named auth provider — the rotating-token analogue of a per-model `api_key`/`env_key`.
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [auth_provider.litellm]
 command = "/usr/local/bin/litellm-token"   # run via `sh -c`
 token_ttl_secs = 3600                      # optional: see below
@@ -387,7 +387,7 @@ auth_provider = "litellm"
 
 **Interaction with other credentials:** a literal `api_key`/`env_key` on the model wins over its `auth_provider`. Provider-backed models are BYOK: your xAI session token is never sent to their endpoints, and a failing provider command fails the request rather than falling back to the session token.
 
-**Security:** provider commands execute code, so they are honored only from trusted config layers (`~/.grok/config.toml`, managed config, requirements). A project's `.grok/config.toml` can never define one. Whatever layer sets a model's `base_url` decides where that model's minted token is sent, and `base_url` (unlike the provider table) is not stripped from remote or campaign patches, the same as for a static `env_key`. Keep provider tables and the model `base_url` in layers you trust. The command inherits Grok's environment (so it sees `PATH`, `HOME`, and any other secrets there), but Grok's own first-party credentials (`XAI_API_KEY`, `GROK_DEPLOYMENT_KEY`, and related keys) are removed so a BYOK helper never receives them; write helpers that read only what they need, and prefer the `GROK_AUTH_PROVIDER_*` handback for the prior credential.
+**Security:** provider commands execute code, so they are honored only from trusted config layers (`~/.cook/config.toml`, managed config, requirements). A project's `.grok/config.toml` can never define one. Whatever layer sets a model's `base_url` decides where that model's minted token is sent, and `base_url` (unlike the provider table) is not stripped from remote or campaign patches, the same as for a static `env_key`. Keep provider tables and the model `base_url` in layers you trust. The command inherits Grok's environment (so it sees `PATH`, `HOME`, and any other secrets there), but Grok's own first-party credentials (`XAI_API_KEY`, `GROK_DEPLOYMENT_KEY`, and related keys) are removed so a BYOK helper never receives them; write helpers that read only what they need, and prefer the `GROK_AUTH_PROVIDER_*` handback for the prior credential.
 
 ### Using auth.json for API Access
 
@@ -396,7 +396,7 @@ If you've authenticated with `grok login`, you can use the stored credentials to
 ```bash
 curl -s -N -X POST "https://cli-chat-proxy.grok.com/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $(jq -r '."https://accounts.x.ai/sign-in".key' ~/.grok/auth.json)" \
+  -H "Authorization: Bearer $(jq -r '."https://accounts.x.ai/sign-in".key' ~/.cook/auth.json)" \
   -H "X-XAI-Token-Auth: xai-grok-cli" \
   -H "x-grok-model-override: grok-build" \
   -d '{
@@ -410,7 +410,7 @@ curl -s -N -X POST "https://cli-chat-proxy.grok.com/v1/chat/completions" \
 
 | Header                           | Required | Purpose                                                                                                                                                                                   |
 | -------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Authorization: Bearer <token>`  | Yes      | Session token from `~/.grok/auth.json` (set by `grok login`)                                                                                                                              |
+| `Authorization: Bearer <token>`  | Yes      | Session token from `~/.cook/auth.json` (set by `grok login`)                                                                                                                              |
 | `X-XAI-Token-Auth: xai-grok-cli` | Yes      | Tells the auth middleware to validate as a CLI session token                                                                                                                              |
 | `x-grok-model-override: <model>` | Yes\*    | The proxy uses this header (not the JSON body) to route to the correct backend. \*Can be omitted for `grok-build` which is on the default route, but always safe to include. |
 
@@ -1325,7 +1325,7 @@ Grok implements the [Agent Client Protocol (ACP)](https://agentclientprotocol.co
 
 ## Configuration
 
-Grok reads configuration from `~/.grok/config.toml`. If the file doesn't exist, Grok uses sensible defaults. You only need to specify values you want to override.
+Grok reads configuration from `~/.cook/config.toml`. If the file doesn't exist, Grok uses sensible defaults. You only need to specify values you want to override.
 
 Each feature section below documents its own config. This section covers the general-purpose settings that don't have their own top-level section.
 
@@ -1396,7 +1396,7 @@ Reference: [Language Server Protocol](https://microsoft.github.io/language-serve
 Grok looks for server definitions in:
 
 - project config: `<repo>/.grok/lsp.json`
-- user config: `~/.grok/lsp.json`
+- user config: `~/.cook/lsp.json`
 
 If the same server name appears in both places, the project config wins.
 
@@ -1555,7 +1555,7 @@ Add project-specific instructions by creating an agent rules file (e.g., `AGENTS
 
 Grok scans for agent rules in this order:
 
-1. `~/.grok/` (global rules)
+1. `~/.cook/` (global rules)
 2. If inside a git repo: every directory from the repo root → current working directory (inclusive)
 3. If **not** inside a git repo: only the current working directory
 
@@ -1581,12 +1581,12 @@ Grok discovers skills from these directories (in priority order):
 | --------------------------- | ----- | -------- |
 | `./.grok/skills/`           | Local | Highest  |
 | `<repo_root>/.grok/skills/` | Repo  | Medium   |
-| `~/.grok/skills/`           | User  | Lowest   |
+| `~/.cook/skills/`           | User  | Lowest   |
 | `~/.claude/skills/`         | User  | Lowest   |
 
 Skills with the same name are deduplicated — higher priority locations override lower ones.
 
-Repo-scoped skills (Local and Repo) respect `.gitignore` and are filtered out if ignored. User-scoped skills (`~/.grok/skills/`) are outside the repo and never filtered.
+Repo-scoped skills (Local and Repo) respect `.gitignore` and are filtered out if ignored. User-scoped skills (`~/.cook/skills/`) are outside the repo and never filtered.
 
 ### Configuration
 
@@ -1603,7 +1603,7 @@ disabled = ["review"]                 # discovered skills to turn off
 Each skill lives in its own directory with a `SKILL.md` file:
 
 ```
-~/.grok/skills/
+~/.cook/skills/
 └── commit/
     └── SKILL.md
 ```
@@ -1658,7 +1658,7 @@ Users can reference skills as `/skill-name` (e.g., `/commit`). When you see this
 
 Agent profiles control the system prompt, toolset, and behavior of a session. A profile is a `.md` file with YAML frontmatter, or a named agent discovered from disk.
 
-Grok discovers agent definitions from `.grok/agents/` (project), `~/.grok/agents/` (user), and built-in agents. Priority (highest wins):
+Grok discovers agent definitions from `.grok/agents/` (project), `~/.cook/agents/` (user), and built-in agents. Priority (highest wins):
 
 1. `--agent-profile <PATH>` CLI flag
 2. `[agent]` section in `config.toml`
@@ -1666,7 +1666,7 @@ Grok discovers agent definitions from `.grok/agents/` (project), `~/.grok/agents
 4. Default `grok-build` agent
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [agent]
 name = "my-custom-agent"             # Discovered by name
 # definition = "/path/to/agent.md"   # OR: explicit path
@@ -1691,7 +1691,7 @@ export GROK_SUBAGENTS=0              # Environment variable
 ```
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [subagents]
 enabled = false
 ```
@@ -1743,13 +1743,13 @@ Plugins extend Grok with additional tools, skills, and MCP servers from external
 | Location                    | Scope   |
 | --------------------------- | ------- |
 | `.grok/plugins/`            | Project |
-| `~/.grok/plugins/`          | User    |
+| `~/.cook/plugins/`          | User    |
 | `--plugin-dir <PATH>` (CLI) | Session |
 
 ### Configuration
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [plugins]
 paths = ["~/my-plugins/custom-tools"]       # additional plugin directories
 disabled = ["user/a1b2c3d4/noisy-plugin"]   # plugin IDs to skip
@@ -1970,7 +1970,7 @@ Grok fetches the model list from `{GROK_MODELS_BASE_URL}/models` on startup and 
 
 If your model list endpoint differs from `{base_url}/models`, set `GROK_MODELS_LIST_URL` explicitly.
 
-**Combining with `[endpoints]` config:** You can also set endpoints in `~/.grok/config.toml`:
+**Combining with `[endpoints]` config:** You can also set endpoints in `~/.cook/config.toml`:
 
 ```toml
 [endpoints]
@@ -1993,7 +1993,7 @@ Extend Grok's capabilities with [Model Context Protocol](https://modelcontextpro
 
 ### Configuration
 
-MCP servers are configured in `~/.grok/config.toml`:
+MCP servers are configured in `~/.cook/config.toml`:
 
 ```toml
 [mcp_servers.<name>]
@@ -2013,7 +2013,7 @@ MCP servers can also be configured per-project in `.grok/config.toml`. Grok walk
 
 | Location                        | Scope             | Priority |
 | ------------------------------- | ----------------- | -------- |
-| `~/.grok/config.toml`           | All projects      | Lowest   |
+| `~/.cook/config.toml`           | All projects      | Lowest   |
 | `<repo-root>/.grok/config.toml` | This repository   | ↑        |
 | `<cwd>/.grok/config.toml`       | Current directory | Highest  |
 
@@ -2036,9 +2036,9 @@ command = "npx"
 args = ["-y", "mcp-remote", "https://mcp.linear.app/mcp"]
 ```
 
-If you also have a `linear` server in `~/.grok/config.toml`, the project version replaces it entirely.
+If you also have a `linear` server in `~/.cook/config.toml`, the project version replaces it entirely.
 
-> **Note:** Only `[mcp_servers]` is supported in project-scoped `.grok/config.toml`. Other config sections (models, etc.) are only read from `~/.grok/config.toml`.
+> **Note:** Only `[mcp_servers]` is supported in project-scoped `.grok/config.toml`. Other config sections (models, etc.) are only read from `~/.cook/config.toml`.
 
 ### Tool Naming
 
@@ -2112,10 +2112,10 @@ Cross-session memory lets Grok remember facts, decisions, code patterns, and deb
 
 ### How it works
 
-Memory is stored as Markdown files under `~/.grok/memory/`:
-- **Global** (`~/.grok/memory/MEMORY.md`) — facts that apply across all your projects
-- **Workspace** (`~/.grok/memory/<project-slug>-<hash8>/MEMORY.md`) — project-specific conventions and context
-- **Session logs** (`~/.grok/memory/<project-slug>-<hash8>/sessions/`) — per-session summaries
+Memory is stored as Markdown files under `~/.cook/memory/`:
+- **Global** (`~/.cook/memory/MEMORY.md`) — facts that apply across all your projects
+- **Workspace** (`~/.cook/memory/<project-slug>-<hash8>/MEMORY.md`) — project-specific conventions and context
+- **Session logs** (`~/.cook/memory/<project-slug>-<hash8>/sessions/`) — per-session summaries
 
 Workspace directories are suffixed with a short hash for uniqueness (e.g. `xai-a3f7b2c9/`). The hash is derived from the git remote URL so all clones and worktrees of the same repository share the same memory directory.
 
@@ -2129,7 +2129,7 @@ export GROK_MEMORY=1
 grok
 
 # Config file (persists permanently)
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [memory]
 enabled = true
 ```
@@ -2152,7 +2152,7 @@ This summary is searchable in future sessions but does **not** capture full cont
 
 ### Capturing rich knowledge with `/flush`
 
-For richer capture — decisions, patterns, debugging workflows, API discoveries — use `/flush` in the TUI. This triggers an LLM-generated summary of the current session's most important content and writes it to a dated session log under `~/.grok/memory/<project-slug>-<hash8>/sessions/`, where it is indexed and searchable in future sessions.
+For richer capture — decisions, patterns, debugging workflows, API discoveries — use `/flush` in the TUI. This triggers an LLM-generated summary of the current session's most important content and writes it to a dated session log under `~/.cook/memory/<project-slug>-<hash8>/sessions/`, where it is indexed and searchable in future sessions.
 
 Use `/flush` when you want to preserve important context before compaction or at any point during a productive session.
 
@@ -2196,13 +2196,13 @@ grok memory stats
 
 ### Configuration reference
 
-Key options under `[memory]` in `~/.grok/config.toml`:
+Key options under `[memory]` in `~/.cook/config.toml`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `enabled` | `false` | Enable memory (can also be set via CLI flag or env var) |
 | `session.save_on_end` | `true` | Write the lightweight metadata summary on session end |
-| `watcher.enabled` | `true` | Watch `~/.grok/memory/` for external edits and reindex on search |
+| `watcher.enabled` | `true` | Watch `~/.cook/memory/` for external edits and reindex on search |
 | `search.max_results` | `6` | Default number of memory results to return |
 | `search.min_score` | `0.35` | Minimum relevance score threshold for explicit memory search and recovery paths |
 | `initial_injection.enabled` | `true` | Enable automatic first-turn memory injection |
@@ -2244,16 +2244,16 @@ grok --sandbox strict
 | Profile         | FS Read            | FS Write                  | Child Network | Use Case                 |
 | --------------- | ------------------ | ------------------------- | ------------- | ------------------------ |
 | `off` (default) | Unrestricted       | Unrestricted              | Unrestricted  | No sandbox               |
-| `workspace`     | Everywhere         | CWD + `/tmp` + `~/.grok/` | Allowed       | Normal development       |
-| `read-only`     | Everywhere         | `~/.grok/` only           | Blocked       | Exploration, code review |
-| `strict`        | CWD + system paths | CWD + `/tmp` + `~/.grok/` | Blocked       | Untrusted code           |
+| `workspace`     | Everywhere         | CWD + `/tmp` + `~/.cook/` | Allowed       | Normal development       |
+| `read-only`     | Everywhere         | `~/.cook/` only           | Blocked       | Exploration, code review |
+| `strict`        | CWD + system paths | CWD + `/tmp` + `~/.cook/` | Blocked       | Untrusted code           |
 
-Sensitive paths (`~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.grok/auth/`) are always
+Sensitive paths (`~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `~/.cook/auth/`) are always
 write-protected regardless of profile.
 
 ### Custom Profiles
 
-Create `~/.grok/sandbox.toml` (global) or `.grok/sandbox.toml` (per-project):
+Create `~/.cook/sandbox.toml` (global) or `.grok/sandbox.toml` (per-project):
 
 ```toml
 [profiles.devbox]
@@ -2306,7 +2306,7 @@ model cannot convince the agent to relax restrictions at runtime.
 
 ### Event Logging
 
-Sandbox events (profile applied, violations) are logged to `~/.grok/sandbox-events.jsonl`
+Sandbox events (profile applied, violations) are logged to `~/.cook/sandbox-events.jsonl`
 for telemetry and debugging.
 
 ---
@@ -2323,7 +2323,7 @@ grok inspect --json   # machine-readable JSON
 The output shows all loaded configuration organized by type:
 
 - **Project Instructions** — AGENTS.md / CLAUDE.md files with token counts
-- **Skills** — from `.grok/skills/`, `~/.grok/skills/`, plugins, and config paths
+- **Skills** — from `.grok/skills/`, `~/.cook/skills/`, plugins, and config paths
 - **Agents** — built-in, user-defined, and plugin-provided subagents
 - **Plugins** — discovered plugins with what each provides (skills, agents, hooks, MCPs)
 - **MCP Servers** — from `config.toml`, plugins, `~/.claude.json`, and `.mcp.json`
@@ -2413,10 +2413,10 @@ Grok automatically persists conversations to disk. This works across all modes: 
 
 ### Storage Layout
 
-Sessions are stored under `~/.grok/sessions/`, organized by URL-encoded working directory:
+Sessions are stored under `~/.cook/sessions/`, organized by URL-encoded working directory:
 
 ```
-~/.grok/sessions/<encoded-cwd>/<session-id>/
+~/.cook/sessions/<encoded-cwd>/<session-id>/
   summary.json            # metadata: title, timestamps, model, message count
   updates.jsonl           # ACP session update stream (conversation + tool calls)
   chat_history.jsonl      # raw chat messages sent to the model
@@ -2492,13 +2492,13 @@ The agent persists all session updates automatically. Clients can reconnect and 
 
 | Path                  | Description                                         |
 | --------------------- | --------------------------------------------------- |
-| `~/.grok/config.toml` | Configuration file                                  |
-| `~/.grok/sessions/`   | Persisted sessions (organized by working directory) |
-| `~/.grok/auth.json`   | Authentication credentials (auto-managed)           |
-| `~/.grok/memory/`     | Cross-session memory files and index                |
-| `~/.grok/skills/`     | User-scoped skill definitions                       |
-| `~/.grok/plugins/`    | User-scoped plugins                                 |
-| `~/.grok/agents/`     | User-scoped agent definitions                       |
+| `~/.cook/config.toml` | Configuration file                                  |
+| `~/.cook/sessions/`   | Persisted sessions (organized by working directory) |
+| `~/.cook/auth.json`   | Authentication credentials (auto-managed)           |
+| `~/.cook/memory/`     | Cross-session memory files and index                |
+| `~/.cook/skills/`     | User-scoped skill definitions                       |
+| `~/.cook/plugins/`    | User-scoped plugins                                 |
+| `~/.cook/agents/`     | User-scoped agent definitions                       |
 | `.grok/config.toml`   | Project-scoped config (MCP servers)                 |
 | `.grok/skills/`       | Project-scoped skill definitions                    |
 | `.grok/plugins/`      | Project-scoped plugins                              |
@@ -2525,7 +2525,7 @@ The agent persists all session updates automatically. Clients can reconnect and 
 | `GROK_AUTH_EARLY_INVALIDATION_SECS` | Seconds before `expires_at` to consider a token expired (default: `300`). See [Automatic Credential Refresh](#automatic-credential-refresh) |
 | `GROK_OIDC_ISSUER`              | OIDC issuer URL (alternative to config file). See [OIDC](#oidc-customer-sso)                             |
 | `GROK_OIDC_CLIENT_ID`           | OIDC client ID (alternative to config file). See [OIDC](#oidc-customer-sso)                              |
-| `GROK_HOME`                     | Override config directory (default: `~/.grok`)                                                           |
+| `GROK_HOME`                     | Override config directory (default: `~/.cook`)                                                           |
 | `GROK_SUBAGENTS`                | Enable (`1`) or disable (`0`) subagent/task tool support                                                 |
 | `GROK_MEMORY`                   | Enable (`1`) or disable (`0`) cross-session memory                                                       |
 | `GROK_AGENT`                    | Custom agent definition path or name (see [Agent Profiles](#agent-profiles))                             |
@@ -2535,7 +2535,7 @@ The agent persists all session updates automatically. Clients can reconnect and 
 | `GROK_FEEDBACK_ENABLED`         | Enable (`1`) or disable (`0`) feedback system independently from telemetry                               |
 | `GROK_DEPLOYMENT_KEY`           | Management API key for enterprise deployments                                                            |
 | `GROK_LOG_FILE`                 | Enable file logging by providing a file path (the value is used verbatim as the path)                    |
-| `GROK_DEBUG_LOG`                | Debug firehose (set by `--debug`): truthy routes per-session logs to `~/.grok/debug/<sessionId>.txt`, a path writes that one file |
+| `GROK_DEBUG_LOG`                | Debug firehose (set by `--debug`): truthy routes per-session logs to `~/.cook/debug/<sessionId>.txt`, a path writes that one file |
 | `RUST_LOG`                      | Log filter for stderr (headless `-p` defaults to `off`, other non-TUI modes to `error`; TUI captures stderr) and for the `GROK_LOG_FILE` log; the `--debug` firehose ignores it |
 
 ---
@@ -2560,14 +2560,14 @@ Reload your shell or run `source ~/.bashrc`.
 Alternative (Grok-managed location):
 
 ```bash
-mkdir -p ~/.grok/completions/bash
-grok completions bash > ~/.grok/completions/bash/grok.bash
+mkdir -p ~/.cook/completions/bash
+grok completions bash > ~/.cook/completions/bash/grok.bash
 ```
 
 Add to `~/.bashrc`:
 
 ```bash
-[[ -r "$HOME/.grok/completions/bash/grok.bash" ]] && source "$HOME/.grok/completions/bash/grok.bash"
+[[ -r "$HOME/.cook/completions/bash/grok.bash" ]] && source "$HOME/.cook/completions/bash/grok.bash"
 ```
 
 ### Zsh
@@ -2590,14 +2590,14 @@ compinit
 Alternative (Grok-managed location):
 
 ```bash
-mkdir -p ~/.grok/completions/zsh
-grok completions zsh > ~/.grok/completions/zsh/_grok
+mkdir -p ~/.cook/completions/zsh
+grok completions zsh > ~/.cook/completions/zsh/_grok
 ```
 
 Add to `~/.zshrc`:
 
 ```zsh
-fpath=("$HOME/.grok/completions/zsh" $fpath)
+fpath=("$HOME/.cook/completions/zsh" $fpath)
 autoload -Uz compinit
 compinit
 ```
@@ -2615,14 +2615,14 @@ Regenerate completions after upgrading `grok` — the script reflects the CLI of
 Write logs to a file for debugging. The TUI captures stderr, so `RUST_LOG` alone won't produce visible output in production — use `grok --debug` or `GROK_LOG_FILE` instead:
 
 ```bash
-# Per-session debug log (~/.grok/debug/<sessionId>.txt)
+# Per-session debug log (~/.cook/debug/<sessionId>.txt)
 grok --debug
 
 # Log to a custom path
 GROK_LOG_FILE=/tmp/grok-debug.log grok
 
 # Tail the most-recently-opened session's log in another terminal (Unix symlink)
-tail -f ~/.grok/debug/latest.txt
+tail -f ~/.cook/debug/latest.txt
 ```
 
 The `--debug` firehose uses a fixed filter (first-party crates at `debug`) and is not narrowed by `RUST_LOG`. A `GROK_LOG_FILE` log defaults to `debug` and honors `RUST_LOG`, so you can set module-level filters for targeted debugging:
@@ -2677,16 +2677,16 @@ Session files are plain JSON/JSONL and can be inspected directly:
 
 ```bash
 # Find sessions for the current directory
-ls ~/.grok/sessions/
+ls ~/.cook/sessions/
 
 # Read session metadata
-cat ~/.grok/sessions/<encoded-cwd>/<session-id>/summary.json | jq .
+cat ~/.cook/sessions/<encoded-cwd>/<session-id>/summary.json | jq .
 
 # View conversation history
-cat ~/.grok/sessions/<encoded-cwd>/<session-id>/updates.jsonl | head -20
+cat ~/.cook/sessions/<encoded-cwd>/<session-id>/updates.jsonl | head -20
 
 # Count turns in a session
-wc -l ~/.grok/sessions/<encoded-cwd>/<session-id>/chat_history.jsonl
+wc -l ~/.cook/sessions/<encoded-cwd>/<session-id>/chat_history.jsonl
 ```
 
 ### Context window full

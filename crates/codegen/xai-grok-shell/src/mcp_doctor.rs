@@ -625,7 +625,7 @@ pub fn policy_enable_refusal(cwd: &Path, name: &str) -> Option<String> {
 /// Which config file a new MCP definition is written to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum McpWriteScope {
-    /// `~/.grok/config.toml`.
+    /// `~/.cook/config.toml`.
     User,
     /// `./.grok/config.toml`.
     Project,

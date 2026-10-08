@@ -547,7 +547,7 @@
 - **Subagent sessions** no longer leak threads or file descriptors when the parent is busy.
 - **Cold startup** no longer performs duplicate remote settings fetches.
 - **Compaction failures** due to context size now degrade input instead of retrying identically.
-- **--sandbox strict** now restricts writes to ~/.grok/sessions only.
+- **--sandbox strict** now restricts writes to ~/.cook/sessions only.
 - **Subagent spawning** now waits longer on a busy coordinator and shows clearer retry guidance instead of "unreachable".
 - **Failed task and todo tool calls** now appear in the transcript instead of disappearing without a trace.
 - **Composer status row** no longer collapses or flashes when using double-Enter to send now.
@@ -580,7 +580,7 @@
 ## Bug Fixes
 
 - **Transient inference failures** (stalls, drops, 5xx) now retry automatically instead of ending the turn.
-- **Windows users** can now correctly open ~/.grok and worktree sessions.
+- **Windows users** can now correctly open ~/.cook and worktree sessions.
 - **Session data** is now more reliably saved after prompts and on power loss.
 - **Compaction failures** now show the actual error instead of a generic message.
 - **Truncation error messages** now show the right guidance instead of suggesting an unhelpful retry.
@@ -781,7 +781,7 @@
 ## Features
 
 - **GROK_CONFIG** and **GROK_CONFIG_PATH** environment variables now let launchers override selected config settings without editing config.toml.
-- **Worktrees** under ~/.grok/worktrees are now automatically reclaimed when safe, with strong safeguards that never delete a user's last copy.
+- **Worktrees** under ~/.cook/worktrees are now automatically reclaimed when safe, with strong safeguards that never delete a user's last copy.
 - **Hook policy blocks** now correctly report "Turn blocked by a hook" instead of "Turn cancelled by user."
 - **Image and video generation** now limits how many calls the model can request in one step to avoid overload.
 - **Arabic and Persian text** can now be reordered correctly in the terminal UI. Turn on in /settings.
@@ -846,7 +846,7 @@
 
 ## Performance
 
-- **Subagent spawning** is dramatically faster when you have many sessions in ~/.grok.
+- **Subagent spawning** is dramatically faster when you have many sessions in ~/.cook.
 - **TUI rendering** now automatically matches high-refresh displays (120 Hz+) for smoother scrolling and painting.
 
 
@@ -878,7 +878,7 @@
 ## Features
 
 - **Subagent spawning** is now bounded; wide fan-outs queue instead of exhausting file descriptors.
-- New `grok du` command shows disk usage of ~/.grok including worktrees and sessions.
+- New `grok du` command shows disk usage of ~/.cook including worktrees and sessions.
 - **Tools** now report whether they only read data, enabling safer restricted agents and subagents.
 - **Sandbox workspace** sessions can now limit which bundled skills are advertised via caller config.
 - **Renaming a session** from the dashboard now starts with the current title prefilled for easy editing.
@@ -1298,7 +1298,7 @@
 
 - **Local shell tools** now see the same environment variables, aliases, and functions as your login shell.
 - **Syntax highlighting** in diffs and the file viewer no longer miscolors strings or comments that span multiple lines.
-- **Global rules** from ~/.grok/rules and compatible vendor homes are now discovered correctly.
+- **Global rules** from ~/.cook/rules and compatible vendor homes are now discovered correctly.
 - **Background tasks** that finish after you press Ctrl+C no longer automatically resume the model.
 - **Ctrl+\** out of the dashboard now returns you to the agent you came from.
 - **MCP OAuth logins** now succeed against servers that require the RFC 9207 issuer parameter in the callback.
@@ -1556,7 +1556,7 @@
 - **IME text input in Otty** no longer attaches unrelated clipboard images on every character.
 - **Rewind** now fully removes the selected turn from both scrollback and the model's conversation history.
 - **Queued prompts** now abort long blocking waits instead of waiting for the full timeout.
-- **File links and media** now work for worktree sessions under ~/.grok/worktrees/.
+- **File links and media** now work for worktree sessions under ~/.cook/worktrees/.
 - **Collapsed Read/Edit tool rows** now show only the filename instead of long absolute paths.
 - **Clipboard copies on Wayland** now succeed even when the terminal loses focus mid-copy.
 - **User messages queued** behind an auto-wake turn are no longer lost when the user presses Ctrl+C.
@@ -2369,7 +2369,7 @@
 - **Dashboard empty state** is now a single hint line; dispatch and peek placeholders appear only when unfocused.
 - **Fixed memory leaks** that could cause the CLI to use tens of gigabytes during long sessions with many tool calls.
 - **Login on SSH or headless machines** now tells you when the browser cannot be opened automatically and shows the URL to visit manually.
-- **Fixed git clone failures** on Windows when the CLI tries to clone marketplace plugins into ~/.grok.
+- **Fixed git clone failures** on Windows when the CLI tries to clone marketplace plugins into ~/.cook.
 
 ## Performance
 
@@ -2512,7 +2512,7 @@
 
 ## Features
 
-- **`grok --debug`** now produces per-session log files under ~/.grok/debug/ even with a leader process.
+- **`grok --debug`** now produces per-session log files under ~/.cook/debug/ even with a leader process.
 
 ## Bug Fixes
 

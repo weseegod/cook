@@ -9,14 +9,14 @@ use xai_grok_config::mcp_servers::McpServerOrigin;
 pub enum ConfigSource {
     /// Built-in / bundled with the binary.
     Builtin,
-    /// Bundled skill shipped with the binary (extracted to ~/.grok/skills/
+    /// Bundled skill shipped with the binary (extracted to ~/.cook/skills/
     /// or injected via bundled skill dirs).
     Bundled { path: PathBuf },
-    /// Server-synced (e.g. ~/.grok/server-skills from the skill store).
+    /// Server-synced (e.g. ~/.cook/server-skills from the skill store).
     Server { path: PathBuf },
     /// Project-scoped: cwd/.grok/ or cwd/.claude/.
     Project { path: PathBuf },
-    /// User-scoped: ~/.grok/ or ~/.claude/.
+    /// User-scoped: ~/.cook/ or ~/.claude/.
     User { path: PathBuf },
     /// Plugin-provided component.
     Plugin { plugin_name: String, path: PathBuf },

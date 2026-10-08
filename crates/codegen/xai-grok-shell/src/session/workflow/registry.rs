@@ -68,7 +68,7 @@ pub(crate) fn user_workflow_dir() -> PathBuf {
     crate::util::grok_home::grok_home().join("workflows")
 }
 
-/// Runtime-updated builtins from the GCS subagent bundle (`~/.grok/bundled/workflows`).
+/// Runtime-updated builtins from the GCS subagent bundle (`~/.cook/bundled/workflows`).
 pub(crate) fn bundled_workflow_dir() -> PathBuf {
     crate::util::grok_home::grok_home()
         .join("bundled")

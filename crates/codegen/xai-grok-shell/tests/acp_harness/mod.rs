@@ -395,7 +395,7 @@ pub fn run_agent_test_with_models<F, Fut>(
     let grok_home = tempfile::TempDir::new().expect("grok home");
     let workdir = tempfile::TempDir::new().expect("workdir");
     set_test_env(grok_home.path(), &server.url());
-    // After GROK_HOME is the temp dir, so teardown cannot OnceLock ~/.grok.
+    // After GROK_HOME is the temp dir, so teardown cannot OnceLock ~/.cook.
     let _globals = RestoreProcessGlobals::enter();
 
     let agent_rt = tokio::runtime::Builder::new_current_thread()

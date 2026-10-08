@@ -21,7 +21,7 @@
   },
   {
     "category": "fixes",
-    "description": "**Global rules** from ~/.grok/rules and compatible vendor homes are now discovered correctly.",
+    "description": "**Global rules** from ~/.cook/rules and compatible vendor homes are now discovered correctly.",
     "breaking_change": false
   },
   {

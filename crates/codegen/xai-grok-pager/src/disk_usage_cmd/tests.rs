@@ -1027,6 +1027,6 @@ fn symlinked_default_home_keeps_home_label() {
     assert_ne!(canonical, resolved, "the symlink must actually resolve");
     assert_eq!(
         crate::util::display_grok_home_prefix_for(&canonical),
-        "~/.grok"
+        "~/.cook"
     );
 }

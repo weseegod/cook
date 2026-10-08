@@ -77,16 +77,15 @@ to `main` until each row below is green.
 ### A — BYOK reads `~/.cook/config.toml`
 
 - **User:** puts `[model.*]` / `[model_providers.*]` in `~/.cook/config.toml`.
-- **Must remain true:** default user home is `~/.cook`, never upstream
-  `~/.grok`. `$COOK_HOME` overrides, then `$GROK_HOME`, unless the override is
-  the real `~/.grok` or `~/.thanh` (those are ignored; nothing is migrated).
+- **Must remain true:** the default user home is `~/.cook`, and no other
+  directory is read or migrated. `$COOK_HOME` overrides, then `$GROK_HOME`.
   `cook models` lists those models.
 - **Source of truth:** `crates/codegen/xai-dirs/src/lib.rs` —
   `grok_home_in` joins `".cook"`. Keep upstream's `GrokHomeSource`,
   `home_dir()`, `resolve_grok_home_with_source()`; only the directory name is
   fork-owned. `xai-fast-worktree` already delegates here.
-- **Do not** dual-read `~/.grok` and `~/.cook`. Do not migrate `~/.thanh`. Do
-  not rewrite project-level `.grok/` (workspace config, agents, hooks). The one
+- **Do not** read a second home directory alongside `~/.cook`, and do not add a
+  migration path. Do not rewrite project-level `.grok/` (workspace config, agents, hooks). The one
   fork-owned project-scope directory is `.cook/prompts/` (Settings → Prompts,
   see the prompt-defaults row below); it is additive and does not change where
   upstream reads project config.
@@ -280,7 +279,7 @@ These paths contain fork customizations. Preserve them during merges.
 | Fork-only files | `build.sh`, `docs/byok-models.md`, `docs/post-merge-core-fix.md` | Never delete; keep fork version |
 | Desktop ACP client (leaf) | entire `frontend/apps/let-cook/`; `docs/desktop-app.md`, `docs/desktop-app-client-implement.md`, `docs/desktop-app-implement.md`, `docs/desktop-tui-capability-map.md` | Never delete; never fold into an upstream `grok-desktop` tree. Do not patch shell/pager for Desktop-only behaviour. |
 | Fork release pipeline | `scripts/publish_release.sh` + `.github/workflows/release.yml` (tag `v*` → self-hosted 4-platform build → R2 `download.letcook.dev`) | Never delete; keep fork-owned |
-| Self-update feed (`cook`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`https://download.letcook.dev`), fork home `~/.cook` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `cook` managed binary name (`~/.cook/bin/cook`, assets `cook-<ver>-<os>-<arch>`), `version-cook.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
+| Self-update feed (`cook`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`https://download.letcook.dev`), fork home `~/.cook` (default in `default_grok_home()`/`resolve_grok_home()`, never the official grok client's home), `cook` managed binary name (`~/.cook/bin/cook`, assets `cook-<ver>-<os>-<arch>`), `version-cook.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
 | User home (`~/.cook`) | `crates/codegen/xai-dirs/src/lib.rs` (`grok_home_in`) | **Single source of truth.** Upstream rewrites this file every sync (`GrokHomeSource`, `home_dir()`). Keep those APIs; re-apply `.join(".cook")`. Never take upstream's `.join(".grok")` wholesale. |
 | Version lockstep | `crates/codegen/xai-grok-version/Cargo.toml`, `crates/codegen/xai-grok-pager-bin/Cargo.toml` | Keep fork version; bump after every sync (see [Release & versioning](#release--versioning)) |
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
@@ -314,7 +313,7 @@ sync #2, 7 inventory files merged that way; the marker diff caught no loss.
 
 The fork ships binaries as **`cook`** (not `grok`) with its own home
 **`~/.cook`** (config, auth, sessions, `bin/`, `downloads/`, caches) so it
-runs fully isolated from an official grok install that keeps `~/.grok`.
+runs fully isolated from an official grok install, which keeps its own home.
 Release assets on Cloudflare R2 (`https://download.letcook.dev`) are named
 `cook-<version>-<os>-<arch>` (e.g. `cook-1.0.37-macos-aarch64`), plus
 plain-text `stable` / `alpha` channel pointers that the built-in updater
@@ -338,7 +337,7 @@ Rules:
 - The updater's default installer is `internal` (pure HTTP against the fork's
   R2 base `https://download.letcook.dev`); `gh-release` (needs `gh`, reads the
   fork's GitHub Releases) is also supported. It manages `~/.cook/bin/cook` only
-  and never touches grok's `~/.grok` tree.
+  and never touches the official grok client's home.
 
 ### Fork commit map
 
@@ -358,7 +357,7 @@ Historical fork commits (reference):
 | `b9b61ba` | Add UPSTREAM-MERGE.md playbook + document fork BYOK goal |
 | `c2b4b6f` | Stop subagent child sessions when workflow cancel lands |
 | `c28b9603` / `bd2e90f9` | Plan `g` run-as-goal + slash `/model` on plan approval (input). Restore after every sync. |
-| `692cb182` (v1.0.14) | **Incident:** wholesale upstream merge dropped A/B/C (`xai-dirs` → `~/.grok`, `ApprovedAsGoal` gone, picker z-order). Last good tip: `499e1d56`. Spec: `docs/post-merge-core-fix.md`. |
+| `692cb182` (v1.0.14) | **Incident:** wholesale upstream merge dropped A/B/C (`xai-dirs` home reverted to upstream's naming, `ApprovedAsGoal` gone, picker z-order). Last good tip: `499e1d56`. Spec: `docs/post-merge-core-fix.md`. |
 
 ## Conflict resolution
 
@@ -451,7 +450,7 @@ Manual checks:
 - [ ] `./build.sh` prints a version (e.g. `cook 0.2.x`)
 - [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok|ApprovedAsGoal|GoalPlanSource|LeaveAndStartGoal`, plus `weseegod/cook`, `download.letcook.dev`, `version-cook.json`, `~/.cook`, `bin/cook`
 - [ ] `xai-dirs` default home is `~/.cook` (`ends_with(".cook")`)
-- [ ] `cook models` sees models from `~/.cook/config.toml` (not `~/.grok/config.toml`)
+- [ ] `cook models` sees models from `~/.cook/config.toml` (not a second home directory)
 - [ ] Plan approval footer still has `g run as goal`; `g` seeds a goal (not "request changes")
 - [ ] With a parked plan, `/model` or `Ctrl+M` shows the picker **on top of** the plan; overlay stays for `a`/`g`
 - [ ] No Privacy banner, no `/privacy`, no Settings coding-data row
@@ -469,7 +468,7 @@ Manual checks:
 - Do **not** take upstream's `xai-dirs` `.join(".grok")` wholesale
 - Do **not** drop `ApprovedAsGoal` because the wire string is "unknown" to upstream (unknown maps to `Cancelled` = request-changes)
 - Do **not** paint `line_viewer` after slash dropdowns / ArgPicker (covers `/model`)
-- Do **not** dual-read `~/.grok` and `~/.cook`
+- Do **not** dual-read a second home directory alongside `~/.cook`
 - Do **not** re-show Privacy, `/usage` limits, announcements, or the consumer paywall
 - Do **not** add fork-only features unrelated to BYOK support, small TUI
   ergonomics, or trimming — propose them upstream instead

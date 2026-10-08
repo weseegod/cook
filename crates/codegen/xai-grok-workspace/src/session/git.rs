@@ -2425,7 +2425,7 @@ pub fn restore_code_checkout_allowed(supplied_cwd: &Path, persisted_cwd: Option<
 }
 /// Pure core of [`restore_code_checkout_allowed`] with the worktrees root
 /// injected so the decision can be unit-tested without touching
-/// `~/.grok`.
+/// `~/.cook`.
 fn restore_code_checkout_allowed_in(
     supplied_cwd: &Path,
     persisted_cwd: Option<&str>,

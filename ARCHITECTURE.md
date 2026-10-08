@@ -207,8 +207,7 @@ For the real-model suite verification order, see
 ## 5. Storage and repository conventions
 
 Cook's default home is `~/.cook`. `$COOK_HOME` selects a custom home; `$GROK_HOME`
-is a compatibility fallback, subject to protections against using the real
-`~/.grok` or `~/.thanh` directories. Project `.grok/` configuration belongs to
+is a compatibility fallback. Project `.grok/` configuration belongs to
 the workspace and is separate from the user home.
 
 | Path under `~/.cook` | Contents |

@@ -50,7 +50,7 @@ static MEMORY_ARCHIVE_BUILDS: std::sync::LazyLock<
 > = std::sync::LazyLock::new(Default::default);
 
 /// Join the in-flight build for `cwd` or start one. The builder task owns publishing and map cleanup, so it completes even if every waiter is dropped (e.g. all turns hit their flush deadline). `MemoryStorage::new` runs git2 workspace discovery and the build tars+gzips the whole memory dir — seconds on large workspaces — so both stay on the blocking pool.
-/// `memory_root` overrides the default `~/.grok/memory` root for tests.
+/// `memory_root` overrides the default `~/.cook/memory` root for tests.
 fn join_or_start_memory_archive_build(
     cwd: String,
     memory_root: Option<std::path::PathBuf>,

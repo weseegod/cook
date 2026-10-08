@@ -14,7 +14,7 @@ pub(crate) struct GroveParentLayout {
     pub source_git_root: Option<String>,
 }
 
-/// Git root used for `~/.grok/worktrees/<slug>/` and optional `source_git_root`.
+/// Git root used for `~/.cook/worktrees/<slug>/` and optional `source_git_root`.
 #[derive(Debug, Clone)]
 pub(crate) struct CreateSourceLayout {
     pub git_root: PathBuf,

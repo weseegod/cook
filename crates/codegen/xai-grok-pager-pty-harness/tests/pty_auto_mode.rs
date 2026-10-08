@@ -3,7 +3,7 @@
 //! Uses `xai-grok-pager-pty-harness` (`PtyHarness`) and Shift+Tab (CSI Z, compatible with `ptyctl` key injection) to cycle Normal to Plan to Auto.
 //! The mode banner or status line must show Auto as its own mode, distinct from Always-Approve.
 //!
-//! Auth: seeds `HOME/.grok/auth.json` from `GROK_AUTH_JSON` (path) or the
+//! Auth: seeds `HOME/.cook/auth.json` from `GROK_AUTH_JSON` (path) or the
 //! developer's `~/.cook/auth.json` so the pager skips device-login when
 //! credentials exist. Without auth the test records an environmental
 //! failure (login screen) and still asserts the harness API surface.

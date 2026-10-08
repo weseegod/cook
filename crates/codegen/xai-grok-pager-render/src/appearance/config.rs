@@ -1859,7 +1859,7 @@ fn annotate_table<T: DocumentedFields>(table: &mut toml_edit::Table) {
 mod tests {
     use super::*;
 
-    /// The `/settings` toggle on a dotfile-managed `~/.grok/pager.toml` must reach the dotfile, not replace the link.
+    /// The `/settings` toggle on a dotfile-managed `~/.cook/pager.toml` must reach the dotfile, not replace the link.
     #[cfg(unix)]
     #[test]
     #[serial_test::serial]

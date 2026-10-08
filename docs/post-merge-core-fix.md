@@ -69,12 +69,12 @@ Change only the directory name:
 | Location | After |
 |----------|--------|
 | `grok_home_in` | `.join(".cook")` |
-| `GrokHomeSource::HomeDefault` doc | `` `<home>/.thanh` `` |
-| crate / `default_grok_home` docs | restore the fork paragraph: isolated from official grok's `~/.grok` |
+| `GrokHomeSource::HomeDefault` doc | `` `<home>/.cook` `` |
+| crate / `default_grok_home` docs | restore the fork paragraph: isolated from the official grok client's home |
 | test `empty_env_falls_through_to_os_home` | `.join(".cook")` |
-| test `default_grok_home_has_no_verbatim_prefix` | `assert!(home.ends_with(".thanh"))` |
+| test `default_grok_home_has_no_verbatim_prefix` | `assert!(home.ends_with(".cook"))` |
 
-**Also:** `crates/codegen/xai-dirs/Cargo.toml` description: `<home>/.thanh`.
+**Also:** `crates/codegen/xai-dirs/Cargo.toml` description: `<home>/.cook`.
 
 `xai-fast-worktree/src/db/mod.rs` already comments `.cook` and already calls
 `xai_dirs::resolve_grok_home()`. No change there once `xai-dirs` is fixed.
@@ -82,7 +82,7 @@ Change only the directory name:
 **Do not** mass-replace project `.grok/` (workspace config, agents, hooks,
 `lsp.json`). Those are not the user home.
 
-**Do not** read both `~/.grok` and `~/.cook`.
+**Do not** read a second home directory alongside `~/.cook`.
 
 ### Tests (A)
 
@@ -471,7 +471,7 @@ Full `./build.sh` only after the targeted tests pass.
 
 - Re-merging upstream
 - Version bump / `scripts/publish_release.sh`
-- Dual-home (`~/.grok` + `~/.cook`)
+- Dual-home (a second home directory alongside `~/.cook`)
 - Deleting `xai-grok-telemetry` / `privacy_banner.rs` / `usage_modal.rs`
 - Redesigning plan-approval UI
 - Project-level `.grok/` paths

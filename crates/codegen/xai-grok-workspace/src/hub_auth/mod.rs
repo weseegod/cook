@@ -1,4 +1,4 @@
-//! Hub [`AuthProvider`] from `~/.grok/auth.json` for the standalone
+//! Hub [`AuthProvider`] from `~/.cook/auth.json` for the standalone
 //! `workspace_server` binary: loopback `ws://` uses a plain bearer, otherwise an auto-refreshing OIDC provider that persists rotated tokens.
 //!
 //! The in-leader `grok workspace` exposure does NOT use this path.
@@ -436,7 +436,7 @@ fn write_json_atomic(path: &Path, value: &serde_json::Value) -> anyhow::Result<(
         .map_err(|e| anyhow::anyhow!("failed to replace {}: {e}", path.display()))
 }
 
-/// Hub auth provider for `hub_url`. `auth_config` overrides `~/.grok/auth.json`.
+/// Hub auth provider for `hub_url`. `auth_config` overrides `~/.cook/auth.json`.
 /// `refresh_cfg.enabled` selects the workspace refresher; the SDK provider is the kill-switch. Loopback `ws://` stays on a static bearer.
 pub fn provider(
     hub_url: &Url,

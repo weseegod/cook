@@ -6,7 +6,7 @@
   },
   {
     "category": "features",
-    "description": "**Worktrees** under ~/.grok/worktrees are now automatically reclaimed when safe, with strong safeguards that never delete a user's last copy.",
+    "description": "**Worktrees** under ~/.cook/worktrees are now automatically reclaimed when safe, with strong safeguards that never delete a user's last copy.",
     "breaking_change": false
   },
   {

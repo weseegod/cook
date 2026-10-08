@@ -17,11 +17,11 @@ const pkgName = '@xai-official/grok';
 const IS_WINDOWS = process.platform === 'win32';
 const EXE = IS_WINDOWS ? '.exe' : '';
 const BIN_NAME = `grok${EXE}`;
-// $GROK_HOME/bin (else ~/.grok/bin), matching the Rust grok_home():
+// $GROK_HOME/bin (else ~/.cook/bin), matching the Rust grok_home():
 // a symlinked $HOME resolves the same way.
 function defaultGrokHome() {
     const home = os.homedir();
-    try { return path.join(fs.realpathSync(home), '.grok'); } catch { return path.join(home, '.grok'); }
+    try { return path.join(fs.realpathSync(home), '.cook'); } catch { return path.join(home, '.cook'); }
 }
 const GROK_HOME = process.env.GROK_HOME ?? defaultGrokHome();
 const CANONICAL_DIR = path.join(GROK_HOME, 'bin');

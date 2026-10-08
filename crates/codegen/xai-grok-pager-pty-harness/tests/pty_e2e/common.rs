@@ -223,7 +223,7 @@ pub(crate) fn trust_env(feature_on: bool) -> [(&'static str, &'static str); 2] {
     ]
 }
 
-/// Filename of the folder-trust store under `$HOME/.grok`. Mirrors
+/// Filename of the folder-trust store under `$HOME/.cook`. Mirrors
 /// `xai_grok_workspace::trust::TRUST_FILE_NAME`; the harness does not link the workspace crate.
 pub(crate) const TRUST_FILE_NAME: &str = "trusted_folders.toml";
 
@@ -289,14 +289,14 @@ pub(crate) fn seed_mcp_server_config(content: &ContentController) {
     std::fs::write(grok_home.join("config.toml"), config).expect("write config.toml");
 }
 
-/// Write one hooks spec file under the sandbox's `~/.grok/hooks/` (`spec` is the file's JSON body).
+/// Write one hooks spec file under the sandbox's `~/.cook/hooks/` (`spec` is the file's JSON body).
 pub(crate) fn seed_hook_spec(
     content: &ContentController,
     file_name: &str,
     spec: &serde_json::Value,
 ) {
     let hooks_dir = content.home().join(".grok").join("hooks");
-    std::fs::create_dir_all(&hooks_dir).expect("create ~/.grok/hooks");
+    std::fs::create_dir_all(&hooks_dir).expect("create ~/.cook/hooks");
     std::fs::write(
         hooks_dir.join(file_name),
         serde_json::to_vec_pretty(spec).expect("serialize hook spec"),
@@ -425,7 +425,7 @@ pub(crate) const MOUSE_OFF_STICKY: &str =
 pub(crate) const MOUSE_OFF_HINT_PROMPT: &str =
     "/toggle-mouse-reporting to enable mouse reporting and restore TUI features";
 
-/// Seed `~/.grok/config.toml` with a `[ui]` section body (e.g. `"vim_mode = true"`).
+/// Seed `~/.cook/config.toml` with a `[ui]` section body (e.g. `"vim_mode = true"`).
 /// Same `{GROK_HOME|HOME}/.grok/config.toml` location `seed_mouse_reporting_toggle_config` uses; call before spawning the pager.
 pub(crate) fn seed_ui_config(content: &ContentController, ui_body: &str) {
     let grok_home = content.home().join(".grok");

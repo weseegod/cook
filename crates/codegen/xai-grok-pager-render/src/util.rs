@@ -448,7 +448,7 @@ mod tests {
         if home.as_os_str().is_empty() {
             return;
         }
-        // Stay outside grok_home so this hits the $HOME branch, not ~/.grok.
+        // Stay outside grok_home so this hits the $HOME branch, not ~/.cook.
         let full = home.join("not-grok-home").join("file.txt");
         let full_str = full.to_string_lossy();
         let abbreviated = abbreviate_path(&full_str);

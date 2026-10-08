@@ -77,7 +77,7 @@ cargo build -p xai-grok-pager-bin --bin xai-grok-pager
 
 `cargo test` does not rebuild that binary. If `COOK_BIN` is missing, `run.sh` exits before starting a model.
 
-Each case gets its own `COOK_HOME` under `OUT_ROOT/<phase>/<case>/home`. Never the user’s `~/.cook`. Resolution order in the product is `$COOK_HOME`, then `$GROK_HOME`, then `~/.cook`. An override equal to the real `~/.grok` or `~/.thanh` is ignored, so the temp home must be somewhere else.
+Each case gets its own `COOK_HOME` under `OUT_ROOT/<phase>/<case>/home`. Never the user’s `~/.cook`. Resolution order in the product is `$COOK_HOME`, then `$GROK_HOME`, then `~/.cook`, so the temp home must not collide with the real one.
 
 Write `home/config.toml` with mode `0600`. Also write `home/config.redacted.toml` with the same text and the `api_key` line removed. The redacted file is the one a failure report may quote.
 

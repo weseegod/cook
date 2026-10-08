@@ -12,8 +12,8 @@
 //! parses the flags itself.
 //!
 //! Resolve (host side, memoized): env override if a regular file → bundled binary
-//! (release builds, self-extracted to `~/.grok/vendor/<name>-<ver>-<target>`) →
-//! `~/.grok/vendor/{name}` if a regular file → `which` on the agent `$PATH`.
+//! (release builds, self-extracted to `~/.cook/vendor/<name>-<ver>-<target>`) →
+//! `~/.cook/vendor/{name}` if a regular file → `which` on the agent `$PATH`.
 //! Env/vendor only require `is_file()` as a lenient hint (no `--version` probe).
 //! This memoized path is only a *hint*: the injected shadow re-resolves at
 //! **call time** — it uses the hint when it's still *executable* (`[ -x ]`), else
@@ -176,7 +176,7 @@ fn resolve_tool(
     )
 }
 
-/// Resolution order: explicit env path → bundled (self-extracted) → `~/.grok/vendor/<bin>` → `which`. Env and vendor only require `is_file()`
+/// Resolution order: explicit env path → bundled (self-extracted) → `~/.cook/vendor/<bin>` → `which`. Env and vendor only require `is_file()`
 /// here (a lenient hint, no `+x` probe) so an odd-permission copy still resolves; the injected shadow gates on `[ -x ]` at call time and falls
 /// back to the OS binary if the hint isn't executable, so a non-exec path can't hard-fail `find`/`grep`.
 fn resolve_tool_from(
@@ -475,7 +475,7 @@ mod tests {
 
     /// Only compiled when the binaries are actually bundled (release pipeline, or
     /// `GROK_TOOLS_BUNDLE_{BFS,UGREP}_PATH` at build time). Verifies the embedded
-    /// bytes self-extract under `~/.grok/vendor` and the extracted `bfs` runs.
+    /// bytes self-extract under `~/.cook/vendor` and the extracted `bfs` runs.
     #[cfg(all(bundle_bfs, bundle_ugrep))]
     #[test]
     fn bundled_binaries_extract_and_run() {

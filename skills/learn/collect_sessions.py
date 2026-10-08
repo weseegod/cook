@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic collector for the /learn skill.
 
-Walks a Grok Build home (default: $GROK_HOME or ~/.grok), keeps the sessions the
+Walks a Grok Build home (default: $GROK_HOME or ~/.cook), keeps the sessions the
 user actually sat at, and writes a compact run directory that the learn-traces.rhai
 workflow shards across agents:
 
@@ -591,7 +591,7 @@ def normalize(s: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--grok-home", default=os.environ.get("GROK_HOME") or os.path.expanduser("~/.grok"))
+    ap.add_argument("--grok-home", default=os.environ.get("GROK_HOME") or os.path.expanduser("~/.cook"))
     ap.add_argument("--out", default=None, help="run directory to create (default: <GROK_HOME>/learn/runs/<UTC timestamp>, or <OS temp dir>/learn/estimate with --estimate)")
     ap.add_argument("--days", type=int, default=0, help="only sessions updated in the last N days (0 = all)")
     ap.add_argument("--since-last", action="store_true", help="only sessions updated after the last /learn run (GROK_HOME/learn/state.json)")

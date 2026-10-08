@@ -3,14 +3,14 @@
 //! Two isolated pipelines. They do not share files, search, flush, or Dream.
 //! See the crate `AGENTS.md` before changing either path.
 //!
-//! - **Legacy:** markdown under `~/.grok/memory/` (tree below).
-//! - **v2:** `~/.grok/memory-v2/` topics, observation inbox, and generated
+//! - **Legacy:** markdown under `~/.cook/memory/` (tree below).
+//! - **v2:** `~/.cook/memory-v2/` topics, observation inbox, and generated
 //!   `MEMORY.md`. See `v2.rs`. v2 never reads or writes the legacy tree.
 //!
 //! ## Legacy data layout
 //!
 //! ```text
-//! ~/.grok/memory/
+//! ~/.cook/memory/
 //!   ├── MEMORY.md                         # Global curated knowledge
 //!   └── {workspace_hash}/                 # Per-workspace (blake3(cwd)[..16])
 //!       ├── MEMORY.md                     # Project-level curated knowledge

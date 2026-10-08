@@ -1,7 +1,7 @@
 //! In-memory theme cache and resolution.
 //!
 //! The pager reads the active `ThemeKind` on every render frame, so the
-//! lookup must be cheaper than re-loading from `~/.grok/config.toml`.
+//! lookup must be cheaper than re-loading from `~/.cook/config.toml`.
 //! [`current_kind`] returns the in-memory value, lazily seeding from the shell's layered effective config on first call.
 //!
 //! Disk writes live in `xai_grok_shell::util::config::set_theme()` (and friends), invoked via `Effect::PersistSetting` from the dispatcher.
@@ -59,7 +59,7 @@ pub struct AutoThemeConfig {
     pub light_theme: Option<ThemeKind>,
 }
 
-/// On the first call, reads from `~/.grok/config.toml` (via the shell's
+/// On the first call, reads from `~/.cook/config.toml` (via the shell's
 /// `load_effective_config`).
 /// After that, returns the in-memory value (updated by [`set`]).
 pub fn current_kind() -> ThemeKind {

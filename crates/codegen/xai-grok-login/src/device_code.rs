@@ -174,7 +174,7 @@ pub async fn request_device_code(
 // --- Phase 2: Poll until approved ---
 
 /// Poll the token endpoint until the user approves (or denies, or the code expires).
-/// On success, persists credentials to `~/.grok/auth.json` and returns the authenticated `GrokAuth`.
+/// On success, persists credentials to `~/.cook/auth.json` and returns the authenticated `GrokAuth`.
 /// Callers should have already displayed `device_code.verification_uri` and `device_code.user_code` to the user before calling this.
 pub async fn complete_device_code_login(
     issuer: &str,

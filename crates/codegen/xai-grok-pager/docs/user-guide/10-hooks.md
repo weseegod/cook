@@ -233,12 +233,12 @@ Prefer the inline form to avoid repeating the `[[hooks.<Event>.hooks]]` header f
 
 ### Enforced hooks
 
-Hooks from the config layers your organization controls are enforced: they carry a `[policy]` badge in `/hooks`, `Space` refuses to disable them, an entry in `~/.grok/disabled-hooks` does not skip them, and their source cannot be removed. Two layers qualify:
+Hooks from the config layers your organization controls are enforced: they carry a `[policy]` badge in `/hooks`, `Space` refuses to disable them, an entry in `~/.cook/disabled-hooks` does not skip them, and their source cannot be removed. Two layers qualify:
 
 - The root-owned system files `/etc/grok/requirements.toml` and `/etc/grok/managed_config.toml` (`requirements/system:` and `system_managed:` names).
-- The `~/.grok/requirements.toml` that the deployment sync writes, while its bytes match the signed policy the server sent (`requirements/signed:` names). If the file is edited or its signature file is missing or unreadable, its hooks load as your own (`requirements/user:` names) and can be disabled again; an unreadable `requirements.toml` contributes no hooks. Organizations that need the file to stay intact set `fail_closed = true` in the same requirements, which refuses to start on an edited copy or a missing signature (an unreadable file is a read error and still starts). See [Configuration](26-config-reference.md#requirementstoml).
+- The `~/.cook/requirements.toml` that the deployment sync writes, while its bytes match the signed policy the server sent (`requirements/signed:` names). If the file is edited or its signature file is missing or unreadable, its hooks load as your own (`requirements/user:` names) and can be disabled again; an unreadable `requirements.toml` contributes no hooks. Organizations that need the file to stay intact set `fail_closed = true` in the same requirements, which refuses to start on an edited copy or a missing signature (an unreadable file is a read error and still starts). See [Configuration](26-config-reference.md#requirementstoml).
 
-Hooks in `~/.grok/managed_config.toml` and `~/.grok/config.toml` are distribution, not enforcement: you can disable them.
+Hooks in `~/.cook/managed_config.toml` and `~/.cook/config.toml` are distribution, not enforcement: you can disable them.
 
 ### Allow only managed hooks
 
@@ -251,8 +251,8 @@ allow_managed_hooks_only = true
 
 With this set:
 
-- **What runs.** Only [enforced hooks](#enforced-hooks): the ones from the root-owned `/etc/grok/requirements.toml` and `/etc/grok/managed_config.toml`, and the ones in the synced `~/.grok/requirements.toml` while it matches its signature. An edited synced file loads as your own hooks, which the pin skips.
-- **What is skipped.** Every other hook, at dispatch: `~/.grok/hooks`, every `~/.grok/*.toml` file, project hooks, plugin hooks, agent frontmatter hooks, and the Claude and Cursor compatibility files. In `/hooks` they show `[disabled]`, and enabling them is refused ("Hooks outside managed policy are disabled by your organization."); `grok inspect` names the file that set the pin.
+- **What runs.** Only [enforced hooks](#enforced-hooks): the ones from the root-owned `/etc/grok/requirements.toml` and `/etc/grok/managed_config.toml`, and the ones in the synced `~/.cook/requirements.toml` while it matches its signature. An edited synced file loads as your own hooks, which the pin skips.
+- **What is skipped.** Every other hook, at dispatch: `~/.cook/hooks`, every `~/.cook/*.toml` file, project hooks, plugin hooks, agent frontmatter hooks, and the Claude and Cursor compatibility files. In `/hooks` they show `[disabled]`, and enabling them is refused ("Hooks outside managed policy are disabled by your organization."); `grok inspect` names the file that set the pin.
 - **What still runs.** Hooks the embedding client registers over ACP (an IDE or the desktop app), as under Claude Code's `allowManagedHooksOnly`. The pager's `[[ui.notifications.hooks]]` commands are a separate mechanism.
 - **Windows.** There is no root-owned layer (no `/etc/grok`), so only the signed synced `requirements.toml` hooks and ACP client hooks still run.
 

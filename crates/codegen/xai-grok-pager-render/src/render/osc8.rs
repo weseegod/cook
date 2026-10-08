@@ -198,7 +198,7 @@ fn linkify_href(text: &str, link: &linkify::Link<'_>) -> Option<String> {
 
 /// One path segment without spaces (`main.rs`, `.grok`, `@scope`). Leading `.`
 /// matches dot-directories and `%` matches percent-encoded segments; grok
-/// session media lives under `~/.grok/sessions/%2F…/images/1.jpg`.
+/// session media lives under `~/.cook/sessions/%2F…/images/1.jpg`.
 const PATH_SEGMENT: &str = r"[a-zA-Z0-9_@.%][a-zA-Z0-9._+@%\-]*";
 
 /// Final path segment may contain *internal* spaces for macOS app bundles and similarly named files (`Demo App.app`).

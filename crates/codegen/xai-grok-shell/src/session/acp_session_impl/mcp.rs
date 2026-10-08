@@ -824,7 +824,7 @@ impl SessionActor {
     }
     /// Returns `true` iff `server` has a `Stdio` entry in [`McpState::configs`] and is not on the per-cwd disabled list.
     /// HTTP / HttpAuth entries always return `false` here, which is what the auto-restart task wants.
-    /// Performs one synchronous read of the per-cwd disabled-MCP list (`crate::util::config::disabled_mcp_server_names`, which parses `~/.grok/config.toml` + the project `.grok/config.toml`) on every call.
+    /// Performs one synchronous read of the per-cwd disabled-MCP list (`crate::util::config::disabled_mcp_server_names`, which parses `~/.cook/config.toml` + the project `.grok/config.toml`) on every call.
     pub(crate) async fn is_stdio_server_configured(&self, server: &str) -> bool {
         let mcp_state = self.mcp_state.lock().await;
         let is_stdio_in_configs = mcp_state

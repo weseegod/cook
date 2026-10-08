@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Runs once after npm install/update. Reads the grok binary from the
 // matching per-platform optional dependency (@xai-official/grok-<platform>)
-// and installs it to ~/.grok/bin/ using versioned filenames:
+// and installs it to ~/.cook/bin/ using versioned filenames:
 //
 //   Unix:    grok-<version>  +  grok  (symlink)
 //   Windows: grok-<version>.exe  +  grok.exe  (copy)
@@ -16,12 +16,12 @@ const zlib = require('zlib');
 const { execSync } = require('child_process');
 const TOML = require('@iarna/toml');
 
-// $GROK_HOME (else ~/.grok), matching the Rust grok_home(): a symlinked
+// $GROK_HOME (else ~/.cook), matching the Rust grok_home(): a symlinked
 // $HOME resolves the same way. Lets fleets relocate the binary off a slow $HOME
 // (NFS); old code hardcoded os.homedir().
 function defaultGrokHome() {
     const home = os.homedir();
-    try { return path.join(fs.realpathSync(home), '.grok'); } catch { return path.join(home, '.grok'); }
+    try { return path.join(fs.realpathSync(home), '.cook'); } catch { return path.join(home, '.cook'); }
 }
 const GROK_HOME = process.env.GROK_HOME ?? defaultGrokHome();
 const CANONICAL_DIR = path.join(GROK_HOME, 'bin');
@@ -246,7 +246,7 @@ if (npmRegistry) {
 fs.writeFileSync(configPath, TOML.stringify(obj), 'utf8');
 
 // Shell completions: print setup hints (no silent shell config mutation).
-// Set GROK_INSTALL_COMPLETIONS=1 to auto-generate to ~/.grok/completions.
+// Set GROK_INSTALL_COMPLETIONS=1 to auto-generate to ~/.cook/completions.
 const GROK_PATH = path.join(CANONICAL_DIR, `grok${EXE}`);
 if (process.env.GROK_INSTALL_COMPLETIONS === '1' && !IS_WINDOWS) {
     try {
@@ -260,7 +260,7 @@ if (process.env.GROK_INSTALL_COMPLETIONS === '1' && !IS_WINDOWS) {
         if (bashRes.status === 0) fs.writeFileSync(bashPath, bashRes.stdout);
         const zshRes = spawnSync(GROK_PATH, ['completions', 'zsh'], { encoding: 'utf8' });
         if (zshRes.status === 0) fs.writeFileSync(zshPath, zshRes.stdout);
-        console.log('Completions generated to ~/.grok/completions (bash/zsh)');
+        console.log('Completions generated to ~/.cook/completions (bash/zsh)');
     } catch {}
 } else if (!IS_WINDOWS) {
     console.log('Tip: grok completions bash > ~/.local/share/bash-completion/completions/grok');

@@ -2342,7 +2342,7 @@ mod tests {
             tmp.path().to_string_lossy().into_owned(),
         );
 
-        let mut spec = make_shell_spec("~/.grok-test-hooks-gb856/tilde-test.sh");
+        let mut spec = make_shell_spec("~/.cook-test-hooks-gb856/tilde-test.sh");
         spec.extra_env = extra_env;
 
         let envelope = make_envelope();

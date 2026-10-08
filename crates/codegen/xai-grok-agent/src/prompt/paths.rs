@@ -1,7 +1,7 @@
 //! `[paths]` configuration: extra directories for skills and rules.
 //!
 //! `extra_rule_dirs` supplements the built-in rule scan (`.grok/`, `.agents/`,
-//! `~/.grok/rules/`, …). `extra_skill_dirs` is written by `/import-claude` so
+//! `~/.cook/rules/`, …). `extra_skill_dirs` is written by `/import-claude` so
 //! Claude skill locations survive the runtime `.claude/` cutoff. Skill
 //! injection does not read `extra_skill_dirs`. Extra injection dirs belong
 //! in `[skills] paths`.

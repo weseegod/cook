@@ -103,7 +103,7 @@ pub struct PlanModeSnapshot {
 }
 impl PlanModeTracker {
     /// Create a new tracker. `session_dir` is the session's storage
-    /// directory (e.g., `~/.grok/sessions/<encoded-cwd>/<session-id>/`).
+    /// directory (e.g., `~/.cook/sessions/<encoded-cwd>/<session-id>/`).
     pub fn new(session_dir: PathBuf) -> Self {
         Self {
             state: PlanModeState::Inactive,

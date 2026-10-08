@@ -1,5 +1,5 @@
 //! E2E: the pager modal Uninstall (`x.ai/plugins/action`) must clean up
-//! `~/.grok/plugin-data/<id>/` like the CLI uninstall path, not orphan it.
+//! `~/.cook/plugin-data/<id>/` like the CLI uninstall path, not orphan it.
 
 mod acp_harness;
 

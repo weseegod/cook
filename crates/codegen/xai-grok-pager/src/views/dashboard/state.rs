@@ -329,7 +329,7 @@ pub enum FilterValue {
     Substring(String),
 }
 
-/// Persisted dashboard configuration stored under `[dashboard]` in `~/.grok/config.toml`. Lenient:
+/// Persisted dashboard configuration stored under `[dashboard]` in `~/.cook/config.toml`. Lenient:
 /// corrupted fields fall back to defaults.
 #[derive(Debug, Clone, Default)]
 pub struct PersistedDashboard {
@@ -4319,7 +4319,7 @@ pub fn load_persisted_enabled() -> Option<bool> {
         .and_then(|v| v.as_bool())
 }
 
-/// Load the full persisted dashboard from `~/.grok/config.toml`. Returns `None` only when the file
+/// Load the full persisted dashboard from `~/.cook/config.toml`. Returns `None` only when the file
 /// is missing or completely unreadable. Malformed individual fields fall back to defaults silently.
 pub fn load_persisted() -> Option<PersistedDashboard> {
     let path = config_path()?;

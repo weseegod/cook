@@ -224,7 +224,7 @@ Strict rules for this announcement:
 
 Before launching the implementer, attempt to load past issue patterns from the workspace memory file. This briefing is injected into both the implementer and reviewer prompts to help avoid recurring issues.
 
-The memory file is **workspace-scoped** and lives under `$HOME/.grok/implement-memory/`, keyed by a stable workspace id derived in this order:
+The memory file is **workspace-scoped** and lives under `$HOME/.cook/implement-memory/`, keyed by a stable workspace id derived in this order:
 
 1. Canonicalised `git config remote.origin.url` (SSH and HTTPS variants of the same upstream collapse onto one id, with or without the `.git` suffix).
 2. Absolute path of the main `.git` directory (`git rev-parse --git-common-dir`) for repos with no remote.
@@ -234,7 +234,7 @@ The `memory.py` helper at `<dirname of this SKILL.md>/scripts/memory.py` resolve
 
 ### Resolve the helper path once
 
-The helper script lives at a fixed location **relative to this SKILL.md file**: `<dirname of SKILL.md>/scripts/memory.py`. The orchestrator already knows the absolute path to this SKILL.md file from its system context (the skills list announces each skill's path when it's loaded). Derive the helper path from that, **not** from `$(pwd)` — the skill can be loaded from a workspace-local `.grok/skills/`, the user's home `~/.grok/skills/`, or a bundled `~/.grok/bundled/...` location, and only the SKILL-relative path works in all cases.
+The helper script lives at a fixed location **relative to this SKILL.md file**: `<dirname of SKILL.md>/scripts/memory.py`. The orchestrator already knows the absolute path to this SKILL.md file from its system context (the skills list announces each skill's path when it's loaded). Derive the helper path from that, **not** from `$(pwd)` — the skill can be loaded from a workspace-local `.grok/skills/`, the user's home `~/.cook/skills/`, or a bundled `~/.cook/bundled/...` location, and only the SKILL-relative path works in all cases.
 
 Capture it once at the start of the run as **orchestrator state** (a value held in your own working memory):
 
@@ -242,11 +242,11 @@ Capture it once at the start of the run as **orchestrator state** (a value held 
 memory_helper_path = dirname(<path-to-this-SKILL.md>) + "/scripts/memory.py"
 ```
 
-For example, if this SKILL.md is at `/Users/alice/.grok/worktrees/org/repo/.grok/skills/implement/SKILL.md`, then `memory_helper_path` is `/Users/alice/.grok/worktrees/org/repo/.grok/skills/implement/scripts/memory.py`. If this SKILL.md is at `/Users/alice/.grok/skills/implement/SKILL.md`, then `memory_helper_path` is `/Users/alice/.grok/skills/implement/scripts/memory.py`.
+For example, if this SKILL.md is at `/Users/alice/.cook/worktrees/org/repo/.grok/skills/implement/SKILL.md`, then `memory_helper_path` is `/Users/alice/.cook/worktrees/org/repo/.grok/skills/implement/scripts/memory.py`. If this SKILL.md is at `/Users/alice/.cook/skills/implement/SKILL.md`, then `memory_helper_path` is `/Users/alice/.cook/skills/implement/scripts/memory.py`.
 
 **Substitute this absolute path directly** into every helper invocation throughout the run — do not rely on a shell environment variable surviving across `run_terminal_command` calls. All examples below show `${MEMORY_HELPER}` for readability; in practice, inline the absolute `memory_helper_path` value.
 
-**Invoke the helper from the workspace root**, not from the helper's own directory. The helper itself is cwd-sensitive only for its workspace-id derivation: it runs `git config --get remote.origin.url` and `git rev-parse --git-common-dir` in the cwd, so cwd needs to be inside the workspace. `run_terminal_command` defaults to the workspace root, so this is the natural case — just don't `cd` to the helper's own directory before invoking it (especially relevant when the skill is loaded from `~/.grok/skills/`, where `cd`-ing to the helper would put cwd outside any workspace and the workspace-id would fall back to that home-dir cwd).
+**Invoke the helper from the workspace root**, not from the helper's own directory. The helper itself is cwd-sensitive only for its workspace-id derivation: it runs `git config --get remote.origin.url` and `git rev-parse --git-common-dir` in the cwd, so cwd needs to be inside the workspace. `run_terminal_command` defaults to the workspace root, so this is the natural case — just don't `cd` to the helper's own directory before invoking it (especially relevant when the skill is loaded from `~/.cook/skills/`, where `cd`-ing to the helper would put cwd outside any workspace and the workspace-id would fall back to that home-dir cwd).
 
 ### Read Path
 
@@ -766,7 +766,7 @@ There is no per-reviewer exit — if the security reviewer has 0 issues but the 
 After the loop terminates with 0 open issues, update the workspace memory file with patterns from this run. The orchestrator performs this directly using its own tools — no subagent is needed for this step.
 
 The write goes through `"${PYTHON}" "${MEMORY_HELPER}" update --file <spec>` so that:
-- The path resolves to the **shared workspace-scoped file** (`$HOME/.grok/implement-memory/<workspace-id>.md`), not a per-worktree file.
+- The path resolves to the **shared workspace-scoped file** (`$HOME/.cook/implement-memory/<workspace-id>.md`), not a per-worktree file.
 - An exclusive lock (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows; no `flock(1)` shell binary required) is held during the read-merge-write, so a /implement run in another worktree of the same repo can't clobber this update.
 - Dedup against existing entries is enforced **deterministically** (case- and whitespace-insensitive match within each category).
 - Compaction is enforced: each category is capped at 25 entries (lowest-count entries dropped first); Recent Runs is capped at 20 entries (oldest dropped).
@@ -951,7 +951,7 @@ After Step 6 (Memory Flush) and the Final Report, clean up the temporary artifac
 
 Also pass each per-reviewer file you created (`grok-review-<IMPL_ID>-general.md`, `-tests.md`, etc.). Missing files are ok.
 
-Note: the workspace memory file under `$HOME/.grok/implement-memory/` is NOT cleaned up — it persists across runs as the shared memory file for this workspace.
+Note: the workspace memory file under `$HOME/.cook/implement-memory/` is NOT cleaned up — it persists across runs as the shared memory file for this workspace.
 
 ## Final Report
 
@@ -1005,7 +1005,7 @@ Give the user a brief status update after each phase:
 - **Escalate, don't spin** — if the implementer and a reviewer cannot reach consensus on an issue after two rounds, escalate to the user by asking them directly (use the appropriate ask/question tool if available). Never let the loop spin on a disagreement.
 - **User decisions are final** — once the user resolves a disputed issue, the implementer must incorporate it without further debate.
 - **Memory is best-effort.** The past-issues briefing and memory flush are additive features. If the `memory.py` helper fails (lock contention timeout, malformed spec, disk full, etc.) proceed without it. Never fail a run due to memory issues. A non-git workspace is **not** a failure mode — the helper falls back to a cwd-based id.
-- **Always go through the `memory.py` helper.** The file lives at `$HOME/.grok/implement-memory/<workspace-id>.md`, resolved by `"${PYTHON}" "${MEMORY_HELPER}" path`. The helper itself lives at `<dirname of this SKILL.md>/scripts/memory.py` — derive `MEMORY_HELPER` from the SKILL.md path the system context gave you (it works whether the skill is loaded from a workspace, from `~/.grok/skills/`, or from a bundled location), **never** from `$(pwd)`. The workspace id is derived from a canonicalised `git config remote.origin.url` (falling back to the absolute `--git-common-dir` path, then to the absolute cwd), so all worktrees and SSH/HTTPS clones of the same upstream repo share one file. Never reference the legacy `.grok/implement-issues.md` path — it is per-worktree and useless. Never read or write the file directly — the helper is the single source of truth.
+- **Always go through the `memory.py` helper.** The file lives at `$HOME/.cook/implement-memory/<workspace-id>.md`, resolved by `"${PYTHON}" "${MEMORY_HELPER}" path`. The helper itself lives at `<dirname of this SKILL.md>/scripts/memory.py` — derive `MEMORY_HELPER` from the SKILL.md path the system context gave you (it works whether the skill is loaded from a workspace, from `~/.cook/skills/`, or from a bundled location), **never** from `$(pwd)`. The workspace id is derived from a canonicalised `git config remote.origin.url` (falling back to the absolute `--git-common-dir` path, then to the absolute cwd), so all worktrees and SSH/HTTPS clones of the same upstream repo share one file. Never reference the legacy `.grok/implement-issues.md` path — it is per-worktree and useless. Never read or write the file directly — the helper is the single source of truth.
 - **Concurrency-safe writes are the helper's job, not yours.** The helper holds an exclusive lock (`fcntl.flock` on POSIX, `msvcrt.locking` on Windows; not the `flock(1)` shell tool) on a sibling `.lock` file during the read-merge-write and commits via temp-file + rename, so two /implement runs in different worktrees can update the file simultaneously without losing writes. Do **not** implement your own locking around the helper.
 - **Dedup is a two-layer responsibility.** The orchestrator harmonises this run's pattern phrasings against `existing_patterns_snapshot` (semantic dedup, Step 6b); the helper then performs case/whitespace/punctuation normalisation as a safety net. Skipping the orchestrator step leads to near-duplicate entries the helper cannot collapse.
 - **Compaction is automatic.** The helper caps each category at 25 entries (lowest-count entries dropped) and Recent Runs at 20 entries (oldest dropped). The orchestrator does not need to enforce caps.

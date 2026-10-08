@@ -1868,7 +1868,7 @@ fn catchall_allow_covers_freeform_dimensions() {
 #[test]
 fn admin_source_trusts_only_root_owned_tiers() {
     // Only managed-settings and the system-dir requirements layer are admin;
-    // the user-writable `~/.grok/requirements.toml` is not, despite its path.
+    // the user-writable `~/.cook/requirements.toml` is not, despite its path.
     let p = std::path::PathBuf::from("x");
     assert!(is_admin_source(&RequirementSource::ManagedSettings {
         path: p.clone()

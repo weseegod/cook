@@ -72,7 +72,7 @@ pub enum V2CarryoverOutcome {
     Imported(V2CarryoverReport),
 }
 
-/// `~/.grok/memory/`, the root the legacy pipeline writes under.
+/// `~/.cook/memory/`, the root the legacy pipeline writes under.
 pub fn default_legacy_memory_root() -> PathBuf {
     xai_grok_tools::util::grok_home::grok_home().join("memory")
 }

@@ -229,7 +229,7 @@ fn parse_mcp_servers_with_problems(root: &toml::Value) -> ParsedMcpServers {
                         severity: McpServerProblemSeverity::Warning,
                         message: format!(
                             "`mcp_servers.{name}` has an unrecognized field `{field}`; it is \
-                             ignored. See ~/.grok/docs/user-guide/07-mcp-servers.md"
+                             ignored. See ~/.cook/docs/user-guide/07-mcp-servers.md"
                         ),
                     });
                 }
@@ -269,12 +269,12 @@ fn diagnose_invalid_entry(name: &str, value: &toml::Value, error: &str) -> McpSe
             "`mcp_servers.{name}` has no transport. To run it, set `command = \"...\"` or \
              `url = \"...\"`. To turn it off, add \"{name}\" to `disabled_mcp_servers` instead of \
              leaving an entry with no transport. \
-             See ~/.grok/docs/user-guide/07-mcp-servers.md"
+             See ~/.cook/docs/user-guide/07-mcp-servers.md"
         )
     } else {
         format!(
             "`mcp_servers.{name}` has an invalid transport: {error}. \
-             See ~/.grok/docs/user-guide/07-mcp-servers.md"
+             See ~/.cook/docs/user-guide/07-mcp-servers.md"
         )
     };
     McpServerConfigProblem {
@@ -296,7 +296,7 @@ fn blank_transport_problem(name: &str, config: &McpServerConfig) -> Option<McpSe
             message: format!(
                 "`mcp_servers.{name}` is enabled but its `{field}` is blank. \
                  Set a value, or add \"{name}\" to `disabled_mcp_servers` to turn it \
-                 off. See ~/.grok/docs/user-guide/07-mcp-servers.md"
+                 off. See ~/.cook/docs/user-guide/07-mcp-servers.md"
             ),
         })
     } else {

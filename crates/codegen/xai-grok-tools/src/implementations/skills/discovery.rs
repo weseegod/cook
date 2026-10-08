@@ -52,7 +52,7 @@ const CURSOR_DEFAULT_SKILLS: &[&str] = &[
 const CLAUDE_DEFAULT_SKILLS: &[&str] = &["pdf", "docx", "xlsx", "pptx", "skill-creator"];
 
 /// Return true if `name` is a vendor-shipped default skill discovered under the matching vendor's config dir (`/.cursor/` or `/.claude/`). The
-/// path check ensures a user's own skill that merely shares a denylisted name (e.g. `~/.grok/skills/shell`) is NOT dropped — only skills
+/// path check ensures a user's own skill that merely shares a denylisted name (e.g. `~/.cook/skills/shell`) is NOT dropped — only skills
 /// physically located under the vendor dir are treated as vendor builtins.
 fn is_vendor_default_skill(path: &str, name: &str) -> bool {
     let in_cursor = path.contains("/.cursor/") || path.contains("\\.cursor\\");
@@ -1446,7 +1446,7 @@ model: test-model
 
     #[test]
     fn is_vendor_default_skill_spares_user_skill_outside_vendor_dir() {
-        // A user's own "shell" skill in ~/.grok is NOT a vendor builtin.
+        // A user's own "shell" skill in ~/.cook is NOT a vendor builtin.
         assert!(!is_vendor_default_skill(
             "/home/u/.grok/skills/shell/SKILL.md",
             "shell"

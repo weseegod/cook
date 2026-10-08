@@ -53,7 +53,7 @@ def save(path: str, state: dict) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--grok-home", default=os.environ.get("GROK_HOME") or os.path.expanduser("~/.grok"))
+    ap.add_argument("--grok-home", default=os.environ.get("GROK_HOME") or os.path.expanduser("~/.cook"))
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("get")
     s = sub.add_parser("set")

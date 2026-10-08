@@ -795,7 +795,7 @@ async fn handle_reload_all_mcp_servers(agent: &MvpAgent) -> ExtResult {
 
 /// Reload MCP servers for sessions whose `cwd` matches (or sits beneath) the project root passed in `params.cwd`.
 /// Called by the config hot-reload watcher when `<cwd>/.grok/config.toml`, `<cwd>/.mcp.json`, or `<cwd>/.claude.json` changes. Sessions in unrelated cwds are intentionally NOT touched.
-/// That is the whole point of [`crate::config::reloader::ConfigUpdate::ProjectMcpServersChanged`] being a per-cwd variant. The legacy [`handle_reload_all_mcp_servers`] is still the fan-out for global `~/.grok/config.toml` edits.
+/// That is the whole point of [`crate::config::reloader::ConfigUpdate::ProjectMcpServersChanged`] being a per-cwd variant. The legacy [`handle_reload_all_mcp_servers`] is still the fan-out for global `~/.cook/config.toml` edits.
 async fn handle_reload_project_mcp_servers(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     #[derive(Deserialize)]
     struct Params {
@@ -926,7 +926,7 @@ pub(crate) fn copy_reloaded_model_tables(
 
 // internal/reload_models_cache
 
-/// Hot-reload the model catalog from `~/.grok/models_cache.json` after an external write detected by the config watcher.
+/// Hot-reload the model catalog from `~/.cook/models_cache.json` after an external write detected by the config watcher.
 /// Routed through the agent's ACP stream (injected by the `ConfigUpdate::ModelsCacheChanged` arm in `agent/app.rs`).
 /// It is not applied directly on the manager from the config-update task: stream requests are processed in order. When `config.toml` and `models_cache.json` change in the same watcher batch, this runs strictly after `reload_models`' `apply_config`. That avoids rebuilding the catalog and notifying clients mid-flight, before the new config was accepted or rejected.
 fn handle_reload_models_cache(agent: &MvpAgent) -> ExtResult {

@@ -107,7 +107,7 @@ pub(super) fn build_selection_meta(
 
 /// Handle permission option selection (AllowOnce, AllowAlways, RejectAlways).
 /// when the user picks the prepended "Yes, and don't ask again for anything" option, this dispatcher (a) sends the standard `Selected` response so the in-flight request is allowed once (the shell's `map_selected_outcome`
-/// resolves the id to `PromptOutcome::AllowOnce`), then (b) reuses the existing `set_yolo_mode(true)` flow to flip the local YOLO state, drain any remaining queued permissions, persist `[ui] permission_mode = "always-approve"` to `~/.grok/config.toml`, and fire the `x.ai/yolo_mode_changed` ACP notification.
+/// resolves the id to `PromptOutcome::AllowOnce`), then (b) reuses the existing `set_yolo_mode(true)` flow to flip the local YOLO state, drain any remaining queued permissions, persist `[ui] permission_mode = "always-approve"` to `~/.cook/config.toml`, and fire the `x.ai/yolo_mode_changed` ACP notification.
 pub(super) fn dispatch_permission_select(
     app: &mut AppView,
     option_id: acp::PermissionOptionId,

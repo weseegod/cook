@@ -56,7 +56,7 @@
   },
   {
     "category": "fixes",
-    "description": "**--sandbox strict** now restricts writes to ~/.grok/sessions only.",
+    "description": "**--sandbox strict** now restricts writes to ~/.cook/sessions only.",
     "breaking_change": false
   },
   {

@@ -112,7 +112,7 @@ Notes:
 - Fidelity `cached_tokens` were `0` on the first baseline requests (and `9` on spark’s omitted arm); those zeros are reported zeros, not missing fields.
 - Prompt drop baseline → omitted: bonsai 8,840 → 230 (97.4%), mimo26 8,837 → 227 (97.4%), spark 9,946 → 256 (97.4%). The v1 bonsai drop is reproduced and extended to the other two local models on this fixture only.
 
-Raw log: `~/.grok/long-running-background-tasks/cook-token-v2-phase1-20260922-120311/`.
+Raw log: `~/.cook/long-running-background-tasks/cook-token-v2-phase1-20260922-120311/`.
 
 Rollback: nothing was changed. Stop the model.
 
@@ -166,7 +166,7 @@ Notes:
 
 - The step-aware live arm again shows the split the design calls out: main-loop prompt input fell 317,205 → 262,887 while `tool_result_tokens` fell 94,081 → 60,165, and compaction calls stayed at 5 in both arms. This is not presented as a saving (see the uncached split in section 3).
 - `still_live` and `unresolved_edit` are carried and pinned, but no live cell exercised them: `live_markers` and `stale_read` use only the failure pin and the active round. Those two flags rest on the unit tests above.
-- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase2-20260922-121345/` (endpoint) and `…-phase2-live-20260922-121706/` (live).
+- Raw logs: `~/.cook/long-running-background-tasks/cook-token-v2-phase2-20260922-121345/` (endpoint) and `…-phase2-live-20260922-121706/` (live).
 
 ## 6. Phase 3 — append-only tool output
 
@@ -228,7 +228,7 @@ Notes:
 - Fixture wording for `middle_error_recoverable` was revised after two recorded attempts, with the raw answers kept. The first wording asked a yes/no question; spark25-4b answered “no defect” with the annotated line past the cut *and* with the whole file in one round (diagnostic variants A and E), so it measured phrasing rather than recoverability. The second wording asked for the annotated line and mimo26-9b answered the line number `41`. The committed fixture asks for the function name on the line the file annotates, with that line placed mid-continuation (36 of 41) so it cannot be produced by naming the first or last function in the block, and with a control arm that drops the annotation.
 - Control arm, not a gating cell: with the annotation removed, bonsai2-27b and spark25-4b answered the explicit negative; mimo26-9b still named the function. Its pass meets the cell's literal bar (the answer names the function the file annotates) but is weaker evidence of keying on the annotation.
 - The endpoint fixture carries the continuation read as the second tool round at the marker's named offset, because an endpoint cell cannot run tools. The rule it tests is unchanged: the error past the shown range must be reported and a “no error” guess fails.
-- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase3-final/` (endpoint matrix), `…-phase3-diag-20260922-124822/` and `…-phase3-diag2-20260922-124843/` (fixture diagnostics), `…-phase3-live-readcap-2/` (live).
+- Raw logs: `~/.cook/long-running-background-tasks/cook-token-v2-phase3-final/` (endpoint matrix), `…-phase3-diag-20260922-124822/` and `…-phase3-diag2-20260922-124843/` (fixture diagnostics), `…-phase3-live-readcap-2/` (live).
 
 ## 7. Phase 4 — hit and miss in the session report
 
@@ -277,7 +277,7 @@ Matrix, one model (bonsai2-27b per the run's instruction), one headless turn `-p
 Notes:
 
 - The first end-to-end run exposed a real bug the unit tests had not: summing the turn row into the empty default session row let the empty row veto `cacheFieldPresent`. Fixed by making empty rows neutral; `usage.json` from the fixed binary shows the honest values above.
-- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase4-final3/` (cold-cache run), `…-phase4-warm/` (warm run), `…-phase4-final/` (the pre-fix run kept as the bug's evidence).
+- Raw logs: `~/.cook/long-running-background-tasks/cook-token-v2-phase4-final3/` (cold-cache run), `…-phase4-warm/` (warm run), `…-phase4-final/` (the pre-fix run kept as the bug's evidence).
 
 ## 8. Phase 5 — `supports_batch_api` on the model row
 
@@ -358,7 +358,7 @@ Matrix, one model (bonsai2-27b per the run's instruction), one headless turn `-p
 
 Notes:
 
-- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase5-20260922-143511/` (`run.log`, `wire.log`, home `config.toml`, `out.json`).
+- Raw logs: `~/.cook/long-running-background-tasks/cook-token-v2-phase5-20260922-143511/` (`run.log`, `wire.log`, home `config.toml`, `out.json`).
 
 ## 9. Phase 6 — independent reads in one realtime response
 
@@ -396,7 +396,7 @@ Matrix, one model (bonsai2-27b per the run's instruction), three files with thre
 
 Notes:
 
-- Raw logs: `~/.grok/long-running-background-tasks/cook-token-v2-phase6-20260922-144856/` (`run.log`, both `three_markers`/`serial_control` answer files, home `config.toml`).
+- Raw logs: `~/.cook/long-running-background-tasks/cook-token-v2-phase6-20260922-144856/` (`run.log`, both `three_markers`/`serial_control` answer files, home `config.toml`).
 
 ## 10. Phase 7 — side calls stay until a matrix says otherwise
 
@@ -455,7 +455,7 @@ Phase 7 cells on the coding turn. `no_new_uuid_policy` records conv ids; this ph
 Notes:
 
 - Score file for the passing re-run: the pass 3 capture. The first capture (mimo empty) is kept separately and is not mixed into the table above.
-- Raw logs: `~/.grok/long-running-background-tasks/heavy-matrix-pass3-20260922-155609/`.
+- Raw logs: `~/.cook/long-running-background-tasks/heavy-matrix-pass3-20260922-155609/`.
 
 ## 11. What is deliberately not a phase
 

@@ -34,7 +34,7 @@ pub fn compute_ws_url_suffix(ws_url: &str) -> String {
 }
 
 /// Env var that overrides the leader socket path and, by extension, the sibling `.lock` path. Set by the `--leader-socket` flag, or exported directly.
-/// Lets a developer sandbox a leader instance away from the default `~/.grok/leader.sock` — e.g. run a local branch build's leader without colliding with an installed stable leader on the same machine.
+/// Lets a developer sandbox a leader instance away from the default `~/.cook/leader.sock` — e.g. run a local branch build's leader without colliding with an installed stable leader on the same machine.
 /// Both the client (`connect_or_spawn`) and the leader (`run_leader`) honor it, and the spawned leader subprocess inherits it. All parties therefore bind the same path. When set, the WS-URL-derived suffix (`compute_ws_url_suffix`) is bypassed entirely.
 pub const LEADER_SOCKET_ENV: &str = "GROK_LEADER_SOCKET";
 

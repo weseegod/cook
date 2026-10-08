@@ -56,7 +56,7 @@ The monitor tool wakes you up every time you log to stdout. Wakeups are expensiv
 - Based on the planning, exit immediately on terminal conditions with FAILED, DONE, or CANCELLED, and log ACTION_REQUIRED for wakeups.
 - Send all debug diagnostics — both your watcher's own trace and the monitored job's output — to a file, so a log line can never be mistaken for DONE, FAILED, or CANCELLED.
 - The script should fail as early as possible. Emit a FAILED token immediately when any required condition reaches terminal failure. For example, if you are waiting on CI and any of them fail, emit FAILED immediately.
-- Write the script to a durable location such as ~/.grok and name it something clear such as `ci_watcher.sh`.
+- Write the script to a durable location such as ~/.cook and name it something clear such as `ci_watcher.sh`.
 - Key every log file the script writes on the pid or session id of the thing being watched. The paths are otherwise fixed, so a second job of the same kind silently clobbers the first one's log.
 
 ## Handling wake-ups
@@ -87,7 +87,7 @@ Suppose you just made some changes to the user's frontend code and would like to
 
 ```
 run_terminal_command(
-  command="echo $$; npm start >~/.grok/long-running-background-tasks/dev_server_$$.log 2>&1",
+  command="echo $$; npm start >~/.cook/long-running-background-tasks/dev_server_$$.log 2>&1",
   timeout=0,
   description="Start the dev server on :3000",
   background=true
@@ -101,7 +101,7 @@ You want to be notified as soon as it is up so you can use it, and you want to b
 ```bash
 #!/usr/bin/env bash
 # Log paths are keyed on the server pid so two dev servers cannot clobber each other.
-PID=$1 URL=http://localhost:3000 DIR=~/.grok/long-running-background-tasks
+PID=$1 URL=http://localhost:3000 DIR=~/.cook/long-running-background-tasks
 LOG=$DIR/dev_server_$PID.log
 up() { curl -fsS -o /dev/null --max-time 5 "$URL" 2>>"$DIR/watch_dev_server_$PID.log"; }
 why() { tail -20 "$LOG" | tr -d '\r' | tr '\n' ' '; }
@@ -122,13 +122,13 @@ To spawn the monitor, point it at the pid `npm start` reported:
 
 ```
 monitor(
-  command='bash ~/.grok/long-running-background-tasks/watch_dev_server.sh 123456789',
+  command='bash ~/.cook/long-running-background-tasks/watch_dev_server.sh 123456789',
   description="Watch the dev server on :3000"
 )
 ```
 
 On the first wakeup the app is ready to use and you can start testing it. After that, you may be woken up if the server goes down. When you do:
-- Read `~/.grok/long-running-background-tasks/dev_server_<pid>.log` for the full compile error or port conflict and fix it.
+- Read `~/.cook/long-running-background-tasks/dev_server_<pid>.log` for the full compile error or port conflict and fix it.
 - If the dev server survived, hot reload picks the fix up and the watcher recovers on its own, so leave the monitor running.
 - If the process is dead, restart it with a fresh `run_terminal_command`, then kill this monitor and spawn a new one against the new pid.
 
@@ -148,7 +148,7 @@ You can find the example script bundled with this skill at watch_pr.py. It needs
 
 ```
 monitor(
-  command='python3 ~/.grok/long-running-background-tasks/watch_pr.py "https://github.com/xai-org/grok-build/pull/123"',
+  command='python3 ~/.cook/long-running-background-tasks/watch_pr.py "https://github.com/xai-org/grok-build/pull/123"',
   description="Watch PR 123"
 )
 ```
@@ -162,7 +162,7 @@ The script below is bundled with this skill as watch_training.py. Run it with `-
 ```md
 Keep an eye on the nanoGPT run nanogpt_owt_124m_r1 (slurm job 1234567) and tell me what changed since last time. Worktree ~/worktrees/nanogpt-owt-124m.
 
-1. python3 ~/.grok/skills/long-running-background-tasks/watch_training.py --run-name nanogpt_owt_124m_r1 --job-id 1234567 --target-val 3.00
+1. python3 ~/.cook/skills/long-running-background-tasks/watch_training.py --run-name nanogpt_owt_124m_r1 --job-id 1234567 --target-val 3.00
 
 How to report:
 - Start with the job's state and if it changed, e.g. "still RUNNING" or "PENDING -> RUNNING".

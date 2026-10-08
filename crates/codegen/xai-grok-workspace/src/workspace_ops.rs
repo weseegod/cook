@@ -259,7 +259,7 @@ fn session_tracker(
 /// Primary bounds are the sandbox root (`/workspace`) and the user-global grok home.
 const REPOS_MANIFEST_MAX_ANCESTOR_HOPS: usize = 16;
 /// Directories to probe for [`REPOS_MANIFEST_RELATIVE_PATH`], starting at `root_cwd` (the agent cwd after a single-repo rewrite) and walking up.
-/// Does not escape the sandbox workspace or load `~/.grok/repos.json` / `$GROK_HOME/repos.json` (user-global, not a provisioned workspace).
+/// Does not escape the sandbox workspace or load `~/.cook/repos.json` / `$GROK_HOME/repos.json` (user-global, not a provisioned workspace).
 fn repos_manifest_search_dirs(start: &std::path::Path) -> Vec<std::path::PathBuf> {
     let rel = xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH;
     let home = xai_dirs::home_dir();
@@ -1990,7 +1990,7 @@ mod tests {
         assert!(dirs.contains(&home.path().join("src")));
         assert!(
             !dirs.iter().any(|d| d == home.path()),
-            "must not probe $HOME/.grok/repos.json: {dirs:?}"
+            "must not probe $HOME/.cook/repos.json: {dirs:?}"
         );
     }
     /// The test is sync and uses `block_on` so `ENV_TEST_LOCK` is not held across `.await` (clippy `await_holding_lock`).
@@ -2026,7 +2026,7 @@ mod tests {
         let listed = rt.block_on(ops.repos_list()).expect("list");
         assert!(
             listed.repos.is_empty(),
-            "missing workspace manifest must not fall back to ~/.grok/repos.json: {:?}",
+            "missing workspace manifest must not fall back to ~/.cook/repos.json: {:?}",
             listed.repos
         );
     }

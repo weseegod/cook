@@ -1,7 +1,7 @@
 [
   {
     "category": "performance",
-    "description": "**Subagent spawning** is dramatically faster when you have many sessions in ~/.grok.",
+    "description": "**Subagent spawning** is dramatically faster when you have many sessions in ~/.cook.",
     "breaking_change": false
   },
   {

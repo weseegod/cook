@@ -11,7 +11,7 @@ metadata:
 
 Interactively gather requirements from the user and create a fully working Grok skill on disk.
 
-Resolve the Grok home directory before creating a user-scoped skill: use `$GROK_HOME` when it is set, otherwise use `~/.grok`. Resolve it to an absolute path and use it wherever `<grok-home>` appears below.
+Resolve the Grok home directory before creating a user-scoped skill: use `$GROK_HOME` when it is set, otherwise use `~/.cook`. Resolve it to an absolute path and use it wherever `<grok-home>` appears below.
 
 ## Step 1: Gather information
 

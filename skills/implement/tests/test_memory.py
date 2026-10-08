@@ -554,7 +554,7 @@ class TestCLI(CLIBase):
 
     def test_read_does_not_create_directory(self):
         # Path/read calls must not have side effects on the directory tree
-        memory_dir = self.home / ".grok" / "implement-memory"
+        memory_dir = self.home / ".cook" / "implement-memory"
         self.assertFalse(memory_dir.exists())
         _run_helper(self.repo_a, "path", env=self.env)
         _run_helper(self.repo_a, "read", env=self.env)
@@ -655,8 +655,8 @@ class TestCLI(CLIBase):
         nogit.mkdir()
         rc, out, err = _run_helper(nogit, "path", env=self.env)
         self.assertEqual(rc, 0, msg=err)
-        # Path should still be under $HOME/.grok/implement-memory/
-        self.assertTrue(out.strip().startswith(str(self.home / ".grok" / "implement-memory")))
+        # Path should still be under $HOME/.cook/implement-memory/
+        self.assertTrue(out.strip().startswith(str(self.home / ".cook" / "implement-memory")))
 
     def test_lock_file_mode_under_restrictive_umask(self):
         # Round 2 [General #70 / General-2 #2]: both files must end up at
@@ -690,7 +690,7 @@ class TestCLI(CLIBase):
         # is a deterministic SHA-256 of the canonical remote URL, so an
         # unprivileged account on a shared host that knows or can guess the
         # public-repo URL can compute the workspace id and attempt to read
-        # ~/.grok/implement-memory/<workspace-id>.md directly. We rely on
+        # ~/.cook/implement-memory/<workspace-id>.md directly. We rely on
         # 0o600 file mode (owner read/write, no group/other) to deny that.
         # Pin the literal so accidental future widening (e.g., 0o644) gets
         # caught here rather than only in production.
@@ -727,7 +727,7 @@ class TestCLI(CLIBase):
         # First create the directory by running update once.
         spec = json.dumps({"patterns": [{"category": "C", "description": "x"}]})
         _run_helper(self.repo_a, "update", stdin=spec, env=self.env)
-        memory_dir = self.home / ".grok" / "implement-memory"
+        memory_dir = self.home / ".cook" / "implement-memory"
         # Remove write/execute so a new os.open(O_CREAT) fails.
         # NOTE: the lock file already exists from the previous update, so
         # os.open with O_CREAT against an existing file in a 0o555 dir would
@@ -756,7 +756,7 @@ class TestCLI(CLIBase):
         # the generic Exception catch-all is in place.
         spec = json.dumps({"patterns": [{"category": "C", "description": "x"}]})
         _run_helper(self.repo_a, "update", stdin=spec, env=self.env)
-        memory_dir = self.home / ".grok" / "implement-memory"
+        memory_dir = self.home / ".cook" / "implement-memory"
         # Find the memory file we just created and overwrite with garbage.
         mem_files = [p for p in memory_dir.iterdir() if p.suffix == ".md"]
         self.assertEqual(len(mem_files), 1)

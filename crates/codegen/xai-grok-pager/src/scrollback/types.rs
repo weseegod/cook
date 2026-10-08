@@ -102,7 +102,7 @@ pub struct BlockContext {
     pub raw: bool,
     /// Optional row budget. When Some(n), the block must fit within n lines.
     pub max_lines: Option<u16>,
-    /// Appearance config (from ~/.grok/pager.toml).
+    /// Appearance config (from ~/.cook/pager.toml).
     pub appearance: AppearanceConfig,
     /// Whether this entry is currently selected in the scrollback.
     pub is_selected: bool,

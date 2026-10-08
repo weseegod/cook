@@ -76,7 +76,7 @@ pub fn decide_inputs_with_interactive(
         is_interactive,
         // An over-broad key (home / fs-root / non-absolute) can never be recorded
         // by the store, so decide() trusts it rather than prompt on a key that
-        // can't persist (Case 2: cwd IS $HOME, incl. the default `~/.grok`).
+        // can't persist (Case 2: cwd IS $HOME, incl. the default `~/.cook`).
         key_recordable: !crate::trust::is_unsafe_trust_root(key),
     }
 }
@@ -127,7 +127,7 @@ impl fmt::Display for GrantRefuse {
             Self::Unreadable => write!(
                 f,
                 "Couldn't save folder trust: the trust store could not be read. \
-                 Fix or delete ~/.grok/trusted_folders.toml, then start Grok again and press y."
+                 Fix or delete ~/.cook/trusted_folders.toml, then start Grok again and press y."
             ),
             Self::KeyMoved => write!(
                 f,
@@ -173,7 +173,7 @@ impl fmt::Display for GrantOutcome {
                 ..
             } => write!(
                 f,
-                "Couldn't save folder trust. Check that ~/.grok is writable, \
+                "Couldn't save folder trust. Check that ~/.cook is writable, \
                  then run `grok --trust` in this folder."
             ),
             Self::Refused { reason } => write!(f, "{reason}"),
@@ -1220,7 +1220,7 @@ mod tests {
         let text = unread.to_string();
         assert!(text.contains("trust store could not be read"), "{text}");
         assert!(
-            text.contains("Fix or delete ~/.grok/trusted_folders.toml"),
+            text.contains("Fix or delete ~/.cook/trusted_folders.toml"),
             "{text}"
         );
         let no_home = GrantOutcome::Refused {

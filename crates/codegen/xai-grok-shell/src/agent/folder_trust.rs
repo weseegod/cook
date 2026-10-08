@@ -33,7 +33,7 @@ use xai_grok_workspace::folder_trust::{
 use crate::session::managed_mcp::mcp_server_name;
 use crate::util::config::{MCP_SCOPE_PROJECT, RemoteSettings};
 
-// NOTE: this folder-trust store (`~/.grok/trusted_folders.toml`) is SEPARATE from the pre-existing per-plugin trust store (`xai_grok_agent::plugins::TrustStore` at `~/.grok/trusted-plugins`, plus the hooks' own project-trust gating)
+// NOTE: this folder-trust store (`~/.cook/trusted_folders.toml`) is SEPARATE from the pre-existing per-plugin trust store (`xai_grok_agent::plugins::TrustStore` at `~/.cook/trusted-plugins`, plus the hooks' own project-trust gating)
 // Trusting a folder here does NOT imply plugin trust and vice versa; the two are independent and non-contradicting
 // Unifying them is a tracked follow-up
 
@@ -338,7 +338,7 @@ fn is_yes_answer(line: &str) -> bool {
 
 /// It MUST enumerate every project MCP source the loaders read. Name-based (not `ConfigSource`-based) ON PURPOSE. Sources: project `.grok/config.toml [mcp_servers]` (NOT the user-tier global config).
 /// Also project `.mcp.json` (`cwd` up to the repo root, never `$HOME`), project `.cursor/mcp.json`, and `~/.claude.json projects.<cwd>.mcpServers`.
-/// Edge case: a name declared in BOTH a project config and the global `~/.grok/config.toml` is dropped when untrusted. This is intended — untrusted project content must not influence the command spawned for a shared name.
+/// Edge case: a name declared in BOTH a project config and the global `~/.cook/config.toml` is dropped when untrusted. This is intended — untrusted project content must not influence the command spawned for a shared name.
 pub(crate) fn project_scoped_mcp_names(cwd: &Path) -> HashSet<String> {
     let mut names = HashSet::new();
 
@@ -1128,7 +1128,7 @@ mod tests {
 
         // A `<cwd>/.grok/lsp.json` server must be tagged `Project` so the gate can distinguish it from user/plugin servers
         // Asserts on the specific
-        // key, so any real `~/.grok/lsp.json` on the test host is irrelevant.
+        // key, so any real `~/.cook/lsp.json` on the test host is irrelevant.
         let tmp = repo_tmp();
         let grok = tmp.path().join(".grok");
         std::fs::create_dir_all(&grok).unwrap();

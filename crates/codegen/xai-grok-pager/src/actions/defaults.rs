@@ -899,7 +899,7 @@ pub(super) fn default_actions(
         },
         // Register all in-dashboard shortcuts through the registry under `When::DashboardFocused`
         // The dispatch path in `dashboard::state::handle_key` looks these up via `registry.lookup(key, When::DashboardFocused)` so users can
-        // rebind any of them through `~/.grok/config.toml`.
+        // rebind any of them through `~/.cook/config.toml`.
         ActionDef {
             id: ActionId::DashboardSelectNext,
             label: "next",

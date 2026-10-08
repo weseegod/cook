@@ -219,7 +219,7 @@ mod tests {
     use std::fs;
 
     // Note: `list_skills` also discovers user-scoped skills from
-    // `~/.grok/skills/`, so on a developer machine the result may be
+    // `~/.cook/skills/`, so on a developer machine the result may be
     // non-empty even for an empty workspace. Tests below check for specific skills rather than asserting emptiness.
 
     #[tokio::test]
@@ -344,7 +344,7 @@ mod tests {
         );
     }
 
-    // Discovery also scans the real `~/.grok`, so fixtures use test-unique names.
+    // Discovery also scans the real `~/.cook`, so fixtures use test-unique names.
     #[tokio::test]
     async fn discover_agents_md_receives_normalized_rule_content() {
         let tmp = tempfile::tempdir().unwrap();
@@ -406,7 +406,7 @@ mod tests {
     }
 
     // Note: `discover_plugins` also discovers user-scoped plugins
-    // from `~/.grok/plugins/`, so tests check for specific plugins.
+    // from `~/.cook/plugins/`, so tests check for specific plugins.
 
     #[test]
     fn discover_plugins_finds_manifest_plugin() {

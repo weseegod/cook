@@ -960,7 +960,7 @@ pub(crate) fn session_registry_from_toml_opt(root: &TomlValue) -> Option<bool> {
     }
 }
 
-/// Overrides `[cli] session_registry`; usable before `~/.grok/config.toml` exists.
+/// Overrides `[cli] session_registry`; usable before `~/.cook/config.toml` exists.
 pub const SESSION_REGISTRY_ENV_VAR: &str = "GROK_SESSION_REGISTRY";
 
 pub(crate) fn session_registry_from_env_opt() -> Option<bool> {
@@ -1189,8 +1189,8 @@ default = "grok-code-fast-1"
         let root = toml::from_str::<TomlValue>(
             r#"
 [skills]
-paths = ["~/.grok/skills", "~/.grok/skills/special/SKILL.md"]
-ignore = ["~/.grok/skills/noisy/SKILL.md"]
+paths = ["~/.cook/skills", "~/.cook/skills/special/SKILL.md"]
+ignore = ["~/.cook/skills/noisy/SKILL.md"]
 "#,
         )
         .unwrap();
@@ -1203,9 +1203,9 @@ ignore = ["~/.grok/skills/noisy/SKILL.md"]
             .unwrap_or_default();
         assert_eq!(
             cfg.paths,
-            vec!["~/.grok/skills", "~/.grok/skills/special/SKILL.md"]
+            vec!["~/.cook/skills", "~/.cook/skills/special/SKILL.md"]
         );
-        assert_eq!(cfg.ignore, vec!["~/.grok/skills/noisy/SKILL.md"]);
+        assert_eq!(cfg.ignore, vec!["~/.cook/skills/noisy/SKILL.md"]);
     }
 
     #[test]

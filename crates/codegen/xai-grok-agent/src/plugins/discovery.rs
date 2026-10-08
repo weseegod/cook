@@ -4,9 +4,9 @@
 //! 1. CLI `--plugin-dir` paths (scope: `CliOverride`)
 //! 2. `.grok/plugins/*/` (scope: `Project`, walked from cwd to worktree root)
 //! 3. `.claude/plugins/*/` (scope: `Project`, compat)
-//! 4. `~/.grok/plugins/*/` (scope: `User`)
+//! 4. `~/.cook/plugins/*/` (scope: `User`)
 //! 5. `~/.claude/plugins/*/` (scope: `User`, compat)
-//!    `~/.grok/installed-plugins/*/` (scope: `User`, marketplace installs)
+//!    `~/.cook/installed-plugins/*/` (scope: `User`, marketplace installs)
 //!    Installed plugins from `~/.claude/plugins/installed_plugins.json` (scope: `User`)
 //! 6. Paths from `[plugins].paths` in config (scope: `ConfigPath`)
 //!
@@ -29,7 +29,7 @@ pub enum PluginScope {
     CliOverride = 0,
     /// `.grok/plugins/` or `.claude/plugins/` in project (requires trust)
     Project = 1,
-    /// `~/.grok/plugins/` or `~/.claude/plugins/` (always trusted)
+    /// `~/.cook/plugins/` or `~/.claude/plugins/` (always trusted)
     User = 2,
     /// `[plugins].paths` in config (trust depends on location)
     ConfigPath = 3,
@@ -94,7 +94,7 @@ pub enum PluginOrigin {
         /// Marketplace name from the `name@marketplace` JSON key, when present.
         marketplace: Option<String>,
     },
-    /// Grok's install registry (`~/.grok/installed-plugins`).
+    /// Grok's install registry (`~/.cook/installed-plugins`).
     MarketplaceInstall {
         /// Marketplace source display name (None for direct git/local installs).
         source_name: Option<String>,
@@ -207,7 +207,7 @@ impl DiscoveryConfig {
 // ── Discovery entry point ─────────────────────────────────────────────
 
 /// User plugin directories in priority order: `$GROK_HOME/plugins` then `~/.claude/plugins`.
-/// Plugins are intentionally not discovered from legacy `~/.grok/plugins`.
+/// Plugins are intentionally not discovered from legacy `~/.cook/plugins`.
 /// Trust, persisted data, and install paths all resolve under `grok_home()`, so a legacy scan would be half-initialized.
 fn user_plugin_dirs(home: Option<&Path>, grok: Option<&Path>) -> Vec<(PathBuf, PluginOrigin)> {
     let mut dirs = Vec::new();
@@ -318,7 +318,7 @@ pub fn discover_plugins(
         }
     }
 
-    // 4-5. User plugins: $GROK_HOME/plugins, legacy ~/.grok/plugins, ~/.claude/plugins.
+    // 4-5. User plugins: $GROK_HOME/plugins, legacy ~/.cook/plugins, ~/.claude/plugins.
     // Gate the grok plugins dir on user_grok_home() so a project's .grok/plugins is never scanned as user-global when no home resolves
     let grok = xai_grok_config::user_grok_home();
     let plugin_dirs = user_plugin_dirs(xai_dirs::home_dir().as_deref(), grok.as_deref());
@@ -461,7 +461,7 @@ pub fn discover_plugins(
 
 // ── Internal helpers ──────────────────────────────────────────────────
 
-/// Scan a plugins parent directory (e.g. `~/.grok/plugins/`) and collect
+/// Scan a plugins parent directory (e.g. `~/.cook/plugins/`) and collect
 /// each subdirectory as a plugin candidate.
 fn scan_plugin_dir(
     plugins_dir: &Path,
@@ -903,7 +903,7 @@ mod tests {
             home.join(".claude").join("plugins"),
             PluginOrigin::UserClaude
         )));
-        // Plugins are not discovered from the legacy ~/.grok tree.
+        // Plugins are not discovered from the legacy ~/.cook tree.
         assert!(
             !dirs
                 .iter()
@@ -960,7 +960,7 @@ mod tests {
     fn discover_user_plugins() {
         let tmp = tempfile::tempdir().unwrap();
 
-        // Create ~/.grok/plugins/ structure
+        // Create ~/.cook/plugins/ structure
         let grok_plugins = tmp.path().join(".grok").join("plugins");
         std::fs::create_dir_all(&grok_plugins).unwrap();
         make_manifest_plugin(&grok_plugins, "user-tool");

@@ -244,7 +244,7 @@ impl AgentView {
 
     /// Copy text to clipboard (a backup file is always written too; see `copy_text_or_file`) and show the result toast.
     /// When every trusted clipboard backend fails (common on Apple Terminal over SSH), the toast points at the backup file
-    /// (`~/.grok/last-copy.txt`, or `GROK_COPY_FILE`) instead. The returned
+    /// (`~/.cook/last-copy.txt`, or `GROK_COPY_FILE`) instead. The returned
     pub fn copy_to_clipboard(&mut self, text: &str) -> crate::clipboard::CopyDelivery {
         let delivery = crate::clipboard::copy_text_or_file(text);
         self.show_toast_ticks(delivery.toast_message().as_ref(), delivery.toast_ticks());

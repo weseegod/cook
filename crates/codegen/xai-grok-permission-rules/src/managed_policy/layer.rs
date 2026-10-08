@@ -28,7 +28,7 @@ impl PolicyLayerTier {
     }
 
     /// Who can write the layer: MDM/system TOML and the root-owned vendor
-    /// file are admin-controlled; `~/.grok` layers are user-writable.
+    /// file are admin-controlled; `~/.cook` layers are user-writable.
     pub fn ownership(self) -> PolicyLayerOwnership {
         match self {
             Self::UserRequirements | Self::UserManaged => PolicyLayerOwnership::User,

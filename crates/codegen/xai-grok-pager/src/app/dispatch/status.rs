@@ -230,7 +230,7 @@ fn log_coding_data_consent_selected(
 }
 
 /// Set coding-data-sharing preference.
-/// The shell owns this setting and stores it in auth metadata (persists via ACP ext-request, NOT `~/.grok/config.toml`).
+/// The shell owns this setting and stores it in auth metadata (persists via ACP ext-request, NOT `~/.cook/config.toml`).
 pub(super) fn set_coding_data_sharing(
     app: &mut AppView,
     opted_in: bool,

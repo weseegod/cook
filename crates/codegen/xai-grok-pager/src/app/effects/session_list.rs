@@ -94,7 +94,7 @@ pub(super) async fn parse_session_picker_entries_blocking(
 }
 /// Sessions older than 30 days, and sessions with no usable user prompt (empty `summary` after fallbacks), are dropped.
 ///
-/// `resolve_local` receives the candidate ids for `presence` and returns the subset that exists on disk; each call is a full `~/.grok/sessions` walk.
+/// `resolve_local` receives the candidate ids for `presence` and returns the subset that exists on disk; each call is a full `~/.cook/sessions` walk.
 fn parse_session_picker_entries_with(
     mut payload: Value,
     presence: LocalPresence,

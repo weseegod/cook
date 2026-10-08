@@ -8410,7 +8410,7 @@ fn bundled_allowlist_unreadable_dir_fails_closed() {
     let got = bundled_allowlist_ignore_dirs("/nonexistent/bundled-skills", Some("pdf"));
     assert_eq!(got, vec!["/nonexistent/bundled-skills".to_string()]);
 }
-/// Unique skill names: discovery also reads the dev machine's `~/.grok`.
+/// Unique skill names: discovery also reads the dev machine's `~/.cook`.
 #[tokio::test]
 async fn bundled_allowlist_filters_discovery() {
     let tmp = tempfile::tempdir().expect("tempdir");

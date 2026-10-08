@@ -858,9 +858,9 @@ fn default_prompt_mode() -> PromptMode {
 pub enum AgentScope {
     /// .grok/agents/ (project-level, highest priority)
     Project,
-    /// ~/.grok/agents/ (user-level)
+    /// ~/.cook/agents/ (user-level)
     User,
-    /// ~/.grok/bundled/agents/ (lowest-priority bundled cache)
+    /// ~/.cook/bundled/agents/ (lowest-priority bundled cache)
     Bundled,
     /// Built-in agent (e.g., default_grok_build(), browser_use()).
     #[default]
@@ -1075,7 +1075,7 @@ where
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum MemoryScope {
-    /// `~/.grok/agent-memory/<name>/`
+    /// `~/.cook/agent-memory/<name>/`
     User,
     /// `<project>/.grok/agent-memory/<name>/`
     Project,

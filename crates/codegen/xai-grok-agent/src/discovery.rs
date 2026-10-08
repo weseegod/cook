@@ -1,5 +1,5 @@
 //! Searches `.grok/agents/` and `.claude/agents/` from cwd to repo root,
-//! then `~/.grok/agents/`, then `~/.claude/agents/`. Name-based dedup keeps
+//! then `~/.cook/agents/`, then `~/.claude/agents/`. Name-based dedup keeps
 //! highest priority.
 
 use std::collections::HashMap;
@@ -167,7 +167,7 @@ fn merge_subagents(
 
 /// Discover agent definitions from the filesystem. Deduplicates by name; higher priority wins.
 /// Order: project `.grok/agents/` (cwd up to repo root), the resolved user home, compat `~/.claude`, then bundled.
-/// User agents come only from `grok_home` (`~/.cook` by default). `~/.grok` is not scanned.
+/// User agents come only from `grok_home` (`~/.cook` by default); no other user-level directory is scanned.
 pub(crate) fn user_agent_dirs(
     home: Option<&Path>,
     grok_home: Option<&Path>,
@@ -1111,7 +1111,7 @@ mod tests {
 
     #[test]
     fn test_merge_user_level_builtin_name_is_skipped() {
-        // A user-level (~/.grok/agents/) agent named "explore" should NOT shadow
+        // A user-level (~/.cook/agents/) agent named "explore" should NOT shadow
         // the built-in — only project-level can do that.
         let discovered = vec![synthetic_agent(
             "explore",

@@ -38,9 +38,9 @@ pub enum SkillScope {
     Local,
     /// repo_root/.grok/skills
     Repo,
-    /// ~/.grok/skills
+    /// ~/.cook/skills
     User,
-    /// ~/.grok/server-skills (synced from the skill store)
+    /// ~/.cook/server-skills (synced from the skill store)
     Server,
     /// platform built-in skills
     Bundled,

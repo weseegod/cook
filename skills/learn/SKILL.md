@@ -12,7 +12,7 @@ argument-hint: "[--mode step|auto|report] [--days N | --since-last | --limit N] 
 
 # learn
 
-Read the sessions this user sat at, find what they repeat, correct, and never use, and change the harness so the next session needs less typing. Every path derives from `GROK_HOME` (default `~/.grok`); nothing here names a person, repo, or cloud.
+Read the sessions this user sat at, find what they repeat, correct, and never use, and change the harness so the next session needs less typing. Every path derives from `GROK_HOME` (default `~/.cook`); nothing here names a person, repo, or cloud.
 
 ```
 You (top-level agent)

@@ -885,7 +885,7 @@ pub struct WorkspaceConfig {
     pub event_buffer_capacity: usize,
     /// Pluggable [`SessionContext`] / [`ToolRegistryBuilder`] producer.
     pub session_factory: Arc<dyn SessionContextFactory>,
-    /// Global hook sources (e.g. `~/.claude/settings.json`, `~/.grok/hooks/`).
+    /// Global hook sources (e.g. `~/.claude/settings.json`, `~/.cook/hooks/`).
     pub hook_global_sources: Vec<HookSourceConfig>,
     /// Project-scoped hook sources (e.g. `<project>/.grok/hooks/`).
     pub hook_project_sources: Vec<HookSourceConfig>,

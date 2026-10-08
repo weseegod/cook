@@ -247,7 +247,7 @@ fn rebuild_worktree_db_from_grove_dirs(
     let existing: Vec<crate::nfs::NfsIdentity> =
         crate::nfs::identities_from_worktree_records(&recs);
     // Union every grove data dir before writing metadata. A leftover
-    // ~/.grok/grove marker must not rewrite backing/source_pin alone and
+    // ~/.cook/grove marker must not rewrite backing/source_pin alone and
     // outrank the live XDG identity (pin-GC already unions first).
     let mut by_id: HashMap<String, crate::nfs::NfsIdentity> = HashMap::new();
     for data_dir in grove_data_dirs {

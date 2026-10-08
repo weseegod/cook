@@ -1916,7 +1916,7 @@ pub(crate) fn relative_symlink_target(
 /// Fork-specific: the updater maintains a single managed entry point named
 /// `cook` — it deliberately never touches `bin/grok` / `bin/agent`, which
 /// belong to the official grok CLI. Combined with the fork's own home
-/// (`~/.cook` vs grok's `~/.grok`), both can run side by side without ever
+/// (`~/.cook` vs grok's `~/.cook`), both can run side by side without ever
 /// clobbering each other.
 ///
 /// Unix: atomic symlink swap with relative target (survives Docker

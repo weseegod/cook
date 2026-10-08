@@ -56,7 +56,8 @@ Cook agent. If Let Cook asks for it, install the CLI too.
 
 A background updater keeps the binary fresh — the welcome screen shows
 `Update: vX available — press ctrl+u to restart`, or run `cook update`
-manually. It only manages `~/.cook/bin/cook` and never touches `~/.grok`.
+manually. It only manages `~/.cook/bin/cook` and never touches the official grok
+client's home.
 
 To build the CLI locally, install Rust and
 [DotSlash](https://dotslash-cli.com), then run:

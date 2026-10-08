@@ -139,7 +139,7 @@ impl HookRegistry {
 pub enum HookSource<'a> {
     /// A JSON settings file; only its `hooks` key is used.
     SettingsFile(&'a Path),
-    /// A directory of `*.json` hook files (e.g. `~/.grok/hooks/`).
+    /// A directory of `*.json` hook files (e.g. `~/.cook/hooks/`).
     Directory(&'a Path),
 }
 

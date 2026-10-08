@@ -99,7 +99,7 @@ The user runs:
 | `--concurrency` | Integer (1-8) | 4 | Max parallel implementation subagents |
 | `--dry-run` | Flag | false | Parse and validate DAG, show execution plan and linearized stack order, but do not implement |
 | `--resume` | String | none | Resume a previous run by PLAN_ID. Reads the state file and retries failed PRs. |
-| `--instructions` | String | none | Extra instructions injected into every implementer and reviewer prompt. Use for cross-cutting concerns like "Enforce rust rules from /root/.grok/memory/MEMORY.md" or "Don't modify the public API". |
+| `--instructions` | String | none | Extra instructions injected into every implementer and reviewer prompt. Use for cross-cutting concerns like "Enforce rust rules from /root/.cook/memory/MEMORY.md" or "Don't modify the public API". |
 | `--no-graphite` | Flag | false | Force plain-git mode even if `gt` is installed. When set, `graphite_available` is forced to `false` and Step 8 uses the plain-git assembly path. |
 | `--auto-pr` | Flag | false | Only meaningful in plain-git mode. When set **and** `gh` is detected, the orchestrator runs `gh pr create --base <stack-parent-branch> --head <branch> --fill --draft` for each branch in stack order, where `<stack-parent-branch>` is defined in the Two Assembly Modes section above. When unset, the orchestrator only prints compare URLs / suggested commands. Ignored in Graphite mode (where `gt submit --stack` always opens PRs). |
 
@@ -225,7 +225,7 @@ The memory helper lives in the implement skill's directory. Derive the path from
 memory_helper_path = dirname(<path-to-implement-SKILL.md>) + "/scripts/memory.py"
 ```
 
-For example, if the implement skill's SKILL.md is at `/root/.grok/worktrees/xai/repo/.grok/skills/implement/SKILL.md`, then `memory_helper_path` is `/root/.grok/worktrees/xai/repo/.grok/skills/implement/scripts/memory.py`.
+For example, if the implement skill's SKILL.md is at `/root/.cook/worktrees/xai/repo/.grok/skills/implement/SKILL.md`, then `memory_helper_path` is `/root/.cook/worktrees/xai/repo/.grok/skills/implement/scripts/memory.py`.
 
 **Substitute this absolute path directly** into every helper invocation -- do not rely on a shell environment variable surviving across `run_terminal_command` calls. All examples below show `${MEMORY_HELPER}` for readability; in practice, inline the absolute path.
 

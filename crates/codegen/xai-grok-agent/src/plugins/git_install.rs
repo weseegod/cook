@@ -512,7 +512,7 @@ pub fn remove_repo_path(path: &Path) -> Result<(), InstallError> {
     Ok(())
 }
 
-/// Each plugin has a data dir at `~/.grok/plugin-data/<plugin_id>/`.
+/// Each plugin has a data dir at `~/.cook/plugin-data/<plugin_id>/`.
 pub fn cleanup_plugin_data(repo: &InstalledRepo, scope: super::discovery::PluginScope) {
     let plugin_data_base = xai_grok_config::grok_home().join("plugin-data");
 

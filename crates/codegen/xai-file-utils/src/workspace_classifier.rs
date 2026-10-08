@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 const EXCLUDED_DIR_NAMES: &[&str] = &[
-    ".grok", ".cook", ".thanh", ".cache", ".daemon", ".config", ".npm", ".cargo", ".rustup",
+    ".cook", ".cache", ".daemon", ".config", ".npm", ".cargo", ".rustup",
     ".vscode",
     ".gemini", ".hermes", ".claude",
 ];
@@ -248,10 +248,10 @@ mod tests {
         use super::*;
 
         #[test]
-        fn grok_dirs_are_unsafe() {
+        fn cook_dirs_are_unsafe() {
             if let Some(home) = xai_dirs::home_dir() {
-                assert!(!is_project_dir(&home.join(".grok")));
-                assert!(!is_project_dir(&home.join(".grok/bin")));
+                assert!(!is_project_dir(&home.join(".cook")));
+                assert!(!is_project_dir(&home.join(".cook/bin")));
             }
         }
 

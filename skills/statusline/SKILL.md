@@ -9,7 +9,7 @@ Edit the user's status-line config. Do the write. Do not only describe it.
 
 ## Where to write
 
-Resolve the config file as `$GROK_HOME/config.toml` when `GROK_HOME` is set, otherwise `~/.grok/config.toml`. If that path is a symlink, edit the target. Create the file if it is missing. Keep every other key.
+Resolve the config file as `$GROK_HOME/config.toml` when `GROK_HOME` is set, otherwise `~/.cook/config.toml`. If that path is a symlink, edit the target. Create the file if it is missing. Keep every other key.
 
 Write `[ui.status_line]` only in that user file. A repository `.grok/config.toml` cannot set this row, and campaign or version-override patches strip it.
 
@@ -32,7 +32,7 @@ Custom script, when they asked for one or for something the built-in items canno
 ```toml
 [ui.status_line]
 type = "command"
-command = "~/.grok/statusline.sh"
+command = "~/.cook/statusline.sh"
 ```
 
 Save the script under the same home as the config file, then `chmod +x` it. Set `command` to that path. The block above is the default home; substitute the resolved home when `GROK_HOME` is set. A `~/` prefix expands to the home directory. `command` may be a shell line.

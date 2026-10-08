@@ -264,7 +264,7 @@ fn collect_skill_config_dirs_from_sources(
 
 /// Determine the skill scope for a config directory based on its location relative to `cwd`, `git_root`, and the user's home directory.
 fn scope_for_config_dir(dir: &Path, cwd: Option<&Path>, git_root: Option<&Path>) -> SkillScope {
-    // Home-level dirs (e.g. ~/.grok/, ~/.agents/, ~/.claude/) are User scope.
+    // Home-level dirs (e.g. ~/.cook/, ~/.agents/, ~/.claude/) are User scope.
     if let Some(home) = xai_dirs::home_dir()
         && dir.parent() == Some(home.as_path())
     {
@@ -2789,7 +2789,7 @@ mod tests {
     #[test]
     fn dedupe_same_scope_same_basename_still_drops() {
         // Same name AND same dir basename across two same-scope roots
-        // (e.g. ~/.grok/skills and ~/.agents/skills): first-seen wins.
+        // (e.g. ~/.cook/skills and ~/.agents/skills): first-seen wins.
         let out = dedupe_skills(vec![
             named_skill(
                 "japandi",

@@ -145,7 +145,7 @@ pub async fn handle(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
 }
 
 /// Structured context for unified-log entries from a successful billing fetch.
-/// Keeps history to a count + the most recent period so `~/.grok/logs/unified.jsonl` stays useful without dumping unbounded period arrays.
+/// Keeps history to a count + the most recent period so `~/.cook/logs/unified.jsonl` stays useful without dumping unbounded period arrays.
 fn billing_unified_log_ctx(billing: &BillingConfigResponse) -> serde_json::Value {
     let history_len = billing
         .config

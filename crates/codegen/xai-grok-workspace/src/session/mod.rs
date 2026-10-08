@@ -1050,7 +1050,7 @@ mod tests {
             "flag-off must not create the session dir or events.jsonl"
         );
     }
-    /// Session-derived content outside ~/.grok/sessions: same owner-only rule,
+    /// Session-derived content outside ~/.cook/sessions: same owner-only rule,
     /// including healing a loose pre-existing root from older builds.
     #[cfg(unix)]
     #[test]

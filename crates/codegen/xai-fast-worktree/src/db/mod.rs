@@ -225,7 +225,7 @@ impl WorktreeDb {
             .with_context(|| format!("failed to set journal mode {}", mode.as_ref()))
     }
 
-    /// Open `~/.grok/worktrees.db` via `resolve_grok_home` (`$GROK_HOME`, else
+    /// Open `~/.cook/worktrees.db` via `resolve_grok_home` (`$GROK_HOME`, else
     /// `<home>/.grok`). Resolved fresh each call for test overrides. Each call
     /// opens its own connection — hot paths should cache the instance.
     pub fn open_default() -> Result<Self> {

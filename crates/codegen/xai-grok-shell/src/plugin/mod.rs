@@ -203,7 +203,7 @@ impl std::fmt::Display for UninstallError {
 }
 
 /// Find, remove, clean up, and deregister a plugin.
-/// When `keep_data` is true, `~/.grok/plugin-data/<id>/` is preserved.
+/// When `keep_data` is true, `~/.cook/plugin-data/<id>/` is preserved.
 pub fn uninstall_plugin(
     name: &str,
     confirm: bool,
@@ -1391,7 +1391,7 @@ pub(crate) fn set_official_marketplace_auto_installed(config_path: &Path) -> std
 }
 
 /// Try removing a source from `settings.json` / `known_marketplaces.json` under
-/// `~/.grok/` and `~/.claude/`. Returns `true` if removed from at least one file.
+/// `~/.cook/` and `~/.claude/`. Returns `true` if removed from at least one file.
 pub fn try_remove_source_from_json_files(source_url_or_path: &str) -> bool {
     // Resolve user grok via user_grok_home() (None when no home resolves) and home separately
     // Removal then still runs from $GROK_HOME when no home dir exists, and never touches a cwd-relative .grok

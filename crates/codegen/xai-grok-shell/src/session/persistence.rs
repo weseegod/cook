@@ -186,7 +186,7 @@ fn default_btw_attempts() -> u32 {
 
 // Local feedback persistence types
 
-/// A feedback entry persisted to `~/.grok/sessions/.../feedback.jsonl`.
+/// A feedback entry persisted to `~/.cook/sessions/.../feedback.jsonl`.
 ///
 /// Uses a tagged enum so different feedback types are self-describing in the JSONL file (currently only `UserFeedback`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -559,7 +559,7 @@ fn find_local_child_for_remote_in_root(
     candidates.into_iter().next().map(|(_, _, id)| id)
 }
 
-/// Searches across ALL cwd directories under `~/.grok/sessions/`.
+/// Searches across ALL cwd directories under `~/.cook/sessions/`.
 /// Use `session_exists_for_cwd` instead when the target cwd is known to avoid false-positive matches.
 /// Unlike [`resolve_local_session`] which only checks a single CWD, this scans every encoded-CWD subdirectory.
 pub fn resolve_local_session_any_cwd(session_id: &str) -> Option<String> {
@@ -2649,7 +2649,7 @@ impl SessionPersistence {
 #[path = "persistence_archive_logs.rs"]
 mod archive_logs;
 
-/// Collect MCP server stderr logs from `~/.grok/logs/mcp/` for inclusion in the session archive.
+/// Collect MCP server stderr logs from `~/.cook/logs/mcp/` for inclusion in the session archive.
 fn collect_mcp_stderr_logs(files: &mut Vec<CopiedSessionFile>) {
     let mcp_log_dir = xai_grok_config::grok_home().join("logs").join("mcp");
     let Ok(entries) = std::fs::read_dir(&mcp_log_dir) else {

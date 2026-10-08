@@ -1,7 +1,7 @@
 //! Markdown-based memory file storage.
 //!
 //! Handles reading and writing memory files (`.md`) for both global and workspace-scoped memory.
-//! All workspace-scoped memory lives under `~/.grok/memory/{project-slug}-{hash8}/` to avoid polluting the user's repo.
+//! All workspace-scoped memory lives under `~/.cook/memory/{project-slug}-{hash8}/` to avoid polluting the user's repo.
 
 use std::path::{Path, PathBuf};
 
@@ -26,14 +26,14 @@ pub enum SaveRememberNoteError {
 }
 
 /// Handles file I/O for the memory storage layer.
-/// Memory files are human-readable/editable Markdown stored under `~/.grok/memory/`.
-/// Workspace-scoped files live under a directory named `{project-slug}-{hash8}`, e.g. `~/.grok/memory/xai-a3f7b2c9/`.
+/// Memory files are human-readable/editable Markdown stored under `~/.cook/memory/`.
+/// Workspace-scoped files live under a directory named `{project-slug}-{hash8}`, e.g. `~/.cook/memory/xai-a3f7b2c9/`.
 #[derive(Debug, Clone)]
 pub struct MemoryStorage {
     mode: MemoryMode,
-    /// `~/.grok/memory/`
+    /// `~/.cook/memory/`
     global_dir: PathBuf,
-    /// `~/.grok/memory/{project-slug}-{hash8}/`
+    /// `~/.cook/memory/{project-slug}-{hash8}/`
     workspace_dir: PathBuf,
     /// The original workspace path (for logging / diagnostics).
     workspace_path: PathBuf,
@@ -42,7 +42,7 @@ pub struct MemoryStorage {
 }
 
 impl MemoryStorage {
-    /// Create a new `MemoryStorage` rooted at `~/.grok/memory/`.
+    /// Create a new `MemoryStorage` rooted at `~/.cook/memory/`.
     /// The workspace directory name is `{slug}-{hash8}` where `slug` is the project directory name and `hash8` is 8 hex chars from blake3.
     /// Directories are created lazily on first write, not here.
     pub fn new(cwd: &Path, root_override: Option<&Path>) -> Self {
@@ -185,7 +185,7 @@ impl MemoryStorage {
     }
 
     /// Write a daily session log file.
-    /// File path: `~/.grok/memory/{project}-{hash8}/sessions/YYYY-MM-DD-{slug}-{sid8}.md`
+    /// File path: `~/.cook/memory/{project}-{hash8}/sessions/YYYY-MM-DD-{slug}-{sid8}.md`
     /// `date`: e.g. `"2026-02-23"`; `slug`: short slug derived from the first user message; `session_id`: full session ID (first 8 chars used as suffix); `append`: when `true`, appends a timestamped section instead of overwriting. Each section is separated by `---` and a timestamp header so the chunker treats them as distinct entries.
     ///
     /// Ephemeral workspaces (`/tmp/...` cwd) skip the write and still return the

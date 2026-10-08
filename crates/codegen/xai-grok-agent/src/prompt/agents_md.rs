@@ -1,10 +1,10 @@
 //! AGENTS.md / Claude.md / rules directory discovery and loading.
 //!
-//! Searches from cwd to repo root, plus `~/.grok/`. Also discovers
+//! Searches from cwd to repo root, plus `~/.cook/`. Also discovers
 //! `*.md` files in rules directories: vendor-prefixed `.grok/rules/`,
 //! `.claude/rules/`, and `.cursor/rules/` in project directories, a
 //! plain `rules/` directly under the vendor-qualified home-scope roots
-//! (`~/.grok/rules/`, `~/.claude/rules/`, `~/.cursor/rules/`), and any
+//! (`~/.cook/rules/`, `~/.claude/rules/`, `~/.cursor/rules/`), and any
 //! user-configured `[paths] extra_rule_dirs` (scanned as home-scope rules).
 
 use std::path::{Path, PathBuf};
@@ -165,7 +165,7 @@ fn add_discovered_candidate(
     });
 }
 
-/// Read Agents.md from ~/.grok/, git repo root, and session cwd.
+/// Read Agents.md from ~/.cook/, git repo root, and session cwd.
 /// `compat` gates which vendor directories are scanned. `CompatConfig::default()` preserves all-vendors behavior.
 /// `project_trusted` omits project-scope files when false.
 /// Each `[paths] extra_rule_dirs` entry is scanned for direct `*.md` rules at home scope, after the built-in home

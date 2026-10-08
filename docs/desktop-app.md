@@ -82,8 +82,7 @@ This section is the lifecycle that picture has to keep.
 1. Resolve binary: `COOK_BIN` → `~/.cook/bin/cook` → bundled sidecar (stable).
 2. Major-version gate against `xai-grok-version`.
 3. Spawn `cook agent stdio` with the workspace cwd. Resolve the home from
-   `COOK_HOME`, then `GROK_HOME`, then `~/.cook`, ignoring overrides that name
-   the real `~/.grok` or `~/.thanh`. Pin both `COOK_HOME` and `GROK_HOME` to
+   `COOK_HOME`, then `GROK_HOME`, then `~/.cook`. Pin both `COOK_HOME` and `GROK_HOME` to
    that directory so Settings and the child use the same home.
 4. `initialize` **once per agent process**, from the capabilities table (§5.1).
 5. `session/new` or `session/load` per conversation.

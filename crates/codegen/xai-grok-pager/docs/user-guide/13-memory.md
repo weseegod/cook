@@ -46,7 +46,7 @@ paths, model output, or free-form errors.
 ### Config (Persistent)
 
 ```toml
-# ~/.grok/config.toml
+# ~/.cook/config.toml
 [memory]
 enabled = true
 ```
@@ -92,7 +92,7 @@ internal hardening notes, not here.
 
 ## How Memory Is Stored
 
-When v2 is on (`[memory_v2] enabled`), each scope stores Markdown under `~/.grok/memory-v2/`: `topics/` for curated notes and `observations/_inbox/` for new facts. When v2 is off and legacy memory is on, files live under `~/.grok/memory/` (`MEMORY.md` plus hashed workspace directories). `[memory] enabled` and `[memory_v2] enabled` both default off.
+When v2 is on (`[memory_v2] enabled`), each scope stores Markdown under `~/.cook/memory-v2/`: `topics/` for curated notes and `observations/_inbox/` for new facts. When v2 is off and legacy memory is on, files live under `~/.cook/memory/` (`MEMORY.md` plus hashed workspace directories). `[memory] enabled` and `[memory_v2] enabled` both default off.
 
 ---
 
@@ -131,7 +131,7 @@ Use `/flush` when you want to preserve important context:
 
 ### Remember
 
-Ask Grok to remember something, and it appends the note to a `MEMORY.md` file -- the workspace file for project-specific items, or the global `~/.grok/memory/MEMORY.md` for cross-project preferences:
+Ask Grok to remember something, and it appends the note to a `MEMORY.md` file -- the workspace file for project-specific items, or the global `~/.cook/memory/MEMORY.md` for cross-project preferences:
 
 ```
 > remember to always open PR links after pushing
@@ -145,7 +145,7 @@ You can also save a note directly with the `/remember` command:
 /remember always open PR links after pushing
 ```
 
-Run `/remember` with no text to enter remember mode, where the next line you type becomes the note. Either way, Grok opens a review panel showing the note (with an optional rewritten version you can toggle with `Tab`); the note is written only after you confirm. On save, Grok shows `Memory saved to ~/.grok/memory/MEMORY.md`.
+Run `/remember` with no text to enter remember mode, where the next line you type becomes the note. Either way, Grok opens a review panel showing the note (with an optional rewritten version you can toggle with `Tab`); the note is written only after you confirm. On save, Grok shows `Memory saved to ~/.cook/memory/MEMORY.md`.
 
 ### Forget
 
@@ -155,7 +155,7 @@ Ask Grok to forget something, and it finds and removes the matching entry:
 > forget the snake_case convention
 ```
 
-Forget is best-effort: the model searches memory and removes entries that match. For guaranteed removal, edit the files under `~/.grok/memory/` directly and delete the entry yourself. To locate a file, open the `/memory` browser and press `y` to copy its path.
+Forget is best-effort: the model searches memory and removes entries that match. For guaranteed removal, edit the files under `~/.cook/memory/` directly and delete the entry yourself. To locate a file, open the `/memory` browser and press `y` to copy its path.
 
 ### Recall
 
@@ -169,7 +169,7 @@ Grok searches across all memory files and summarizes what it knows, grouped by s
 
 ### Direct Editing
 
-You can edit memory files directly under `~/.grok/memory/`. The file watcher reindexes your changes on the next memory search. Use `/flush` to save the current session now, and `/dream` to consolidate session logs into organized topics.
+You can edit memory files directly under `~/.cook/memory/`. The file watcher reindexes your changes on the next memory search. Use `/flush` to save the current session now, and `/dream` to consolidate session logs into organized topics.
 
 ---
 
@@ -217,7 +217,7 @@ You can also open `/memory` from the command palette.
 When you save a note with `/remember`, Grok confirms in the scrollback:
 
 ```
-Memory saved to ~/.grok/memory/MEMORY.md
+Memory saved to ~/.cook/memory/MEMORY.md
 ```
 
 Background saves — automatic flush, automatic Dream, and session-end — run silently and do not post a scrollback message. `/flush` and `/dream` report their outcome in scrollback when you run them yourself. Use `/memory` at any time to browse what Grok has stored.
@@ -340,7 +340,7 @@ grok memory clear --all
 grok memory clear --yes
 ```
 
-To edit memory from the shell, open the files in your editor directly -- for example, `$EDITOR ~/.grok/memory/MEMORY.md`.
+To edit memory from the shell, open the files in your editor directly -- for example, `$EDITOR ~/.cook/memory/MEMORY.md`.
 
 ---
 
@@ -352,7 +352,7 @@ To edit memory from the shell, open the files in your editor directly -- for exa
 |-----|---------|-------------|
 | `enabled` | `false` | Enable memory |
 | `session.save_on_end` | `true` | Write metadata summary on session end |
-| `watcher.enabled` | `true` | Watch `~/.grok/memory/` for external edits and reindex |
+| `watcher.enabled` | `true` | Watch `~/.cook/memory/` for external edits and reindex |
 
 ### Index Settings (`[memory.index]`)
 
@@ -431,7 +431,7 @@ When a session memory is old, Grok attaches a staleness note to it in search res
 
 ## File Watcher
 
-By default, Grok watches `~/.grok/memory/` for external file changes. If you edit memory files directly (e.g., in your editor), the changes are picked up automatically on the next memory search:
+By default, Grok watches `~/.cook/memory/` for external file changes. If you edit memory files directly (e.g., in your editor), the changes are picked up automatically on the next memory search:
 
 - Created or modified files are reindexed.
 - Deleted files have their stale chunks removed from the index.
@@ -460,9 +460,9 @@ Memory is injected on the first turn. If you started a session before enabling m
 Use `/memory` in the TUI to browse all memory files with a preview. You can also access them directly:
 
 ```bash
-ls ~/.grok/memory/
-cat ~/.grok/memory/MEMORY.md
-$EDITOR ~/.grok/memory/MEMORY.md
+ls ~/.cook/memory/
+cat ~/.cook/memory/MEMORY.md
+$EDITOR ~/.cook/memory/MEMORY.md
 ```
 
 ### Debug Logging

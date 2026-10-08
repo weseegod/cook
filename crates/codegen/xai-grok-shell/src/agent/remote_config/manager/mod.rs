@@ -848,7 +848,7 @@ impl ModelsManager {
         }
     }
 
-    /// Hot-reload the catalog from `~/.grok/models_cache.json` after an external write (config-watcher detected).
+    /// Hot-reload the catalog from `~/.cook/models_cache.json` after an external write (config-watcher detected).
     pub(crate) fn reload_from_disk_cache(&self) {
         self.reload_from_cache_manager(&self.inner.cache);
     }

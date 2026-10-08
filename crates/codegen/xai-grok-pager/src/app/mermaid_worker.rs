@@ -843,7 +843,7 @@ fn take_pending_for(
 #[cfg(test)]
 thread_local! {
     /// Per-test override for the session `mermaid/` cache dir. View-side tests set this to a private tempdir so [`AgentView::mermaid_out_path`] resolves a hermetic, writable cache dir *without* mutating the process-global
-    /// `GROK_HOME` (whose `grok_home()` value is cached first-write-wins, an isolation hazard under the full parallel suite; PNGs could land in the real `~/.grok`). Thread-local, so each parallel test is independent; the `TempDir` guard lives here so the dir outlives the view. Mirrors the `subagent::REPLAY_GROK_HOME` test override. Production never sets this.
+    /// `GROK_HOME` (whose `grok_home()` value is cached first-write-wins, an isolation hazard under the full parallel suite; PNGs could land in the real `~/.cook`). Thread-local, so each parallel test is independent; the `TempDir` guard lives here so the dir outlives the view. Mirrors the `subagent::REPLAY_GROK_HOME` test override. Production never sets this.
     static TEST_MERMAID_DIR: std::cell::RefCell<Option<tempfile::TempDir>> =
         const { std::cell::RefCell::new(None) };
 }

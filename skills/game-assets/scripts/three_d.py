@@ -26,7 +26,7 @@ GLB_MAGIC = b"glTF"
 
 
 def grok_home() -> Path:
-    return Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
+    return Path(os.environ.get("GROK_HOME") or Path.home() / ".cook")
 
 
 def auth_json_path() -> Path:

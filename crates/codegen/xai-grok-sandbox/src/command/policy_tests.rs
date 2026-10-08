@@ -748,7 +748,7 @@ fn a_hooks_path_over_a_write_root_protects_its_hook_files_not_the_tree() {
         ("~".to_owned(), f.home.clone()),
         ("/".to_owned(), PathBuf::from("/")),
         (f.ws.display().to_string(), f.ws.clone()),
-        ("~/.grok".to_owned(), f.grok_home.clone()),
+        ("~/.cook".to_owned(), f.grok_home.clone()),
         ("~/.cargo".to_owned(), f.home.join(".cargo")),
         (shared_tmp.display().to_string(), shared_tmp.clone()),
     ] {

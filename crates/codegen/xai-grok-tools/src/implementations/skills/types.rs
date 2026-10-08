@@ -22,9 +22,9 @@ pub enum SkillScope {
     Local = 0,
     /// repo_root/.grok/skills
     Repo = 1,
-    /// ~/.grok/skills
+    /// ~/.cook/skills
     User = 2,
-    /// ~/.grok/server-skills (synced from the skill store)
+    /// ~/.cook/server-skills (synced from the skill store)
     Server = 3,
     /// platform built-in skills (lowest precedence)
     Bundled = 4,

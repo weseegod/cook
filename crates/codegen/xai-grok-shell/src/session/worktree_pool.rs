@@ -2,11 +2,11 @@
 //!
 //! A pre-warmed worktree pool (background fill, acquire/claim/release,
 //! orphan adoption) once lived here but was never wired into production and
-//! has been deleted. This cleanup path remains so `~/.grok/worktree_pool/`
+//! has been deleted. This cleanup path remains so `~/.cook/worktree_pool/`
 //! directories left behind by dead agent instances are still reclaimed.
 //!
 //! Layout: each pool instance owned
-//! `~/.grok/worktree_pool/<instance_id>/<pool_id>/` with a `.pid` liveness
+//! `~/.cook/worktree_pool/<instance_id>/<pool_id>/` with a `.pid` liveness
 //! file in the instance directory.
 //! Cleanup only touches directories whose owning process is dead.
 
@@ -147,7 +147,7 @@ fn cleanup_stale_pool_worktrees_inner() {
     );
 }
 
-/// The base pool directory under `~/.grok/`.
+/// The base pool directory under `~/.cook/`.
 fn pool_base_directory() -> PathBuf {
     grok_home().join("worktree_pool")
 }

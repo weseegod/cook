@@ -12,7 +12,7 @@ INSTALL_DIR="${1:-${INSTALL_DIR:-$HOME/.local/bin}}"
 # Managed layout: binary cài vào $GROK_HOME/bin/cook (mặc định ~/.cook/bin/cook)
 # — đúng chỗ updater (Ctrl+U / `cook update`) thay thế — rồi symlink
 # $INSTALL_DIR/cook -> $GROK_HOME/bin/cook để lệnh `cook` luôn trỏ bản mới nhất.
-# Home riêng ~/.cook (không dùng ~/.grok) để config/auth/sessions/bin tách hoàn
+# Home riêng ~/.cook để config/auth/sessions/bin tách hoàn
 # toàn khỏi grok chính thức — chạy song song không đụng nhau.
 # Compat: also symlink $INSTALL_DIR/thanh → cook for one release.
 GROK_HOME_DIR="${GROK_HOME:-${COOK_HOME:-$HOME/.cook}}"

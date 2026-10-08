@@ -44,7 +44,7 @@ Dispatch based on the first argument. If no arguments are provided, show usage h
 
 The state file is **per-session** so that concurrent Grok sessions do not interfere with each other. Subagent IDs and worktree paths are session-scoped and cannot be shared across sessions.
 
-Path: `~/.grok/plugin-data/pr-babysit/watched-prs-<INSTANCE_ID>.json`
+Path: `~/.cook/plugin-data/pr-babysit/watched-prs-<INSTANCE_ID>.json`
 
 The `<INSTANCE_ID>` is a UUID generated once per session on the first `add` command and stored inside the state file. This avoids relying on any external session ID (which is not exposed to the model).
 
@@ -52,11 +52,11 @@ The `<INSTANCE_ID>` is a UUID generated once per session on the first `add` comm
 
 1. **First `add` in a session**: Resolve `HOST_PY` as `<dirname of this SKILL.md>/../shared/scripts/host.py`. Find a real Python 3 interpreter (`python`, then `py -3`, then `python3`; reject `WindowsApps`). Generate a UUID via `<python> <HOST_PY> uuid --full`. Create the state file with that UUID embedded, and persist the filename. Hold the `INSTANCE_ID` in memory for the rest of the session.
 2. **Subsequent `add` / `remove` / `list` / `check` calls in the same session**: The agent already knows the `INSTANCE_ID` from the first `add` call (it is in the conversation context). Use the same filename.
-3. **`/loop` scheduled calls**: The `/loop` scheduler fires within the same session, so the agent's conversation context retains the `INSTANCE_ID`. If for any reason the `INSTANCE_ID` is not in context (e.g., after context compaction), scan `~/.grok/plugin-data/pr-babysit/` for `watched-prs-*.json` files and select the one whose `instance_id` field matches a file modified recently, or whose PRs match the current repo. If exactly one file matches the current repo, use it.
+3. **`/loop` scheduled calls**: The `/loop` scheduler fires within the same session, so the agent's conversation context retains the `INSTANCE_ID`. If for any reason the `INSTANCE_ID` is not in context (e.g., after context compaction), scan `~/.cook/plugin-data/pr-babysit/` for `watched-prs-*.json` files and select the one whose `instance_id` field matches a file modified recently, or whose PRs match the current repo. If exactly one file matches the current repo, use it.
 
 Create the directory and file if they do not exist:
 
-Create `~/.grok/plugin-data/pr-babysit` if needed (file tool or `New-Item -ItemType Directory -Force` / `mkdir`). Then:
+Create `~/.cook/plugin-data/pr-babysit` if needed (file tool or `New-Item -ItemType Directory -Force` / `mkdir`). Then:
 
 ```
 <PYTHON> <HOST_PY> uuid --full

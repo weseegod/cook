@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Log paths are keyed on the server pid so two dev servers cannot clobber each other.
-PID=$1 URL=http://localhost:3000 DIR=~/.grok/long-running-background-tasks
+PID=$1 URL=http://localhost:3000 DIR=~/.cook/long-running-background-tasks
 LOG=$DIR/dev_server_$PID.log
 up() { curl -fsS -o /dev/null --max-time 5 "$URL" 2>>"$DIR/watch_dev_server_$PID.log"; }
 why() { tail -20 "$LOG" | tr -d '\r' | tr '\n' ' '; }

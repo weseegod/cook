@@ -18,7 +18,7 @@ pub fn load_marketplace_sources() -> Vec<MarketplaceSource> {
 }
 
 /// [`load_marketplace_sources`] with each source origin-classified for advisory scoping:
-/// config.toml, admin pins, and `~/.grok` are grok-native; `~/.claude` sources are foreign.
+/// config.toml, admin pins, and `~/.cook` are grok-native; `~/.claude` sources are foreign.
 fn load_marketplace_sources_with_origin() -> Vec<(MarketplaceSource, PolicySubjectOrigin)> {
     let config = crate::config::load_effective_config()
         .ok()
@@ -155,7 +155,7 @@ fn filter_sources_by_allowlist(
                 allowed
             }
             SourceKind::Local { path } => {
-                // Extras accumulate from every layer: a pin in user-writable ~/.grok files must not carve an
+                // Extras accumulate from every layer: a pin in user-writable ~/.cook files must not carve an
                 // exception out of a root-owned lockdown.
                 let admin_pinned = managed_pins.iter().any(|pin| {
                     pin.ownership
@@ -324,7 +324,7 @@ mod tests {
         ));
     }
 
-    /// Origin tagging: config.toml and `~/.grok` sources are grok-native, `~/.claude` foreign; both-home dupes dedup native.
+    /// Origin tagging: config.toml and `~/.cook` sources are grok-native, `~/.claude` foreign; both-home dupes dedup native.
     #[test]
     fn load_sources_with_origin_tags_native_and_foreign_roots() {
         fn write_known(root: &std::path::Path, entries: &[(&str, &str)]) {

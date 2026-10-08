@@ -1,4 +1,4 @@
-//! Tracks open TUI sessions in `~/.grok/active_sessions.json`. A clean exit removes the entry,
+//! Tracks open TUI sessions in `~/.cook/active_sessions.json`. A clean exit removes the entry,
 //! a crash leaves it behind, and the next [`register`] prunes entries whose PID is dead.
 
 #![deny(clippy::indexing_slicing)]

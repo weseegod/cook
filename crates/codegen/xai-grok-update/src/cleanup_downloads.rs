@@ -1,4 +1,4 @@
-//! Prune versioned leftovers in `~/.grok/downloads/` after a successful install.
+//! Prune versioned leftovers in `~/.cook/downloads/` after a successful install.
 //! Skip a leftover if a live process is executing it (best-effort).
 
 use std::path::{Path, PathBuf};

@@ -4,7 +4,7 @@ use xai_grok_tools::implementations::grok_build::ask_user_question;
 
 /// Resolve whether the bash-harness shadows that swap `find` for `bfs` and `grep` for `ugrep` are enabled.
 /// Precedence (highest first): `requirements.toml` (org policy, wins outright) > a truthy `DISABLE_EMBEDDED_SEARCH_TOOLS` master (forces off) > env > `config.toml` `[toolset.bash]` > `managed_config.toml` > default-on.
-/// Pass the **merged** requirements ([`crate::config::load_merged_requirements`]) so an org policy in any requirements layer — not only `~/.grok/requirements.toml` — is honored. Returns `(find_bfs, grep_ugrep)`, which the caller bakes into a [`xai_grok_tools::computer::local::SearchShadowConfig`] on the local terminal backend.
+/// Pass the **merged** requirements ([`crate::config::load_merged_requirements`]) so an org policy in any requirements layer — not only `~/.cook/requirements.toml` — is honored. Returns `(find_bfs, grep_ugrep)`, which the caller bakes into a [`xai_grok_tools::computer::local::SearchShadowConfig`] on the local terminal backend.
 pub(crate) fn resolve_search_tools_enabled(
     requirements: Option<&TomlValue>,
     user: Option<&TomlValue>,

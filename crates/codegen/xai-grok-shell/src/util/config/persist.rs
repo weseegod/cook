@@ -17,7 +17,7 @@ fn read_skills_config(path: &Path) -> Result<Option<SkillsConfig>> {
     let value = parse_existing_config_toml(&contents)?;
     Ok(Some(value.try_into()?))
 }
-/// Process-wide write lock for `~/.grok/config.toml`.
+/// Process-wide write lock for `~/.cook/config.toml`.
 /// Serializes the read-modify-write in `save_config` so two rapid settings toggles can't interleave and clobber each other.
 static SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Blank (first-run 0-byte file) is an empty table; other unparseable TOML is an error so a silent fallback cannot drop unmodeled sections.

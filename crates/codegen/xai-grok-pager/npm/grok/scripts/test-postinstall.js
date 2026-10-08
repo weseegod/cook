@@ -91,7 +91,7 @@ function cleanupOldVersions(canonicalDir, currentVersionedName) {
 
 /** Grok bin dir resolution (mirrors postinstall.js and bin/grok-bootstrap.js). */
 function resolveGrokBinDir(env, homedir) {
-    const grokHome = env.GROK_HOME ?? path.join(homedir, '.grok');
+    const grokHome = env.GROK_HOME ?? path.join(homedir, '.cook');
     return path.join(grokHome, 'bin');
 }
 
@@ -1029,14 +1029,14 @@ test('canonical pager from non-npm install is preserved on Linux', () => {
 
 console.log('\ngrok home + brotli install tests\n');
 
-test('resolveGrokBinDir honors $GROK_HOME, else falls back to <home>/.grok/bin', () => {
+test('resolveGrokBinDir honors $GROK_HOME, else falls back to <home>/.cook/bin', () => {
     assert.strictEqual(
-        resolveGrokBinDir({ GROK_HOME: '/fast/local/.grok' }, '/home/alice'),
-        path.join('/fast/local/.grok', 'bin'),
+        resolveGrokBinDir({ GROK_HOME: '/fast/local/.cook' }, '/home/alice'),
+        path.join('/fast/local/.cook', 'bin'),
     );
     assert.strictEqual(
         resolveGrokBinDir({}, '/home/alice'),
-        path.join('/home/alice', '.grok', 'bin'),
+        path.join('/home/alice', '.cook', 'bin'),
     );
     assert.strictEqual(resolveGrokBinDir({ GROK_HOME: '' }, '/home/alice'), path.join('', 'bin'));
 });
@@ -1067,7 +1067,7 @@ test('decompresses brotli into the canonical dir without duplicating into node_m
         const brotliPath = path.join(vendorBin, 'grok.br');
         fs.writeFileSync(brotliPath, zlib.brotliCompressSync(Buffer.from('native-binary-bytes')));
 
-        const binDir = path.join(dir, '.grok', 'bin');
+        const binDir = path.join(dir, '.cook', 'bin');
         const result = installBinaryFromBrotli(brotliPath, '0.1.220', binDir);
 
         assert.ok(fs.lstatSync(result.canonicalPath).isSymbolicLink());

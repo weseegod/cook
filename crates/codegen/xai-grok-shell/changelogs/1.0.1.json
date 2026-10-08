@@ -16,7 +16,7 @@
   },
   {
     "category": "features",
-    "description": "New `grok du` command shows disk usage of ~/.grok including worktrees and sessions.",
+    "description": "New `grok du` command shows disk usage of ~/.cook including worktrees and sessions.",
     "breaking_change": false
   },
   {
