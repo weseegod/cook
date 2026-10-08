@@ -130,6 +130,12 @@ function defaultState(): MockState {
       "subagent/general-purpose.md": "Complete the assigned task directly.\n",
       "subagent/plan.md": "You are a read-only software architect.\n",
     },
+    skillsRoot: "/home/demo/.cook/skills",
+    skillDefaults: {
+      review: "Review the change for defects.\n",
+      "game-tilesets": "Generate a game tileset.\n",
+    },
+    skillFiles: {},
     pickedFiles: [],
     filePayloads: {},
     workspace: {

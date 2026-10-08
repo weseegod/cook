@@ -220,6 +220,12 @@ Skills can also come from plugins. When you install a plugin that includes skill
 
 See the [Plugins guide](09-plugins.md) for more on installing plugins that provide skills.
 
+### Resetting an edited skill
+
+Editing a skill in **Settings → Skills** saves your copy to `~/.cook/skills/<name>/SKILL.md`, which then overrides the definition Cook ships. That dialog offers a **Reset** for any skill Cook ships: it writes the shipped `SKILL.md` back over your copy. The shipped bodies are compiled into the agent from the `skills/` tree at build time, so Reset returns the text that build shipped rather than whatever a later bundle sync may have cached under `~/.cook/bundled/skills/`.
+
+Reset replaces a copy, so it stays disabled until you have saved one. A skill you wrote yourself ships no default, and the dialog shows no Reset for it. Only `SKILL.md` is restored; sibling files your copy carries (`scripts/`, `templates/`) stay as they are.
+
 ---
 
 ## Best Practices

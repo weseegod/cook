@@ -573,6 +573,7 @@ pub mod repo_changes;
 pub mod restore;
 pub mod result;
 pub mod signals;
+pub(crate) mod skill_defaults;
 pub(crate) mod slash_authority;
 pub(crate) mod slash_commands;
 pub mod usage_file;

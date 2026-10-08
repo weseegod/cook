@@ -105,7 +105,7 @@ registry; everything else goes to the notification registry.
 | `reverse/` | A→C requests that carry an id. Interactions in `reverse/interactions.ts`; typed decline in `reverse/policy.ts` |
 | `notifications/` | A→C notifications. Handlers in `notifications/handlers.ts`, including `x.ai/queue/changed` |
 | `xai.ts` | `XaiClient`: session, model catalog, commands |
-| `extensions.ts` | MCP connectors, skills, plugins, project files |
+| `extensions.ts` | MCP connectors, skills, plugins, project files. Also the prompt and skill Reset pair: `x.ai/prompts/*` and `x.ai/skills/default`/`restore` |
 | `settings-ext.ts` | Memory files, hooks, workflows |
 | `providers.ts` | Provider and model upsert. Tauri writes through the host; mock falls back to `x.ai/providers/*` |
 | `provider-presets.ts` | Offline preset mirror for Settings and first-run connect. Agent `x.ai/providers/presets` wins when it answers |
@@ -259,7 +259,7 @@ The TUI follows the same notification in
 | Models | `providers.tsx`, `providers/` (cards, dialogs, OAuth, logos), `model-dialog.tsx`, `provider-form.tsx` |
 | Connectors | `connectors.tsx`, grouping `connectors-groups.ts` |
 | Memory & project | `context-panels.tsx` (`MemoryPanel`, `ProjectInstructionsPanel`) |
-| Skills | `context-panels.tsx` `SkillsPanel`, grouping `skills-groups.ts`. A skill's name opens `skill-viewer.tsx` (full `SKILL.md`, Edit → save); the save path rule is `skill-target.ts`. No skill-path setup: edits land in `~/.cook/skills/` |
+| Skills | `context-panels.tsx` `SkillsPanel`, grouping `skills-groups.ts`. A skill's name opens `skill-viewer.tsx` (full `SKILL.md`, Edit → save, Reset → the shipped body); the save path rule is `skill-target.ts`. No skill-path setup: edits land in `~/.cook/skills/`. Reset reads `x.ai/skills/default` and writes `x.ai/skills/restore`, both answered from the shell's compiled `skills/*/SKILL.md` table, so a skill Cook does not ship shows no Reset |
 | Hooks | `hooks-panel.tsx` |
 | Data Controls | `data-controls.tsx` — delete all conversations (`x.ai/sessions/delete_all`). Rules: desktop-app §7 |
 | About | `settings-panel.tsx` `AboutUpdates`, backed by `src/updater.ts` (also drives the open-app banner in `update-banner.tsx`) |

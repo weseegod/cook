@@ -285,6 +285,38 @@ export function restorePrompt(relative: string) {
   return request<PromptWriteResult>("x.ai/prompts/restore", { relative });
 }
 
+/** `x.ai/skills/default` and `x.ai/skills/restore`: the shipped `SKILL.md` behind a skill row. */
+export type SkillState = "absent" | "unmodified" | "modified";
+
+export interface SkillDefaultView {
+  name: string;
+  /** The user's copy, `<cook home>/skills/<name>/SKILL.md`; empty when Cook ships no default. */
+  path: string;
+  /** Whether Cook ships this skill, and so whether Settings can offer Reset at all. */
+  hasDefault: boolean;
+  state: SkillState;
+  /** The user's copy; `null` when none exists yet. */
+  content: string | null;
+  /** The shipped body, empty when the skill ships no default. */
+  default: string;
+}
+
+export interface SkillRestoreResult {
+  name: string;
+  /** `unmodified` once the shipped body is back in place. */
+  state: SkillState;
+}
+
+/** The shipped body and the user's copy of one skill. */
+export function readSkillDefault(name: string, cwd?: string) {
+  return request<SkillDefaultView>("x.ai/skills/default", { name, cwd: skillCwd(cwd) });
+}
+
+/** Write the shipped body back over the user's copy of one skill. */
+export function restoreSkillDefault(name: string, cwd?: string) {
+  return request<SkillRestoreResult>("x.ai/skills/restore", { name, cwd: skillCwd(cwd) });
+}
+
 export function flushMemory(sessionId: string) {
   return request<Record<string, unknown>>("x.ai/memory/flush", { session_id: sessionId });
 }

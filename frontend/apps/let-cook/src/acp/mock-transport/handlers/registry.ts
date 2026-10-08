@@ -3,6 +3,7 @@ import { planHandlers } from "./plans";
 import { promptHandlers } from "./prompts";
 import { sessionHandlers } from "./sessions";
 import { settingsHandlers } from "./settings";
+import { skillDefaultHandlers } from "./skill-defaults";
 import { taskHandlers } from "./tasks";
 import { turnHandlers } from "./turn";
 import { workspaceHandlers } from "./workspace";
@@ -19,6 +20,7 @@ const handlers: Record<string, MethodHandler> = {
   ...sessionHandlers,
   ...planHandlers,
   ...promptHandlers,
+  ...skillDefaultHandlers,
   ...settingsHandlers,
   ...mcpHandlers,
   ...taskHandlers,

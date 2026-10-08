@@ -2,6 +2,7 @@ use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
 use crate::extensions::agent_runtime::AgentRuntime;
+use crate::session::skill_defaults;
 use crate::util::config as cli_config;
 use xai_grok_agent::prompt::skills::{
     CompatConfig, SkillInfo, SkillsConfig, collect_config_skills, list_skills_with_plugins,
@@ -76,6 +77,43 @@ pub struct SkillsResetResponse {
     /// Full updated skill list after reload.
     pub skills: Vec<SkillInfo>,
     pub message: String,
+}
+
+/// Request for `x.ai/skills/default` and `x.ai/skills/restore`. Only a name in the compiled
+/// shipped-skill table resolves; every other name has no default to read or return to.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDefaultRequest {
+    pub name: String,
+    /// Working directory for skill discovery context.
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+/// Answer for `x.ai/skills/default`: the shipped body and the user's copy of one skill.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillDefaultView {
+    pub name: String,
+    /// `<cook home>/skills/<name>/SKILL.md`, empty when the skill ships no default.
+    pub path: String,
+    /// Whether Cook ships this skill, so Settings can offer Reset at all.
+    pub has_default: bool,
+    /// `absent` | `unmodified` | `modified`.
+    pub state: &'static str,
+    /// The user's copy; `None` when there is none.
+    pub content: Option<String>,
+    /// The compiled shipped body, empty when the skill ships no default.
+    pub default: String,
+}
+
+/// Answer for `x.ai/skills/restore`, which writes the shipped body over the user's copy.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRestoreResult {
+    pub name: String,
+    /// `unmodified` once the shipped body is back in place.
+    pub state: &'static str,
 }
 
 #[derive(Debug, Deserialize)]
@@ -622,8 +660,89 @@ pub async fn handle(
             super::to_ext_response(Ok(SkillsListResponse::from(skills)))
         }
 
+        "x.ai/skills/default" => {
+            let req: SkillDefaultRequest = serde_json::from_str(args.params.get())?;
+            super::to_ext_response(Ok(skill_default_view(&req.name)))
+        }
+
+        "x.ai/skills/restore" => {
+            let req: SkillDefaultRequest = serde_json::from_str(args.params.get())?;
+            match restore_skill_default(&req.name) {
+                Ok(result) => {
+                    // Sessions otherwise learn about disk changes only from inotify.
+                    agent.refresh_skill_baseline_for_all_sessions();
+                    super::to_ext_response(Ok(result))
+                }
+                Err(error) => super::to_ext_response(Err::<SkillRestoreResult, _>(error)),
+            }
+        }
+
         _ => Err(acp::Error::method_not_found()),
     }
+}
+
+/// The shipped body and the user's copy for one skill.
+///
+/// A name the compiled table does not hold is reported as having no default rather than failing, so
+/// Settings can ask about any row and simply hide Reset. Reporting instead of erroring also keeps
+/// the caller from building a path out of a name nothing vouches for.
+fn skill_default_view(name: &str) -> SkillDefaultView {
+    skill_default_view_at(&skill_defaults::user_skills_root(), name)
+}
+
+/// [`skill_default_view`] against an explicit skills root, so tests are hermetic.
+fn skill_default_view_at(skills_root: &std::path::Path, name: &str) -> SkillDefaultView {
+    let Some(default) = skill_defaults::default_for(name) else {
+        return SkillDefaultView {
+            name: name.to_string(),
+            path: String::new(),
+            has_default: false,
+            state: skill_defaults::SkillState::Absent.as_str(),
+            content: None,
+            default: String::new(),
+        };
+    };
+    let path = skill_defaults::user_copy_path_at(skills_root, name)
+        .expect("a name the compiled table holds always resolves a copy path");
+    SkillDefaultView {
+        name: name.to_string(),
+        path: path.to_string_lossy().into_owned(),
+        has_default: true,
+        state: skill_defaults::state_of(&path, default).as_str(),
+        content: std::fs::read_to_string(&path).ok(),
+        default: default.to_string(),
+    }
+}
+
+/// Write the shipped body over the user's copy of one skill.
+///
+/// Refuses a skill Cook does not ship, and refuses a skill with no user copy: writing one would
+/// shadow the bundled cache with the build-time text, which is the opposite of putting the shipped
+/// default back in use.
+fn restore_skill_default(name: &str) -> anyhow::Result<SkillRestoreResult> {
+    restore_skill_default_at(&skill_defaults::user_skills_root(), name)
+}
+
+/// [`restore_skill_default`] against an explicit skills root, so tests are hermetic.
+fn restore_skill_default_at(
+    skills_root: &std::path::Path,
+    name: &str,
+) -> anyhow::Result<SkillRestoreResult> {
+    let Some(default) = skill_defaults::default_for(name) else {
+        anyhow::bail!(
+            "{name} is not a skill Cook ships, so it has no default to restore"
+        );
+    };
+    let path = skill_defaults::user_copy_path_at(skills_root, name)
+        .expect("a name the compiled table holds always resolves a copy path");
+    if !path.is_file() {
+        anyhow::bail!("no user copy at {}, so there is nothing to reset", path.display());
+    }
+    skill_defaults::restore_at(&path, default)?;
+    Ok(SkillRestoreResult {
+        name: name.to_string(),
+        state: skill_defaults::state_of(&path, default).as_str(),
+    })
 }
 
 #[cfg(test)]
@@ -765,5 +884,89 @@ mod tests {
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json.get("totalSkills"), Some(&serde_json::json!(5)));
         assert!(json.get("paths").is_some_and(|p| p.is_array()));
+    }
+
+    /// The three states Settings renders, for a skill the compiled table ships.
+    #[test]
+    fn default_view_reads_absent_unmodified_and_modified() {
+        let tmp = tempfile::tempdir().unwrap();
+        let shipped = skill_defaults::default_for("review").unwrap();
+
+        let absent = skill_default_view_at(tmp.path(), "review");
+        assert!(absent.has_default);
+        assert_eq!(absent.state, "absent");
+        assert!(absent.content.is_none());
+        assert_eq!(absent.default, shipped);
+        assert!(absent.path.ends_with("/review/SKILL.md"));
+
+        let path = skill_defaults::user_copy_path_at(tmp.path(), "review").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, shipped).unwrap();
+        assert_eq!(skill_default_view_at(tmp.path(), "review").state, "unmodified");
+
+        std::fs::write(&path, "my rewrite\n").unwrap();
+        let modified = skill_default_view_at(tmp.path(), "review");
+        assert_eq!(modified.state, "modified");
+        assert_eq!(modified.content.as_deref(), Some("my rewrite\n"));
+    }
+
+    /// A skill the user wrote carries no default, and no path is built from its name.
+    #[test]
+    fn default_view_reports_no_default_for_a_skill_cook_does_not_ship() {
+        let tmp = tempfile::tempdir().unwrap();
+        for name in ["my-own-skill", "", "../escape"] {
+            let view = skill_default_view_at(tmp.path(), name);
+            assert!(!view.has_default, "{name} ships no default");
+            assert_eq!(view.path, "", "{name} must not resolve a path");
+            assert_eq!(view.state, "absent");
+            assert!(view.content.is_none());
+            assert_eq!(view.default, "");
+        }
+    }
+
+    #[test]
+    fn restore_writes_the_shipped_body_byte_for_byte() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = skill_defaults::user_copy_path_at(tmp.path(), "review").unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "my rewrite\n").unwrap();
+
+        let result = restore_skill_default_at(tmp.path(), "review").unwrap();
+
+        assert_eq!(result.name, "review");
+        assert_eq!(result.state, "unmodified");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            skill_defaults::default_for("review").unwrap()
+        );
+    }
+
+    /// Both refusals leave the tree exactly as they found it.
+    #[test]
+    fn restore_refuses_without_a_default_or_without_a_user_copy() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let error = restore_skill_default_at(tmp.path(), "my-own-skill").unwrap_err();
+        assert!(error.to_string().contains("no default to restore"), "got: {error}");
+        assert_eq!(std::fs::read_dir(tmp.path()).unwrap().count(), 0);
+
+        let error = restore_skill_default_at(tmp.path(), "review").unwrap_err();
+        assert!(error.to_string().contains("nothing to reset"), "got: {error}");
+        assert!(!tmp.path().join("review").exists());
+
+        // A name that tries to climb out of the skills root is refused the same way.
+        let error = restore_skill_default_at(tmp.path(), "../../etc").unwrap_err();
+        assert!(error.to_string().contains("no default to restore"), "got: {error}");
+        assert!(!tmp.path().parent().unwrap().join("etc").exists());
+    }
+
+    #[test]
+    fn default_view_serializes_camel_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let json = serde_json::to_value(skill_default_view_at(tmp.path(), "review")).unwrap();
+        assert_eq!(json.get("hasDefault"), Some(&serde_json::json!(true)));
+        assert!(json.get("default").is_some_and(|v| v.is_string()));
+        let json = serde_json::to_value(skill_default_view_at(tmp.path(), "mine")).unwrap();
+        assert_eq!(json.get("hasDefault"), Some(&serde_json::json!(false)));
     }
 }

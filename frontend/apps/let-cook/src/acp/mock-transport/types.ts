@@ -215,6 +215,12 @@ export interface MockState {
   promptFiles: Record<string, string>;
   /** Compiled defaults keyed by relative path, as `x.ai/prompts/read` returns them. */
   promptDefaults: Record<string, string>;
+  /** `<cook home>/skills`, the root the mock reports for a user's copy of a skill. */
+  skillsRoot: string;
+  /** Shipped skill bodies keyed by name, as `x.ai/skills/default` returns them. */
+  skillDefaults: Record<string, string>;
+  /** User copies of shipped skills keyed by name; absent means "no copy". */
+  skillFiles: Record<string, string>;
   /** Paths the native attachment picker returns; empty means "no native picker here". */
   pickedFiles: string[];
   /** Folder the native folder picker returns; unset means the default demo workspace. */
