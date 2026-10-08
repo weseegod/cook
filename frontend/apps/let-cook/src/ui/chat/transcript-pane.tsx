@@ -6,11 +6,20 @@
  * session transcript; a subagent's own view feeds it that child's transcript. Everything a session
  * adds around it (turn-status, prompt slot, dialogs) rides in the slots below.
  */
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
 import type { TranscriptBlock } from "../../state/session";
 import { TranscriptActionsContext } from "./transcript-context";
 import { TranscriptRow } from "./transcript-row";
-import { hasContentBelow, hasResponseTopAbove, responseTopIndex, stickyPromptIndex } from "./transcript-nav";
+import { hasContentBelow, hasResponseTopAbove, resolveFollow, responseTopIndex, stickyPromptIndex } from "./transcript-nav";
 import { isLiveTool, projectTranscript, type DisplayBlock } from "./transcript-projection";
 import {
   captureContentAnchor,
@@ -24,6 +33,8 @@ import {
 const WINDOW_ESTIMATE = 72;
 const WINDOW_OVERSCAN = 8;
 const WINDOW_MIN_COUNT = 64;
+/** Programmatic writes pause this long after the last scroll-gesture event, momentum included. */
+const SCROLL_GUARD_MS = 150;
 
 interface ScrollMetrics {
   scrollTop: number;
@@ -44,6 +55,16 @@ function cancelFrame(handle: number): void {
     return;
   }
   window.clearTimeout(handle);
+}
+
+/**
+ * True while a scroll gesture is in flight. `pinToBottom`, the anchor restore, and the streaming pin
+ * all stand aside for this window: a write over the user's own scroll is what made a live turn's
+ * transcript feel like it was fighting the wheel — and the fight is invisible to `scroll` events,
+ * because the event then reports the position the pane wrote instead of the one the user asked for.
+ */
+function scrollGestureActive(gestureAt: number): boolean {
+  return performance.now() - gestureAt < SCROLL_GUARD_MS;
 }
 
 function rowDomId(id: string): string {
@@ -94,6 +115,10 @@ export function TranscriptPane({
   const followRef = useRef(true);
   /** True for one scroll event after a pin / anchor restore, so follow does not drop on our write. */
   const programmaticScrollRef = useRef(false);
+  /** When the scroller last saw a wheel/touch/pointer event. Never-reached value: no gesture yet. */
+  const gestureAtRef = useRef(Number.NEGATIVE_INFINITY);
+  /** Tail state as of the last scroll event. The pane starts pinned to the tail. */
+  const atTailRef = useRef(true);
   const contentAnchorRef = useRef<ContentAnchor | null>(null);
   const scrollMetricsFrame = useRef<number | null>(null);
   const pendingScrollMetrics = useRef<ScrollMetrics | null>(null);
@@ -130,7 +155,9 @@ export function TranscriptPane({
     setFollow(enabled);
   }, []);
 
-  const pinToBottom = useCallback((element: HTMLDivElement) => {
+  /** `force` is for the deliberate paths (the jump button): a live gesture never blocks those. */
+  const pinToBottom = useCallback((element: HTMLDivElement, force = false) => {
+    if (!force && scrollGestureActive(gestureAtRef.current)) return;
     const target = Math.max(0, element.scrollHeight - element.clientHeight);
     if (Math.abs(element.scrollTop - target) < 1) return;
     programmaticScrollRef.current = true;
@@ -140,8 +167,9 @@ export function TranscriptPane({
   const updateScrollState = useCallback((element: HTMLDivElement) => {
     const programmatic = programmaticScrollRef.current;
     programmaticScrollRef.current = false;
-    const nextFollow = !hasContentBelow(element.scrollHeight, element.scrollTop, element.clientHeight);
-    if (!programmatic && nextFollow !== followRef.current) setFollowMode(nextFollow);
+    const atTail = !hasContentBelow(element.scrollHeight, element.scrollTop, element.clientHeight);
+    atTailRef.current = atTail;
+    setFollowMode(resolveFollow(followRef.current, { programmatic, overscroll: false, atTail }));
     contentAnchorRef.current = captureContentAnchor(
       projectedRef.current,
       element.scrollTop,
@@ -166,9 +194,23 @@ export function TranscriptPane({
     const transcript = transcriptRef.current;
     if (!transcript) return;
     contentAnchorRef.current = null;
-    pinToBottom(transcript);
+    pinToBottom(transcript, true);
     updateScrollState(transcript);
   }, [pinToBottom, setFollowMode, updateScrollState]);
+
+  const markScrollGesture = useCallback(() => {
+    gestureAtRef.current = performance.now();
+  }, []);
+
+  const onTranscriptWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>) => {
+    markScrollGesture();
+    // A downward wheel that found the scroller already at the tail is the native form of the TUI's
+    // overscroll (`follow_by_overscroll`), and the one gesture that resumes follow by itself.
+    // The browser has already applied this wheel's scroll by the time the event reaches us, so the
+    // test is the tail state from before it: a wheel that itself landed on the tail stays manual.
+    if (event.deltaY <= 0 || !atTailRef.current) return;
+    setFollowMode(true);
+  }, [markScrollGesture, setFollowMode]);
 
   const pageScroll = useCallback((direction: "up" | "down") => {
     const transcript = transcriptRef.current;
@@ -272,6 +314,13 @@ export function TranscriptPane({
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
+    // Mid-gesture the user's position is the truth. The anchor is re-read from it so the first
+    // restore after the gesture continues from where they left the transcript, not from where the
+    // pane last pinned it.
+    if (scrollGestureActive(gestureAtRef.current)) {
+      contentAnchorRef.current = captureContentAnchor(projected, transcript.scrollTop, heights, WINDOW_ESTIMATE);
+      return;
+    }
     if (followRef.current) {
       pinToBottom(transcript);
       return;
@@ -327,6 +376,10 @@ export function TranscriptPane({
               className="transcript"
               ref={transcriptRef}
               onScroll={(event) => updateScrollState(event.currentTarget)}
+              onWheel={onTranscriptWheel}
+              onTouchStart={markScrollGesture}
+              onTouchMove={markScrollGesture}
+              onPointerDown={markScrollGesture}
             >
               {blocks.length === 0 ? (
                 empty

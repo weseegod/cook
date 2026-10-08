@@ -170,7 +170,10 @@ and the rewind / recap / plan dialogs. A background command stays in
 one projection; `transcript-row.tsx` is the one switch that paints it (message,
 thought, tool, verb group, session event). A second switch is how a child view
 drifts from the parent chat. Tool and thinking rows are `tool-card.tsx`.
-Markdown is `markdown.tsx`.
+Markdown is `markdown.tsx`. Follow mode mirrors the TUI's scrollback: any
+scroll back from the tail drops it, and it resumes from a wheel down at the
+tail, "Jump to latest", or sending a prompt. The pane writes `scrollTop` itself
+(the pin, the anchor restore) only while no scroll gesture is in flight.
 
 ### Header
 

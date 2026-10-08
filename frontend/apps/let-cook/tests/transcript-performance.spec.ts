@@ -117,3 +117,54 @@ test("holds the top row while reading back as the tail streams", async ({ page }
   const after = await topVisibleRowId(page);
   expect(after).toBe(before);
 });
+
+test("keeps the position a wheel gives it inside the last screen of a live turn", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ historyUpdates, promptDelayMs: 12_000 }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+
+  await page.getByTestId("composer-input").fill("Continue the conversation");
+  await page.getByTestId("send-button").click();
+  await expect(page.locator(".message-assistant").last()).toContainText("Mock assistant reply.");
+  await streamChunks(page, 4, "\n\nGrow the tail before the user scrolls back. ");
+
+  // 60px sits inside the last screen. Follow used to re-arm anywhere within 96px of the tail, so the
+  // streaming pin snapped this wheel back to the bottom on the next frame.
+  const transcript = page.locator(".transcript");
+  await transcript.hover();
+  await page.mouse.wheel(0, -60);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(40);
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+  const top = await topVisibleRowId(page);
+
+  await streamChunks(page, 6, "\n\nKeep streaming while the user reads. ");
+  expect(await bottomGap(page)).toBeGreaterThan(40);
+  expect(await topVisibleRowId(page)).toBe(top);
+});
+
+test("stays manual when a scroll lands on the tail, and resumes follow on the next wheel down", async ({ page }) => {
+  await openWorkspace(page, shellSeed({ historyUpdates, promptDelayMs: 12_000 }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+
+  await page.getByTestId("composer-input").fill("Continue the conversation");
+  await page.getByTestId("send-button").click();
+  await expect(page.locator(".message-assistant").last()).toContainText("Mock assistant reply.");
+  await streamChunks(page, 4, "\n\nGrow the tail before the user leaves it. ");
+
+  const transcript = page.locator(".transcript");
+  await transcript.hover();
+  await page.mouse.wheel(0, -400);
+  await expect.poll(() => bottomGap(page)).toBeGreaterThan(40);
+
+  // A clamped landing on the tail is still the user's own position, so follow stays off.
+  await page.mouse.wheel(0, 4_000);
+  await expect.poll(() => bottomGap(page)).toBeLessThan(12);
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toBeVisible();
+
+  // One more scroll-down at the tail is the overscroll gesture; follow resumes and glues the tail.
+  await page.mouse.wheel(0, 120);
+  await expect(page.getByRole("button", { name: "Jump to latest" })).toHaveCount(0);
+  await streamChunks(page, 6, "\n\nKeep streaming after follow resumed. ");
+  await expect.poll(() => bottomGap(page)).toBeLessThan(4);
+});

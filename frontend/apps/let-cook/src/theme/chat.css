@@ -1021,6 +1021,11 @@
 }
 
 .transcript-row {
+  /* Own the row's box so a child's bottom margin lands inside the height ResizeObserver reads.
+     Collapsed out of the wrapper it is invisible to the virtualizer, and swapping real rows for
+     estimate spacers then moved the transcript's total height by 16px per swapped row — which is
+     what yanked the viewport toward the tail while a turn streamed. */
+  display: flow-root;
   min-width: 0;
   max-width: 100%;
 }
