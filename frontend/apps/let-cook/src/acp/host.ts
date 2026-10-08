@@ -84,6 +84,8 @@ export async function sessionRecordPath(sessionId: string, cwd?: string): Promis
 export async function startProcess(cwd: string): Promise<StartInfo> {
   if (!isTauri()) {
     if (isMock()) {
+      // The real host points its workspace-rooted commands at the folder the agent was spawned in.
+      (await mock()).openWorkspaceAt(cwd);
       return { binaryPath: "mock://cook", binaryVersion: "1.0.32", cwd };
     }
     throw new Error("Let Cook must run inside Tauri (use pnpm tauri dev)");
@@ -159,8 +161,9 @@ export async function respond(
 }
 
 export async function pickFolder(): Promise<string | null> {
-  if (!isTauri()) return "/tmp/cook-demo";
-  return invokeDesktop<string | null>("pick_folder", {});
+  if (isTauri()) return invokeDesktop<string | null>("pick_folder", {});
+  if (isMock()) return (await mock()).mockPickFolder();
+  return "/tmp/cook-demo";
 }
 
 export interface FilePayload {

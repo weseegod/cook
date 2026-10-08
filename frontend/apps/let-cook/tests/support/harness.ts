@@ -64,6 +64,9 @@ export function api(page: Page) {
       page.evaluate((value) => window.__cookMock!.elicit(value ?? {}), overrides ?? {}),
     modelsUpdate: (params?: Record<string, unknown>) =>
       page.evaluate((value) => window.__cookMock!.modelsUpdate(value ?? {}), params ?? {}),
+    /** What the native folder picker answers on its next call. */
+    pickedFolder: (folder: string) =>
+      page.evaluate((value) => window.__cookMock!.pickedFolder(value), folder),
     completeOAuth: (id: string) => page.evaluate((value) => window.__cookMock!.completeOAuth(value), id),
   };
 }

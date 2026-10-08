@@ -21,6 +21,13 @@ import {
   type FileSearchMatch,
 } from "../file-search";
 
+/** Walked inventory plus the workspace folder and hidden mode it was walked for. */
+interface LoadedIndex {
+  root: string | null;
+  hidden: boolean;
+  entries: WorkspaceIndexEntry[];
+}
+
 export interface ComposerFileSearch {
   visible: boolean;
   matches: FileSearchMatch[];
@@ -40,17 +47,18 @@ export function useComposerFileSearch(options: {
   text: string;
   setText: (value: string) => void;
   textarea: RefObject<HTMLTextAreaElement | null>;
+  /** Workspace folder the host index answers for. A new folder drops the old inventory. */
+  workspaceRoot: string | null;
   /** Slash menu owns the keystream while it has rows. */
   slashOpen: boolean;
   menuClosed: boolean;
   setMenuClosed: (closed: boolean) => void;
 }): ComposerFileSearch {
-  const { text, setText, textarea, slashOpen, menuClosed, setMenuClosed } = options;
+  const { text, setText, textarea, workspaceRoot, slashOpen, menuClosed, setMenuClosed } = options;
   const [cursor, setCursor] = useState(0);
   const [active, setActive] = useState(0);
   const [drillPrefix, setDrillPrefix] = useState<string | null>(null);
-  const [index, setIndex] = useState<WorkspaceIndexEntry[] | null>(null);
-  const [hidden, setHidden] = useState(false);
+  const [loaded, setLoaded] = useState<LoadedIndex | null>(null);
   const fetchGen = useRef(0);
 
   const ctx: AtContext | null = useMemo(() => {
@@ -67,23 +75,22 @@ export function useComposerFileSearch(options: {
     }
   }, [ctx, drillPrefix, text]);
 
-  // Lazy-load (and refresh when hidden mode toggles).
+  // Lazy-load (and refresh when hidden mode toggles or the workspace folder moves).
   useEffect(() => {
     if (!ctx) return;
     const wantHidden = isHiddenMode(ctx);
-    if (index && wantHidden === hidden) return;
+    if (loaded && loaded.root === workspaceRoot && loaded.hidden === wantHidden) return;
     const gen = ++fetchGen.current;
-    setHidden(wantHidden);
     void indexWorkspace(wantHidden)
       .then((entries) => {
         if (fetchGen.current !== gen) return;
-        setIndex(entries);
+        setLoaded({ root: workspaceRoot, hidden: wantHidden, entries });
       })
       .catch(() => {
         if (fetchGen.current !== gen) return;
-        setIndex([]);
+        setLoaded({ root: workspaceRoot, hidden: wantHidden, entries: [] });
       });
-  }, [ctx, hidden, index]);
+  }, [ctx, loaded, workspaceRoot]);
 
   // Fresh `@` token clears any leftover drill.
   useEffect(() => {
@@ -92,10 +99,15 @@ export function useComposerFileSearch(options: {
     }
   }, [ctx]);
 
+  // The drill anchor names a folder of the previous workspace, so it stops applying here.
+  useEffect(() => {
+    setDrillPrefix(null);
+  }, [workspaceRoot]);
+
   const matches = useMemo(() => {
-    if (!ctx || !index) return [];
-    return rankForContext(index, ctx).slice(0, FILE_SEARCH_VISIBLE);
-  }, [ctx, index]);
+    if (!ctx || !loaded || loaded.root !== workspaceRoot) return [];
+    return rankForContext(loaded.entries, ctx).slice(0, FILE_SEARCH_VISIBLE);
+  }, [ctx, loaded, workspaceRoot]);
 
   useEffect(() => setActive(0), [ctx?.query, matches.length]);
 

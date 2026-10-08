@@ -1,8 +1,29 @@
 import { expect, test, type Page } from "@playwright/test";
 import { CONNECTED_SEED } from "./seed";
-import { openWorkspace } from "./support/harness";
+import { api, openWorkspace, waitForCalls, WORKSPACE } from "./support/harness";
 
 const composer = (page: Page) => page.getByPlaceholder("Ask Cook anything…");
+
+/** The demo workspace the suites open, plus a project the folder picker switches the window to. */
+const SECOND_FOLDER = "/tmp/other-project";
+const SECOND_FOLDER_SEED = {
+  ...CONNECTED_SEED,
+  workspace: {
+    ...WORKSPACE,
+    indexByCwd: {
+      [SECOND_FOLDER]: [
+        { path: "server", kind: "directory" },
+        { path: "package.json", kind: "file" },
+      ],
+    },
+  },
+};
+
+/** How many vocabulary refreshes the renderer has run; each connect finishes with one. */
+async function catalogRefreshes(page: Page): Promise<number> {
+  const requests = await api(page).requests();
+  return requests.filter((entry) => entry.method === "x.ai/commands/list").length;
+}
 
 test.describe("composer @ path search", () => {
   test("lists depth-1 entries for a bare @", async ({ page }) => {
@@ -55,5 +76,20 @@ test.describe("composer @ path search", () => {
     await composer(page).fill("look at @READ");
     await expect(page.getByTestId("file-search-menu")).toBeVisible();
     await expect(page.getByTestId("file-search-item").filter({ hasText: "README.md" })).toBeVisible();
+  });
+
+  test("lists the new folder's paths after the workspace is switched", async ({ page }) => {
+    await openWorkspace(page, SECOND_FOLDER_SEED);
+    await composer(page).fill("@");
+    await expect(page.getByTestId("file-search-item").filter({ hasText: "README.md" })).toBeVisible();
+
+    const refreshes = await catalogRefreshes(page);
+    await api(page).pickedFolder(SECOND_FOLDER);
+    await page.getByRole("button", { name: "Choose workspace folder" }).click();
+    await waitForCalls(page, "x.ai/commands/list", refreshes + 1);
+
+    await composer(page).fill("@");
+    await expect(page.getByTestId("file-search-item").filter({ hasText: "package.json" })).toBeVisible();
+    await expect(page.getByTestId("file-search-item").filter({ hasText: "README.md" })).toHaveCount(0);
   });
 });

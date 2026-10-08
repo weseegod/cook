@@ -54,6 +54,8 @@ export function Composer() {
     busyToken.current += 1;
     setBusy(false);
   }, [sessionId]);
+  // `@` paths come from the folder the window is pointed at, which the user can switch mid-session.
+  const cwd = useSessionStore((state) => state.cwd);
   const planMode = useSessionStore((state) => state.planMode);
   const alwaysApprove = useSessionStore((state) => state.alwaysApprove);
   const modelId = useSessionStore((state) => state.modelId);
@@ -84,6 +86,7 @@ export function Composer() {
     text,
     setText,
     textarea,
+    workspaceRoot: cwd,
     slashOpen: matching.length > 0,
     menuClosed,
     setMenuClosed,

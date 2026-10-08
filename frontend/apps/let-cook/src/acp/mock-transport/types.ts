@@ -1,4 +1,4 @@
-import type { FilePreview, ReviewSnapshot, WorkspaceEntry } from "../workspace";
+import type { FilePreview, ReviewSnapshot, WorkspaceEntry, WorkspaceIndexEntry } from "../workspace";
 import type { TranscriptBlock } from "../../state/session";
 
 export interface RecordedRequest {
@@ -148,6 +148,11 @@ export interface MockWorkspaceState {
    * window across two projects — a repository here, a folder with no git there.
    */
   byCwd?: Record<string, ReviewSnapshot>;
+  /**
+   * `@` inventories that differ from {@link entries}, keyed by folder, for the tests that switch
+   * workspace mid-window: the flat walk `workspace_index` would answer for each project.
+   */
+  indexByCwd?: Record<string, WorkspaceIndexEntry[]>;
 }
 
 /**
@@ -206,6 +211,8 @@ export interface MockState {
   files: Record<string, string>;
   /** Paths the native attachment picker returns; empty means "no native picker here". */
   pickedFiles: string[];
+  /** Folder the native folder picker returns; unset means the default demo workspace. */
+  pickedFolder?: string;
   /** Base64 payloads keyed by path, as `read_file_base64` would return them. */
   filePayloads: Record<string, { data: string; mediaType: string; size: number }>;
   workspace: MockWorkspaceState;
@@ -260,6 +267,8 @@ export interface MockControl {
   seedTranscript(blocks: TranscriptBlock[], childSessionId?: string): Promise<void>;
   /** Patch the mocked working tree so a running turn's diffstat can be seen to move. */
   workspaceReview(overrides: Partial<ReviewSnapshot>): void;
+  /** Set the folder the native folder picker answers, so a test can switch workspace mid-window. */
+  pickedFolder(folder: string): void;
   taskBackgrounded(overrides?: Record<string, unknown>): void;
   taskCompleted(overrides?: Record<string, unknown>): void;
   /** Grow a mocked background task's stdout, so an open viewer can be seen to follow it. */

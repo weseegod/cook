@@ -861,6 +861,33 @@ mod tests {
         );
     }
 
+    /// The `@` inventory is walked per folder: a cache left over from the previous workspace would
+    /// hand the renderer paths that do not exist under the root the commands answer for.
+    #[test]
+    fn drops_the_index_cache_when_the_workspace_moves() {
+        let host = AcpHost::default();
+        let first = tempfile::tempdir().unwrap();
+        let second = tempfile::tempdir().unwrap();
+
+        host.follow_workspace(first.path().to_str().unwrap());
+        let root = host.workspace_root().unwrap();
+        host.store_workspace_index(
+            root.clone(),
+            false,
+            vec![crate::workspace::WorkspaceIndexEntry {
+                path: "old.txt".to_owned(),
+                kind: "file",
+            }],
+        );
+        assert!(host.cached_workspace_index(&root, false).is_some());
+
+        // Switching conversations repoints the walk as well, not just the root.
+        host.follow_workspace(second.path().to_str().unwrap());
+        let moved = host.workspace_root().unwrap();
+        assert!(host.cached_workspace_index(&moved, false).is_none());
+        assert!(host.cached_workspace_index(&root, false).is_none());
+    }
+
     #[test]
     fn rejects_parent_traversal() {
         let root = Arc::new(Mutex::new(Some(std::env::temp_dir())));

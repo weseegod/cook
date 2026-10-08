@@ -29,6 +29,16 @@ export function mockPickFiles(): string[] | null {
   return state.pickedFiles.length > 0 ? [...state.pickedFiles] : null;
 }
 
+/** Native folder picker stand-in. The seeded folder, or the demo workspace the suites already use. */
+export function mockPickFolder(): string {
+  return state.pickedFolder ?? "/tmp/cook-demo";
+}
+
+/** Choose what the native folder picker answers on its next call. */
+export function mockSetPickedFolder(folder: string): void {
+  state.pickedFolder = folder;
+}
+
 /** `read_file_base64` stand-in for a path the seed declared. */
 export function mockReadFilePayload(path: string): { data: string; mediaType: string; size: number } {
   const payload = state.filePayloads[path];
@@ -42,8 +52,14 @@ export function mockWorkspaceList(relativePath = ""): WorkspaceEntry[] {
   return structuredClone(entries);
 }
 
-/** Flatten the seeded directory tree into the same shape `workspace_index` returns. */
+/**
+ * Flatten the seeded directory tree into the same shape `workspace_index` returns. A conversation
+ * that moved the workspace to another folder answers from that folder's own tree when the seed
+ * gave one, the same way the host walks the root it currently holds.
+ */
 export function mockWorkspaceIndex(_hidden = false): WorkspaceIndexEntry[] {
+  const scoped = state.workspace.cwd ? state.workspace.indexByCwd?.[state.workspace.cwd] : undefined;
+  if (scoped) return structuredClone(scoped);
   const seen = new Set<string>();
   const flat: WorkspaceIndexEntry[] = [];
   for (const entries of Object.values(state.workspace.entries)) {

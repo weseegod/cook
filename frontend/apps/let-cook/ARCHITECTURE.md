@@ -198,7 +198,7 @@ The Git chip menu shows the changed-file count in Preview and opens the diff, or
 |---|---|
 | `ui/chat/prompt-slot.tsx` | Places the composer |
 | `ui/chat/composer.tsx` | Prompt, Enter, slash menu, attachments. Empty Enter during a turn calls `sendQueueEntryNow` |
-| `ui/chat/composer/` | Slash host, attachment hook, `@` file search hook |
+| `ui/chat/composer/` | Slash host, attachment hook, `@` file search hook (drops its walk when the workspace folder changes) |
 | `ui/chat/slash-commands.ts` | Client slash entries |
 | `ui/chat/model-picker.tsx` | Saved models only. Catalog metadata comes from `state/catalog.ts` |
 | `ui/chat/queue-bar.tsx` | Queued rows. **Send now** calls `sendQueueEntryNow` for that row |
