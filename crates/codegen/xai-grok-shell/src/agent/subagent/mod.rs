@@ -1565,6 +1565,7 @@ fn resolve_agent_definition(
         subagent_type,
         &resolution_context,
     )?;
+    crate::session::prompt_overrides::apply_subagent_body_override(&mut def, Some(&ctx.parent_cwd));
     ctx.apply_session_cli_overrides(&mut def);
     Some(def)
 }

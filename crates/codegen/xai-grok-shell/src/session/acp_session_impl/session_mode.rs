@@ -202,13 +202,19 @@ impl SessionActor {
                 enabled = false,
             );
         }
-        let agent_def = match session_mode_id.0.as_ref() {
+        let mut agent_def = match session_mode_id.0.as_ref() {
             "browser_use" => Some(AgentDefinition::browser_use()),
             name => {
                 let cwd = self.tool_context.cwd.as_path();
                 xai_grok_agent::discovery::by_name_in_cwd(name, cwd)
             }
         };
+        if let Some(def) = agent_def.as_mut() {
+            crate::session::prompt_overrides::apply_subagent_body_override(
+                def,
+                Some(self.tool_context.cwd.as_path()),
+            );
+        }
         if let Some(ref def) = agent_def {
             tracing::info!(
                 session_id = %self.session_info.id.0,
@@ -313,7 +319,7 @@ impl SessionActor {
                 crate::session::plan_mode::plan_file_has_content(&plan_path).await;
             let template = self.plan_activation_template(is_reentry);
             if let Some(rendered) = self
-                .render_plan_template(template, &plan_path, plan_has_content)
+                .render_plan_template(&template, &plan_path, plan_has_content)
                 .await
             {
                 push_reminder(self, &rendered);
@@ -342,12 +348,12 @@ impl SessionActor {
                 let plan_has_content =
                     crate::session::plan_mode::plan_file_has_content(&plan_path).await;
                 let template = if use_full {
-                    plan_mode_reminder_full_template()
+                    self.plan_template("plan/full.md", plan_mode_reminder_full_template())
                 } else {
-                    plan_mode_reminder_sparse_template()
+                    self.plan_template("plan/sparse.md", plan_mode_reminder_sparse_template())
                 };
                 if let Some(rendered) = self
-                    .render_plan_template(template, &plan_path, plan_has_content)
+                    .render_plan_template(&template, &plan_path, plan_has_content)
                     .await
                 {
                     push_reminder(self, &rendered);
@@ -358,8 +364,11 @@ impl SessionActor {
         }
         if self.plan_mode.lock().has_pending_exit_reminder() {
             let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
-            let template = plan_mode_exit_reminder_template();
-            if let Some(rendered) = self.render_plan_template(template, &plan_path, false).await {
+            let template = self.plan_template("plan/exit.md", plan_mode_exit_reminder_template());
+            if let Some(rendered) = self
+                .render_plan_template(&template, &plan_path, false)
+                .await
+            {
                 push_reminder(self, &rendered);
             }
             self.plan_mode.lock().clear_pending_exit_reminder();
@@ -384,7 +393,7 @@ impl SessionActor {
         let plan_has_content = crate::session::plan_mode::plan_file_has_content(&plan_path).await;
         let template = self.plan_activation_template(is_reentry);
         let rendered = self
-            .render_plan_template(template, &plan_path, plan_has_content)
+            .render_plan_template(&template, &plan_path, plan_has_content)
             .await;
         let tag = self.reminder_wrapper_tag();
         let buffered = rendered.is_some();
@@ -425,16 +434,27 @@ impl SessionActor {
             .update_resource(xai_grok_tools::types::resources::PlanFilePath(plan_path))
             .await;
     }
+    /// Plan-mode template text: the user's override under `<cook home>/prompts/` (or the project's
+    /// `.grok/prompts/`) when present, otherwise the compiled default. One trailing newline is
+    /// dropped so an editor's final newline does not change the reminder.
+    pub(super) fn plan_template(&self, relative: &str, default: &str) -> String {
+        let text = crate::session::prompt_overrides::resolve(
+            relative,
+            default,
+            Some(self.tool_context.cwd.as_path()),
+        );
+        crate::session::prompt_overrides::trim_template_newline(&text).to_string()
+    }
     /// The activation reminder template for the active template (no first-entry/reentry distinction), or grok's reentry/full variant.
     /// Shared by turn-start injection (`inject_plan_mode_reminders` case 1) and the mid-turn toggle (`activate_plan_mode_mid_turn`).
-    fn plan_activation_template(&self, is_reentry: bool) -> &'static str {
+    fn plan_activation_template(&self, is_reentry: bool) -> String {
         use crate::session::plan_mode::{
             plan_mode_reentry_reminder_template, plan_mode_reminder_full_template,
         };
         if is_reentry {
-            plan_mode_reentry_reminder_template()
+            self.plan_template("plan/reentry.md", plan_mode_reentry_reminder_template())
         } else {
-            plan_mode_reminder_full_template()
+            self.plan_template("plan/full.md", plan_mode_reminder_full_template())
         }
     }
     /// Render a plan mode template via the tool bridge's `TemplateRenderer`.

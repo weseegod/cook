@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Cable, Cpu, Database, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
+import { Cable, Cpu, Database, FileText, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
 import { getConfigSecurity } from "../../acp/host";
@@ -16,6 +16,7 @@ import { ConnectorsPanel } from "./connectors";
 import { DataControlsPanel } from "./data-controls";
 import { MemoryPanel, ProjectInstructionsPanel, SkillsPanel } from "./context-panels";
 import { HooksPanel } from "./hooks-panel";
+import { PromptsPanel } from "./prompts-panel";
 import { ProvidersPanel } from "./providers";
 import { useTheme, type ThemePreference } from "../theme/theme";
 import { ConfirmDialog } from "../components/dialog";
@@ -26,7 +27,7 @@ import {
   useBooleanPref,
 } from "../preferences";
 
-export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "hooks" | "data" | "about";
+export type SettingsTab = "general" | "models" | "connectors" | "context" | "skills" | "prompts" | "hooks" | "data" | "about";
 type Tab = SettingsTab;
 
 const TABS: Array<{ id: Tab; label: string; description: string; icon: React.ReactNode }> = [
@@ -35,6 +36,7 @@ const TABS: Array<{ id: Tab; label: string; description: string; icon: React.Rea
   { id: "connectors", label: "Connectors", description: "MCP servers and their tools", icon: <Cable size={16} /> },
   { id: "context", label: "Memory & project", description: "Instructions and memory", icon: <Palette size={16} /> },
   { id: "skills", label: "Skills", description: "Enable or disable discovered skills", icon: <Sparkles size={16} /> },
+  { id: "prompts", label: "Prompts", description: "Edit the prompt templates Cook injects", icon: <FileText size={16} /> },
   { id: "hooks", label: "Hooks", description: "Lifecycle hooks and event log", icon: <Webhook size={16} /> },
   { id: "data", label: "Data Controls", description: "Stored data and erasure", icon: <Database size={16} /> },
   { id: "about", label: "About", description: "Let Cook details", icon: <Info size={16} /> },
@@ -181,6 +183,12 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
           {tab === "skills" && (
             <Section title="Skills and plugins" description="Enable skills discovered in this workspace." icon={<Sparkles size={15} />}>
               <SkillsPanel connected={connected} />
+            </Section>
+          )}
+
+          {tab === "prompts" && (
+            <Section title="Prompts" description="Edit the prompt templates the agent injects." icon={<FileText size={15} />}>
+              <PromptsPanel connected={connected} />
             </Section>
           )}
 

@@ -189,3 +189,57 @@ async fn midturn_reentry_after_delivery_buffers_no_duplicate_reminder() {
         })
         .await;
 }
+
+/// Removes an override file when the test ends, so a failing assertion cannot leave it behind for
+/// the next test in this process (the actor cwd is a shared `/tmp`).
+struct RemoveFileOnDrop(std::path::PathBuf);
+
+impl Drop for RemoveFileOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// A project override at `<cwd>/.cook/prompts/plan/full.md` replaces the compiled activation
+/// reminder text without a rebuild.
+#[tokio::test]
+async fn project_prompt_override_replaces_the_activation_reminder() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (actor, _gateway_rx) = build_actor().await;
+            fake_running_turn(&actor).await;
+
+            let override_path = actor
+                .tool_context
+                .cwd
+                .to_path_buf()
+                .join(".cook")
+                .join("prompts")
+                .join("plan")
+                .join("full.md");
+            std::fs::create_dir_all(override_path.parent().unwrap()).unwrap();
+            std::fs::write(&override_path, "OVERRIDE-MARKER: plan elsewhere.\n").unwrap();
+            let _cleanup = RemoveFileOnDrop(override_path);
+
+            actor
+                .handle_session_mode(acp::SessionModeId::new("plan"))
+                .await;
+            actor.flush_pending_skill_reminders().await;
+
+            let conv = actor.chat_state_handle.get_conversation().await;
+            let text = conv
+                .first()
+                .expect("expected the activation reminder in the conversation")
+                .text_content();
+            assert!(
+                text.contains("OVERRIDE-MARKER"),
+                "override file must supply the reminder text: {text}"
+            );
+            assert!(
+                !text.contains("## Plan format"),
+                "compiled default must not be injected when an override exists: {text}"
+            );
+        })
+        .await;
+}

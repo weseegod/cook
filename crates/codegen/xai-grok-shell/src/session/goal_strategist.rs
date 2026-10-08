@@ -33,7 +33,7 @@ const GOAL_STRATEGIST_SUBAGENT_TYPE: &str = GOAL_ROLE_SUBAGENT_TYPE;
 /// Description shown in the pager subagent strip and matched by the e2e coordinator stub to distinguish strategist spawns from skeptics.
 pub(crate) const GOAL_STRATEGIST_SUBAGENT_DESCRIPTION: &str = "goal strategist";
 
-const GOAL_STRATEGIST_PROMPT_TEMPLATE: &str = include_str!("templates/goal_strategist_prompt.md");
+pub(crate) const GOAL_STRATEGIST_PROMPT_TEMPLATE: &str = include_str!("../../../../../prompts/goal/goal_strategist_prompt.md");
 
 /// Cap (in `char`s, not bytes) on the recommendation snippet read back from the strategy note and inlined into the continuation directive.
 /// Truncation is on a `char` boundary, so the cap is UTF-8-safe but a multibyte note can exceed this many bytes.
@@ -263,7 +263,11 @@ pub(crate) async fn run_goal_strategist(
     let plan_file_str = inputs.plan_file.to_string_lossy();
     let traces_dir_str = inputs.session_traces_dir.to_string_lossy();
     let scratch_root_str = inputs.scratch_root.to_string_lossy();
-    let with_paths = GOAL_STRATEGIST_PROMPT_TEMPLATE
+    let with_paths = crate::session::prompt_overrides::resolve(
+        "goal/goal_strategist_prompt.md",
+        GOAL_STRATEGIST_PROMPT_TEMPLATE,
+        None,
+    )
         .replace("{STRATEGY_FILE}", &strategy_file_str)
         .replace("{PLAN_FILE}", &plan_file_str)
         .replace("{SESSION_TRACES_DIR}", &traces_dir_str)

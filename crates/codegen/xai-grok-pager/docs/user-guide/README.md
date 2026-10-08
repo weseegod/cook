@@ -28,6 +28,7 @@ terminal-only shortcuts and commands are labeled as such. See
 | [Custom Models](11-custom-models.md) | Connect API-compatible services and self-hosted models. |
 | [Project Rules](12-project-rules.md) | Add `AGENTS.md` instructions for a project or directory. |
 | [Memory](13-memory.md) | Save and find useful information across sessions. |
+| [Prompts](31-prompts.md) | Override the prompt templates Cook injects, and reset them. |
 
 ## Workflows and reference
 

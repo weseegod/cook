@@ -858,6 +858,65 @@
   overflow-wrap: anywhere;
 }
 
+/* Settings → Prompts: one row per editable prompt template. */
+.prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.prompt-list > li {
+  border: 1px solid var(--settings-border);
+  border-radius: 8px;
+  background: var(--settings-card-bg);
+  min-width: 0;
+}
+
+.prompt-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: none;
+  color: var(--settings-text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.prompt-row code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-row:hover code {
+  color: var(--accent);
+}
+
+.prompt-row:focus-visible {
+  outline: 2px solid var(--focus-border);
+  outline-offset: 2px;
+}
+
+.prompt-state {
+  flex: none;
+  color: var(--settings-muted);
+  font-size: 12px;
+}
+
+.prompt-state-modified {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* The viewer's buttons ride in the dialog footer, so they carry no body gap of their own. */
 .skill-viewer-actions {
   display: flex;

@@ -177,6 +177,7 @@ raw drawing and theme changes there; screen behavior belongs in
 | Change compaction | `xai-grok-shell/src/session/compaction*.rs`, `two_pass.rs`, `session/helpers/`, and `xai-grok-compaction` |
 | Change goal orchestration | `xai-grok-shell/src/session/goal_*.rs` and `goal_classifier/` |
 | Change the plan checklist or a working-plan save | `xai-grok-shell/src/session/plan_mode.rs`, `plan_contract.rs`, `working_plan.rs`, and `xai-grok-tools/src/implementations/grok_build/working_plan.rs`. Procedure: `docs/core-agent-flow-and-token-optimization.md`. |
+| Change a prompt template the agent injects | Author the default under `prompts/` (compiled in via `include_str!`); the loader and override precedence live in `xai-grok-shell/src/session/prompt_overrides.rs`, and the Settings → Prompts wire surface in `xai-grok-shell/src/extensions/prompts.rs`. |
 | Change subagents | `xai-grok-shell/src/agent/subagent/` and `xai-grok-subagent-resolution/` |
 | Change workflow execution or scripts | `xai-grok-shell/src/session/workflow/` and `src/session/workflows/` |
 | Add or change a tool | `xai-grok-tools/src/implementations/`, then update `src/registry/types.rs` and tool metadata as needed |
@@ -215,6 +216,7 @@ the workspace and is separate from the user home.
 | `config.toml` | User config (model, keys, agents, permissions, UI). |
 | `skills.toml` | User skill discovery paths, exclusions, and disabled names. |
 | `skills/` | User skill directories. The installer fills defaults that are still missing from the release archive and writes `skills.toml` only on first install. It does not reset an existing `skills.toml`. |
+| `prompts/` | User copies of model-facing prompt templates, mirroring the relative layout of the repository's `prompts/`. A copy overrides the default compiled into the binary; `manifest.json` holds the defaults' SHA-256 checksums, drives the Modified/Unmodified state, and lets Reset write the shipped text back. Project scope is `<workspace>/.cook/prompts/` and outranks this directory. Settings → Prompts edits these files. |
 | `managed_config.toml`, `requirements.toml` | Higher-priority config layers merged by `xai-grok-config` (managed > user > signed requirements > MDM). |
 | `auth.json` / credentials | Auth tokens (`xai-grok-auth`); MCP credentials in `mcp_credentials.json` (`xai-grok-mcp`). |
 | `bin/cook` | Managed entry point for the CLI. Normally a symlink to the versioned file in `downloads/` (`../downloads/cook-<version>-<platform>`). If a regular file occupies this path (older curl installs), the self-updater moves it aside and replaces it with that symlink. |
@@ -236,6 +238,10 @@ Repository conventions:
   `[workspace]`. Do not add it to the generated root workspace or make it
   depend directly on shell, pager, or tools crates. Desktop behavior belongs
   in the ACP client and its host boundary.
+- Model-facing prompt defaults live in `prompts/` at the repository root and are
+  compiled into the shell with `include_str!`. Changing a default means editing
+  that file and rebuilding; users override one at runtime by copying it under
+  `~/.cook/prompts/` (or `<workspace>/.cook/prompts/`).
 - Unit tests generally live beside the implementation; integration and
   snapshot tests live in crate test directories.
 

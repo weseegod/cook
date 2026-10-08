@@ -237,6 +237,54 @@ export function listPlugins(sessionId?: string) {
   );
 }
 
+/** `x.ai/prompts/*`: the user-editable copies of the shell's model-facing prompt templates. */
+export type PromptState = "absent" | "unmodified" | "modified";
+
+export interface PromptEntryView {
+  /** Path relative to the prompts root, e.g. `plan/full.md`. */
+  relative: string;
+  /** Absolute path of the user's copy, whether or not it exists yet. */
+  path: string;
+  state: PromptState;
+}
+
+export interface PromptList {
+  /** The prompts root these paths live under (`<cook home>/prompts`). */
+  root: string;
+  prompts: PromptEntryView[];
+}
+
+export interface PromptContent {
+  relative: string;
+  path: string;
+  state: PromptState;
+  /** The user's copy; `null` when none exists yet. */
+  content: string | null;
+  /** The compiled default, for showing and seeding a first edit. */
+  default: string;
+}
+
+export interface PromptWriteResult {
+  relative: string;
+  state: PromptState;
+}
+
+export function listPrompts() {
+  return request<PromptList>("x.ai/prompts/list");
+}
+
+export function readPrompt(relative: string) {
+  return request<PromptContent>("x.ai/prompts/read", { relative });
+}
+
+export function writePrompt(relative: string, content: string) {
+  return request<PromptWriteResult>("x.ai/prompts/write", { relative, content });
+}
+
+export function restorePrompt(relative: string) {
+  return request<PromptWriteResult>("x.ai/prompts/restore", { relative });
+}
+
 export function flushMemory(sessionId: string) {
   return request<Record<string, unknown>>("x.ai/memory/flush", { session_id: sessionId });
 }
@@ -245,7 +293,6 @@ export function flushMemory(sessionId: string) {
 export const PROJECT_FILES = [
   { path: "AGENTS.md", label: "AGENTS.md", description: "Project instructions the agent reads on every turn" },
   { path: ".cook/rules.md", label: ".cook/rules.md", description: "Fork-local rules for this workspace" },
-  { path: ".thanh/rules.md", label: ".thanh/rules.md", description: "Legacy fork-local rules (one release)" },
   { path: "CLAUDE.md", label: "CLAUDE.md", description: "Imported Claude project instructions" },
 ];
 

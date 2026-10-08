@@ -4137,11 +4137,11 @@ impl SessionActor {
     /// Rendered via the session's `TemplateRenderer` so `${{ plan_path }}` resolves; falls back if rendering fails.
     pub(super) async fn plan_mode_edit_rejected_message(&self) -> String {
         let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
-        self.render_plan_template(
+        let template = self.plan_template(
+            "plan/edit-rejected.md",
             crate::session::plan_mode::plan_mode_edit_rejected_template(),
-            &plan_path,
-            false,
-        )
+        );
+        self.render_plan_template(&template, &plan_path, false)
         .await
         .unwrap_or_else(|| {
             format!(

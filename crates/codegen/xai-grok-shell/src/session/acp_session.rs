@@ -331,20 +331,20 @@ struct GoalToolNames {
 /// Shared body of the goal-mode system reminder.
 /// Used by both `setup_goal` (initial `/goal <objective>`) and `resume_goal` (`/goal resume`).
 /// Placeholders are uppercase to avoid collision with the literal `{...}` content in the prompt.
-pub(super) const GOAL_TASK_DISCIPLINE_TEMPLATE: &str =
-    include_str!("templates/goal_task_discipline.md");
-pub(super) const GOAL_RULES_TEMPLATE: &str = include_str!("templates/goal_rules.md");
-pub(super) const GOAL_RULES_TEMPLATE_LEGACY: &str = include_str!("templates/goal_rules_legacy.md");
+pub(crate) const GOAL_TASK_DISCIPLINE_TEMPLATE: &str =
+    include_str!("../../../../../prompts/goal/goal_task_discipline.md");
+pub(crate) const GOAL_RULES_TEMPLATE: &str = include_str!("../../../../../prompts/goal/goal_rules.md");
+pub(crate) const GOAL_RULES_TEMPLATE_LEGACY: &str = include_str!("../../../../../prompts/goal/goal_rules_legacy.md");
 /// Plan-aware preamble folded into the goal-rules block when the planner is enabled and a plan exists.
 /// Empty on the legacy path.
-const GOAL_PLAN_BLOCK_TEMPLATE: &str = include_str!("templates/goal_plan_block.md");
+pub(crate) const GOAL_PLAN_BLOCK_TEMPLATE: &str = include_str!("../../../../../prompts/goal/goal_plan_block.md");
 /// Placeholders are lowercase because the template carries no literal JSON-ish `{...}` content that would collide.
 /// (`goal_rules.md` keeps uppercase placeholders because it embeds verbatim user prose that may contain `{...}`.).
 /// A `/goal … --budget N` cap IS enforced at the turn-end continuation gate (terminal `BudgetLimited`).
-pub(super) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE: &str =
-    include_str!("templates/goal_continuation_directive.md");
-pub(super) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY: &str =
-    include_str!("templates/goal_continuation_directive_legacy.md");
+pub(crate) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE: &str =
+    include_str!("../../../../../prompts/goal/goal_continuation_directive.md");
+pub(crate) const GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY: &str =
+    include_str!("../../../../../prompts/goal/goal_continuation_directive_legacy.md");
 /// Compact can run mid-turn (`run_compact_only` / CompactAndResubmit); those
 /// callers must not inherit TurnEnd drain, `rounds_since_verify++`, or budget stop.
 enum GoalContinuationPurpose {

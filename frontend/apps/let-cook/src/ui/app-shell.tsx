@@ -30,7 +30,7 @@ const SettingsPanel = lazy(() => import("./settings/settings-panel").then(({ Set
 const DISMISSED_KEY = "cook.connectProviderDismissed";
 const NOTICE_TIMEOUT_MS = 3_000;
 const MIN_CHAT_WIDTH_WITH_TOOLS = 600;
-const SETTINGS_TABS = new Set<SettingsTab>(["general", "models", "connectors", "context", "skills", "hooks", "about"]);
+const SETTINGS_TABS = new Set<SettingsTab>(["general", "models", "connectors", "context", "skills", "prompts", "hooks", "about"]);
 
 function isSettingsTab(value: string): value is SettingsTab {
   return SETTINGS_TABS.has(value as SettingsTab);

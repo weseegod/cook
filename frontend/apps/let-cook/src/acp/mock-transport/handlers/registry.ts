@@ -1,5 +1,6 @@
 import { mcpHandlers } from "./mcp";
 import { planHandlers } from "./plans";
+import { promptHandlers } from "./prompts";
 import { sessionHandlers } from "./sessions";
 import { settingsHandlers } from "./settings";
 import { taskHandlers } from "./tasks";
@@ -17,6 +18,7 @@ export type MethodHandler = (ctx: HandlerContext) => unknown | Promise<unknown>;
 const handlers: Record<string, MethodHandler> = {
   ...sessionHandlers,
   ...planHandlers,
+  ...promptHandlers,
   ...settingsHandlers,
   ...mcpHandlers,
   ...taskHandlers,

@@ -137,7 +137,7 @@ const GOAL_PLANNER_SUBAGENT_TYPE: &str = GOAL_ROLE_SUBAGENT_TYPE;
 
 const GOAL_PLANNER_SUBAGENT_DESCRIPTION: &str = "goal plan writer";
 
-const GOAL_PLANNER_PROMPT_TEMPLATE: &str = include_str!("templates/goal_planner_prompt.md");
+pub(crate) const GOAL_PLANNER_PROMPT_TEMPLATE: &str = include_str!("../../../../../prompts/goal/goal_planner_prompt.md");
 
 // Outcome and spawner abstraction
 
@@ -383,7 +383,12 @@ pub(crate) async fn run_goal_planner(
     }
 
     let plan_file_str = inputs.plan_file.to_string_lossy();
-    let with_plan_file = GOAL_PLANNER_PROMPT_TEMPLATE.replace("{PLAN_FILE}", &plan_file_str);
+    let with_plan_file = crate::session::prompt_overrides::resolve(
+        "goal/goal_planner_prompt.md",
+        GOAL_PLANNER_PROMPT_TEMPLATE,
+        None,
+    )
+    .replace("{PLAN_FILE}", &plan_file_str);
     // Render once per toolset: `primary` for the resolved toolset, `fallback` for the default/parent toolset the explicit-pair retry falls back to
     let render = |tool_names: &RoleToolNames| -> String {
         let rendered = tool_names.apply(&with_plan_file);

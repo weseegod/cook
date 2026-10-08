@@ -209,6 +209,12 @@ export interface MockState {
   promptDelayMs: number;
   /** Agent-side project instruction files keyed by path. */
   files: Record<string, string>;
+  /** Prompts root the mock reports for `x.ai/prompts/list`. */
+  promptRoot: string;
+  /** User copies of prompt templates keyed by relative path; absent means "no copy". */
+  promptFiles: Record<string, string>;
+  /** Compiled defaults keyed by relative path, as `x.ai/prompts/read` returns them. */
+  promptDefaults: Record<string, string>;
   /** Paths the native attachment picker returns; empty means "no native picker here". */
   pickedFiles: string[];
   /** Folder the native folder picker returns; unset means the default demo workspace. */

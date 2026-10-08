@@ -2351,6 +2351,9 @@ impl acp::Agent for MvpAgent {
             s if s.starts_with("x.ai/bundle/") => {
                 crate::extensions::bundle::handle(self, &args).await
             }
+            s if s.starts_with("x.ai/prompts/") => {
+                crate::extensions::prompts::handle(&args).await
+            }
             s if s.starts_with("x.ai/code/") => {
                 let ops = self.resolve_workspace_ops()?;
                 crate::extensions::code_nav::handle(self, &ops, &args).await

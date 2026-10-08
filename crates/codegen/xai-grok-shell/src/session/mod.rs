@@ -563,6 +563,7 @@ pub use xai_grok_shared::placeholder_images;
 pub(crate) mod commit_plan;
 pub(crate) mod plan_contract;
 pub mod plan_mode;
+pub(crate) mod prompt_overrides;
 pub mod prompt_history;
 pub mod prompt_parser;
 pub(crate) mod prompt_timing;

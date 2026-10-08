@@ -367,6 +367,8 @@ sends the TUI `x.ai/queue/*` notifications for existing rows.
 | C-mkt | `x.ai/marketplace/list` / `action` | `/marketplace` | — | `gap` | surface |
 | C-hk-list | `x.ai/hooks/list` | `/hooks` | — | `gap` | surface |
 | C-hk-act | `x.ai/hooks/action` | modal | — | `gap` | surface |
+| C-pr-list | `x.ai/prompts/list` | — (edit files under `~/.cook/prompts/` directly) | Settings Prompts list with Modified / No copy / Unmodified state | `ok` | surface |
+| C-pr-edit | `x.ai/prompts/read` + `x.ai/prompts/write` + `x.ai/prompts/restore` | — | Settings Prompts: open a template, Edit and Save the user's copy under `~/.cook/prompts/`, Reset to restore the shipped default byte for byte | `ok` | surface |
 
 ### 5.6 MCP prefix (`x.ai/mcp/*`)
 

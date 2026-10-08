@@ -30,7 +30,7 @@ const GOAL_SUMMARIZER_SUBAGENT_TYPE: &str = GOAL_ROLE_SUBAGENT_TYPE;
 /// Description shown in the pager subagent strip and matched by the e2e coordinator stub to distinguish summarizer spawns from other roles.
 pub(crate) const GOAL_SUMMARIZER_SUBAGENT_DESCRIPTION: &str = "goal summarizer";
 
-const GOAL_SUMMARIZER_PROMPT_TEMPLATE: &str = include_str!("templates/goal_summarizer_prompt.md");
+pub(crate) const GOAL_SUMMARIZER_PROMPT_TEMPLATE: &str = include_str!("../../../../../prompts/goal/goal_summarizer_prompt.md");
 
 /// Hard backstop on the surfaced summary length, in chars (`chars().take` is char-boundary-safe).
 /// Sits well above a compliant summary; it only clips a model that ignores the prompt's word cap.
@@ -226,7 +226,11 @@ pub(crate) async fn run_goal_summarizer(
     let plan_file_str = inputs.plan_file.to_string_lossy();
     let details_str = inputs.details_file.unwrap_or("(unavailable)");
     let traces_dir_str = inputs.session_traces_dir.to_string_lossy();
-    let with_paths = GOAL_SUMMARIZER_PROMPT_TEMPLATE
+    let with_paths = crate::session::prompt_overrides::resolve(
+        "goal/goal_summarizer_prompt.md",
+        GOAL_SUMMARIZER_PROMPT_TEMPLATE,
+        None,
+    )
         .replace("{PLAN_FILE}", &plan_file_str)
         .replace("{DETAILS_FILE}", details_str)
         .replace("{SESSION_TRACES_DIR}", &traces_dir_str);

@@ -70,7 +70,7 @@ const GOAL_CLASSIFIER_SUBAGENT_TYPE: &str = GOAL_ROLE_SUBAGENT_TYPE;
 /// A stable label reads more cleanly in the strip than a per-spawn suffix.
 const GOAL_CLASSIFIER_SUBAGENT_DESCRIPTION: &str = "goal achievement skeptic";
 
-const GOAL_VERIFIER_PROMPT_TEMPLATE: &str = include_str!("templates/goal_verifier_prompt.md");
+pub(crate) const GOAL_VERIFIER_PROMPT_TEMPLATE: &str = include_str!("../../../../../prompts/goal/goal_verifier_prompt.md");
 
 /// Override via `GROK_GOAL_VERIFIER_N` (clamped 1..=5) or the remote `goal_verifier_count` setting.
 /// A lone outlier in either direction (one rubber-stamp or one false refute) cannot decide the outcome.
@@ -1104,21 +1104,24 @@ pub(crate) fn parse_goal_kind(plan: &str) -> Option<GoalKind> {
 
 /// `code-change` review lens: adversarial code review layered on the acceptance criteria, hunting real defects, fake tests, and cheating.
 /// Leading `\n` so `{KIND_LENS}` splices as a blank-line-bounded section.
+pub(crate) const KIND_LENS_CODE_CHANGE_BODY: &str = include_str!("../../../../../prompts/goal/goal_verifier_kind_lens_code_change.md");
 const KIND_LENS_CODE_CHANGE: &str = concat!(
     "\n",
-    include_str!("templates/goal_verifier_kind_lens_code_change.md")
+    include_str!("../../../../../prompts/goal/goal_verifier_kind_lens_code_change.md")
 );
 
 /// `research` fact-check lens: verify every claim against its cited source.
+pub(crate) const KIND_LENS_RESEARCH_BODY: &str = include_str!("../../../../../prompts/goal/goal_verifier_kind_lens_research.md");
 const KIND_LENS_RESEARCH: &str = concat!(
     "\n",
-    include_str!("templates/goal_verifier_kind_lens_research.md")
+    include_str!("../../../../../prompts/goal/goal_verifier_kind_lens_research.md")
 );
 
 /// `analysis` soundness lens: conclusions must be grounded in evidence and follow from it.
+pub(crate) const KIND_LENS_ANALYSIS_BODY: &str = include_str!("../../../../../prompts/goal/goal_verifier_kind_lens_analysis.md");
 const KIND_LENS_ANALYSIS: &str = concat!(
     "\n",
-    include_str!("templates/goal_verifier_kind_lens_analysis.md")
+    include_str!("../../../../../prompts/goal/goal_verifier_kind_lens_analysis.md")
 );
 
 /// The review-lens block for `kind` (empty string for `None`, the generic verifier).
@@ -1131,11 +1134,38 @@ fn kind_lens(kind: Option<GoalKind>) -> &'static str {
     }
 }
 
+/// [`kind_lens`] with a user override under `<cook home>/prompts/goal/` applied.
+///
+/// The compiled constants carry a leading `\n` so `{KIND_LENS}` splices as a blank-line-bounded
+/// section; this keeps that blank line in front of either source.
+fn kind_lens_with_overrides(kind: Option<GoalKind>) -> String {
+    let Some((relative, default)) = kind.map(|kind| match kind {
+        GoalKind::CodeChange => (
+            "goal/goal_verifier_kind_lens_code_change.md",
+            KIND_LENS_CODE_CHANGE_BODY,
+        ),
+        GoalKind::Research => (
+            "goal/goal_verifier_kind_lens_research.md",
+            KIND_LENS_RESEARCH_BODY,
+        ),
+        GoalKind::Analysis => (
+            "goal/goal_verifier_kind_lens_analysis.md",
+            KIND_LENS_ANALYSIS_BODY,
+        ),
+    }) else {
+        return String::new();
+    };
+    format!(
+        "\n{}",
+        crate::session::prompt_overrides::resolve(relative, default, None)
+    )
+}
+
 /// Prompt for skeptic 0 when it is RESUMED across attempts; it already carries its prior transcript and the gaps it flagged.
 /// It must re-read the changed files (its cached reads are stale after the agent's further edits).
 /// It confirms each prior gap is genuinely fixed in the CURRENT files with no regression and emits the same verdict-file and terminal-token contract.
-const GOAL_VERIFIER_RESUME_PROMPT_TEMPLATE: &str =
-    include_str!("templates/goal_verifier_resume_prompt.md");
+pub(crate) const GOAL_VERIFIER_RESUME_PROMPT_TEMPLATE: &str =
+    include_str!("../../../../../prompts/goal/goal_verifier_resume_prompt.md");
 
 /// Wrap the evidence packet (OBJECTIVE / CHANGES_FILE / PLAN_FILE / FINAL_RESPONSE) in `template`.
 /// Substitutes the kind-specific review lens into `{KIND_LENS}` and the runner-allocated output paths into `{DETAILS_FILE}` / `{VERDICT_FILE}`.
@@ -1213,7 +1243,11 @@ fn render_skeptic_prompt(
     scratch_ready: bool,
 ) -> String {
     render_verifier_prompt(
-        GOAL_VERIFIER_PROMPT_TEMPLATE,
+        &crate::session::prompt_overrides::resolve(
+            "goal/goal_verifier_prompt.md",
+            GOAL_VERIFIER_PROMPT_TEMPLATE,
+            None,
+        ),
         objective,
         changes_ref,
         changed_files,
@@ -1250,7 +1284,11 @@ fn render_skeptic_resume_prompt(
     scratch_ready: bool,
 ) -> String {
     render_verifier_prompt(
-        GOAL_VERIFIER_RESUME_PROMPT_TEMPLATE,
+        &crate::session::prompt_overrides::resolve(
+            "goal/goal_verifier_resume_prompt.md",
+            GOAL_VERIFIER_RESUME_PROMPT_TEMPLATE,
+            None,
+        ),
         objective,
         changes_ref,
         changed_files,
@@ -1717,7 +1755,7 @@ pub(crate) async fn run_verification_stage(
             .and_then(|body| parse_goal_kind(&body)),
         None => None,
     };
-    let kind_lens = kind_lens(goal_kind);
+    let kind_lens = kind_lens_with_overrides(goal_kind);
 
     let implementer_scratch = inputs.implementer_scratch_dir.to_string_lossy();
 
@@ -1741,7 +1779,7 @@ pub(crate) async fn run_verification_stage(
         changed_files: &changed_files,
         verifier_id: inputs.verifier_id,
         attempt: inputs.attempt,
-        kind_lens,
+        kind_lens: &kind_lens,
         implementer_scratch: implementer_scratch.as_ref(),
         scratch_dir_ready: inputs.scratch_dir_ready,
         prior_gaps: inputs.prior_gaps,

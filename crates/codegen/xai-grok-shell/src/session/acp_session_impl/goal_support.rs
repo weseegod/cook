@@ -179,10 +179,18 @@ pub(super) enum GoalSetupOutcome {
     Message(String),
 }
 
+/// Goal template text: the user's copy under `<cook home>/prompts/` when present, otherwise the
+/// compiled default. These renderers are free functions with no session workspace root, so the
+/// project `.grok/prompts/` scope is not consulted here (see `session::prompt_overrides`).
+fn goal_template(relative: &str, default: &str) -> String {
+    crate::session::prompt_overrides::resolve(relative, default, None)
+}
+
 /// Goal-only `<task_completion_discipline>` (Rules 1-4); `{TODO_TOOL}` from [`GoalToolNames`].
 /// Template must end with `\n` so `{DISCIPLINE_BLOCK}TRACKING:` glues correctly.
 pub(super) fn render_goal_task_discipline(names: &GoalToolNames) -> String {
-    GOAL_TASK_DISCIPLINE_TEMPLATE.replace("{TODO_TOOL}", &names.todo)
+    goal_template("goal/goal_task_discipline.md", GOAL_TASK_DISCIPLINE_TEMPLATE)
+        .replace("{TODO_TOOL}", &names.todo)
 }
 
 fn expand_run_checks(text: String) -> String {
@@ -204,7 +212,7 @@ pub(super) fn render_goal_plan_block(plan_path: &std::path::Path, names: &GoalTo
     );
     // Column-0 single-line `Plan: <abs>` contract; see the fn docs
     expand_run_checks(
-        GOAL_PLAN_BLOCK_TEMPLATE
+        goal_template("goal/goal_plan_block.md", GOAL_PLAN_BLOCK_TEMPLATE)
             .replace("{PLAN_PATH}", &plan_path.display().to_string())
             .replace("{TODO_TOOL}", &names.todo),
     )
@@ -271,7 +279,7 @@ pub(super) fn render_goal_rules(
         None => String::new(),
     };
     expand_run_checks(
-        GOAL_RULES_TEMPLATE
+        goal_template("goal/goal_rules.md", GOAL_RULES_TEMPLATE)
             .replace("{OBJECTIVE}", objective)
             .replace("{TASK_TOOL}", &names.task)
             .replace("{TODO_TOOL}", &names.todo)
@@ -309,7 +317,7 @@ pub(super) fn render_goal_rules_legacy(
         None => String::new(),
     };
     expand_run_checks(
-        GOAL_RULES_TEMPLATE_LEGACY
+        goal_template("goal/goal_rules_legacy.md", GOAL_RULES_TEMPLATE_LEGACY)
             .replace("{OBJECTIVE}", objective)
             .replace("{GOAL_TOOL}", &names.goal)
             .replace("{TASK_TOOL}", &names.task)
@@ -412,7 +420,10 @@ pub(super) fn render_goal_continuation_directive(
     let strategist_note = neutralize_directive_slot(strategist_note);
     let next_step = neutralize_directive_slot(next_step);
     expand_run_checks(
-        GOAL_CONTINUATION_DIRECTIVE_TEMPLATE
+        goal_template(
+            "goal/goal_continuation_directive.md",
+            GOAL_CONTINUATION_DIRECTIVE_TEMPLATE,
+        )
             .replace("{objective}", objective)
             .replace("{tokens}", &tokens.to_string())
             .replace("{elapsed}", elapsed)
@@ -463,7 +474,10 @@ pub(super) fn render_goal_continuation_directive_legacy(
     let strategist_note = neutralize_directive_slot(strategist_note);
     let next_step = neutralize_directive_slot(next_step);
     expand_run_checks(
-        GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY
+        goal_template(
+            "goal/goal_continuation_directive_legacy.md",
+            GOAL_CONTINUATION_DIRECTIVE_TEMPLATE_LEGACY,
+        )
             .replace("{objective}", objective)
             .replace("{tokens}", &tokens.to_string())
             .replace("{elapsed}", elapsed)
