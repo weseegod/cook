@@ -3,7 +3,8 @@ import { isTerminalToolStatus } from "./transcript-projection";
 
 /**
  * Eagerly folded kinds, from `scrollback/blocks/tool/mod.rs::verb_group_kind`.
- * Command / EditFile / McpCall / Message / OtherTool are *not* here: they keep their own rows and
+ * Command is the agent's shell (`bash_mode` off); a user `!` command keeps its own row.
+ * EditFile / McpCall / Message / OtherTool are *not* here: they keep their own rows and
  * only ever appear in a truncation header, never in a verb run.
  */
 export type VerbKind =
@@ -15,7 +16,8 @@ export type VerbKind =
   | "websearch"
   | "memory"
   | "mcpsearch"
-  | "subagent";
+  | "subagent"
+  | "command";
 
 interface Vocabulary {
   running: string;
@@ -34,6 +36,7 @@ const VOCABULARY: Record<VerbKind, Vocabulary> = {
   memory: { running: "Searching", done: "Searched", one: "memory", many: "memories" },
   mcpsearch: { running: "Searching", done: "Searched", one: "MCP tool", many: "MCP tools" },
   subagent: { running: "Running", done: "Ran", one: "subagent", many: "subagents" },
+  command: { running: "Running", done: "Ran", one: "command", many: "commands" },
 };
 
 /** The foldable kind of a tool call, or `null` when it keeps its own row. */
@@ -49,6 +52,8 @@ export function verbKind(tool: ToolBlock): VerbKind | null {
   if (/^list\b/i.test(title) || kind === "list" || ["list", "list_dir", "list_directory"].includes(kind)) return "dir";
   if (/^search\b/i.test(title) || kind === "search" || ["search", "grep", "glob"].includes(kind)) return "search";
   if (/^read\b/i.test(title) || kind === "read") return "file";
+  // Agent shell joins the run; a user `!` command (`bashMode`) keeps its own row.
+  if (kind === "execute" || /^(bash|shell|run|execute)\b/i.test(title)) return tool.bashMode ? null : "command";
   return null;
 }
 

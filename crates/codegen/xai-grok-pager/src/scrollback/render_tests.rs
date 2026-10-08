@@ -19,6 +19,23 @@ fn at_mut<'a, T>(xs: &'a mut [T], i: usize) -> &'a mut T {
         .unwrap_or_else(|| panic!("index {i} out of bounds, len={n}"))
 }
 
+/// A `Message` tool row: label-only and collapsed, so it truncation-folds ("Sent N messages") and never verb-folds.
+fn user_command(n: usize) -> RenderBlock {
+    use crate::scrollback::blocks::tool::{
+        SentMessageInput, SentMessagePresentation, SentMessageTarget, SentMessageToolCallBlock, ToolCallBlock,
+    };
+    RenderBlock::ToolCall(ToolCallBlock::SentMessage(SentMessageToolCallBlock::new(
+        SentMessagePresentation::Sent,
+        Some(SentMessageInput {
+            target: SentMessageTarget::Unresolved {
+                subagent_id: format!("sub-{n}"),
+            },
+            delivery: None,
+            text: format!("cmd{n}"),
+        }),
+    )))
+}
+
 fn make_entries(count: usize) -> Vec<ScrollbackEntry> {
     (0..count)
         .map(|i| ScrollbackEntry::new(RenderBlock::stub(format!("Entry {i}"), Color::Blue)))
@@ -537,7 +554,7 @@ fn windowed_paint_labels_truncation_header_on_last_viewport_row() {
     }
     let header = state.len();
     for i in 0..6 {
-        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+        state.push_block(user_command(i));
     }
     let viewport = Rect::new(0, 0, 80, 24);
     state.prepare_layout(viewport.width, viewport.height);
@@ -585,9 +602,39 @@ fn windowed_paint_labels_truncation_header_on_last_viewport_row() {
 
     let header_row = buffer_row_text(&buf, viewport.height - 1);
     assert!(
-        header_row.contains("Ran 3 commands"),
+        header_row.contains("Sent 3 messages"),
         "label must cover the full off-screen hidden prefix: {header_row:?}"
     );
+}
+
+/// Agent shell commands are verb-run members: six of them fold under one `Ran 6 commands` header
+/// instead of reaching the truncation ("N more") pass.
+#[test]
+fn agent_commands_fold_into_one_verb_header() {
+    use crate::scrollback::ScrollbackState;
+
+    crate::appearance::cache::set_group_tool_verbs(true);
+    crate::appearance::cache::set_show_thinking_blocks(false);
+    let mut state = ScrollbackState::new();
+    let mut appearance = AppearanceConfig::default();
+    appearance.scrollback.display.group_max_visible = 3;
+    state.set_appearance(appearance);
+    for i in 0..6 {
+        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+    }
+    let viewport = Rect::new(0, 0, 80, 24);
+    state.prepare_layout(viewport.width, viewport.height);
+
+    let layouts = state.get_cached_entry_layouts().expect("layout cache");
+    assert!(
+        at(layouts, 0).verb_group_header,
+        "six agent commands must fold as a verb run, not truncate"
+    );
+    assert_eq!(at(layouts, 0).group_header_count, 6);
+    assert_eq!(at(layouts, 0).height, 1, "the header is the only visible row");
+    for i in 1..6 {
+        assert_eq!(at(layouts, i).height, 0, "member {i} is hidden under the header");
+    }
 }
 
 /// A hidden thinking entry inside a folded run stays transparent through the whole production path.
@@ -914,7 +961,7 @@ fn truncation_header_renders_bucket_label_with_spans_and_plain_count_without() {
     appearance.scrollback.display.group_max_visible = 3;
     state.set_appearance(appearance);
     for i in 0..6 {
-        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+        state.push_block(user_command(i));
     }
     let viewport = Rect::new(0, 0, 80, 10);
     state.prepare_layout(viewport.width, viewport.height);
@@ -922,14 +969,14 @@ fn truncation_header_renders_bucket_label_with_spans_and_plain_count_without() {
     let layouts = state.get_cached_entry_layouts().expect("layout cache");
     assert!(
         !at(layouts, 0).verb_group_header,
-        "commands never verb-fold"
+        "a message row never verb-folds"
     );
     // 6 participants with max_visible 3 leave 3 hidden; the plain count shows one less while the label describes all 3 hidden participants
     assert_eq!(at(layouts, 0).group_header_count, 2);
 
     let labeled = truncation_header_row(&state, viewport, true);
     assert!(
-        labeled.contains("Ran 3 commands"),
+        labeled.contains("Sent 3 messages"),
         "spans feed the hidden-prefix bucket label: {labeled:?}"
     );
     let plain = truncation_header_row(&state, viewport, false);
@@ -980,7 +1027,7 @@ fn expanded_truncation_collapse_header_renders_whole_run_label() {
     appearance.scrollback.display.group_max_visible = 3;
     state.set_appearance(appearance);
     for i in 0..6 {
-        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+        state.push_block(user_command(i));
     }
     let viewport = Rect::new(0, 0, 80, 10);
     state.prepare_layout(viewport.width, viewport.height);
@@ -994,7 +1041,7 @@ fn expanded_truncation_collapse_header_renders_whole_run_label() {
 
     let labeled = truncation_header_row(&state, viewport, true);
     assert!(
-        labeled.contains("Ran 6 commands"),
+        labeled.contains("Sent 6 messages"),
         "expanded header must describe the whole run: {labeled:?}"
     );
     let plain = truncation_header_row(&state, viewport, false);
@@ -1040,7 +1087,7 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
     appearance.scrollback.display.group_max_visible = 3;
     state.set_appearance(appearance);
     for i in 0..6 {
-        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+        state.push_block(user_command(i));
     }
     let viewport = Rect::new(0, 0, 80, 10);
     state.prepare_layout(viewport.width, viewport.height);
@@ -1050,7 +1097,7 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
     let model = &result.selection_model;
     let header = model.range(0, GROUP_HEADER_RANGE_ID).expect("header range");
     assert_eq!(header.lines.len(), 1);
-    assert_eq!(at(&header.lines, 0).text, "Ran 3 commands");
+    assert_eq!(at(&header.lines, 0).text, "Sent 3 messages");
     assert_eq!(at(&header.lines, 0).screen_y, 0);
     // Pin the hitbox to the DRAWN glyphs, not just to the chrome helper
     // The frame's own cells must spell the label starting at screen_x, so a chrome edit that misaligned highlight from paint would fail here
@@ -1059,7 +1106,7 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
         .map(|x| buf.cell((x, 0)).map(|c| c.symbol()).unwrap_or(""))
         .collect();
     assert_eq!(
-        drawn, "Ran 3 commands",
+        drawn, "Sent 3 messages",
         "synthetic hitbox must start exactly where the drawn label starts"
     );
     let expected_x = HorizontalLayout::ACCENT
@@ -1071,7 +1118,7 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
     );
     let copy = reconstruct_selection_text(model, &full_row_drag(at(&header.lines, 0)))
         .expect("header copy");
-    assert_eq!(copy, "Ran 3 commands");
+    assert_eq!(copy, "Sent 3 messages");
 
     // Expanded: the collapse header describes the whole run and copies it.
     state.set_selected(Some(0));
@@ -1082,10 +1129,10 @@ fn labeled_truncation_header_synthetic_line_copies_label_text() {
     let header = model
         .range(0, GROUP_HEADER_RANGE_ID)
         .expect("expanded header range");
-    assert_eq!(at(&header.lines, 0).text, "Ran 6 commands");
+    assert_eq!(at(&header.lines, 0).text, "Sent 6 messages");
     let copy = reconstruct_selection_text(model, &full_row_drag(at(&header.lines, 0)))
         .expect("expanded header copy");
-    assert_eq!(copy, "Ran 6 commands");
+    assert_eq!(copy, "Sent 6 messages");
 }
 
 /// With the vocabulary gate off, a span-fed truncation header keeps the plain count AND stays non-copyable.
@@ -1101,7 +1148,7 @@ fn plain_count_truncation_header_contributes_no_selectable_line() {
     appearance.scrollback.display.group_max_visible = 3;
     state.set_appearance(appearance);
     for i in 0..6 {
-        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+        state.push_block(user_command(i));
     }
     let viewport = Rect::new(0, 0, 80, 10);
     state.prepare_layout(viewport.width, viewport.height);
@@ -1146,7 +1193,7 @@ fn verb_and_truncation_headers_share_one_label_channel() {
     state.push_block(RenderBlock::read("a.rs", None));
     state.push_block(RenderBlock::read("b.rs", None));
     for i in 0..6 {
-        state.push_block(RenderBlock::execute(format!("cmd{i}")));
+        state.push_block(user_command(i));
     }
     let viewport = Rect::new(0, 0, 80, 12);
     state.prepare_layout(viewport.width, viewport.height);
@@ -1155,7 +1202,7 @@ fn verb_and_truncation_headers_share_one_label_channel() {
     assert!(at(layouts, 0).verb_group_header, "reads verb-fold");
     assert!(
         !at(layouts, 2).verb_group_header && at(layouts, 2).is_group_header(),
-        "commands truncation-fold behind the verb run"
+        "message rows truncation-fold behind the verb run"
     );
 
     let (buf, result) = render_state(&state, viewport, true);
@@ -1167,7 +1214,7 @@ fn verb_and_truncation_headers_share_one_label_channel() {
         "verb header must render its label: {rows:?}"
     );
     assert!(
-        rows.iter().any(|r| r.contains("Ran 3 commands")),
+        rows.iter().any(|r| r.contains("Sent 3 messages")),
         "truncation header must render its label: {rows:?}"
     );
 
@@ -1179,7 +1226,7 @@ fn verb_and_truncation_headers_share_one_label_channel() {
     let trunc = model
         .range(2, GROUP_HEADER_RANGE_ID)
         .expect("truncation header range");
-    assert_eq!(at(&trunc.lines, 0).text, "Ran 3 commands");
+    assert_eq!(at(&trunc.lines, 0).text, "Sent 3 messages");
 }
 
 #[test]

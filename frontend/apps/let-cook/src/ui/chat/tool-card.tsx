@@ -150,6 +150,7 @@ function toolVisualEqual(previous: ToolBlock, next: ToolBlock): boolean {
     && previous.elapsedMs === next.elapsedMs
     && previous.command === next.command
     && previous.description === next.description
+    && previous.bashMode === next.bashMode
     && sameArray(previous.paths, next.paths)
     && sameArray(previous.locations, next.locations)
     && sameArray(previous.content, next.content);

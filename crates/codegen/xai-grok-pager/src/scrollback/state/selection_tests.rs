@@ -1,5 +1,6 @@
 use super::super::test_util::*;
 use super::*;
+use crate::scrollback::blocks::tool::ToolCallBlock;
 use pretty_assertions::assert_eq;
 use ratatui::style::Color;
 
@@ -898,19 +899,37 @@ fn verb_group_folds_multi_member_and_singleton_runs() {
 fn verb_group_separators_break_runs() {
     let mut state = verb_state();
     push_reads(&mut state, 2);
-    state.push_block(RenderBlock::execute("cargo test"));
-    push_reads(&mut state, 2);
     state.push_block(RenderBlock::edit("f.rs", None));
     push_reads(&mut state, 1);
     state.prepare_layout(80, 40);
 
     assert!(verb_header_at(&state, 0));
     assert_eq!(header_count_at(&mut state, 0), 2);
-    assert!(cached_height_at(&state, 2) > 0, "execute stays standalone");
-    assert!(verb_header_at(&state, 3));
-    assert!(cached_height_at(&state, 5) > 0, "edit stays standalone");
+    assert!(cached_height_at(&state, 2) > 0, "edit stays standalone");
     // The singleton fold's shape (count/height) is owned by `verb_group_folds_multi_member_and_singleton_runs`
-    assert!(verb_header_at(&state, 6), "run re-anchors after the Edit");
+    assert!(verb_header_at(&state, 3), "run re-anchors after the Edit");
+}
+
+/// A user `!` command (`bash_mode`) is not a member: it keeps its own row and breaks the run.
+#[test]
+fn user_bash_command_breaks_a_verb_run() {
+    let mut state = verb_state();
+    push_reads(&mut state, 1);
+    let bash = state.push_block(RenderBlock::execute("echo hi"));
+    state
+        .get_by_id_mut(bash)
+        .unwrap()
+        .set_display_mode(DisplayMode::Collapsed);
+    let RenderBlock::ToolCall(ToolCallBlock::Execute(block)) = &mut state.get_by_id_mut(bash).unwrap().block else {
+        panic!("expected an execute block");
+    };
+    block.bash_mode = true;
+    push_reads(&mut state, 1);
+    state.prepare_layout(80, 40);
+
+    assert!(cached_height_at(&state, 1) > 0, "user `!` command stays standalone");
+    assert!(verb_header_at(&state, 0));
+    assert!(verb_header_at(&state, 2), "run re-anchors after the user command");
 }
 
 /// Push a finished thought: collapsed and not running, the shape `finish_thinking`'s auto-collapse leaves behind.

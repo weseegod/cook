@@ -28,9 +28,13 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
     const entries = run.entries;
     run = null;
     const tools = entries.flatMap((item) => (item.entry === "tool" ? [item.tool] : []));
-    const group: DisplayBlock | null = tools.length > 0
+    // A run of nothing but one shell command folds to the less useful `Ran 1 command`, so it keeps
+    // the `$ <command>` row (`RunScan::folds`).
+    const singletonCommand = tools.length === 1 && verbKind(tools[0]) === "command";
+    const group: DisplayBlock | null = tools.length > 0 && !singletonCommand
       ? { type: "verb-group", id: `verb-${tools[0].id}`, tools }
       : null;
+    const loneTool: DisplayBlock | null = singletonCommand ? { type: "tool", id: tools[0].id, tool: tools[0] } : null;
     // Walk in arrival order so a live `Thinking…` row sits where it began. Finished thoughts are
     // claimed into the group beside the tools and never paint a row of their own; with no tools
     // they compact into one group, or one row when they are alone.
@@ -44,6 +48,8 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
         output.push(group);
         return;
       }
+      // A lone command does not fold, so its claimed thoughts paint their own rows too.
+      if (loneTool) output.push(loneTool);
       if (thoughtRun.length > 1) output.push({ type: "thought-group", id: `thought-${thoughtRun[0].id}`, thoughts: [...thoughtRun] });
       else if (thoughtRun.length === 1) output.push(thoughtRun[0]);
     };

@@ -83,6 +83,8 @@ pub(crate) struct RunScan {
     /// Member entries counted (tool calls and subagent rows), including a member start entry.
     /// Thought members claim but never count; the fold threshold is members-only.
     pub(crate) members: usize,
+    /// How many of `members` are shell commands ([`VerbGroupKind::Command`]). A lone command stays its own row.
+    pub(crate) command_members: usize,
     /// Exclusive run end: one past the last claimed entry (member or thought member), so trailing transparent entries stay outside the run.
     pub(crate) end: usize,
     /// Where the walk stopped: the breaking entry's index, or the first index where `entry_at` returned `None`.
@@ -91,10 +93,11 @@ pub(crate) struct RunScan {
 
 impl RunScan {
     /// Whether the run folds into a verb-group header row. Thought members never count, so a pure-thought run (whose
-    /// label would be empty) never folds. The layout fold and `verb_group_range_of` share this predicate so the two
-    /// can't drift.
+    /// label would be empty) never folds. A run of nothing but one shell command folds to the less useful
+    /// `Ran 1 command`, so it keeps the `$ <command>` row instead. The layout fold and `verb_group_range_of` share
+    /// this predicate so the two can't drift.
     pub(crate) fn folds(&self) -> bool {
-        self.members >= 1
+        self.members >= 1 && !(self.members == 1 && self.command_members == 1)
     }
 }
 
@@ -112,12 +115,16 @@ pub(crate) fn scan_run_forward<'e>(
         RunStep::Transparent | RunStep::Break => return None,
     }
     let mut members = 0usize;
+    let mut command_members = 0usize;
     let mut end = start;
     let mut i = start;
     while let Some(entry) = entry_at(i) {
         match run_step(entry, show_thinking) {
-            RunStep::Member(_) => {
+            RunStep::Member(kind) => {
                 members += 1;
+                if kind == VerbGroupKind::Command {
+                    command_members += 1;
+                }
                 end = i + 1;
             }
             RunStep::ThoughtMember => end = i + 1,
@@ -128,6 +135,7 @@ pub(crate) fn scan_run_forward<'e>(
     }
     Some(RunScan {
         members,
+        command_members,
         end,
         stop: i,
     })
@@ -531,7 +539,8 @@ mod tests {
             read("a.rs"),
             ScrollbackEntry::new(RenderBlock::thinking("hmm")),
             read("b.rs"),
-            ScrollbackEntry::new(RenderBlock::execute("ls")),
+            ScrollbackEntry::new(RenderBlock::edit("src/main.rs", None))
+                .with_display_mode(DisplayMode::Collapsed),
             read("c.rs"),
         ];
         let refs: Vec<&ScrollbackEntry> = entries.iter().collect();
@@ -563,7 +572,8 @@ mod tests {
                 .with_display_mode(DisplayMode::Expanded),
             read("d.rs"),
             // Non-thinking separators still end the run.
-            ScrollbackEntry::new(RenderBlock::execute("ls")),
+            ScrollbackEntry::new(RenderBlock::edit("src/main.rs", None))
+                .with_display_mode(DisplayMode::Collapsed),
             read("e.rs"),
         ];
         let refs: Vec<&ScrollbackEntry> = entries.iter().collect();
@@ -577,7 +587,15 @@ mod tests {
         assert_eq!(l.text, "Read 4 files");
     }
 
-    fn execute() -> ScrollbackEntry {
+    /// A user `!` command: label-only, so it never eager-folds and only appears in truncation labels.
+    fn user_command() -> ScrollbackEntry {
+        let mut block = crate::scrollback::blocks::tool::ExecuteToolCallBlock::new("ls");
+        block.bash_mode = true;
+        entry(crate::scrollback::blocks::tool::ToolCallBlock::Execute(block))
+    }
+
+    /// An agent shell command: an eager verb-run member.
+    fn agent_command() -> ScrollbackEntry {
         ScrollbackEntry::new(RenderBlock::execute("ls")).with_display_mode(DisplayMode::Collapsed)
     }
 
@@ -602,7 +620,7 @@ mod tests {
     #[test]
     fn truncation_label_buckets_commands_and_never_thoughts() {
         // Three commands and two thoughts hidden: thoughts occupy participant slots but the label stays tools-only
-        let entries = vec![execute(), thought(), execute(), thought(), execute()];
+        let entries = vec![user_command(), thought(), user_command(), thought(), user_command()];
         let l = trunc_label(&entries, None).expect("commands bucket");
         assert_eq!(l.text, "Ran 3 commands");
     }
@@ -610,7 +628,7 @@ mod tests {
     #[test]
     fn truncation_label_limit_counts_participants_not_buckets() {
         // limit=3 covers [execute, thought, execute]: the thought consumes a participant slot without appearing in the label
-        let entries = vec![execute(), thought(), execute(), execute(), execute()];
+        let entries = vec![user_command(), thought(), user_command(), user_command(), user_command()];
         let l = trunc_label(&entries, Some(3)).expect("prefix buckets");
         assert_eq!(l.text, "Ran 2 commands");
     }
@@ -618,11 +636,11 @@ mod tests {
     #[test]
     fn truncation_label_mixes_kinds_in_first_appearance_order() {
         let entries = vec![
-            execute(),
+            user_command(),
             read("a.rs"),
             ScrollbackEntry::new(RenderBlock::edit("src/main.rs", None))
                 .with_display_mode(DisplayMode::Collapsed),
-            execute(),
+            user_command(),
         ];
         let l = trunc_label(&entries, None).expect("buckets");
         assert_eq!(l.text, "Ran 2 commands, Read 1 file, Edited 1 file");
@@ -630,7 +648,7 @@ mod tests {
 
     #[test]
     fn truncation_label_none_for_pure_thought_prefix() {
-        let entries = vec![thought(), thought(), execute()];
+        let entries = vec![thought(), thought(), user_command()];
         assert!(
             trunc_label(&entries, Some(2)).is_none(),
             "a prefix of only thoughts buckets nothing; caller falls back to 'N more'"
@@ -641,14 +659,14 @@ mod tests {
     fn truncation_label_none_for_prefix_with_unbucketable_rows() {
         let system = ScrollbackEntry::new(RenderBlock::system("hook ran"))
             .with_display_mode(DisplayMode::Collapsed);
-        let entries = vec![execute(), system, execute()];
+        let entries = vec![user_command(), system, user_command()];
         assert!(
             trunc_label(&entries, None).is_none(),
             "a hidden System row has no bucket; the plain count stays numerically honest"
         );
         // The unbucketable row past the limit never walks: the prefix still gets a label
         let entries = vec![
-            execute(),
+            user_command(),
             ScrollbackEntry::new(RenderBlock::system("hook ran"))
                 .with_display_mode(DisplayMode::Collapsed),
         ];
@@ -660,7 +678,7 @@ mod tests {
     fn truncation_label_counts_failed_commands() {
         let failed = RenderBlock::execute_with_output("false", "", Some("exit 1"));
         let entries = vec![
-            execute(),
+            user_command(),
             ScrollbackEntry::new(failed).with_display_mode(DisplayMode::Collapsed),
         ];
         let l = trunc_label(&entries, None).expect("buckets");
@@ -672,7 +690,7 @@ mod tests {
     fn truncation_label_skips_hidden_thinking_without_consuming_limit() {
         let mut hidden_thought = ScrollbackEntry::new(RenderBlock::thinking("hidden"));
         hidden_thought.set_display_mode(DisplayMode::Collapsed);
-        let entries = [execute(), hidden_thought, execute()];
+        let entries = [user_command(), hidden_thought, user_command()];
         let refs: Vec<&ScrollbackEntry> = entries.iter().collect();
         // show_thinking=false: the thought is hidden chrome, not a participant, so both commands fit in a limit of 2
         let l = truncation_header_label(&refs, 0..refs.len(), Some(2), false, &Theme::current())
@@ -757,5 +775,44 @@ mod tests {
         let l = label(&entries);
         assert_eq!(l.text, "Reading 1 file, Ran 1 subagent");
         assert!(l.running);
+    }
+
+    fn scan(entries: &[ScrollbackEntry]) -> RunScan {
+        let entry_at = |i: usize| entries.get(i);
+        scan_run_forward(entry_at, 0, /*show_thinking=*/ true).expect("entry at 0 anchors a run")
+    }
+
+    #[test]
+    fn agent_commands_fold_but_a_lone_command_keeps_its_row() {
+        // Six consecutive agent commands: one header, six members.
+        let commands: Vec<ScrollbackEntry> = (0..6).map(|_| agent_command()).collect();
+        let six = scan(&commands);
+        assert_eq!(six.members, 6);
+        assert_eq!(six.command_members, 6);
+        assert!(six.folds());
+
+        // A lone command with no sibling tool stays the `$ <command>` row.
+        let lone = scan(&[agent_command()]);
+        assert_eq!(lone.members, 1);
+        assert_eq!(lone.command_members, 1);
+        assert!(!lone.folds(), "a lone command must not read as `Ran 1 command`");
+
+        // A lone read still folds (`Read 1 file`), and a command plus any other member folds too.
+        assert!(scan(&[read("a.rs")]).folds());
+        let mixed = scan(&[agent_command(), read("a.rs")]);
+        assert_eq!(mixed.members, 2);
+        assert_eq!(mixed.command_members, 1);
+        assert!(mixed.folds());
+    }
+
+    #[test]
+    fn user_bash_mode_command_keeps_its_own_row_and_breaks_the_run() {
+        let user_bash = user_command();
+        let entries = [read("a.rs"), user_bash, read("b.rs")];
+        // `bash_mode` returns `None` from `verb_group_kind`, so it is a `Break`, not a member.
+        let scan = scan(&entries);
+        assert_eq!(scan.members, 1);
+        assert_eq!(scan.command_members, 0);
+        assert_eq!(scan.stop, 1, "the run stops at the user `!` command");
     }
 }

@@ -47,13 +47,16 @@ describe("verb runs", () => {
     if (projected[0].type === "verb-group") expect(verbGroupLabel(projected[0].tools)).toBe("Read 1 file");
   });
 
-  it("keeps execute and edit as their own rows, breaking the run", () => {
+  it("keeps edit as its own row, breaking the run, while agent shell folds in", () => {
     const projected = projectTranscript([
       tool("read-1", "Read src/a.ts"),
       tool("run-1", "Run tests", "completed", { kind: "execute", command: "pnpm test" }),
       tool("read-2", "Read src/b.ts"),
     ]);
-    expect(projected.map((row) => row.type)).toEqual(["verb-group", "tool", "verb-group"]);
+    expect(projected.map((row) => row.type)).toEqual(["verb-group"]);
+    if (projected[0].type === "verb-group") {
+      expect(verbGroupLabel(projected[0].tools)).toBe("Read 2 files, Ran 1 command");
+    }
   });
 
   it("breaks runs on assistant prose", () => {
@@ -97,7 +100,7 @@ describe("verb runs", () => {
     }
   });
 
-  it("keeps execute and edit as their own rows inside a read cluster", () => {
+  it("keeps edit as its own row inside a read cluster while shell joins", () => {
     expect(rows([
       tool("read-1", "read_file", "completed", { kind: "read", paths: ["src/a.ts"] }),
       tool("edit-1", "Edit `src/b.ts`", "completed", { kind: "edit", paths: ["src/b.ts"] }),
@@ -134,6 +137,49 @@ describe("verb runs", () => {
   it("keeps a streaming thought on its live row", () => {
     const projected = projectTranscript([thought("t1"), thought("t2", true)]);
     expect(projected.map((row) => row.type)).toEqual(["message", "message"]);
+  });
+
+  it("folds a shell burst into one row and leaves a lone command on its `$` row", () => {
+    const cmd = (id: string) => tool(id, "Run command", "completed", { kind: "execute", command: `cmd ${id}` });
+    const burst = projectTranscript([
+      cmd("c1"),
+      thought("t1"),
+      tool("r1", "Read a.ts"),
+      cmd("c2"),
+      tool("s1", "Search pattern"),
+      thought("t2"),
+      tool("r2", "Read b.ts"),
+      cmd("c3"),
+      tool("l1", "List src"),
+      cmd("c4"),
+      tool("s2", "Search other"),
+      thought("t3"),
+      tool("r3", "Read c.ts"),
+      cmd("c5"),
+      tool("r4", "Read d.ts"),
+      cmd("c6"),
+      tool("s3", "Search third"),
+      thought("t4"),
+      tool("r5", "Read e.ts"),
+      cmd("c7"),
+      tool("r6", "Read f.ts"),
+      cmd("c8"),
+      cmd("c9"),
+      cmd("c10"),
+      cmd("c11"),
+    ]);
+    expect(burst.map((row) => row.type)).toEqual(["verb-group"]);
+    const group = burst[0];
+    if (group.type !== "verb-group") throw new Error("expected a verb group");
+    expect(verbGroupLabel(group.tools)).toBe("Ran 11 commands, Read 6 files, Searched 3 patterns, Listed 1 dir");
+
+    // One command with no sibling tool keeps the `$ <command>` row, not `Ran 1 command`.
+    expect(rows([cmd("solo")])).toEqual(["tool"]);
+
+    // A user `!` command (bashMode) is not a member: it breaks the run.
+    const userBash = tool("bash-1", "Run command", "completed", { kind: "execute", command: "echo hi", bashMode: true });
+    expect(rows([tool("read-1", "Read a.ts"), userBash, tool("read-2", "Read b.ts")]))
+      .toEqual(["verb-group", "tool", "verb-group"]);
   });
 });
 
@@ -180,7 +226,8 @@ describe("verb kinds", () => {
     expect(verbKind(tool("g", "Memory Search q"))).toBe("memory");
     expect(verbKind(tool("h", "Search Tools q"))).toBe("mcpsearch");
     expect(verbKind(tool("i", "Subagent explore"))).toBe("subagent");
-    expect(verbKind(tool("j", "Run tests", "completed", { kind: "execute" }))).toBeNull();
+    expect(verbKind(tool("j", "Run tests", "completed", { kind: "execute" }))).toBe("command");
+    expect(verbKind(tool("j2", "Run command", "completed", { kind: "execute", bashMode: true }))).toBeNull();
     expect(verbKind(tool("k", "Edit src/a.ts"))).toBeNull();
     expect(verbKind(tool("l", "Web Fetch https://x"))).toBe("fetch");
   });

@@ -379,8 +379,21 @@ mod tests {
         .with_display_mode(DisplayMode::Collapsed)
     }
 
-    fn execute() -> ScrollbackEntry {
-        ScrollbackEntry::new(RenderBlock::execute("ls")).with_display_mode(DisplayMode::Collapsed)
+    /// A user `!` command: label-only and collapsed, so it truncation-folds and never verb-folds.
+    fn user_command() -> ScrollbackEntry {
+        let mut block =
+            crate::scrollback::blocks::tool::ExecuteToolCallBlock::new("ls");
+        block.bash_mode = true;
+        ScrollbackEntry::new(RenderBlock::ToolCall(
+            crate::scrollback::blocks::tool::ToolCallBlock::Execute(block),
+        ))
+        .with_display_mode(DisplayMode::Collapsed)
+    }
+
+    /// An agent shell command: an eager verb-run member.
+    fn agent_command(n: usize) -> ScrollbackEntry {
+        ScrollbackEntry::new(RenderBlock::execute(format!("cmd{n}")))
+            .with_display_mode(DisplayMode::Collapsed)
     }
 
     fn thought() -> ScrollbackEntry {
@@ -418,12 +431,12 @@ mod tests {
         spans
     }
 
-    /// The "Read 2 skills / 8 more" transcript shape: a verb run followed by a 19-row dense run of commands and thoughts with the default budget.
+    /// The "Read 2 skills / 8 more" transcript shape: a verb run followed by a 19-row dense run of edits and thoughts with the default budget.
     #[test]
     fn verb_run_breaks_truncation_and_both_spans_project() {
         let mut list = vec![skill_read(), skill_read()];
         for i in 0..19 {
-            list.push(if i % 3 == 2 { thought() } else { execute() });
+            list.push(if i % 3 == 2 { thought() } else { user_command() });
         }
         let entries = map(list);
         let mut layout = seeded_layout(entries.len());
@@ -481,7 +494,7 @@ mod tests {
 
     #[test]
     fn runs_at_or_under_budget_produce_no_truncation_span() {
-        let entries = map((0..11).map(|_| execute()).collect());
+        let entries = map((0..11).map(|_| user_command()).collect());
         let mut layout = seeded_layout(entries.len());
         let spans = scan_and_project(&entries, &mut layout, 10, &HashSet::new());
         assert!(spans.is_empty());
@@ -491,7 +504,7 @@ mod tests {
     #[test]
     fn verb_toggle_off_feeds_members_to_truncation() {
         let mut list = vec![skill_read(), skill_read()];
-        list.extend((0..12).map(|_| execute()));
+        list.extend((0..12).map(|_| user_command()));
         let entries = map(list);
         let spans = scan(&entries, 10, &HashSet::new(), false, true);
         assert_eq!(
@@ -541,7 +554,7 @@ mod tests {
 
     #[test]
     fn expanded_truncation_becomes_collapse_header_counting_rest() {
-        let entries = map((0..13).map(|_| execute()).collect());
+        let entries = map((0..13).map(|_| user_command()).collect());
         let mut layout = seeded_layout(entries.len());
         let expanded: HashSet<EntryId> = [EntryId::new(0)].into();
         let spans = scan_and_project(&entries, &mut layout, 10, &expanded);
@@ -564,10 +577,10 @@ mod tests {
 
     #[test]
     fn hidden_thinking_flows_through_truncation_without_participating() {
-        // 12 executes with a hidden thought interleaved: the run still truncates, the thought neither counts nor gets written
-        let mut list: Vec<ScrollbackEntry> = (0..6).map(|_| execute()).collect();
+        // 12 edits with a hidden thought interleaved: the run still truncates, the thought neither counts nor gets written
+        let mut list: Vec<ScrollbackEntry> = (0..6).map(|_| user_command()).collect();
         list.push(thought());
-        list.extend((0..6).map(|_| execute()));
+        list.extend((6..12).map(|_| user_command()));
         let entries = map(list);
         let mut layout = seeded_layout(entries.len());
         let spans = scan(
@@ -616,8 +629,8 @@ mod tests {
 
     #[test]
     fn spans_are_sorted_and_disjoint() {
-        let mut list = vec![skill_read(), skill_read(), execute()];
-        list.extend((0..12).map(|_| execute()));
+        let mut list = vec![skill_read(), skill_read(), user_command()];
+        list.extend((1..13).map(|_| user_command()));
         list.push(skill_read());
         list.push(skill_read());
         let entries = map(list);
@@ -629,5 +642,23 @@ mod tests {
             };
             assert!(a.range.end <= b.range.start);
         }
+    }
+
+    #[test]
+    fn agent_commands_form_a_verb_run_not_a_truncation() {
+        // Six agent commands: the verb scan claims them first, so no "N more" header appears.
+        let entries = map((0..6).map(agent_command).collect());
+        let mut layout = seeded_layout(entries.len());
+        let spans = scan_and_project(&entries, &mut layout, 3, &HashSet::new());
+        assert_eq!(
+            spans,
+            vec![GroupSpan {
+                range: 0..6,
+                kind: GroupKind::VerbRun { members: 6 },
+                expanded: false,
+            }]
+        );
+        assert!(layout.first().is_some_and(|i| i.verb_group_header));
+        assert_eq!(layout.first().map(|i| i.group_header_count), Some(6));
     }
 }

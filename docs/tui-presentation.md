@@ -417,7 +417,7 @@ Entries live in `scrollback/entry.rs`. Content implements `BlockContent` (`scrol
 - Output: terminal-styled stdout on `bg_dark`. Truncated: first N + `… +{hidden} lines` + last M.
 - Error: error accent; error lines after a blank separator.
 - Live: `push_output` streams chunks.
-- Not verb-folded (label-only `Command` for truncation headers).
+- Verb-folds as `Command` (agent shell). A user `!` command (`bash_mode`) keeps its own row and breaks the run. A run of nothing but one command does not fold, so a lone `$ command` keeps its row instead of reading as `Ran 1 command`.
 
 #### Read — `tool/read.rs`
 
@@ -598,9 +598,11 @@ Muted wrapped text. Compact. Not foldable.
 
 Consecutive **collapsed** members of foldable kinds collapse under one header. The label rebuilds every frame so tense and counts update in place. Running entries repaint every tick; no per-call detail churns beside the header while the run executes.
 
-Eager fold kinds (`ToolCallBlock::verb_group_kind` returns `Some`): File, Skill, Search, Dir, WebFetch, WebSearch, MemorySearch, IntegrationSearch, Subagent.
+Eager fold kinds (`ToolCallBlock::verb_group_kind` returns `Some`): File, Skill, Search, Dir, WebFetch, WebSearch, MemorySearch, IntegrationSearch, Subagent, Command (agent shell).
 
-Label-only (truncation headers, not eager fold): Command, EditFile, McpCall, Message, OtherTool. Execute / Edit / UseTool / SentMessage / Other therefore stay as their own rows, densely packed.
+Label-only (truncation headers, not eager fold): EditFile, McpCall, Message, OtherTool. A user `!` command (`bash_mode`) is label-only too. Edit / UseTool / SentMessage / Other therefore stay as their own rows, densely packed.
+
+A run of nothing but one command does not fold (`RunScan::folds`), so a lone agent `$ command` keeps its row.
 
 Gated by appearance `group_tool_verbs`.
 
@@ -614,6 +616,8 @@ Gated by appearance `group_tool_verbs`.
 | Finished collapsed thinking without prompt chrome | `ThoughtMember` (claimed, height 0, never labeled) |
 | Streaming, user-opened thinking, or manually opened tool | `Transparent` (keeps its own rows, does not break the run) |
 | Anything else | `Break` |
+
+A run of one command only does not fold (`RunScan::folds`): a lone agent `$ command` keeps its row.
 
 A kind-swap (eager `Other` refining into `Read`) marks the entry structurally dirty so the next layout pass recaptures the fold (`verb_group_kind_changed`).
 
@@ -751,7 +755,7 @@ As the TUI presents it, not as the shell implements it.
 1. **Send.** Enter on the composer → `dispatch_send_prompt` (`app/dispatch/prompt.rs`). Slash/local commands short-circuit. Otherwise enqueue; idle drain → `Effect::SendPrompt`. Optimistic user row. Composer cleared. `expect_user_echo` so the ACP echo is not duplicated.
 2. **Turn start.** `AgentState::TurnRunning`. Turn-status appears (spinner + activity). `pre_create_thinking` if thinking blocks are on. `pin_reserve` arms so the prompt can sit at the top of the viewport.
 3. **Streaming.** Thought chunks → `Thinking…` in the transcript and on the status row. First agent text finishes thinking (`Thought for Xs`) and starts assistant markdown (`Responding…`). Phase timer resets on each `PhaseKey` change; turn timer keeps running.
-4. **Tools.** A tool call closes the prose segment. Status shows `Run {cmd}` / `Search` / `Fetch` / `{description}…` / writing-tool-call / waits. Agent execute stays collapsed (no live stdout). Consecutive collapsed non-destructive tools fold into a verb-group header. Running execute may show `[↓]` demote-to-bg.
+4. **Tools.** A tool call closes the prose segment. Status shows `Run {cmd}` / `Search` / `Fetch` / `{description}…` / writing-tool-call / waits. Agent execute stays collapsed (no live stdout). Consecutive collapsed non-destructive tools — reads, searches, listings, and agent shell — fold into a verb-group header; a lone command keeps its row. Running execute may show `[↓]` demote-to-bg.
 5. **Permission / question / plan / elicitation.** Card replaces the composer (draft stashed). Spinner becomes pulsing `◆`. Turn stays `TurnRunning`. Ask suppresses the phase timer; question pause nets out of the turn clock.
 6. **Queue.** Mid-turn typing queues. Sendable waits advertise `· N queued, Enter to send now`.
 7. **Cancel.** `[stop]` / Esc / Ctrl-C may open the cancel-turn card. Status: `Cancelling…`. Send-now that only aborts a wait does not write a cancel marker.

@@ -91,8 +91,8 @@ pub enum VerbGroupKind {
     IntegrationSearch,
     /// Subagent lifecycle rows (`RenderBlock::Subagent`).
     Subagent,
-    /// Shell commands. Label-only: commands never fold eagerly ([`ToolCallBlock::verb_group_kind`] excludes them).
-    /// A truncation header describing hidden rows still buckets them ("Ran 6 commands").
+    /// Shell commands. Agent commands fold eagerly ([`ToolCallBlock::verb_group_kind`]); a user `!`
+    /// command (`bash_mode`) does not. A truncation header describing hidden rows also buckets them ("Ran 6 commands").
     Command,
     /// File edits. Label-only, like [`Self::Command`].
     EditFile,
@@ -578,6 +578,8 @@ impl ToolCallBlock {
             ToolCallBlock::MemorySearch(_) => Some(VerbGroupKind::MemorySearch),
             ToolCallBlock::Skill(_) => Some(VerbGroupKind::Skill),
             ToolCallBlock::Edit(b) if b.is_memory_activity => Some(VerbGroupKind::MemorySearch),
+            // Agent shell joins the run; a user `!` command keeps its own row (`bash_mode`).
+            ToolCallBlock::Execute(b) if !b.bash_mode => Some(VerbGroupKind::Command),
             ToolCallBlock::Execute(_)
             | ToolCallBlock::Edit(_)
             | ToolCallBlock::UseTool(_)
@@ -704,6 +706,7 @@ mod tests {
                 ToolCallBlock::IntegrationSearch(_) => Some(VerbGroupKind::IntegrationSearch),
                 ToolCallBlock::MemorySearch(_) => Some(VerbGroupKind::MemorySearch),
                 ToolCallBlock::Skill(_) => Some(VerbGroupKind::Skill),
+                ToolCallBlock::Execute(b) if !b.bash_mode => Some(VerbGroupKind::Command),
                 ToolCallBlock::Execute(_)
                 | ToolCallBlock::Edit(_)
                 | ToolCallBlock::UseTool(_)

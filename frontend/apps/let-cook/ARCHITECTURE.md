@@ -186,7 +186,10 @@ The projection folds like the TUI's scrollback. Consecutive foldable tools
 collapse under one header (`Read 2 files, Searched 1 pattern`); a finished
 thought is claimed into that run at height 0, and a still-streaming thought keeps
 its own `Thinking…` row without breaking the run (`docs/tui-presentation.md` §8).
-Which tools fold, and the one-line collapsed header, come from the normalized
+Agent shell (`kind: "execute"`) is a foldable member too; a user `!` command
+(`ToolBlock.bashMode`) keeps its own row, and a run of a single command does not
+fold so a lone `$ <command>` keeps its row. Which tools fold, and the one-line
+collapsed header, come from the normalized
 `ToolBlock.kind`: `values.ts` collapses the ACP kind, the canonical
 `_meta["x.ai/tool"].kind` the early `tool_call` already carries, and the wire
 name (`read_file`, `grep`) onto one vocabulary.

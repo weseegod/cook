@@ -180,6 +180,7 @@ export function toolMetadata(
     previous?.command,
   );
   const description = firstString(raw.description, input.description, previous?.description);
+  const bashMode = bashModeFlag(raw) ?? previous?.bashMode;
   const paths = uniqueStrings([
     ...stringArray(raw.paths),
     ...stringArray(raw.locations),
@@ -190,7 +191,18 @@ export function toolMetadata(
     ...stringArray(canonicalInput.directory),
     ...(previous?.paths ?? []),
   ]);
-  return { command, description, paths };
+  return { command, description, bashMode, paths };
+}
+
+/**
+ * The user-`!` marker the shell stamps into the tool-call's own `_meta` (`tracker.rs` reads
+ * `_meta.bash_mode`). Only a real `true` counts; absent means an agent command.
+ */
+function bashModeFlag(raw: Record<string, unknown>): boolean | undefined {
+  for (const source of [asRecord(raw._meta), asRecord(raw.meta)]) {
+    if (source && source.bash_mode === true) return true;
+  }
+  return undefined;
 }
 
 export function toolContent(raw: Record<string, unknown>, previous: ToolBlock | null): unknown[] {
