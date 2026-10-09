@@ -16,6 +16,20 @@ struct SpawnStep {
     span: tracing::span::EnteredSpan,
     _timer: xai_grok_telemetry::instrumentation::InstrumentationTimer,
 }
+/// The `web_search` wire this spawn hands the client.
+///
+/// `prepare_web_search_sampling_config` carries the resolved wire in `api_backend`: a `messages`
+/// entry searches through `{base}/messages` with the Anthropic server tool, everything else keeps
+/// the hosted Responses request.
+fn web_search_wire_of(
+    api_backend: &xai_grok_sampling_types::ApiBackend,
+) -> xai_grok_tools::implementations::WebSearchWire {
+    if *api_backend == xai_grok_sampling_types::ApiBackend::Messages {
+        xai_grok_tools::implementations::WebSearchWire::Messages
+    } else {
+        xai_grok_tools::implementations::WebSearchWire::Responses
+    }
+}
 impl SpawnStep {
     fn record<V: tracing::field::Value>(&self, field: &'static str, value: V) {
         self.span.record(field, value);
@@ -553,11 +567,27 @@ pub(crate) async fn spawn_session_actor(
         xai_grok_tools::implementations::WebSearchConfig::Disabled
     } else if let Some(cfg) = web_search_sampling_config {
         if let Some(api_key) = cfg.api_key {
+            let wire = web_search_wire_of(&cfg.api_backend);
+            // OpenCode Go rejects a request without `x-opencode-session`, including the search
+            // call, so the conversation's id must ride along on the search config too. Keyed on the
+            // search base URL, so a non-OpenCode endpoint is left untouched.
+            let mut extra_headers = cfg.extra_headers;
+            let session_key = sampling_config
+                .conversation_group_id
+                .as_ref()
+                .map(std::string::ToString::to_string);
+            crate::agent::config::inject_opencode_session_header(
+                &mut extra_headers,
+                &cfg.base_url,
+                session_key.as_deref(),
+            );
             xai_grok_tools::implementations::WebSearchConfig::Enabled {
+                wire,
+                use_session_bearer: crate::util::is_xai_api_bearer_url(&cfg.base_url),
                 api_key,
                 base_url: cfg.base_url,
                 model: cfg.model,
-                extra_headers: cfg.extra_headers,
+                extra_headers,
                 alpha_test_key: credentials.alpha_test_key.clone(),
                 allowed_domains: web_search_domains
                     .as_ref()
@@ -3288,6 +3318,31 @@ mod terminal_backend_select_tests {
         assert_eq!(
             select_terminal_backend_kind(false, false, false, false, false),
             TerminalBackendKind::LocalNonPersistent
+        );
+    }
+}
+
+#[cfg(test)]
+mod web_search_wire_tests {
+    use super::web_search_wire_of;
+    use xai_grok_sampling_types::ApiBackend;
+    use xai_grok_tools::implementations::WebSearchWire;
+
+    #[test]
+    fn the_search_config_backend_selects_the_wire() {
+        assert_eq!(
+            web_search_wire_of(&ApiBackend::Messages),
+            WebSearchWire::Messages,
+            "a messages search config searches `{{base}}/messages` with `web_search_20250305`"
+        );
+        assert_eq!(
+            web_search_wire_of(&ApiBackend::Responses),
+            WebSearchWire::Responses
+        );
+        assert_eq!(
+            web_search_wire_of(&ApiBackend::ChatCompletions),
+            WebSearchWire::Responses,
+            "the configured `web_search_model` keeps the hosted Responses request"
         );
     }
 }

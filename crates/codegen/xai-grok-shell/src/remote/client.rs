@@ -774,6 +774,14 @@ pub(crate) fn parse_remote_model_value(
             .or_else(|| meta.and_then(|m| m.get("supportsBackendSearch")))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        web_search_wire: obj
+            .get("webSearchWire")
+            .or_else(|| obj.get("web_search_wire"))
+            .or_else(|| meta.and_then(|m| m.get("webSearchWire")))
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default(),
+        web_search_base_url: get_string(obj, "webSearchBaseUrl")
+            .or_else(|| get_string(obj, "web_search_base_url")),
         compactions_remaining: obj
             .get("compactionsRemaining")
             .or_else(|| obj.get("compactions_remaining"))

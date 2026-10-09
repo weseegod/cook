@@ -33,4 +33,4 @@ pub fn extra_write_qualified_ids() -> Vec<String> {
 }
 pub use search_tool::{SEARCH_TOOL_NAME, SearchTool};
 pub use use_tool::{USE_TOOL_NAME, UseTool, UseToolInput};
-pub use web_search::WebSearchConfig;
+pub use web_search::{WebSearchConfig, WebSearchWire};

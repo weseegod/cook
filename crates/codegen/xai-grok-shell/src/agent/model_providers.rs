@@ -5,6 +5,7 @@ use indexmap::IndexMap;
 use super::config::{ConfigModelOverride, EnvKeys};
 use super::config_model_override_parse::{ConfigWarning, ConfigWarningKind};
 use crate::sampling::{ApiBackend, ChatCompletionsRequestFormat};
+use xai_grok_tools::implementations::web_search::WebSearchWire;
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
@@ -26,6 +27,10 @@ pub struct ModelProviderConfig {
     pub context_windows: Option<Vec<NonZeroU64>>,
     /// Request-body cap of this endpoint; inherited by models that set none of their own.
     pub max_request_bytes: Option<NonZeroU64>,
+    /// Search wire this endpoint's models inherit; `messages` runs the provider's own server tool.
+    pub web_search_wire: Option<WebSearchWire>,
+    /// Search-call base URL when it differs from `base_url`; inherited by models.
+    pub web_search_base_url: Option<String>,
 }
 
 pub(crate) fn model_provider_auth_name(provider_id: &str) -> String {
@@ -94,7 +99,8 @@ pub(crate) fn parse_model_providers(
         match serde_ignored::deserialize::<_, _, ModelProviderConfig>(value.clone(), |path| {
             unknown.push(path.to_string());
         }) {
-            Ok(provider) => {
+            Ok(mut provider) => {
+                apply_preset_search_profile(id, &mut provider);
                 for key in unknown {
                     warnings.push(ConfigWarning::model_provider(
                         id,
@@ -176,6 +182,30 @@ pub(crate) fn parse_model_providers(
     (providers, warnings)
 }
 
+/// Fill in a card's search profile on a provider table that predates the field. `upsert_provider`
+/// writes the profile when it installs a card, so this only reaches tables written before
+/// `web_search_wire` existed (or edited by hand); an explicit value always wins.
+fn apply_preset_search_profile(provider_id: &str, provider: &mut ModelProviderConfig) {
+    if provider.web_search_wire.is_some() {
+        return;
+    }
+    let Some(base_url) = provider
+        .base_url
+        .as_deref()
+        .or(provider.api_base_url.as_deref())
+    else {
+        return;
+    };
+    let Some(profile) = crate::extensions::providers::preset_search_endpoint(provider_id, base_url)
+    else {
+        return;
+    };
+    provider.web_search_wire = Some(profile.wire);
+    if provider.web_search_base_url.is_none() {
+        provider.web_search_base_url = Some(profile.search_base_url.to_owned());
+    }
+}
+
 impl ConfigModelOverride {
     pub(crate) fn with_provider_defaults(
         &self,
@@ -197,6 +227,8 @@ impl ConfigModelOverride {
             context_window,
             context_windows,
             max_request_bytes,
+            web_search_wire,
+            web_search_base_url,
         } = provider;
 
         let mut merged = self.clone();
@@ -241,6 +273,11 @@ impl ConfigModelOverride {
                 .clone()
                 .or_else(|| auth.as_ref().map(|_| model_provider_auth_name(provider_id)));
         }
+        merged.web_search_wire = merged.web_search_wire.or(*web_search_wire);
+        merged.web_search_base_url = merged
+            .web_search_base_url
+            .clone()
+            .or_else(|| web_search_base_url.clone());
         merged
     }
 
@@ -261,6 +298,61 @@ mod tests {
         Config, resolve_credentials, resolve_model_list, sampling_config_for_model,
     };
     use crate::sampling::ChatCompletionsRequestFormat;
+
+    #[test]
+    fn a_provider_table_written_before_the_field_still_gets_the_card_search_profile() {
+        use xai_grok_tools::implementations::WebSearchWire;
+
+        let raw_config: toml::Value = toml::from_str(
+            r#"
+            [model_providers.deepseek]
+            base_url = "https://api.deepseek.com"
+            api_key = "sk-legacy"
+            api_backend = "chat_completions"
+
+            [model.legacy-deepseek]
+            model = "deepseek-flash"
+            model_provider = "deepseek"
+
+            [model_providers.deepseek-overridden]
+            base_url = "https://api.deepseek.com"
+            api_key = "sk-legacy"
+            api_backend = "chat_completions"
+            web_search_wire = "off"
+
+            [model.overridden-deepseek]
+            model = "deepseek-flash"
+            model_provider = "deepseek-overridden"
+            "#,
+        )
+        .unwrap();
+
+        let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+        let resolved = resolve_model_list(&cfg, None);
+        let legacy = resolved.get("legacy-deepseek").expect("model should exist");
+        assert_eq!(
+            legacy.info.resolved_web_search_wire(),
+            WebSearchWire::Messages,
+            "a hand-written DeepSeek table inherits the card's search surface"
+        );
+        assert_eq!(
+            legacy.info.web_search_base_url.as_deref(),
+            Some("https://api.deepseek.com/anthropic/v1")
+        );
+        assert!(
+            cfg.resolve_web_search_with_wire(legacy.info.resolved_web_search_wire())
+                .value,
+            "the inherited wire keeps the tool on"
+        );
+        let overridden = resolved
+            .get("overridden-deepseek")
+            .expect("model should exist");
+        assert_eq!(
+            overridden.info.resolved_web_search_wire(),
+            WebSearchWire::Off,
+            "an explicit wire in the provider table wins over the card profile"
+        );
+    }
 
     #[test]
     fn xiaomi_provider_selects_request_format_without_changing_standard_providers() {

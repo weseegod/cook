@@ -52,7 +52,7 @@ use xai_grok_tools::implementations::grok_build::task::types::{
 use xai_grok_tools::implementations::grok_build::video_gen::VideoGenConfig;
 use xai_grok_tools::implementations::grok_build::web_fetch::WebFetchConfig;
 use xai_grok_tools::implementations::lsp::LspBackend;
-use xai_grok_tools::implementations::web_search::WebSearchConfig;
+use xai_grok_tools::implementations::web_search::{WebSearchConfig, WebSearchWire};
 use xai_grok_tools::notification::ToolNotificationHandle;
 use xai_grok_tools::types::SharedApiKeyProvider;
 use xai_grok_tools::types::compat::CompatConfig;
@@ -623,6 +623,8 @@ mod legacy_tests {
             spec_mut.web_search_domains = domains;
             spec_mut.backend_search = true;
             spec_mut.web_search_config = WebSearchConfig::Enabled {
+                wire: WebSearchWire::Responses,
+                use_session_bearer: true,
                 api_key: "test-key".to_string(),
                 base_url: "https://api.x.ai/v1".to_string(),
                 model: "grok-4".to_string(),

@@ -779,6 +779,8 @@ mod tests {
                 default: true,
             }],
             supports_backend_search: Some(false),
+            web_search_wire: None,
+            web_search_base_url: None,
             compactions_remaining: Some(CompactionsRemaining::Fixed(1)),
             compaction_at_tokens: Some(CompactionAtTokens::Fixed(100_000)),
             show_model_fingerprint: Some(true),

@@ -499,6 +499,168 @@ fn hidden_default_web_search_resolution_is_explicit_and_responses_only() {
         "hidden default should still use normal credential resolution"
     );
 }
+/// The wire a model runs `web_search` on: an explicit override first, else the backend, else off.
+#[test]
+fn model_web_search_wire_follows_backend_with_overrides() {
+    let raw_config: toml::Value = toml::from_str(
+        r#"
+            [model_providers.anthropic]
+            base_url = "https://api.anthropic.com/v1"
+            api_backend = "messages"
+            api_key = "sk-anthropic"
+
+            [model.claude-sonnet]
+            model = "claude-sonnet-4-6"
+            model_provider = "anthropic"
+
+            [model.grok-hosted]
+            model = "grok-4.5"
+            base_url = "https://api.x.ai/v1"
+            api_backend = "responses"
+            supports_backend_search = true
+            context_window = 200000
+
+            [model.plain-chat]
+            model = "gpt-5"
+            base_url = "https://api.openai.com/v1"
+            api_backend = "chat_completions"
+            context_window = 200000
+
+            [model.byo-messages-search]
+            model = "custom-model"
+            base_url = "https://gateway.example/v1"
+            api_backend = "chat_completions"
+            web_search_wire = "messages"
+            web_search_base_url = "https://gateway.example/anthropic/v1"
+            context_window = 200000
+            "#,
+    )
+    .unwrap();
+    let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+    let resolved = resolve_model_list(&cfg, None);
+    let wire = |key: &str| {
+        resolved
+            .get(key)
+            .unwrap_or_else(|| panic!("{key} should exist"))
+            .info
+            .resolved_web_search_wire()
+    };
+    assert_eq!(
+        wire("claude-sonnet"),
+        WebSearchWire::Messages,
+        "a messages backend searches on its own server tool"
+    );
+    assert_eq!(
+        wire("grok-hosted"),
+        WebSearchWire::Responses,
+        "the backend-search flag selects hosted Responses"
+    );
+    assert_eq!(
+        wire("plain-chat"),
+        WebSearchWire::Off,
+        "chat completions searches nowhere by default"
+    );
+    assert_eq!(
+        wire("byo-messages-search"),
+        WebSearchWire::Messages,
+        "an explicit wire outranks the chat backend"
+    );
+    assert_eq!(
+        resolved["byo-messages-search"]
+            .info
+            .web_search_base_url
+            .as_deref(),
+        Some("https://gateway.example/anthropic/v1"),
+    );
+}
+/// Who decides whether `web_search` is advertised: an explicit setting, else the model's wire.
+#[test]
+#[serial]
+fn web_search_defaults_on_for_every_model_and_an_off_wire_opts_the_entry_out() {
+    let empty: toml::Value = toml::from_str("").unwrap();
+    let cfg = Config::new_from_toml_cfg(&empty).unwrap();
+    assert!(
+        cfg.resolve_web_search_with_wire(WebSearchWire::Inherit).value,
+        "a model that declares no search surface still gets the tool"
+    );
+    assert!(
+        cfg.resolve_web_search_with_wire(WebSearchWire::Messages)
+            .value,
+        "a messages wire keeps search on"
+    );
+    assert!(
+        cfg.resolve_web_search_with_wire(WebSearchWire::Responses)
+            .value,
+        "a backend-search Responses model keeps search on too"
+    );
+    assert!(
+        !cfg.resolve_web_search_with_wire(WebSearchWire::Off).value,
+        "a model that declares off opts its own entry out"
+    );
+
+    let explicit_off: toml::Value = toml::from_str("features.web_search = false").unwrap();
+    let cfg = Config::new_from_toml_cfg(&explicit_off).unwrap();
+    assert!(
+        !cfg.resolve_web_search_with_wire(WebSearchWire::Inherit)
+            .value,
+        "an explicit features.web_search = false wins over the default"
+    );
+
+    let _env = EnvGuard::set("GROK_WEB_SEARCH", "0");
+    let cfg = Config::new_from_toml_cfg(&empty).unwrap();
+    assert!(
+        !cfg.resolve_web_search_with_wire(WebSearchWire::Inherit)
+            .value,
+        "GROK_WEB_SEARCH=0 wins over the default"
+    );
+    drop(_env);
+
+    let mut cfg = Config::new_from_toml_cfg(&empty).unwrap();
+    cfg.disable_web_search = true;
+    assert!(
+        !cfg.resolve_web_search_with_wire(WebSearchWire::Inherit)
+            .value,
+        "the --disable-web-search kill switch wins over the default"
+    );
+}
+
+/// A DeepSeek card install: the chat loop stays chat completions while search moves to the
+/// Anthropic-compatible surface, and no hosted Responses tool is requested.
+#[test]
+fn deepseek_card_entry_searches_on_messages_without_touching_chat_completions() {
+    let raw_config: toml::Value = toml::from_str(
+        r#"
+            [model_providers.deepseek]
+            base_url = "https://api.deepseek.com"
+            api_backend = "chat_completions"
+            api_key = "sk-deepseek"
+            web_search_wire = "messages"
+            web_search_base_url = "https://api.deepseek.com/anthropic/v1"
+
+            [model.deepseek-chat]
+            model = "deepseek-chat"
+            model_provider = "deepseek"
+            context_window = 128000
+            "#,
+    )
+    .unwrap();
+    let cfg = Config::new_from_toml_cfg(&raw_config).expect("config should parse");
+    let resolved = resolve_model_list(&cfg, None);
+    let entry = resolved.get("deepseek-chat").expect("model should exist");
+    assert_eq!(entry.info.api_backend, ApiBackend::ChatCompletions);
+    assert_eq!(
+        entry.info.resolved_web_search_wire(),
+        WebSearchWire::Messages
+    );
+    assert_eq!(
+        entry.info.web_search_base_url.as_deref(),
+        Some("https://api.deepseek.com/anthropic/v1"),
+    );
+    assert!(
+        !entry.info.supports_backend_search,
+        "hosted Responses search stays off, so the chat-completions body carries no web_search tool",
+    );
+}
 #[test]
 fn finalize_image_describe_sampler_none_uses_active_session_model_not_forced_helper() {
     let active = SamplerConfig {

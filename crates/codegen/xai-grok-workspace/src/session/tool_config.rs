@@ -452,7 +452,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
         use xai_grok_tools::implementations::grok_build::app_builder::AppBuilderDeployerConfig;
         use xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig;
         use xai_grok_tools::implementations::grok_build::video_gen::VideoGenConfig;
-        use xai_grok_tools::implementations::web_search::WebSearchConfig;
+        use xai_grok_tools::implementations::web_search::{WebSearchConfig, WebSearchWire};
         let fs = Arc::new(xai_grok_tools::computer::local::LocalFs)
             as Arc<dyn xai_grok_tools::computer::types::AsyncFileSystem>;
         let notification_handle = xai_grok_tools::notification::ToolNotificationHandle::noop();
@@ -482,6 +482,8 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
                                 zdr_restricted: false,
                             },
                             WebSearchConfig::Enabled {
+                                wire: WebSearchWire::Responses,
+                                use_session_bearer: false,
                                 api_key: token,
                                 base_url: url.clone(),
                                 model: default_web_search_model(),

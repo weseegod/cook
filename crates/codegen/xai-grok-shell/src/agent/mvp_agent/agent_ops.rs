@@ -5,6 +5,7 @@
 use super::*;
 use crate::agent::config::TraceUploadEndpoints;
 use crate::sampling::EffortTarget;
+use xai_grok_tools::implementations::WebSearchWire;
 use xai_grok_login::PreferredAuthMethod;
 use crate::upload::trace::PromptMetadataParams;
 use xai_grok_tools::implementations::grok_build::task::backend::SubagentBackend;
@@ -2248,21 +2249,54 @@ impl MvpAgent {
             &self.media_tool_credentials(),
         )
     }
-    pub(super) fn prepare_web_search_sampling_config(&self) -> Option<SamplingConfig> {
-        let model_id = self.cfg.borrow().web_search_model.clone();
+    pub(super) fn prepare_web_search_sampling_config(
+        &self,
+        model_id: &str,
+    ) -> Option<SamplingConfig> {
         let models = self.models_manager.models();
+        let session_entry = crate::agent::config::find_model_by_id(&models, model_id);
+        let wire = session_entry
+            .map(|entry| entry.info.resolved_web_search_wire())
+            .unwrap_or(WebSearchWire::Off);
+        // A model that declares how to search searches on its own endpoint. The rest keep the
+        // configured `web_search_model`, still the only route for hosted Responses search.
+        let search_model = if wire == WebSearchWire::Off {
+            self.cfg.borrow().web_search_model.clone()
+        } else {
+            model_id.to_owned()
+        };
         let session = self.current_or_buffered_auth();
         let alpha_test_key = self.cfg.borrow().endpoints.alpha_test_key.clone();
         let client_version = self.cfg.borrow().client_version.clone();
-        let mut cfg = config::resolve_web_search_sampling_config(
-            &model_id,
+        // A resolution without a credential cannot search, and dropping the tool would hide the
+        // failure from the model instead of letting it read the error. Fall back to the session
+        // model's own endpoint, which carries the credential the session is chatting with.
+        let mut cfg = match config::resolve_web_search_sampling_config(
+            &search_model,
             &models,
             session.as_ref().map(|a| a.key.as_str()),
             self.cfg.borrow().grok_com_config.api_key_auth_disabled(),
             alpha_test_key.clone(),
             client_version,
             &self.cfg.borrow().endpoints,
-        )?;
+        ) {
+            Some(cfg) if cfg.api_key.is_some() => cfg,
+            _ => self.sampling_config.borrow().clone(),
+        };
+        if wire != WebSearchWire::Off
+            && let Some(entry) = session_entry
+        {
+            // `api_backend` is how the wire survives to the spawn; the search client reads it
+            // back to pick `{base}/messages` over `{base}/responses`.
+            cfg.api_backend = if wire == WebSearchWire::Messages {
+                crate::sampling::ApiBackend::Messages
+            } else {
+                crate::sampling::ApiBackend::Responses
+            };
+            if let Some(base) = entry.info.web_search_base_url.clone() {
+                cfg.base_url = base;
+            }
+        }
         crate::agent::proxy_headers::inject_proxy_headers(
             &mut cfg.extra_headers,
             cfg.client_version.as_deref(),
@@ -2270,6 +2304,23 @@ impl MvpAgent {
             &cfg.base_url,
         );
         Some(cfg)
+    }
+    /// The `web_search` wire the session's active model *declares*, or `inherit` when it declares
+    /// none. Only an explicit `off` opts the entry out of the tool.
+    pub(super) fn declared_web_search_wire(&self, model_id: &str) -> WebSearchWire {
+        let models = self.models_manager.models();
+        crate::agent::config::find_model_by_id(&models, model_id)
+            .map(|entry| entry.info.web_search_wire)
+            .unwrap_or(WebSearchWire::Inherit)
+    }
+    /// Whether `web_search` is advertised for `model_id`: on unless something says otherwise, which
+    /// is the feature/env/remote setting, `--disable-web-search`, or an `off` wire on the entry.
+    pub(super) fn web_search_enabled_for(&self, model_id: &str) -> bool {
+        let declared = self.declared_web_search_wire(model_id);
+        self.cfg
+            .borrow()
+            .resolve_web_search_with_wire(declared)
+            .value
     }
     /// The caller at the process boundary renders the [`crate::agent::init::BootstrapError`] and exits.
     pub fn new(
@@ -4660,7 +4711,8 @@ impl MvpAgent {
             .find(|entry| entry.info.has_model_id(&sampling_config.model))
             .and_then(|entry| entry.info.max_retries);
         let origin_client = self.origin_client_info_from_meta(init.meta.as_ref());
-        let web_search_sampling_config = self.prepare_web_search_sampling_config();
+        let web_search_sampling_config =
+            self.prepare_web_search_sampling_config(&sampling_config.model);
         let image_gen_config = self.prepare_image_gen_config();
         let video_gen_config = self.prepare_video_gen_config();
         let app_builder_deployer_config = self.prepare_app_builder_deployer_config();
@@ -4695,7 +4747,7 @@ impl MvpAgent {
                     .is_feature_enabled(crate::agent::config::Feature::AskUserQuestion)
             });
         let client_hooks = crate::extensions::hooks::parse_client_hooks(session_meta);
-        let disable_web_search = !self.cfg.borrow().resolve_web_search().value;
+        let disable_web_search = !self.web_search_enabled_for(&sampling_config.model);
         let todo_gate = self.cfg.borrow().todo_gate;
         let remote_settings_for_spawn = self.cfg.borrow().remote_settings.clone();
         let laziness_debug_log_for_spawn = self.cfg.borrow().laziness_debug_log.clone();

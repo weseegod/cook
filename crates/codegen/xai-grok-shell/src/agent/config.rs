@@ -22,6 +22,7 @@ use xai_grok_sampling_types::{
     input_modalities_meta_value, parse_input_modalities, reasoning_effort_meta_value,
     reasoning_efforts_meta_value,
 };
+use xai_grok_tools::implementations::web_search::WebSearchWire;
 use xai_grok_tools::types::compat::{CompatConfig, CompatConfigToml};
 /// Determines behavior like relay sync enablement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -2198,13 +2199,24 @@ impl Config {
             .default(false)
             .resolve()
     }
-    /// Client `web_search` tool. Default off via [`Feature::WebSearch`].
+    /// Client `web_search` tool. On by default via [`Feature::WebSearch`]; the tool is advertised
+    /// for every model so a provider that cannot search answers with a tool error the model reads.
     /// `--disable-web-search` / `disable_web_search` remains a force-off that beats an enabled feature.
     pub(crate) fn resolve_web_search(&self) -> Resolved<bool> {
         if self.disable_web_search {
             return Resolved::new(false, ConfigSource::Config);
         }
         self.feature(Feature::WebSearch)
+    }
+    /// [`Self::resolve_web_search`] with the model's *declared* wire as an entry-level opt-out:
+    /// `web_search_wire = "off"` in `[model.<id>]`, `[model_providers.<id>]` or the remote catalog
+    /// turns the tool off for that entry. An undeclared wire (`inherit`) keeps the feature
+    /// default, which is on.
+    pub(crate) fn resolve_web_search_with_wire(&self, wire: WebSearchWire) -> Resolved<bool> {
+        if wire == WebSearchWire::Off {
+            return Resolved::new(false, ConfigSource::Config);
+        }
+        self.resolve_web_search()
     }
     /// Classifier, planner, and summary all default to goal mode itself: when `/goal` is on they are on unless config/env/remote says otherwise.
     /// `goal_enabled` is the session's already-resolved master switch (the same value the actor stores).
@@ -3248,6 +3260,10 @@ struct DefaultModelJson {
     #[serde(default)]
     supports_backend_search: bool,
     #[serde(default)]
+    web_search_wire: WebSearchWire,
+    #[serde(default)]
+    web_search_base_url: Option<String>,
+    #[serde(default)]
     compactions_remaining: Option<CompactionsRemaining>,
     #[serde(default)]
     compaction_at_tokens: Option<CompactionAtTokens>,
@@ -3331,6 +3347,8 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 reasoning_effort_server_default: false,
                 variants: m.variants,
                 supports_backend_search: m.supports_backend_search,
+                web_search_wire: m.web_search_wire,
+                web_search_base_url: m.web_search_base_url,
                 compactions_remaining: m.compactions_remaining,
                 compaction_at_tokens: m.compaction_at_tokens,
                 show_model_fingerprint: m.show_model_fingerprint,
@@ -3461,6 +3479,15 @@ pub struct ModelEntryConfig {
     pub supported_in_api: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub supports_backend_search: bool,
+    /// Wire that runs `web_search` for this model. `Inherit` (the default) derives it from
+    /// `api_backend` and `supports_backend_search`: Messages runs the server tool, Responses
+    /// runs hosted search, and anything else leaves the tool off unless the model opts in here.
+    #[serde(default, skip_serializing_if = "is_inherit_web_search_wire")]
+    pub web_search_wire: WebSearchWire,
+    /// Base URL for the search call when it differs from `base_url`. DeepSeek native search lives
+    /// on `/anthropic/v1` while the chat loop stays on the root, so the entry names both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search_base_url: Option<String>,
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compactions_remaining: Option<CompactionsRemaining>,
@@ -3531,6 +3558,8 @@ impl Default for ModelEntryConfig {
             hidden: false,
             supported_in_api: true,
             supports_backend_search: false,
+            web_search_wire: WebSearchWire::Inherit,
+            web_search_base_url: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -3540,6 +3569,10 @@ impl Default for ModelEntryConfig {
             laziness_detector: LazinessDetectorPerModelConfig::default(),
         }
     }
+}
+/// `skip_serializing_if` for the model-entry default wire: `inherit` never round-trips into config.toml.
+fn is_inherit_web_search_wire(wire: &WebSearchWire) -> bool {
+    *wire == WebSearchWire::Inherit
 }
 /// Derives `PartialEq` on `f32`, which is fine for the current shape. Both `f32` fields default to `None`, so there's no parsed-vs-literal `0.7` float equality footgun.
 /// If a future default introduces `Some(0.7)`, this helper must be reworked (e.g. compare on tolerance, or switch to a bit-pattern compare).
@@ -3604,6 +3637,10 @@ pub struct ConfigModelOverride {
     pub supports_batch_api: Option<bool>,
     pub reasoning_efforts: Vec<ReasoningEffortOption>,
     pub supports_backend_search: Option<bool>,
+    /// Override the derived `web_search` wire; `None` keeps the base entry's value.
+    pub web_search_wire: Option<WebSearchWire>,
+    /// Override the search-call base URL; `None` keeps the base entry's value.
+    pub web_search_base_url: Option<String>,
     /// Aliases must be registered in `config_model_override_parse::ALIASES`; serde rejects a table that contains both spellings otherwise.
     #[serde(alias = "send_compactions_remaining")]
     pub compactions_remaining: Option<CompactionsRemaining>,
@@ -3736,6 +3773,15 @@ impl ConfigModelOverride {
         if let Some(v) = self.supports_backend_search {
             entry.info.supports_backend_search = v;
         }
+        if let Some(v) = self.web_search_wire {
+            entry.info.web_search_wire = v;
+        }
+        if self.web_search_base_url.is_some() {
+            entry
+                .info
+                .web_search_base_url
+                .clone_from(&self.web_search_base_url);
+        }
         if self.compactions_remaining.is_some() {
             entry.info.compactions_remaining = self.compactions_remaining;
         }
@@ -3857,6 +3903,12 @@ pub struct ModelInfo {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variants: Vec<ModelVariant>,
     pub supports_backend_search: bool,
+    /// Wire that runs `web_search`; `Inherit` derives from `api_backend` and `supports_backend_search`.
+    #[serde(default, skip_serializing_if = "is_inherit_web_search_wire")]
+    pub web_search_wire: WebSearchWire,
+    /// Search-call base URL when it differs from `base_url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search_base_url: Option<String>,
     /// Per-model config for the `x-compactions-remaining` header; `None` disables it.
     pub compactions_remaining: Option<CompactionsRemaining>,
     /// Per-model config for the `x-compaction-at` header; `None` disables it.
@@ -3929,6 +3981,8 @@ impl ModelInfo {
             reasoning_effort_server_default: false,
             variants: Vec::new(),
             supports_backend_search: false,
+            web_search_wire: WebSearchWire::Inherit,
+            web_search_base_url: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,
@@ -3977,6 +4031,8 @@ impl ModelInfo {
             reasoning_effort_server_default: entry.reasoning_effort_server_default,
             variants: entry.variants.clone(),
             supports_backend_search: entry.supports_backend_search,
+            web_search_wire: entry.web_search_wire,
+            web_search_base_url: entry.web_search_base_url.clone(),
             compactions_remaining: entry.compactions_remaining,
             compaction_at_tokens: entry.compaction_at_tokens,
             show_model_fingerprint: entry.show_model_fingerprint,
@@ -3985,6 +4041,13 @@ impl ModelInfo {
             reasoning_summary: entry.reasoning_summary,
             laziness_detector: entry.laziness_detector.clone(),
         }
+    }
+    /// The `web_search` wire this model runs, with `Inherit` resolved against its backend.
+    pub(crate) fn resolved_web_search_wire(&self) -> WebSearchWire {
+        self.web_search_wire.resolve(
+            self.api_backend == ApiBackend::Messages,
+            self.supports_backend_search,
+        )
     }
     /// Whether `id` is one of the ids this model sends: its own, or the one it uses at some effort.
     pub(crate) fn has_model_id(&self, id: &str) -> bool {
@@ -4745,6 +4808,8 @@ pub(crate) fn resolve_aux_model_sampling_config(
                 reasoning_effort_server_default: false,
                 variants: Vec::new(),
                 supports_backend_search: false,
+                web_search_wire: WebSearchWire::Inherit,
+                web_search_base_url: None,
                 compactions_remaining: None,
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
@@ -5052,6 +5117,8 @@ fn resolve_hidden_default_web_search_sampling_config(
             reasoning_effort_server_default: false,
             variants: Vec::new(),
             supports_backend_search: false,
+            web_search_wire: WebSearchWire::Inherit,
+            web_search_base_url: None,
             compactions_remaining: None,
             compaction_at_tokens: None,
             show_model_fingerprint: false,

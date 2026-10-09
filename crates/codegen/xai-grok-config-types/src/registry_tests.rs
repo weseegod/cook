@@ -47,13 +47,13 @@ fn registered_settings() {
         BTreeMap::from([
             ("session_search", ("GROK_SESSION_SEARCH", true)),
             ("lsp_tools", ("GROK_LSP_TOOLS", false)),
-            ("web_fetch", ("GROK_WEB_FETCH", false)),
+            ("web_fetch", ("GROK_WEB_FETCH", true)),
             ("session_recap", ("GROK_SESSION_RECAP", true)),
             ("ask_user_question", ("GROK_ASK_USER_QUESTION", true)),
             ("voice_mode", ("GROK_VOICE_MODE", true)),
             ("write_file", ("GROK_WRITE_FILE", true)),
             ("feedback", ("GROK_FEEDBACK_ENABLED", false)),
-            ("web_search", ("GROK_WEB_SEARCH", false)),
+            ("web_search", ("GROK_WEB_SEARCH", true)),
             ("feedback_trace_card", ("GROK_FEEDBACK_TRACE_CARD", false)),
             ("turn_summary", ("GROK_TURN_SUMMARY", true)),
             ("cancel_rewind", ("GROK_CANCEL_REWIND", true)),
@@ -178,6 +178,37 @@ fn pin_outranks_env_outranks_config_outranks_remote_outranks_default() {
     let fallback = Feature::SessionSearch.resolve(FeatureSources::default());
     assert!(fallback.value);
     assert_eq!(fallback.source, ConfigSource::Default);
+}
+
+/// `web_fetch` ships on: nobody setting it leaves it enabled, and one voice saying off wins.
+#[test]
+fn web_fetch_defaults_on_and_an_explicit_off_still_turns_it_off() {
+    let unset = Feature::WebFetch.resolve(FeatureSources::default());
+    assert!(unset.value, "web_fetch is on when nothing sets it");
+    assert_eq!(unset.source, ConfigSource::Default);
+
+    let from_env = Feature::WebFetch.resolve(FeatureSources {
+        env: Some(false),
+        ..Default::default()
+    });
+    assert!(!from_env.value, "GROK_WEB_FETCH=0 turns it off");
+    assert_eq!(from_env.source, ConfigSource::Env);
+}
+
+/// `web_search` ships on for every model, so the tool is advertised and a provider that cannot
+/// search answers with a tool error instead of the tool silently missing.
+#[test]
+fn web_search_defaults_on_and_an_explicit_off_still_turns_it_off() {
+    let unset = Feature::WebSearch.resolve(FeatureSources::default());
+    assert!(unset.value, "web_search is on when nothing sets it");
+    assert_eq!(unset.source, ConfigSource::Default);
+
+    let from_env = Feature::WebSearch.resolve(FeatureSources {
+        env: Some(false),
+        ..Default::default()
+    });
+    assert!(!from_env.value, "GROK_WEB_SEARCH=0 turns it off");
+    assert_eq!(from_env.source, ConfigSource::Env);
 }
 
 #[test]

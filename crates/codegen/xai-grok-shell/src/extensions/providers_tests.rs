@@ -385,6 +385,72 @@ fn presets_match_the_shared_desktop_fixture() {
 }
 
 #[test]
+fn deepseek_card_carries_a_messages_search_profile() {
+    let profile = preset_search_endpoint("deepseek", "https://api.deepseek.com")
+        .expect("the DeepSeek card declares where its search runs");
+    assert_eq!(
+        profile.wire,
+        xai_grok_tools::implementations::WebSearchWire::Messages
+    );
+    assert_eq!(
+        profile.search_base_url,
+        "https://api.deepseek.com/anthropic/v1"
+    );
+    assert!(
+        preset_search_endpoint("deepseek", "https://api.deepseek.com/v1").is_some(),
+        "a path or trailing slash on the same host still matches"
+    );
+    assert!(
+        preset_search_endpoint("deepseek", "https://proxy.example/v1").is_none(),
+        "a provider repointed at another host must not inherit DeepSeek's search endpoint"
+    );
+    assert!(
+        preset_search_endpoint("opencode", "https://api.deepseek.com").is_none(),
+        "a different provider on the same host is unaffected"
+    );
+}
+
+#[test]
+fn upsert_writes_the_card_search_profile_and_keeps_a_user_value() {
+    let mut doc: toml_edit::DocumentMut = r#"
+[model_providers.deepseek]
+base_url = "https://api.deepseek.com"
+web_search_wire = "responses"
+"#
+    .parse()
+    .expect("valid fixture");
+    let provider = doc["model_providers"]["deepseek"]
+        .as_table_mut()
+        .expect("provider table");
+    apply_preset_search_endpoint(provider, "deepseek");
+    assert_eq!(
+        provider
+            .get("web_search_wire")
+            .and_then(|item| item.as_str()),
+        Some("responses"),
+        "a hand-edited wire wins over the card profile"
+    );
+    assert_eq!(
+        provider
+            .get("web_search_base_url")
+            .and_then(|item| item.as_str()),
+        Some("https://api.deepseek.com/anthropic/v1"),
+        "the profile still fills a field the user left empty"
+    );
+
+    let mut other: toml_edit::DocumentMut =
+        "[model_providers.gateway]\nbase_url = \"https://gw.example/v1\"\n"
+            .parse()
+            .expect("valid fixture");
+    let provider = other["model_providers"]["gateway"]
+        .as_table_mut()
+        .expect("provider table");
+    apply_preset_search_endpoint(provider, "gateway");
+    assert!(provider.get("web_search_wire").is_none());
+    assert!(provider.get("web_search_base_url").is_none());
+}
+
+#[test]
 fn env_key_primary_reads_single_and_list_forms() {
     use crate::agent::config::EnvKeys;
     assert_eq!(

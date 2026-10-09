@@ -100,6 +100,8 @@ async fn web_search_uses_model_override_from_config_end_to_end() {
         state_path: std::env::temp_dir().join("grok-web-search-e2e/state.json"),
         memory_backend: None,
         web_search_config: xai_grok_tools::implementations::web_search::WebSearchConfig::Enabled {
+            wire: xai_grok_tools::implementations::web_search::WebSearchWire::Responses,
+            use_session_bearer: crate::util::is_xai_api_bearer_url(&web_search_sampling.base_url),
             api_key: web_search_sampling.api_key.clone().unwrap(),
             base_url: web_search_sampling.base_url.clone(),
             model: web_search_sampling.model.clone(),

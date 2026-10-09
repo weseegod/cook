@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ExtResult, parse_params, to_raw_response};
 use crate::agent::MvpAgent;
+use xai_grok_tools::implementations::WebSearchWire;
 
 /// Ceiling for one credential probe. A hung provider must not wedge the settings dialog.
 const TEST_TIMEOUT: Duration = Duration::from_secs(20);
@@ -190,6 +191,77 @@ fn headers_as_map<S: serde::Serializer>(
         map.serialize_entry(name, value)?;
     }
     map.end()
+}
+
+/// Where a provider card's server-side search runs, when that is not the chat loop's endpoint.
+///
+/// A card install writes the row's fields into `[model_providers.<id>]`, so every model the card
+/// seeds inherits a `web_search` wire that works without a second model. Adding another provider
+/// is a row here; `[model.<id>]` and the provider table itself still override either field.
+pub(crate) struct PresetSearchEndpoint {
+    pub(crate) provider_id: &'static str,
+    /// The chat base URL the profile belongs to, so a repointed provider id never inherits it.
+    pub(crate) chat_base_url: &'static str,
+    pub(crate) wire: WebSearchWire,
+    pub(crate) search_base_url: &'static str,
+}
+
+const PRESET_SEARCH_ENDPOINTS: &[PresetSearchEndpoint] = &[PresetSearchEndpoint {
+    // The chat loop is OpenAI-compatible; the search tool lives on the Anthropic-compatible surface.
+    provider_id: "deepseek",
+    chat_base_url: "https://api.deepseek.com",
+    wire: WebSearchWire::Messages,
+    search_base_url: "https://api.deepseek.com/anthropic/v1",
+}];
+
+pub(crate) fn preset_search_endpoint(
+    provider_id: &str,
+    base_url: &str,
+) -> Option<&'static PresetSearchEndpoint> {
+    let host = url_host(base_url)?;
+    PRESET_SEARCH_ENDPOINTS
+        .iter()
+        .find(|row| row.provider_id == provider_id && url_host(row.chat_base_url) == Some(host))
+}
+
+/// The TOML spelling of a wire, matching `WebSearchWire`'s serde representation. The upsert test
+/// pins the written value, so the two cannot drift silently.
+fn wire_setting(wire: WebSearchWire) -> &'static str {
+    match wire {
+        WebSearchWire::Inherit => "inherit",
+        WebSearchWire::Off => "off",
+        WebSearchWire::Messages => "messages",
+        WebSearchWire::Responses => "responses",
+    }
+}
+
+/// Fill in the card's search profile on a provider table. Card installs carry no wire of their
+/// own, so this is their default; anything a hand-edited table already wrote wins.
+fn apply_preset_search_endpoint(provider: &mut toml_edit::Table, provider_id: &str) {
+    let base_url = provider
+        .get("base_url")
+        .and_then(|item| item.as_str())
+        .unwrap_or_default();
+    let Some(profile) = preset_search_endpoint(provider_id, base_url) else {
+        return;
+    };
+    provider
+        .entry("web_search_wire")
+        .or_insert(toml_edit::value(wire_setting(profile.wire)));
+    provider
+        .entry("web_search_base_url")
+        .or_insert(toml_edit::value(profile.search_base_url));
+}
+
+/// Host-only comparison: a path, a trailing slash, or a userinfo prefix never defeats the match.
+fn url_host(url: &str) -> Option<&str> {
+    let authority = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()?;
+    let host = authority.rsplit('@').next()?.split(':').next()?;
+    (!host.is_empty()).then_some(host)
 }
 
 const fn seed(
@@ -625,6 +697,7 @@ async fn upsert_provider(req: &UpsertRequest) -> anyhow::Result<UpsertResponse> 
         if let Some(backend) = req.api_backend.as_deref() {
             provider.insert("api_backend", toml_edit::value(backend));
         }
+        apply_preset_search_endpoint(provider, &req.id);
         if req.extra_headers.is_empty() {
             provider.remove("extra_headers");
         } else {

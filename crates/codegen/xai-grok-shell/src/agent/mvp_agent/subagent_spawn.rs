@@ -304,7 +304,8 @@ impl MvpAgent {
                         crate::config::MemoryMode::Legacy
                     }
                 }),
-            web_search_sampling_config: self.prepare_web_search_sampling_config(),
+            web_search_sampling_config: self
+                .prepare_web_search_sampling_config(&self.sampling_config.borrow().model),
             web_fetch_config: self.prepare_web_fetch_config(),
             image_gen_config: self.prepare_image_gen_config(),
             video_gen_config: self.prepare_video_gen_config(),
@@ -334,7 +335,7 @@ impl MvpAgent {
             subagent_toggle,
             subagent_roles,
             subagent_personas,
-            disable_web_search: !self.cfg.borrow().resolve_web_search().value,
+            disable_web_search: !self.web_search_enabled_for(&self.sampling_config.borrow().model),
             todo_gate: self.cfg.borrow().todo_gate,
             remote_settings: self.cfg.borrow().remote_settings.clone(),
             laziness_debug_log: self.cfg.borrow().laziness_debug_log.clone(),

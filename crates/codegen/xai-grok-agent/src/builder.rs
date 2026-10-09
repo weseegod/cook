@@ -3321,7 +3321,7 @@ mod tests {
     async fn requested_enabled_web_tools_survive_allowlist() {
         use xai_grok_tools::computer::local::LocalTerminalBackend;
         use xai_grok_tools::implementations::grok_build::web_fetch::WebFetchConfig;
-        use xai_grok_tools::implementations::web_search::WebSearchConfig;
+        use xai_grok_tools::implementations::web_search::{WebSearchConfig, WebSearchWire};
         use xai_grok_tools::notification::ToolNotificationHandle;
         let mut definition = crate::config::AgentDefinition::default_grok_build();
         definition.tools = vec![
@@ -3338,6 +3338,8 @@ mod tests {
         )
         .from_definition(definition)
         .with_web_search_config(WebSearchConfig::Enabled {
+            wire: WebSearchWire::Responses,
+            use_session_bearer: true,
             api_key: "test-key".into(),
             base_url: "https://api.x.ai/v1".into(),
             model: "test-web-search-model".into(),
@@ -3501,10 +3503,12 @@ mod tests {
         tool_overrides: Option<xai_grok_sampling_types::ToolOverrides>,
     ) -> crate::agent::Agent {
         use xai_grok_tools::computer::local::LocalTerminalBackend;
-        use xai_grok_tools::implementations::web_search::WebSearchConfig;
+        use xai_grok_tools::implementations::web_search::{WebSearchConfig, WebSearchWire};
         use xai_grok_tools::notification::ToolNotificationHandle;
         let web_search_config = if web_search_enabled {
             WebSearchConfig::Enabled {
+                wire: WebSearchWire::Responses,
+                use_session_bearer: true,
                 api_key: "test-key".into(),
                 base_url: "https://api.x.ai/v1".into(),
                 model: "test-web-search-model".into(),
