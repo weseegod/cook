@@ -399,6 +399,11 @@ pub(super) fn build_tool_parse_error_message(
              every required field filled in — copy the example shape from the tool \
              description. Do not retry `{}`.",
         );
+    } else if function_name == "search_replace" && err.to_string().contains("missing field") {
+        msg.push_str(
+            "\n\nAn `edits` entry is `{old_string, new_string}`. When you send `edits`, you may omit \
+             top-level `old_string` and `new_string` entirely; send them only for a single-hunk edit.",
+        );
     }
 
     msg

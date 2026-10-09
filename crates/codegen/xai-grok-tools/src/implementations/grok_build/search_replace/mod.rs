@@ -82,8 +82,12 @@ pub struct SearchReplaceInput {
         description = "The path to the file to modify. You can use either a relative path in the workspace or an absolute path."
     )]
     pub file_path: String,
+    /// The text to replace. Omitted with `edits` behaves the same as an empty string.
+    #[serde(default)]
     #[schemars(description = "The text to replace")]
     pub old_string: String,
+    /// The replacement text. Omitted with `edits` behaves the same as an empty string.
+    #[serde(default)]
     #[schemars(
         description = "The text to replace it with (must be different from ${{ params.edit.old_string }})"
     )]
@@ -213,10 +217,32 @@ pub(crate) async fn run_search_replace(
             )));
         }
     }
-    if input.edits.is_empty() && input.old_string == input.new_string {
-        return Ok(SearchReplaceOutput::InvalidInput(
-            "Old string and new string are the same".to_owned(),
-        ));
+    if input.edits.is_empty() {
+        if input.old_string.is_empty() && input.new_string.is_empty() {
+            let (old_string_name, new_string_name) = {
+                let res = resources.lock().await;
+                match res.require::<TemplateRenderer>() {
+                    Ok(renderer) => (
+                        renderer.render("${{ params.edit.old_string }}").map_err(|e| {
+                            xai_tool_runtime::ToolError::invalid_arguments(e.to_string())
+                        })?,
+                        renderer.render("${{ params.edit.new_string }}").map_err(|e| {
+                            xai_tool_runtime::ToolError::invalid_arguments(e.to_string())
+                        })?,
+                    ),
+                    Err(_) => ("old_string".to_owned(), "new_string".to_owned()),
+                }
+            };
+            return Ok(SearchReplaceOutput::InvalidInput(format!(
+                "No edit given. Send `{old_string_name}` and `{new_string_name}`, or an `edits` array of \
+                 `{{old_string, new_string}}`. An empty `{old_string_name}` creates a new file."
+            )));
+        }
+        if input.old_string == input.new_string {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                "Old string and new string are the same".to_owned(),
+            ));
+        }
     }
     let (empty_old_string_does_not_override, include_user_edit_hint);
     {
@@ -3027,5 +3053,104 @@ neutTest_set);
             std::fs::read_to_string(tmp.path().join("test.txt")).unwrap(),
             original
         );
+    }
+
+    /// `{file_path, edits}` is the documented shape; the top-level pair is omitted, not sent empty.
+    #[test]
+    fn omitted_top_level_strings_deserialize_with_edits() {
+        let input: SearchReplaceInput = serde_json::from_str(
+            r#"{"file_path":"a.py","edits":[{"old_string":"one","new_string":"two"}]}"#,
+        )
+        .expect("the documented edits shape must deserialize");
+        assert_eq!(input.file_path, "a.py");
+        assert!(input.old_string.is_empty());
+        assert!(input.new_string.is_empty());
+        assert_eq!(input.edits.len(), 1);
+        assert_eq!(input.edits[0].old_string, "one");
+        assert_eq!(input.edits[0].new_string, "two");
+    }
+
+    #[test]
+    fn schema_requires_only_file_path() {
+        let schema = schemars::schema_for!(SearchReplaceInput);
+        let value = serde_json::to_value(&schema).unwrap();
+        let required: Vec<&str> = value
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|r| r.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert!(required.contains(&"file_path"), "schema: {value}");
+        assert!(!required.contains(&"old_string"), "schema: {value}");
+        assert!(!required.contains(&"new_string"), "schema: {value}");
+    }
+
+    #[tokio::test]
+    async fn omitted_top_level_strings_apply_both_hunks() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input: SearchReplaceInput = serde_json::from_str(
+            r#"{"file_path":"test.txt","edits":[{"old_string":"alpha","new_string":"ALPHA"},{"old_string":"gamma","new_string":"GAMMA"}]}"#,
+        )
+        .unwrap();
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert_eq!(applied.edits.details.len(), 2);
+                assert_eq!(
+                    std::fs::read_to_string(tmp.path().join("test.txt")).unwrap(),
+                    "ALPHA\nbeta\nGAMMA\n"
+                );
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    /// A file_path with no edit is a missing edit, so the error names both accepted shapes.
+    #[tokio::test]
+    async fn empty_input_names_both_shapes() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "hello\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input: SearchReplaceInput =
+            serde_json::from_str(r#"{"file_path":"test.txt"}"#).unwrap();
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(msg.contains("old_string"), "expected shape names: {msg}");
+                assert!(msg.contains("new_string"), "expected shape names: {msg}");
+                assert!(msg.contains("edits"), "expected edits shape: {msg}");
+                assert!(
+                    !msg.contains("are the same"),
+                    "must not call a missing edit equal strings: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+    }
+
+    /// The equal-non-empty pair keeps the old message.
+    #[tokio::test]
+    async fn equal_non_empty_strings_report_same() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "hello\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("test.txt", "hello", "hello");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(msg.contains("are the same"), "expected same message: {msg}");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
     }
 }

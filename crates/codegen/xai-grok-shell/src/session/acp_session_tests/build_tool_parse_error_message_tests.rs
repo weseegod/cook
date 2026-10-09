@@ -106,6 +106,30 @@ fn test_non_empty_valid_json_skips_empty_object_note() {
     assert!(!msg.contains("Do not retry `{}`"), "{msg}");
 }
 
+/// A search_replace missing-field error names both accepted shapes.
+#[test]
+fn test_search_replace_missing_field_names_edits_shape() {
+    let err =
+        xai_tool_runtime::ToolError::invalid_arguments("missing field `old_string`".to_string());
+    let msg = build_tool_parse_error_message(
+        "search_replace",
+        &err,
+        r#"{"file_path":"a.py","edits":[{"old_string":"x","new_string":"y"}]}"#,
+    );
+
+    assert!(msg.contains("{old_string, new_string}"), "{msg}");
+    assert!(msg.contains("may omit"), "{msg}");
+}
+
+/// The edits shape note is search_replace-only.
+#[test]
+fn test_edits_shape_note_is_search_replace_only() {
+    let err = xai_tool_runtime::ToolError::invalid_arguments("missing field".to_string());
+    let msg = build_tool_parse_error_message("read_file", &err, r#"{"path":"x"}"#);
+
+    assert!(!msg.contains("{old_string, new_string}"), "{msg}");
+}
+
 /// Arguments longer than MAX_ARGS_IN_ERROR must be truncated with a marker.
 #[test]
 fn test_long_arguments_are_truncated() {
