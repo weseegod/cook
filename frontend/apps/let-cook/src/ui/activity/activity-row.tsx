@@ -72,6 +72,12 @@ export function ActivityRowView({
           <strong className="activity-name" title={item.name}>{item.name}</strong>
           {suffix && <span className="activity-doing" title={suffix}>· {suffix}</span>}
           <span className={`activity-status activity-status-${item.status.toLowerCase()}`}>{item.status}</span>
+          {/* TUI tasks pane: muted model id before the elapsed clock (`tasks_pane.rs`). */}
+          {item.model && (
+            <span className="activity-model" data-testid={`${testIdPrefix}-model-${item.id}`} title={item.model}>
+              {item.model}
+            </span>
+          )}
           <span className="activity-elapsed">{formatDuration(elapsed)}</span>
         </span>
         {openable && (

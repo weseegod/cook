@@ -153,6 +153,25 @@ describe("activity store (P4)", () => {
     expect(rowForChildSession("someone-else")).toBeNull();
   });
 
+  it("keeps the spawn model on the row like the TUI Tasks pane", () => {
+    applySubagentSessionUpdate(
+      {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "sa-1",
+        child_session_id: "child-1",
+        description: "Explore",
+        model: "qwen38-27b",
+      },
+      "s1",
+    );
+    expect(useActivityStore.getState().subagents["sa-1"].model).toBe("qwen38-27b");
+    applySubagentSessionUpdate(
+      { sessionUpdate: "subagent_progress", subagent_id: "sa-1", turn_count: 2 },
+      "s1",
+    );
+    expect(useActivityStore.getState().subagents["sa-1"].model).toBe("qwen38-27b");
+  });
+
   it("falls back to the subagent id when the spawn omits a child session", () => {
     applySubagentSessionUpdate({ sessionUpdate: "subagent_spawned", subagent_id: "sa-9" }, "s1");
     expect(useActivityStore.getState().subagents["sa-9"].childSessionId).toBe("sa-9");

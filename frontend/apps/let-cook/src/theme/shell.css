@@ -377,6 +377,16 @@ img.brand-mark {
   color: var(--danger);
 }
 
+.activity-model {
+  flex: 0 1 auto;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .activity-elapsed {
   flex: 0 0 auto;
   font-family: var(--font-mono);

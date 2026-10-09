@@ -42,6 +42,8 @@ export interface SubagentListItem {
   tokensUsed?: number;
   toolsUsed?: string[];
   errorCount?: number;
+  /** Effective model id (`SubagentLiveSnapshotDto.model`); TUI paints it on the Tasks row. */
+  model?: string;
   /** Final report of a finished child (`SubagentSnapshotDto::output`). */
   output?: string;
 }
@@ -128,6 +130,7 @@ function normalizeSubagent(item: UnknownRecord): SubagentListItem {
     tokensUsed: numberValue(item.tokens_used ?? item.tokensUsed),
     toolsUsed: stringArray(item.tools_used ?? item.toolsUsed),
     errorCount: numberValue(item.error_count ?? item.errorCount),
+    model: stringValue(item.model ?? item.modelId),
     output: stringValue(item.output),
   };
 }
