@@ -22,6 +22,8 @@ Hard-suite results: one folder under docs/audits/ with all prompts, agent output
 
 API settings: EVAL_BASE_URL and EVAL_API_KEY override provider settings from
 ~/.cook/config.toml. EVAL_PARALLEL_SLOTS sets the API concurrency limit.
+Cook skills: EVAL_SKILLS=working-plan,bug-fix seeds those dirs into each cook
+cell (from EVAL_SKILLS_ROOT, else <repo>/skills, else ~/.cook/skills).
 EOF
 }
 

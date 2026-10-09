@@ -60,6 +60,51 @@ prepare_workdir() {
   fi
 }
 
+# Seed named skills into an isolated COOK_HOME for cook/cook-main eval cells.
+# EVAL_SKILLS=working-plan,bug-fix copies only those skill dirs and writes skills.toml
+# with inject=true and status.<name>=true. Sources, in order: EVAL_SKILLS_ROOT, $ROOT/skills,
+# then ${GROK_HOME:-$HOME/.cook}/skills. Empty/unset EVAL_SKILLS leaves the cell without skills.
+seed_eval_skills() {
+  local cook_home=$1
+  local raw=${EVAL_SKILLS:-} skills_root name src dest status_lines=()
+  raw=${raw//[[:space:]]/}
+  [[ -n "$raw" ]] || return 0
+  if [[ -n "${EVAL_SKILLS_ROOT:-}" ]]; then
+    skills_root=$EVAL_SKILLS_ROOT
+  elif [[ -n "${ROOT:-}" && -d "$ROOT/skills" ]]; then
+    skills_root=$ROOT/skills
+  else
+    skills_root="${GROK_HOME:-${HOME}/.cook}/skills"
+  fi
+  [[ -d "$skills_root" ]] || {
+    echo "EVAL_SKILLS set but skill root missing: $skills_root" >&2
+    return 1
+  }
+  mkdir -p "$cook_home/skills"
+  IFS=, read -r -a names <<<"$raw"
+  for name in "${names[@]}"; do
+    [[ -n "$name" ]] || continue
+    [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+      echo "invalid EVAL_SKILLS name: $name" >&2
+      return 1
+    }
+    src=$skills_root/$name
+    [[ -f "$src/SKILL.md" ]] || {
+      echo "EVAL_SKILLS skill not found (need $name/SKILL.md under $skills_root): $name" >&2
+      return 1
+    }
+    dest=$cook_home/skills/$name
+    rm -rf "$dest"
+    cp -a "$src" "$dest"
+    status_lines+=("$name = true")
+  done
+  {
+    printf '%s\n' 'paths = []' 'ignore = []' 'server_skill_dirs = []' 'bundled_skill_dirs = []' 'inject = true' '' '[status]'
+    printf '%s\n' "${status_lines[@]}"
+  } >"$cook_home/skills.toml"
+  printf '%s\n' "${EVAL_SKILLS:-}" >"$cook_home/eval-skills.txt"
+}
+
 run_agent() {
   local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking agent_bin
   if [[ "$THINKING" == true ]]; then effort=medium; pi_thinking=medium; else effort=none; pi_thinking=off; fi
@@ -109,6 +154,7 @@ account = "evaluate@example.com"
 version = 2''')
 PY
       chmod 600 "$dir/home/cook/config.toml"
+      seed_eval_skills "$dir/home/cook"
       if "$agent_bin" --help 2>/dev/null | grep -q -- '--no-auto-update'; then
         cmd=("$agent_bin" -p "$PROMPT" -m "local/$MODEL" --cwd "$dir/workdir" --output-format json --always-approve --reasoning-effort "$effort" --no-auto-update)
       else
@@ -171,5 +217,20 @@ if [[ "${BASH_SOURCE[0]}" == "$0" && "${1:-}" == --self-test ]]; then
   [[ $(git -C "$RUN_DIR/existing/workdir" rev-parse HEAD) == "$head" ]]
   prepare_workdir empty
   [[ -d "$RUN_DIR/empty/workdir/.git" && -d "$RUN_DIR/empty/home" ]]
+  skills_src=$(mktemp -d)
+  mkdir -p "$skills_src/working-plan" "$skills_src/bug-fix"
+  printf '%s\n' '---' 'name: working-plan' 'description: plan' '---' 'body' >"$skills_src/working-plan/SKILL.md"
+  printf '%s\n' '---' 'name: bug-fix' 'description: fix' '---' 'body' >"$skills_src/bug-fix/SKILL.md"
+  EVAL_SKILLS=working-plan,bug-fix EVAL_SKILLS_ROOT=$skills_src seed_eval_skills "$RUN_DIR/empty/home/cook"
+  [[ -f "$RUN_DIR/empty/home/cook/skills/working-plan/SKILL.md" ]]
+  [[ -f "$RUN_DIR/empty/home/cook/skills/bug-fix/SKILL.md" ]]
+  grep -q 'working-plan = true' "$RUN_DIR/empty/home/cook/skills.toml"
+  grep -q 'bug-fix = true' "$RUN_DIR/empty/home/cook/skills.toml"
+  grep -q 'inject = true' "$RUN_DIR/empty/home/cook/skills.toml"
+  [[ $(<"$RUN_DIR/empty/home/cook/eval-skills.txt") == working-plan,bug-fix ]]
+  unset EVAL_SKILLS EVAL_SKILLS_ROOT
+  seed_eval_skills "$RUN_DIR/empty/home/no-skills"
+  [[ ! -e "$RUN_DIR/empty/home/no-skills/skills.toml" ]]
+  rm -rf "$skills_src"
   echo 'agent self-test passed'
 fi

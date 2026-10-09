@@ -13,7 +13,15 @@ scripts/swe-bench/run.sh --model stealth/space-bunny-alpha --parallel 3 --seed 1
 scripts/swe-bench/run.sh --model stealth/space-bunny-alpha --agents cook --parallel 3 --seeds 1,2,3,4,5,6,7,8,9,10 --grade true
 scripts/swe-bench/run.sh --model deepseek/deepseek-v4.1-flash:relace --agents cook --parallel 3 --seeds 1-10 --grade true
 scripts/swe-bench/run.sh --model local/spark25-4b --agents cook --parallel 1 --levels easy,medium --seeds 1-10 --grade true
+EVAL_SKILLS=working-plan,bug-fix \
+  scripts/swe-bench/run.sh --model deepseek/deepseek-v4.1-flash:relace --agents cook --parallel 3 --seeds 1 --grade true
 ```
+
+Cook cells start with an isolated `COOK_HOME` and do not inherit `~/.cook/skills`.
+Set `EVAL_SKILLS` to a comma-separated list of skill directory names to copy into
+each cook cell and enable in that cell's `skills.toml` (`inject = true`). Skill
+dirs are resolved from `EVAL_SKILLS_ROOT` if set, otherwise `<repo>/skills`,
+otherwise `~/.cook/skills`. Unset `EVAL_SKILLS` leaves cook without seeded skills.
 
 `--model org/model:provider` pins OpenRouter routing to that provider only
 (`provider.only=[provider]`, `allow_fallbacks=false`) through a local proxy in

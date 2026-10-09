@@ -30,6 +30,8 @@ automatically when missing. Before a long graded run, validate Docker yourself:
   temp/swe-bench/venv/bin/swebench eval verified --gold -i sympy__sympy-20590 \
     --task-repo temp/swe-bench/swe-bench-tasks
 API overrides: EVAL_BASE_URL, EVAL_API_KEY, EVAL_CONTEXT_WINDOW, EVAL_PARALLEL_SLOTS.
+Cook skills: EVAL_SKILLS=working-plan,bug-fix seeds those skill dirs into each
+cook cell COOK_HOME (from EVAL_SKILLS_ROOT, else <repo>/skills, else ~/.cook/skills).
 A trailing :provider (except OpenRouter :free/:nitro/:floor variants) starts a
 local proxy that injects OpenRouter provider.only with allow_fallbacks=false.
 EOF
