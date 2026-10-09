@@ -13,7 +13,8 @@ Run one pinned SWE-bench Verified instance per level with each selected agent.
 --agents LIST      cook,cook-main,opencode,pi (default: cook,opencode,pi)
 --timeout SECONDS  easy-task time budget, minimum 600 (default: 900);
                    medium=2x, hard=4x, very-hard=6x for every agent
---thinking BOOL    reasoning enabled (default: true)
+--thinking LEVEL   reasoning level: off, minimal, low, medium, high, max
+                   (true=medium, false=off; default: true)
 --levels LIST      comma-separated subset of easy,medium,hard,very-hard
                    (default: all four); order is always easy→very-hard
 --parallel N       global task pool across all seeds/agents, 1 to 3 (default: 3);
@@ -105,7 +106,7 @@ mapfile -t SEEDS <<<"$SEED_TEXT"
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { echo 'timeout must be positive' >&2; exit 2; }
 (( TIMEOUT >= 600 && TIMEOUT <= 2147483647 / 6 )) || { echo '--timeout must be at least 600 seconds and fit the level multipliers' >&2; exit 2; }
 [[ "$PARALLEL" =~ ^[1-3]$ ]] || { echo 'parallel must be 1, 2, or 3' >&2; exit 2; }
-[[ "$THINKING" == true || "$THINKING" == false ]] || { echo 'thinking must be true or false' >&2; exit 2; }
+[[ "$THINKING" =~ ^(true|false|off|none|minimal|low|medium|high|xhigh|max)$ ]] || { echo 'thinking must be true, false, off, none, minimal, low, medium, high, xhigh, or max' >&2; exit 2; }
 AGENTS=${AGENTS//[[:space:]]/}
 [[ -n "$AGENTS" && "$AGENTS" != ,* && "$AGENTS" != *, && "$AGENTS" != *,,* ]] || { echo 'invalid agents list' >&2; exit 2; }
 IFS=, read -r -a SELECTED <<<"$AGENTS"

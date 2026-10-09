@@ -382,7 +382,7 @@ if __name__ == "__main__":
     parser.add_argument("--wire")
     parser.add_argument("--task")
     parser.add_argument("--agents")
-    parser.add_argument("--thinking", choices=("true", "false"), default="false")
+    parser.add_argument("--thinking", choices=("true", "false", "off", "none", "minimal", "low", "medium", "high", "xhigh", "max"), default="false")
     parser.add_argument("--parallel", type=int, choices=(1, 2, 3), default=1)
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()

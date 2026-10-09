@@ -105,9 +105,21 @@ seed_eval_skills() {
   printf '%s\n' "${EVAL_SKILLS:-}" >"$cook_home/eval-skills.txt"
 }
 
+# Reasoning level shared by every agent. `true`/`false` keep the original
+# medium/none behavior; a level name (low, high, max, ...) passes through.
+resolve_thinking_level() {
+  local level=${THINKING,,}
+  case "$level" in
+    ""|true) level=medium ;;
+    false|off) level=off ;;
+  esac
+  printf '%s' "$level"
+}
+
 run_agent() {
-  local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking agent_bin
-  if [[ "$THINKING" == true ]]; then effort=medium; pi_thinking=medium; else effort=none; pi_thinking=off; fi
+  local agent=$1 dir="$RUN_DIR/$1" start end rc effort pi_thinking agent_bin thinking_level
+  thinking_level=$(resolve_thinking_level)
+  if [[ "$thinking_level" == off ]]; then effort=none; pi_thinking=off; else effort=$thinking_level; pi_thinking=$thinking_level; fi
   prepare_workdir "$agent"
   case "$agent" in
     cook|cook-main)
@@ -136,7 +148,7 @@ input = ["text"]
 context_window = {os.environ["CONTEXT_WINDOW"]}
 max_completion_tokens = 8192
 supports_reasoning_effort = true
-reasoning_efforts = ["none", "medium"]
+reasoning_efforts = ["none", "minimal", "low", "medium", "high", "max"]
 
 [model_providers.local]
 base_url = {quote(base_url)}
@@ -179,11 +191,16 @@ PY
       mkdir -p "$dir/home/pi"
       PI_CODING_AGENT_DIR="$dir/home/pi"
       export PI_CODING_AGENT_DIR
-      python3 - "$WIRE" "$BASE_URL" "$CONTEXT_WINDOW" <<'PY' >"$PI_CODING_AGENT_DIR/models.json"
+      python3 - "$WIRE" "$BASE_URL" "$CONTEXT_WINDOW" "$pi_thinking" <<'PY' >"$PI_CODING_AGENT_DIR/models.json"
 import json,sys
-wire,base,window=sys.argv[1:]
+wire,base,window,pi_thinking=sys.argv[1:]
+# `medium` (the historical default) stays unmapped so existing runs are
+# unchanged; an explicit level declares its own wire spelling.
+levelmap={"off":"none"}
+if pi_thinking in ("minimal","low","high","max","xhigh"):
+    levelmap[pi_thinking]=pi_thinking
 print(json.dumps({"providers":{"local":{"baseUrl":base,"api":"openai-completions","apiKey":"$LLAMA_API_KEY",
-  "models":[{"id":wire,"name":wire,"reasoning":True,"thinkingLevelMap":{"off":"none"},
+  "models":[{"id":wire,"name":wire,"reasoning":True,"thinkingLevelMap":levelmap,
     "compat":{"supportsReasoningEffort":True},"contextWindow":int(window),"maxTokens":8192}]}}}))
 PY
       chmod 600 "$PI_CODING_AGENT_DIR/models.json"

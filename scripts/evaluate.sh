@@ -16,7 +16,8 @@ Hard-suite results: one folder under docs/audits/ with all prompts, agent output
 --suite hard       run the 4 fixed evaluation prompts
 --timeout SECONDS  per-agent timeout (default: 1800)
 --agents LIST      comma-separated subset of cook,cook-main,opencode,pi (default: cook,opencode,pi)
---thinking BOOL    enable reasoning for every agent (default: false for --task, true for --suite hard)
+--thinking LEVEL   reasoning level: off, minimal, low, medium, high, max
+                   (true=medium, false=off; default: false for --task, true for --suite hard)
 --parallel N        concurrent agent harnesses: 1, 2, or 3 (default: 1); suite runs share one pool
 --output-root DIR  suite folder parent (default: docs/audits/; useful for isolated smoke tests)
 
@@ -54,7 +55,7 @@ if [[ -z "$THINKING" ]]; then
 fi
 [[ "$TIMEOUT" =~ ^[1-9][0-9]*$ ]] || { echo "--timeout must be positive seconds" >&2; exit 2; }
 [[ "$MODEL" =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && "$MODEL" != *..* && "$MODEL" != *//* ]] || { echo "invalid model name" >&2; exit 2; }
-[[ "$THINKING" == true || "$THINKING" == false ]] || { echo "--thinking must be true or false" >&2; exit 2; }
+[[ "$THINKING" == true || "$THINKING" == false || "$THINKING" =~ ^(off|none|minimal|low|medium|high|xhigh|max)$ ]] || { echo "--thinking must be true, false, off, none, minimal, low, medium, high, xhigh, or max" >&2; exit 2; }
 [[ "$PARALLEL" =~ ^[1-3]$ ]] || { echo "--parallel must be 1, 2, or 3" >&2; exit 2; }
 AGENTS=${AGENTS//[[:space:]]/}
 IFS=, read -r -a SELECTED <<<"$AGENTS"
