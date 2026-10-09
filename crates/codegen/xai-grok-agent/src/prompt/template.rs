@@ -689,6 +689,16 @@ mod tests {
             prompt.contains("confirm with memory_search before claiming it is stored"),
             "non-interactive prompt must require tool-backed durable memory writes"
         );
+        assert!(
+            prompt.contains("On a turn that only calls tools, keep reasoning to the decision."),
+            "non-interactive prompt must keep short tool-only reasoning"
+        );
+        assert!(
+            prompt.contains(
+                "Prefer the working tree over searching other commits or the network for an existing patch."
+            ),
+            "non-interactive prompt must prefer the working tree over remote patches"
+        );
     }
 
     #[test]
@@ -703,6 +713,16 @@ mod tests {
         assert!(
             !prompt.contains("confirm with memory_search before claiming it is stored"),
             "interactive prompt must omit the headless durable-memory tool rule"
+        );
+        assert!(
+            !prompt.contains("On a turn that only calls tools, keep reasoning to the decision."),
+            "interactive prompt must omit the headless short-reasoning rule"
+        );
+        assert!(
+            !prompt.contains(
+                "Prefer the working tree over searching other commits or the network for an existing patch."
+            ),
+            "interactive prompt must omit the headless working-tree preference"
         );
     }
 

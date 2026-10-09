@@ -1556,6 +1556,7 @@ impl BashTool {
 
     /// The `current` template. It is the two-knob enabled template with `block_until_ms` in place of `is_background` and `timeout`.
     /// The kill-at-timeout sentences are gone. Under `current` the foreground command is never killed.
+    /// Completion notifications live in the system prompt, so this copy does not repeat them.
     fn single_knob_description_template_enabled() -> &'static str {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
@@ -1563,7 +1564,7 @@ Usage notes:
   - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms).${%- if return_output_on_block | default(false) %} A foreground command still running at ${{ params.execute.block_until_ms }} is killed and its output is returned. Pass a larger ${{ params.execute.block_until_ms }} to wait longer. Only `${{ params.execute.block_until_ms }}: 0` runs the command in the background.${%- else %} A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}. `${{ params.execute.block_until_ms }}: 0` runs the command in the background immediately.${%- endif %}
   - Background commands run until they exit${%- if tools.by_kind.kill_task_action %}, until you stop them with ${{ tools.by_kind.kill_task_action }},${%- endif %} or until the ${{ background_cap_hours }}h background cap.${%- if tools.by_kind.kill_task_action %} ${{ tools.by_kind.kill_task_action }}${%- else %} Stopping a command${%- endif %}${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately.${%- else %} sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.${%- endif %}
   - If the output exceeds {max_output_bytes} characters,${%- if return_output_on_block | default(false) %} you keep the end and the result names the log file with the full output, which you can read or search.${%- else %} the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.${%- endif %}
-  - Set `${{ params.execute.block_until_ms }}` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if system_reminders_enabled %} You are notified when it completes, so you can keep working; only poll it with ${{ tools.by_kind.background_task_action }} when it needs close monitoring (long-running jobs that can hang or degrade before finishing), and poll later if you end up blocked on the result.${%- elif tools.by_kind.background_task_action %} Use ${{ tools.by_kind.background_task_action }} to monitor it or wait for it to finish.${%- endif %}${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
+  - Set `${{ params.execute.block_until_ms }}` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
   - The shell is already in the workspace. Pass ${{ params.execute.workdir }} instead of `cd <dir> &&`.
   - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.
   - Put independent calls in one response.${%- if not shell_uses_semicolon | default(false) %} Chain dependent commands with `&&`.${%- endif %}
@@ -5047,9 +5048,12 @@ mod tests {
                     (ToolKind::Execute, "run_terminal_cmd".to_string()),
                     (
                         ToolKind::BackgroundTaskAction,
-                        "get_task_output".to_string(),
+                        "get_command_or_subagent_output".to_string(),
                     ),
-                    (ToolKind::KillTaskAction, "kill_task".to_string()),
+                    (
+                        ToolKind::KillTaskAction,
+                        "kill_command_or_subagent".to_string(),
+                    ),
                 ]),
                 HashMap::from([(
                     ToolKind::Execute,
@@ -5504,34 +5508,34 @@ mod tests {
             BashTool::rendered_description(None, &renderer(reminders), params, BashVersion::Current)
         }
 
-        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with get_task_output. `block_until_ms: 0` runs the command in the background immediately.\n  - Background commands run until they exit, until you stop them with kill_task, or until the 10h background cap. kill_task sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You are notified when it completes, so you can keep working; only poll it with get_task_output when it needs close monitoring (long-running jobs that can hang or degrade before finishing), and poll later if you end up blocked on the result. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
+        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with get_command_or_subagent_output. `block_until_ms: 0` runs the command in the background immediately.\n  - Background commands run until they exit, until you stop them with kill_command_or_subagent, or until the 10h background cap. kill_command_or_subagent sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
 
         /// The `current` description is the two-knob text with `block_until_ms` in place of `timeout` and `is_background`.
-        /// The kill-at-timeout sentences are gone. Nothing else changed.
+        /// Retired tool names and the completion-notification essay are gone.
         #[cfg(unix)]
         #[test]
         fn current_description_is_the_two_knob_text_with_minimal_edits() {
             let out = desc(&BashParams::default(), true);
             assert_eq!(out, CURRENT_DESCRIPTION_PRODUCT);
+            for required in ["block_until_ms", "workdir", "grep"] {
+                assert!(out.contains(required), "{required:?} must appear: {out}");
+            }
             for retired in [
                 "is_background",
                 "timeout:",
                 "killed at timeout",
                 "will timeout after",
                 "not bounded by the default",
+                "get_task_output",
+                "kill_task",
+                "You are notified when it completes",
             ] {
                 assert!(!out.contains(retired), "{retired:?} must not appear: {out}");
             }
 
-            // With system reminders off only the notification sentence differs
+            // Completion notifications live in the system prompt; reminders on/off match.
             let off = desc(&BashParams::default(), false);
-            assert_eq!(
-                off,
-                CURRENT_DESCRIPTION_PRODUCT.replace(
-                    " You are notified when it completes, so you can keep working; only poll it with get_task_output when it needs close monitoring (long-running jobs that can hang or degrade before finishing), and poll later if you end up blocked on the result.",
-                    " Use get_task_output to monitor it or wait for it to finish."
-                )
-            );
+            assert_eq!(off, CURRENT_DESCRIPTION_PRODUCT);
         }
 
         /// The `up to` figure is the block ceiling, an operator cap or the background cap.
