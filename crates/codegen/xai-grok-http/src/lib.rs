@@ -247,6 +247,37 @@ pub fn process_client_identifier() -> String {
     std::env::var("GROK_CLIENT_NAME").unwrap_or_else(|_| "grok-shell".to_string())
 }
 
+/// Desktop ACP sessions keep [`ClientType::Desktop`] (`grok-desktop`) on the wire for permissions and telemetry.
+/// xAI sampling rejects that product for Build traffic; identify like the CLI pager instead.
+const SAMPLING_HTTP_CLIENT_FOR_DESKTOP: &str = "grok-pager";
+
+fn is_desktop_acp_client(product: &str) -> bool {
+    product == ClientType::Desktop.user_agent_label()
+}
+
+/// Map an ACP/session `client_identifier` to the product sent on xAI sampling HTTP requests.
+pub fn sampling_http_client_identifier(client_identifier: Option<String>) -> Option<String> {
+    client_identifier.map(|id| {
+        if is_desktop_acp_client(&id) {
+            SAMPLING_HTTP_CLIENT_FOR_DESKTOP.to_string()
+        } else {
+            id
+        }
+    })
+}
+
+/// Map session `origin_client` the same way as [`sampling_http_client_identifier`].
+pub fn sampling_http_origin_client(
+    origin_client: Option<OriginClientInfo>,
+) -> Option<OriginClientInfo> {
+    origin_client.map(|mut origin| {
+        if is_desktop_acp_client(&origin.product) {
+            origin.product = SAMPLING_HTTP_CLIENT_FOR_DESKTOP.to_string();
+        }
+        origin
+    })
+}
+
 pub const CLIENT_MODE_HEADER: &str = "x-grok-client-mode";
 
 static CLIENT_MODE: OnceLock<&'static str> = OnceLock::new();
@@ -490,6 +521,25 @@ pub fn shared_startup_blocking_client() -> reqwest::blocking::Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_acp_client_maps_to_pager_on_sampling_http() {
+        assert_eq!(
+            sampling_http_client_identifier(Some("grok-desktop".into())).as_deref(),
+            Some("grok-pager")
+        );
+        assert_eq!(
+            sampling_http_client_identifier(Some("grok-pager".into())).as_deref(),
+            Some("grok-pager")
+        );
+        let origin = sampling_http_origin_client(Some(OriginClientInfo {
+            product: "grok-desktop".into(),
+            version: Some("1.0.0".into()),
+        }))
+        .expect("origin");
+        assert_eq!(origin.product, "grok-pager");
+        assert_eq!(origin.version.as_deref(), Some("1.0.0"));
+    }
 
     #[test]
     fn error_cause_chain_appends_hidden_sources() {

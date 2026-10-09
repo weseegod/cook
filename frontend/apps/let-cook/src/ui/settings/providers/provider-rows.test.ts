@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { findPreset } from "../../../acp/provider-presets";
 import type { ProviderSummary } from "../../../acp/providers";
-import { buildProviderRows } from "./provider-rows";
+import { buildProviderRows, isXaiOauthSignedIn } from "./provider-rows";
 
 const openai = findPreset("openai")!;
 const anthropic = findPreset("anthropic")!;
@@ -18,6 +18,40 @@ function summary(id: string, extra: Partial<ProviderSummary> = {}): ProviderSumm
     ...extra,
   };
 }
+
+describe("xAI OAuth Sign out", () => {
+  it("requires a session method and email", () => {
+    expect(isXaiOauthSignedIn("cached_token", "cook@example.com")).toBe(true);
+    expect(isXaiOauthSignedIn("grok.com", "cook@example.com")).toBe(true);
+    expect(isXaiOauthSignedIn("xai.api_key", "cook@example.com")).toBe(false);
+    expect(isXaiOauthSignedIn("cached_token", null)).toBe(false);
+    expect(isXaiOauthSignedIn("cached_token", "")).toBe(false);
+  });
+
+  it("does not mark oauthConnected for API key or stale session without email", () => {
+    const apiKeyRow = buildProviderRows({
+      presets: [xai],
+      providers: [summary("xai", { name: "xAI" })],
+      explicitModels: [],
+      catalog: [],
+      selectedModel: "",
+      hiddenIds: [],
+      xaiAuthenticated: isXaiOauthSignedIn("xai.api_key", null),
+    }).find((row) => row.preset.id === "xai")!;
+    expect(apiKeyRow.oauthConnected).toBe(false);
+
+    const staleSession = buildProviderRows({
+      presets: [xai],
+      providers: [summary("xai", { name: "xAI" })],
+      explicitModels: [],
+      catalog: [],
+      selectedModel: "",
+      hiddenIds: [],
+      xaiAuthenticated: isXaiOauthSignedIn("cached_token", null),
+    }).find((row) => row.preset.id === "xai")!;
+    expect(staleSession.oauthConnected).toBe(false);
+  });
+});
 
 describe("provider row order", () => {
   it("puts a removed built-in last and ignores catalog models and oauth", () => {

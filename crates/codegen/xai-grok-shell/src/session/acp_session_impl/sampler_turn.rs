@@ -787,7 +787,9 @@ impl SessionActor {
             stream_tool_calls: cfg.stream_tool_calls.unwrap_or(false),
             idle_timeout_secs: None,
             tool_call_budget: None,
-            client_identifier: self.client_identifier.clone(),
+            client_identifier: crate::http::sampling_http_client_identifier(
+                self.client_identifier.clone(),
+            ),
             deployment_id: xai_grok_cloud_config::managed_config::resolve_deployment_id(
                 xai_grok_cloud_config::managed_config::resolve_deployment_key().as_deref(),
             ),
@@ -797,7 +799,7 @@ impl SessionActor {
                 .and_then(|am| am.current_or_expired())
                 .filter(|a| a.is_xai_auth())
                 .map(|a| a.user_id),
-            origin_client: self.origin_client.clone(),
+            origin_client: crate::http::sampling_http_origin_client(self.origin_client.clone()),
             // Attribute sampler 401s against the bearer sent on the wire.
             // `None` for sessions spawned without an `AuthManager` (BYOK direct, certain test fixtures)
             attribution_callback: self.attribution_callback.clone(),

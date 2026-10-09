@@ -146,6 +146,14 @@ impl MvpAgent {
     pub(super) fn set_auth_method(&self, id: acp::AuthMethodId) {
         self.auth_method_id.store(Some(std::sync::Arc::new(id)));
     }
+    /// After a full session logout, drop `cached_token` from the live auth method handle.
+    pub(crate) fn sync_auth_method_after_full_logout(&self) {
+        if let Some(method_id) = self.cached_token_fallthrough_method_id() {
+            self.set_auth_method(method_id);
+        } else {
+            self.auth_method_id.store(None);
+        }
+    }
     /// Publish model-owned credentials for voice/tools static fallthrough.
     /// Only [`ModelEntry::own_credential`], not `sampling_config.api_key` (which may be a session JWT).
     pub(crate) fn sync_process_static_api_key(&self, preferred_model_id: Option<&str>) {
@@ -2148,7 +2156,7 @@ impl MvpAgent {
             deployment_id,
             user_id,
         );
-        config.origin_client = origin_client;
+        config.origin_client = crate::http::sampling_http_origin_client(origin_client);
         config
     }
     /// Resolve sampling config for a model by ID, falling back to the global default on resolution failure.
@@ -2162,7 +2170,7 @@ impl MvpAgent {
             self.prepare_sampling_config_for_model(&model, origin_client.clone())
         } else {
             let mut c = self.sampling_config.borrow().clone();
-            c.origin_client = origin_client;
+            c.origin_client = crate::http::sampling_http_origin_client(origin_client);
             c
         }
     }
