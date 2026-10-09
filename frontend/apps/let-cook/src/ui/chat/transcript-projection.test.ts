@@ -67,7 +67,7 @@ describe("verb runs", () => {
 
   it("claims finished thoughts into an open run but lets a streaming thought keep its row", () => {
     expect(rows([thought("t1"), tool("read-1", "Read a.ts"), tool("read-2", "Read b.ts")])).toEqual(["verb-group"]);
-    expect(rows([thought("t1", true), tool("read-1", "Read a.ts")])).toEqual(["message", "verb-group"]);
+    expect(rows([thought("t1", true), tool("read-1", "Read a.ts")])).toEqual(["verb-group", "message"]);
   });
 
   it("folds a grep+read cluster, interleaved with finished thoughts, into one header", () => {
@@ -94,9 +94,9 @@ describe("verb runs", () => {
       thought("t1", true),
       tool("read-2", "read_file", "completed", { kind: "read", paths: ["src/b.ts"] }),
     ]);
-    expect(projected.map((row) => row.type)).toEqual(["message", "verb-group"]);
-    if (projected[1].type === "verb-group") {
-      expect(projected[1].tools.map((entry) => entry.id)).toEqual(["read-1", "read-2"]);
+    expect(projected.map((row) => row.type)).toEqual(["verb-group", "message"]);
+    if (projected[0].type === "verb-group") {
+      expect(projected[0].tools.map((entry) => entry.id)).toEqual(["read-1", "read-2"]);
     }
   });
 

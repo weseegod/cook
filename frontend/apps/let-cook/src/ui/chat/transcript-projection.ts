@@ -35,23 +35,24 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
       ? { type: "verb-group", id: `verb-${tools[0].id}`, tools }
       : null;
     const loneTool: DisplayBlock | null = singletonCommand ? { type: "tool", id: tools[0].id, tool: tools[0] } : null;
-    // Walk in arrival order so a live `Thinking…` row sits where it began. Finished thoughts are
-    // claimed into the group beside the tools and never paint a row of their own; with no tools
-    // they compact into one group, or one row when they are alone.
+    // Finished thoughts are claimed into the group beside the tools and never paint a row of
+    // their own; with no tools they compact into one group, or one row when they are alone.
+    // A live `Thinking…` row trails the run so it stays at the bottom of the chat cluster.
     const thoughtRun: MessageBlock[] = [];
     const liveRun: MessageBlock[] = [];
     const emitGroup = () => {
-      // A live `Thinking…` row is Transparent: it keeps its own row rather than moving under the
-      // group header (`verb_group.rs::RunStep::Transparent`).
-      for (const thought of liveRun) output.push(thought);
       if (group) {
         output.push(group);
-        return;
+      } else {
+        // A lone command does not fold, so its claimed thoughts paint their own rows too.
+        if (loneTool) output.push(loneTool);
+        if (thoughtRun.length > 1) output.push({ type: "thought-group", id: `thought-${thoughtRun[0].id}`, thoughts: [...thoughtRun] });
+        else if (thoughtRun.length === 1) output.push(thoughtRun[0]);
       }
-      // A lone command does not fold, so its claimed thoughts paint their own rows too.
-      if (loneTool) output.push(loneTool);
-      if (thoughtRun.length > 1) output.push({ type: "thought-group", id: `thought-${thoughtRun[0].id}`, thoughts: [...thoughtRun] });
-      else if (thoughtRun.length === 1) output.push(thoughtRun[0]);
+      // Transparent: keeps its own row rather than moving under the group header, and does not
+      // split the run (`verb_group.rs::RunStep::Transparent`). Emitted last so Thinking sits
+      // under Read/Search/etc.
+      for (const thought of liveRun) output.push(thought);
     };
     for (const item of entries) {
       if (item.entry === "tool") continue;
