@@ -3785,6 +3785,16 @@ impl SessionActor {
             stub_identical_observation_result,
         } = args;
         let (mut result, mut tool_layer_images) = drained.into_parts();
+        if matches!(
+            &result.output,
+            xai_grok_tools::types::output::ToolOutput::EnterPlanMode(_)
+        ) {
+            let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
+            if let Some(contract) = self.render_plan_contract(&plan_path).await {
+                result.prompt_text =
+                    format!("{}\n\n{contract}", result.prompt_text.trim_end());
+            }
+        }
         if let ToolsToolOutput::Todo(
             xai_grok_tools::types::output::TodoWriteOutput::TodosUpdated(ref updated),
         ) = result.output

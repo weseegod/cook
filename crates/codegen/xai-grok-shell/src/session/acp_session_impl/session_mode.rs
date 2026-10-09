@@ -323,6 +323,9 @@ impl SessionActor {
                 .await
             {
                 push_reminder(self, &rendered);
+                if let Some(contract) = self.render_plan_contract(&plan_path).await {
+                    push_reminder(self, &contract);
+                }
                 injected_this_turn = true;
                 self.plan_mode.lock().record_reminder_injected();
                 self.persist_plan_mode_state();
@@ -357,6 +360,11 @@ impl SessionActor {
                     .await
                 {
                     push_reminder(self, &rendered);
+                    if use_full
+                        && let Some(contract) = self.render_plan_contract(&plan_path).await
+                    {
+                        push_reminder(self, &contract);
+                    }
                     self.plan_mode.lock().record_reminder_injected();
                     self.persist_plan_mode_state();
                 }
@@ -395,13 +403,20 @@ impl SessionActor {
         let rendered = self
             .render_plan_template(&template, &plan_path, plan_has_content)
             .await;
+        let contract = self.render_plan_contract(&plan_path).await;
         let tag = self.reminder_wrapper_tag();
-        let buffered = rendered.is_some();
-        let activated = match rendered {
-            Some(rendered) => self
+        let body = match (rendered.as_deref(), contract.as_deref()) {
+            (Some(gate), Some(contract)) => Some(format!("{gate}\n\n{contract}")),
+            (Some(gate), None) => Some(gate.to_string()),
+            (None, Some(contract)) => Some(contract.to_string()),
+            (None, None) => None,
+        };
+        let buffered = body.is_some();
+        let activated = match body {
+            Some(body) => self
                 .plan_mode
                 .lock()
-                .activate_mid_turn(format!("<{tag}>\n{rendered}\n</{tag}>")),
+                .activate_mid_turn(format!("<{tag}>\n{body}\n</{tag}>")),
             None => {
                 tracing::warn!(
                     session_id = %self.session_info.id.0,
@@ -475,6 +490,13 @@ impl SessionActor {
             .tool_bridge()
             .render_prompt(template, &extra)
             .await
+    }
+    /// Override-aware `plan/contract.md`: section order and checklist rules for active plan mode.
+    /// Shared by `/plan` reminder injection and `enter_plan_mode` tool results.
+    pub(super) async fn render_plan_contract(&self, plan_path: &std::path::Path) -> Option<String> {
+        use crate::session::plan_mode::plan_mode_contract_template;
+        let template = self.plan_template("plan/contract.md", plan_mode_contract_template());
+        self.render_plan_template(&template, plan_path, false).await
     }
     /// Persist the current plan mode state to disk.
     ///

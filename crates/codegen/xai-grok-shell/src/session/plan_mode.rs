@@ -487,6 +487,13 @@ pub(crate) fn plan_mode_reminder_sparse_template() -> &'static str {
 pub(crate) fn plan_mode_reentry_reminder_template() -> &'static str {
     trim_template_newline(include_str!("../../../../../prompts/plan/reentry.md"))
 }
+/// Plan-contract body: section order and checklist rules for active plan mode.
+/// Injected on `/plan` activation / full reminders and appended to `enter_plan_mode` results.
+/// Render via `TemplateRenderer::render_with_extra()`; uses `${{ tools.by_kind.ask_user }}` /
+/// `${{ tools.by_kind.exit_plan }}`. The default body is `prompts/plan/contract.md`.
+pub(crate) fn plan_mode_contract_template() -> &'static str {
+    trim_template_newline(include_str!("../../../../../prompts/plan/contract.md"))
+}
 /// `<session_dir>/plan.md`: the single plan file used before per-episode allocation, and the
 /// fallback for snapshots that predate it.
 pub(crate) fn legacy_plan_file_path(session_dir: &Path) -> PathBuf {

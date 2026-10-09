@@ -12,8 +12,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::SystemTime;
 
-/// Directory name under a scope root; `prompts/plan/full.md` in the repository is overridden by
-/// `<cook home>/prompts/plan/full.md`.
+/// Directory name under a scope root; `prompts/plan/contract.md` in the repository is overridden by
+/// `<cook home>/prompts/plan/contract.md`.
 pub(crate) const PROMPTS_DIR_NAME: &str = "prompts";
 
 /// Drop one trailing newline.
@@ -154,24 +154,8 @@ pub(crate) fn catalog() -> Vec<PromptEntry> {
     use crate::session::plan_mode;
     vec![
         PromptEntry {
-            relative: "plan/full.md",
-            default: plan_mode::plan_mode_reminder_full_template(),
-        },
-        PromptEntry {
-            relative: "plan/reentry.md",
-            default: plan_mode::plan_mode_reentry_reminder_template(),
-        },
-        PromptEntry {
-            relative: "plan/sparse.md",
-            default: plan_mode::plan_mode_reminder_sparse_template(),
-        },
-        PromptEntry {
-            relative: "plan/exit.md",
-            default: plan_mode::plan_mode_exit_reminder_template(),
-        },
-        PromptEntry {
-            relative: "plan/edit-rejected.md",
-            default: plan_mode::plan_mode_edit_rejected_template(),
+            relative: "plan/contract.md",
+            default: plan_mode::plan_mode_contract_template(),
         },
         PromptEntry {
             relative: "goal/goal_rules.md",
@@ -562,17 +546,17 @@ mod tests {
                 .all(|status| status.state == OverrideState::Absent)
         );
 
-        restore_at(&root, "plan/sparse.md").unwrap();
-        let sparse = statuses_at(&root)
+        restore_at(&root, "plan/contract.md").unwrap();
+        let contract = statuses_at(&root)
             .into_iter()
-            .find(|status| status.relative == "plan/sparse.md")
+            .find(|status| status.relative == "plan/contract.md")
             .unwrap();
-        assert_eq!(sparse.state, OverrideState::Unmodified);
+        assert_eq!(contract.state, OverrideState::Unmodified);
 
-        std::fs::write(&sparse.path, "edited\n").unwrap();
+        std::fs::write(&contract.path, "edited\n").unwrap();
         let edited = statuses_at(&root)
             .into_iter()
-            .find(|status| status.relative == "plan/sparse.md")
+            .find(|status| status.relative == "plan/contract.md")
             .unwrap();
         assert_eq!(edited.state, OverrideState::Modified);
     }
@@ -580,7 +564,7 @@ mod tests {
     #[test]
     fn restore_writes_the_default_byte_for_byte_and_invalidates_the_cache() {
         let root = temp_root("restore");
-        let path = path_at(&root, "plan/full.md").unwrap();
+        let path = path_at(&root, "plan/contract.md").unwrap();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "user text\n").unwrap();
         assert_eq!(
@@ -589,8 +573,8 @@ mod tests {
             "overrides should serve the user's text first"
         );
 
-        restore_at(&root, "plan/full.md").unwrap();
-        let default = default_for("plan/full.md").unwrap();
+        restore_at(&root, "plan/contract.md").unwrap();
+        let default = default_for("plan/contract.md").unwrap();
         assert_eq!(
             std::fs::read_to_string(&path).unwrap(),
             default,
@@ -608,9 +592,14 @@ mod tests {
         let root = temp_root("write");
         assert!(write_user_text_at(&root, "../escape.md", "x").is_err());
         assert!(write_user_text_at(&root, "plan/unknown.md", "x").is_err());
-        assert!(write_user_text_at(&root, "plan/full.md", "ok").is_ok());
-        assert_eq!(read_user_text_at(&root, "plan/full.md").as_deref(), Some("ok"));
+        assert!(write_user_text_at(&root, "plan/full.md", "ok").is_err());
+        assert!(write_user_text_at(&root, "plan/contract.md", "ok").is_ok());
+        assert_eq!(
+            read_user_text_at(&root, "plan/contract.md").as_deref(),
+            Some("ok")
+        );
         assert!(read_user_text_at(&root, "plan/unknown.md").is_none());
+        assert!(read_user_text_at(&root, "plan/full.md").is_none());
     }
 
     #[test]

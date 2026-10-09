@@ -31,7 +31,7 @@ fn state_name(state: OverrideState) -> &'static str {
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct PromptEntryView {
-    /// Path relative to the prompts root, e.g. `plan/full.md`.
+    /// Path relative to the prompts root, e.g. `plan/contract.md`.
     relative: String,
     /// Absolute path of the user's copy, whether or not it exists yet.
     path: String,
@@ -204,8 +204,15 @@ mod tests {
         assert!(
             list.prompts
                 .iter()
-                .any(|entry| entry.relative == "plan/full.md"),
-            "plan/full.md must be editable: {:?}",
+                .any(|entry| entry.relative == "plan/contract.md"),
+            "plan/contract.md must be editable: {:?}",
+            list.prompts.iter().map(|e| &e.relative).collect::<Vec<_>>()
+        );
+        assert!(
+            list.prompts
+                .iter()
+                .all(|entry| entry.relative != "plan/full.md"),
+            "plan gate reminders stay out of Settings: {:?}",
             list.prompts.iter().map(|e| &e.relative).collect::<Vec<_>>()
         );
         assert!(root.join("manifest.json").is_file());
@@ -214,26 +221,26 @@ mod tests {
     #[test]
     fn write_then_read_then_restore_round_trip() {
         let root = temp_root("roundtrip");
-        let absent = read_at(&root, "plan/full.md").unwrap();
+        let absent = read_at(&root, "plan/contract.md").unwrap();
         assert_eq!(absent.content, None);
         assert_eq!(
             absent.default,
-            prompt_overrides::default_for("plan/full.md").unwrap(),
+            prompt_overrides::default_for("plan/contract.md").unwrap(),
             "read must hand back the compiled default so the editor can seed an edit"
         );
 
-        let written = write_at(&root, "plan/full.md", "edited by the user\n").unwrap();
+        let written = write_at(&root, "plan/contract.md", "edited by the user\n").unwrap();
         assert_eq!(written.state, "modified");
-        let read = read_at(&root, "plan/full.md").unwrap();
+        let read = read_at(&root, "plan/contract.md").unwrap();
         assert_eq!(read.content.as_deref(), Some("edited by the user\n"));
         assert_eq!(read.state, "modified");
 
-        let restored = restore_at_default(&root, "plan/full.md").unwrap();
+        let restored = restore_at_default(&root, "plan/contract.md").unwrap();
         assert_eq!(restored.state, "unmodified");
-        let after = read_at(&root, "plan/full.md").unwrap();
+        let after = read_at(&root, "plan/contract.md").unwrap();
         assert_eq!(
             after.content.as_deref(),
-            prompt_overrides::default_for("plan/full.md"),
+            prompt_overrides::default_for("plan/contract.md"),
             "restore must write the compiled default"
         );
     }
@@ -251,8 +258,8 @@ mod tests {
     #[test]
     fn writing_the_default_text_reports_unmodified() {
         let root = temp_root("identical");
-        let default = prompt_overrides::default_for("plan/exit.md").unwrap();
-        let written = write_at(&root, "plan/exit.md", &format!("{default}\n")).unwrap();
+        let default = prompt_overrides::default_for("plan/contract.md").unwrap();
+        let written = write_at(&root, "plan/contract.md", &format!("{default}\n")).unwrap();
         assert_eq!(written.state, "unmodified");
         // A goal template keeps its own trailing newline; restoring it verbatim is also unmodified.
         let goal_default = prompt_overrides::default_for("goal/goal_rules.md").unwrap();
@@ -269,7 +276,7 @@ mod tests {
         let list = list_at(&root).unwrap();
         let relatives: Vec<&str> = list.prompts.iter().map(|entry| entry.relative.as_str()).collect();
         for expected in [
-            "plan/full.md",
+            "plan/contract.md",
             "goal/goal_rules.md",
             "goal/goal_task_discipline.md",
             "goal/goal_planner_prompt.md",
@@ -280,6 +287,18 @@ mod tests {
             "subagent/plan.md",
         ] {
             assert!(relatives.contains(&expected), "missing {expected} in {relatives:?}");
+        }
+        for hidden in [
+            "plan/full.md",
+            "plan/sparse.md",
+            "plan/reentry.md",
+            "plan/exit.md",
+            "plan/edit-rejected.md",
+        ] {
+            assert!(
+                !relatives.contains(&hidden),
+                "plan gate reminder {hidden} must not appear in Settings"
+            );
         }
     }
 }

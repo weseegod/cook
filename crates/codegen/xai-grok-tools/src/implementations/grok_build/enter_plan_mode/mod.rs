@@ -410,8 +410,10 @@ mod tests {
             prompt.contains(".grok/plan.md"),
             "expected plan path: {prompt}"
         );
-        assert!(prompt.contains("exit_plan_mode"), "{prompt}");
-        assert!(prompt.contains("ask_user_question"), "{prompt}");
+        assert!(
+            prompt.contains("The plan file location is unavailable."),
+            "{prompt}"
+        );
         assert_ne!(
             prompt, empty_peer,
             "unavailable seed must change compiled status"
@@ -470,8 +472,14 @@ mod tests {
         let output: ToolOutput = result.into();
         let prompt = output.to_prompt_format();
         assert!(prompt.contains("plan.md"));
-        assert!(prompt.contains("exit_plan_mode"));
-        assert!(prompt.contains("ask_user_question"));
+        assert!(
+            prompt.contains("You have entered plan mode"),
+            "entry message: {prompt}"
+        );
+        assert!(
+            !prompt.contains("In plan mode, you should:"),
+            "contract copy is appended by the shell, not the tool format"
+        );
     }
 
     #[tokio::test]
@@ -500,7 +508,10 @@ mod tests {
         let empty_peer = empty_seed_peer(&result);
         let prompt = ToolOutput::EnterPlanMode(result).to_prompt_format();
         assert!(prompt.contains("plan.md"), "{prompt}");
-        assert!(prompt.contains("exit_plan_mode"), "{prompt}");
+        assert!(
+            prompt.contains("The file exists but is not empty."),
+            "{prompt}"
+        );
         assert_ne!(
             prompt, empty_peer,
             "non-empty seed must change compiled status"

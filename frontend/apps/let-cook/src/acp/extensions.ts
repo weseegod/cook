@@ -241,7 +241,7 @@ export function listPlugins(sessionId?: string) {
 export type PromptState = "absent" | "unmodified" | "modified";
 
 export interface PromptEntryView {
-  /** Path relative to the prompts root, e.g. `plan/full.md`. */
+  /** Path relative to the prompts root, e.g. `plan/contract.md`. */
   relative: string;
   /** Absolute path of the user's copy, whether or not it exists yet. */
   path: string;

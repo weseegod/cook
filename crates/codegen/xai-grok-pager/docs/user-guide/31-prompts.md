@@ -22,11 +22,7 @@ The relative paths are:
 
 ```text
 prompts/
-  plan/full.md                     plan-mode activation reminder
-  plan/sparse.md                   per-turn plan-mode reminder
-  plan/reentry.md                  reminder after re-entering plan mode
-  plan/exit.md                     reminder when plan mode ends
-  plan/edit-rejected.md            message when a plan-mode edit is refused
+  plan/contract.md                 active plan-mode contract (section order / checklist)
   goal/goal_rules.md               goal rules block
   goal/goal_rules_legacy.md        goal rules block (legacy)
   goal/goal_plan_block.md          plan block shown to a goal
@@ -43,6 +39,11 @@ prompts/
   subagent/explore.md              built-in explore subagent body
   subagent/general-purpose.md      built-in general-purpose subagent body
 ```
+
+Plan-mode gate reminders (`plan/full.md`, `plan/sparse.md`, `plan/reentry.md`,
+`plan/exit.md`, `plan/edit-rejected.md`) still ship in the repository and are
+injected at runtime, but they are not listed in Settings → Prompts. Copy one
+under `~/.cook/prompts/` only if you need a filesystem override outside the UI.
 
 ---
 
@@ -69,8 +70,8 @@ Create the file yourself under `~/.cook/prompts/`, mirroring the relative path:
 
 ```bash
 mkdir -p ~/.cook/prompts/plan
-cp prompts/plan/full.md ~/.cook/prompts/plan/full.md   # from a Cook checkout
-$EDITOR ~/.cook/prompts/plan/full.md
+cp prompts/plan/contract.md ~/.cook/prompts/plan/contract.md   # from a Cook checkout
+$EDITOR ~/.cook/prompts/plan/contract.md
 ```
 
 Cook picks up the change on the next turn; no restart is needed. Delete the file to fall back to
@@ -84,8 +85,8 @@ the shipped default.
 - Keep the `${...}` placeholders (for example `${plan_path}` and `${TODO_TOOL}`) exactly as they
   are. They are filled in when the template is rendered; a template that fails to render falls
   back to the shipped default and logs a warning.
-- The plan-mode reminders are a gate: they tell the model to write the plan file before making
-  edits. Rewriting one carelessly can weaken that gate.
+- `plan/contract.md` is the active plan-mode contract. Rewriting it changes how plans are shaped;
+  keep the `${{ tools.by_kind.* }}` placeholders intact.
 - Your copies are never overwritten by Cook updates. The panel's **Reset** button is how you
   return to the shipped text.
 - `~/.cook/prompts/manifest.json` records the shipped defaults' checksums. Cook manages this file;

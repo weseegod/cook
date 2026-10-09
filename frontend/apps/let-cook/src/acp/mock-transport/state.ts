@@ -119,11 +119,8 @@ function defaultState(): MockState {
     promptRoot: "/home/demo/.cook/prompts",
     promptFiles: {},
     promptDefaults: {
-      "plan/full.md": "Plan mode is active. Write the plan to the plan file before making changes.\n",
-      "plan/sparse.md": "Keep the plan file up to date.\n",
-      "plan/exit.md": "Plan mode is off.\n",
-      "plan/reentry.md": "Plan mode is active again.\n",
-      "plan/edit-rejected.md": "That edit was rejected while plan mode is active.\n",
+      "plan/contract.md":
+        "In plan mode, you should:\n1. Explore the codebase\n5. Write a self-contained plan.\n6. Exit when ready.\n",
       "goal/goal_rules.md": "Follow the goal rules.\n",
       "goal/goal_task_discipline.md": "Track the task list.\n",
       "subagent/explore.md": "You are a fast, read-only codebase exploration agent.\n",

@@ -849,11 +849,12 @@ impl ToolOutput {
             ToolOutput::EnterPlanMode(EnterPlanModeOutput::Entered {
                 message,
                 plan_file_path,
-                tool_hints,
+                tool_hints: _,
                 plan_file_seed,
             }) => {
-                let ask = &tool_hints.ask_user;
-                let exit = &tool_hints.exit_plan;
+                // Contract instructions (section order / checklist) live in
+                // `prompts/plan/contract.md` and are appended by the shell so Settings
+                // overrides apply. This format keeps only the entry message and plan path.
                 let plan_status = match plan_file_seed {
                     PlanFileSeedStatus::Empty => {
                         format!(
@@ -879,17 +880,7 @@ impl ToolOutput {
                         format!("Write your plan to {plan_file_path}. {detail}")
                     }
                 };
-                format!(
-                    "{message}\n\n\
-                     {plan_status}\n\n\
-                     In plan mode, you should:\n\
-                     1. Thoroughly explore the codebase to understand existing patterns\n\
-                     2. Identify similar features, codebase architecture, and understand trade-offs\n\
-                     3. Use {ask} if you need to clarify the approach\n\
-                     4. Design a concrete implementation strategy\n\
-                     5. Write a self-contained plan to the file above. Start with `# Plan: <5–10 word title>` without a path. Then use these sections, in order: Goal kind, Decisions, Context (only the bullets a cold run needs), Acceptance criteria (outcomes the user requested and any outcome the core behavior needs; each an observable pass or fail; group outcomes one check can cover; split an outcome that can fail on its own; name a command that already exists, or describe the behavior; do not invent a command, name an unwritten script, or add a checkbox; no optional idea, performance test, screenshot, or extra scenario unless that outcome needs it), Verification plan (each line tags one Acceptance criteria entry as `gating` or `evidence` and adds no scenario), Non-goals, Assumed scope, then for code-change Implementation approach, Current anchors, and Edit brief, then Deviations containing `(none yet)`, optional Risks / Contradictions, and last the Task checklist (as many concrete steps as the work requires; the last line runs `## Acceptance criteria`). Use no code fences or pasted source; checkboxes belong only in Task checklist. Each checklist line uses `- [ ] `<path>` — change. Done when: observation.` The checklist stays in the file and is the last section. After approval, mark a finished step by changing `- [ ]` to `- [x]` on that line and leaving the rest unchanged.\n\
-                     6. When ready, use {exit} to present your plan to the user."
-                )
+                format!("{message}\n\n{plan_status}")
             }
             ToolOutput::ExitPlanMode(exit) => match exit {
                 ExitPlanModeOutput::PlanReady {
@@ -2337,8 +2328,14 @@ mod tests {
         let prompt = output.to_prompt_format();
         assert!(prompt.contains("entered-msg-token"));
         assert!(prompt.contains("/tmp/plan.md"));
-        assert!(prompt.contains("ask_user_question"));
-        assert!(prompt.contains("exit_plan_mode"));
+        assert!(
+            prompt.contains("The file exists and is empty."),
+            "seed status stays in the tool format; contract copy is appended by the shell"
+        );
+        assert!(
+            !prompt.contains("In plan mode, you should:"),
+            "contract instructions moved to prompts/plan/contract.md"
+        );
         assert!(
             !prompt.contains("subagent_type"),
             "should not contain subagent guidance without task tool"
@@ -2361,7 +2358,9 @@ mod tests {
         assert!(!prompt.contains("subagent_type"));
     }
     #[test]
-    fn enter_plan_mode_prompt_format_with_custom_tool_names() {
+    fn enter_plan_mode_prompt_format_omits_tool_hint_names() {
+        // Tool names for the contract body are resolved when the shell renders
+        // `prompts/plan/contract.md`; this format only reports entry + plan path.
         let output = ToolOutput::EnterPlanMode(EnterPlanModeOutput::Entered {
             message: "Entered plan mode.".into(),
             plan_file_path: "/session/plan.md".into(),
@@ -2373,10 +2372,9 @@ mod tests {
             plan_file_seed: PlanFileSeedStatus::Empty,
         });
         let prompt = output.to_prompt_format();
-        assert!(prompt.contains("AskUser"));
-        assert!(prompt.contains("FinishPlan"));
-        assert!(!prompt.contains("ask_user_question"));
-        assert!(!prompt.contains("exit_plan_mode"));
+        assert!(prompt.contains("/session/plan.md"));
+        assert!(!prompt.contains("AskUser"));
+        assert!(!prompt.contains("FinishPlan"));
     }
     #[test]
     fn enter_plan_mode_output_serde_with_tool_hints() {

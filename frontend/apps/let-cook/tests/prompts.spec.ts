@@ -8,8 +8,8 @@ import { api, callsTo, openWorkspace, shellSeed, waitForCalls, expectNoHorizonta
 const PROMPTS_SEED = shellSeed({
   promptRoot: "/home/demo/.cook/prompts",
   promptDefaults: {
-    "plan/full.md": "Plan mode is active. Write the plan file first.\n",
-    "plan/exit.md": "Plan mode is off.\n",
+    "plan/contract.md":
+      "In plan mode, you should:\n1. Explore\n5. Write a self-contained plan.\n6. Exit when ready.\n",
     "subagent/explore.md": "You are a fast, read-only codebase exploration agent.\n",
   },
   promptFiles: {
@@ -26,25 +26,27 @@ test.describe("settings prompts", () => {
     await page.getByRole("tab", { name: "Prompts" }).click();
 
     await waitForCalls(page, "x.ai/prompts/list");
-    await expect(page.getByTestId("prompt-open-plan/full.md")).toContainText("No copy");
+    await expect(page.getByTestId("prompt-open-plan/contract.md")).toContainText("No copy");
     await expect(page.getByTestId("prompt-open-subagent/explore.md")).toContainText("Modified");
     await expect(page.getByTestId("prompts-warning")).toContainText("${...}");
 
     // Editing a prompt that has no user copy seeds the editor with the shipped text.
-    await page.getByTestId("prompt-open-plan/full.md").click();
-    await expect(page.getByTestId("prompt-text")).toContainText("Plan mode is active");
+    await page.getByTestId("prompt-open-plan/contract.md").click();
+    await expect(page.getByTestId("prompt-text")).toContainText("In plan mode, you should");
     await page.getByTestId("prompt-edit").click();
-    await expect(page.getByTestId("prompt-editor")).toHaveValue("Plan mode is active. Write the plan file first.\n");
-    await page.getByTestId("prompt-editor").fill("my plan reminder\n");
+    await expect(page.getByTestId("prompt-editor")).toHaveValue(
+      "In plan mode, you should:\n1. Explore\n5. Write a self-contained plan.\n6. Exit when ready.\n",
+    );
+    await page.getByTestId("prompt-editor").fill("my plan contract\n");
     await page.getByTestId("prompt-save").click();
 
     const writes = await waitForCalls(page, "x.ai/prompts/write");
-    expect(writes[0].params).toEqual({ relative: "plan/full.md", content: "my plan reminder\n" });
+    expect(writes[0].params).toEqual({ relative: "plan/contract.md", content: "my plan contract\n" });
     await expect(page.getByTestId("prompt-status")).toContainText("Saved");
     await expect(page.getByTestId("prompt-reset")).toBeEnabled();
 
     const files = (await mock.state()).promptFiles as Record<string, string>;
-    expect(files["plan/full.md"]).toBe("my plan reminder\n");
+    expect(files["plan/contract.md"]).toBe("my plan contract\n");
     await expectNoHorizontalOverflow(page);
   });
 
