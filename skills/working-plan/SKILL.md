@@ -1,11 +1,11 @@
 ---
 name: working-plan
-description: "Use before editing when a repository task has several dependent steps, spans multiple files, or has an unclear cause or scope (features, refactors, investigations, non-trivial bug fixes). Skip for a small edit where the file and change are already known."
+description: "Use before starting work that has several dependent steps, spans multiple files or sources, or has an unclear cause or scope (features, refactors, investigations, analysis, non-trivial fixes). Skip when the change is small and already clear."
 ---
 
-Understand the requested outcome, then inspect the relevant code, callers, docs, and closest existing tests. Check conventions against existing examples in the repository instead of assuming them; state only unavoidable assumptions in the plan.
+Understand the request first, then inspect what it touches (code, callers, docs, data, existing checks) before planning. Take conventions from existing examples; state only unavoidable assumptions.
 
-Before the first edit, call `save_working_plan` once with the full Markdown plan as `body`, then keep working in the same turn (no plan mode, no approval, don't stop after saving).
+Before the first edit, call `save_working_plan` once with the full Markdown plan as `body`, then continue in the same turn (no approval, don't stop).
 
 # Plan: <short title>
 
@@ -13,15 +13,14 @@ Before the first edit, call `save_working_plan` once with the full Markdown plan
 - <One outcome per bullet.>
 
 ## Acceptance criteria
-- <Exact observable outcome, its source (the request, an existing test, docs, or existing code), and the check that verifies it. Include the variants and error paths the affected code already supports.>
+- <Observable outcome>. Source: <request, existing test, docs, or code>. Evidence: <how it will be confirmed>. Cover the variants and error paths the affected code already supports.
 
 ## Task checklist
-- [ ] <Step and area>. Done when: <observable result>.
-- [ ] Run focused checks, then broader related ones. Done when: each criterion's check output confirms its outcome.
-- [ ] Review the whole change against every criterion. Done when: each criterion is marked met with its evidence, or left open with the blocker.
+- [ ] <Step>. Done when: <observable result>.
+- [ ] Verify every criterion. Done when: its evidence is observed, or the blocker is noted.
 
-Keep the plan proportional to the work, with `## Task checklist` last. Keep the two closing steps, adding steps before them as needed.
-
-A check counts only if it would fail without the change. Take expected values from the sources above, not from your own implementation. Read each check's output.
-
-Update the plan file when evidence changes the cause, scope, or expected outcome. Mark a step done only when its stated condition is observed. Report any failing or unrunnable check instead of marking it done. Never weaken an expectation or skip a case to make a check pass.
+Rules:
+- Size the plan to the work: a small task gets a few lines. The checklist stays last, ending with the verify step.
+- Evidence, cheapest first: (1) an existing check that already covers it, (2) running a command or script and reading its output, (3) reading the code path or source. Add a new test only when none of these can show the outcome, and put it in the existing test file for that area. Do not write end-to-end or browser tests unless the task changes a user-facing flow that cannot be checked at a lower level.
+- Evidence must be able to fail without the change. Take expected values from the sources, not from your own implementation's output.
+- Update the plan when evidence changes the cause, scope, or expected outcome. Mark a step done only when its condition is observed. Report failing or unrunnable checks instead of marking them done. Never weaken an expectation to make a check pass.
