@@ -19,7 +19,7 @@ import { LoadingState } from "../components/async-state";
 import { OauthDialog } from "./providers/oauth-dialog";
 import { ProviderCard } from "./providers/provider-card";
 import { RemoveModelDialog, RemoveProviderDialog, ReplacementModelDialog } from "./providers/provider-dialogs";
-import { buildProviderRows, type ProviderRow } from "./providers/provider-rows";
+import { buildProviderRows, isXaiOauthSignedIn, type ProviderRow } from "./providers/provider-rows";
 import { useAuthInfo, useProviderPresets, useProviders } from "./providers/use-provider-queries";
 
 export { useProviderPresets, useProviders };
@@ -127,7 +127,7 @@ export function ProvidersPanel({
     catalog: models,
     selectedModel,
     hiddenIds: providers.data?.hiddenProviders ?? [],
-    xaiAuthenticated: Boolean(auth.data?.methodId),
+    xaiAuthenticated: isXaiOauthSignedIn(auth.data?.methodId, auth.data?.email),
     xaiEmail: auth.data?.email,
   }), [auth.data?.email, auth.data?.methodId, list, models, presets, providers.data?.hiddenProviders, providers.data?.models, selectedModel]);
 

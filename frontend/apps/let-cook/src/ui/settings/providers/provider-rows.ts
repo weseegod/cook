@@ -2,6 +2,13 @@ import { findPreset } from "../../../acp/provider-presets";
 import type { ProviderModelLink, ProviderPreset, ProviderSummary } from "../../../acp/providers";
 import type { ModelSummary } from "../../../acp/xai";
 
+const XAI_OAUTH_SESSION_METHODS = new Set(["cached_token", "grok.com", "oidc"]);
+
+/** Cook OAuth Sign out — not API key and not a stale session method with no email. */
+export function isXaiOauthSignedIn(methodId?: string | null, email?: string | null): boolean {
+  return Boolean(methodId && XAI_OAUTH_SESSION_METHODS.has(methodId) && email);
+}
+
 export interface ProviderRow {
   preset: ProviderPreset;
   /** The `[model_providers.<id>]` table, absent until the provider is connected. */

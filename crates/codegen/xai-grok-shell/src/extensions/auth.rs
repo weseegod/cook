@@ -181,6 +181,10 @@ async fn handle_logout(agent: &MvpAgent, args: &acp::ExtRequest) -> ExtResult {
     // `auth.lifecycle` (not `auth`) avoids colliding with the pre-existing per-request `AuthManager::auth()` `#[instrument]` span
     xai_grok_telemetry::event_span!("auth.lifecycle", action = "logout", success = true);
 
+    if params.scope.is_none() {
+        agent.sync_auth_method_after_full_logout();
+    }
+
     agent.models_manager.on_auth_changed().await;
 
     to_raw_response(&serde_json::json!({

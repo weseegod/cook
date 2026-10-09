@@ -4180,6 +4180,41 @@ async fn prepare_video_gen_config_sends_client_identifier_header() {
 /// Regression: `x.ai/auth/info` must return profile fields even when the access token is expired.
 /// Profile data does not expire with the token, and hiding it made the desktop render "Signed in" with no identity.
 #[tokio::test]
+async fn auth_logout_clears_stale_cached_token_auth_method_id() {
+    let agent = build_agent_with_auth(xai_grok_login::GrokAuth::test_default());
+    agent.set_auth_method(acp::AuthMethodId::new("cached_token"));
+    crate::extensions::auth::handle(
+        &agent,
+        &acp::ExtRequest::new(
+            "x.ai/auth/logout",
+            std::sync::Arc::from(serde_json::value::to_raw_value(&serde_json::json!({})).unwrap()),
+        ),
+    )
+    .await
+    .expect("logout");
+    let info = crate::extensions::auth::handle(
+        &agent,
+        &acp::ExtRequest::new(
+            "x.ai/auth/info",
+            std::sync::Arc::from(serde_json::value::to_raw_value(&serde_json::json!({})).unwrap()),
+        ),
+    )
+    .await
+    .expect("auth/info");
+    let info: serde_json::Value = serde_json::from_str(info.0.get()).unwrap();
+    assert_ne!(
+        info.get("methodId").and_then(|v| v.as_str()),
+        Some("cached_token"),
+        "full logout must not leave cached_token as the live auth method"
+    );
+    assert_eq!(
+        info.get("methodId").and_then(|v| v.as_str()),
+        Some("grok.com"),
+        "without API key, fall through to grok.com"
+    );
+}
+
+#[tokio::test]
 async fn auth_info_returns_profile_when_token_expired() {
     let agent = build_agent_with_auth(xai_grok_login::GrokAuth {
         email: Some("user@example.com".into()),

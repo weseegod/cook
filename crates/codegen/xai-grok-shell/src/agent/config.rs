@@ -4785,7 +4785,15 @@ pub(crate) fn stamp_session_local_sampler_fields(
     client_identifier: Option<String>,
     max_retries: Option<u32>,
 ) {
-    cfg.client_identifier = client_identifier;
+    cfg.client_identifier = crate::http::sampling_http_client_identifier(client_identifier);
+    if cfg.origin_client.is_none() {
+        cfg.origin_client = crate::http::sampling_http_origin_client(
+            active_session_config.origin_client.clone(),
+        );
+    } else {
+        cfg.origin_client =
+            crate::http::sampling_http_origin_client(cfg.origin_client.clone());
+    }
     cfg.conversation_group_id = active_session_config.conversation_group_id.clone();
     cfg.attribution_callback = active_session_config.attribution_callback.clone();
     if crate::util::is_xai_api_bearer_url(&cfg.base_url) {
