@@ -22,7 +22,7 @@ const DESCRIPTION: &str = r#"Replace the session todo list with the complete lis
 
 Use this when the request has more than one step. Prefer at most four items taken from that request. Call again only when the plan changes — not after every step.
 
-Each item needs content, status (pending | in_progress | completed | cancelled), and priority (high | medium | low). Keep at most one item in_progress."#;
+Each item needs content, status (pending | in_progress | completed | cancelled), and priority (high | medium | low, default medium). Keep at most one item in_progress."#;
 
 // ─── Input ───────────────────────────────────────────────────────────
 
@@ -39,8 +39,9 @@ pub struct OpenCodeTodoItem {
     )]
     pub status: String,
 
-    /// Priority level: "high", "medium", or "low".
-    #[schemars(description = "Priority level: high, medium, or low")]
+    /// Priority level: "high", "medium", or "low". Defaults to "medium" when omitted.
+    #[serde(default)]
+    #[schemars(description = "Priority level: high, medium, or low (default medium)")]
     pub priority: String,
 }
 
@@ -516,6 +517,26 @@ mod tests {
         assert_eq!(high.priority, TodoPriority::High);
         assert_eq!(medium.priority, TodoPriority::Medium);
         assert_eq!(low.priority, TodoPriority::Low);
+    }
+
+    /// A real-model call omitted `priority`; the item must still store and run as medium.
+    #[tokio::test]
+    async fn omitted_priority_defaults_to_medium() {
+        let tool = TodoWriteTool;
+        let resources = Resources::new();
+        let input: TodoWriteInput = serde_json::from_value(serde_json::json!({
+            "todos": [{"content": "Locate the failure", "status": "in_progress"}]
+        }))
+        .expect("an item without priority must deserialize");
+        assert_eq!(input.todos[0].priority, "");
+
+        let output = expect_success(
+            xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(output.todos.len(), 1);
+        assert_eq!(output.todos[0].priority, TodoPriority::Medium);
     }
 
     #[tokio::test]

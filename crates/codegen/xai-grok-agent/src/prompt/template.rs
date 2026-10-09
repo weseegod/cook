@@ -699,17 +699,25 @@ mod tests {
         );
         assert!(
             prompt.contains(
-                "Prefer the working tree over searching other commits or the network for an existing patch."
+                "Work in the current tree: reproduce the failure the request describes"
             ),
-            "non-interactive prompt must prefer the working tree over remote patches"
+            "non-interactive prompt must state the current-tree work loop"
         );
         assert!(
-            prompt.contains("When the request is done, stop."),
-            "non-interactive prompt must tell the model to stop when the request is done"
+            prompt.contains("Do not search other commits or download a released copy"),
+            "non-interactive prompt must forbid copying a finished patch"
         );
         assert!(
-            prompt.contains("prefer at most four items taken from that request"),
-            "non-interactive prompt must remind the model of the short todo_write contract"
+            !prompt.contains("Prefer the working tree over searching other commits"),
+            "non-interactive prompt must drop the replaced working-tree sentence"
+        );
+        assert!(
+            !prompt.contains("When the request is done, stop."),
+            "non-interactive prompt must drop the replaced stop-when-done sentence"
+        );
+        assert!(
+            !prompt.contains("prefer at most four items taken from that request"),
+            "non-interactive prompt must drop the todo_write sentence it no longer advertises"
         );
         assert!(
             !prompt.contains("NEVER coin acronyms, shorthand, or technical-sounding labels"),
@@ -735,14 +743,20 @@ mod tests {
             "interactive prompt must omit the headless short-reasoning rule"
         );
         assert!(
-            !prompt.contains(
-                "Prefer the working tree over searching other commits or the network for an existing patch."
-            ),
-            "interactive prompt must omit the headless working-tree preference"
+            !prompt.contains("Work in the current tree"),
+            "interactive prompt must omit the headless work loop"
+        );
+        assert!(
+            !prompt.contains("Do not search other commits or download a released copy"),
+            "interactive prompt must omit the headless finished-patch rule"
+        );
+        assert!(
+            !prompt.contains("Prefer the working tree over searching other commits"),
+            "interactive prompt must omit the replaced working-tree sentence"
         );
         assert!(
             !prompt.contains("When the request is done, stop."),
-            "interactive prompt must omit the headless stop-when-done rule"
+            "interactive prompt must omit the replaced stop-when-done sentence"
         );
         assert!(
             !prompt.contains("prefer at most four items taken from that request"),

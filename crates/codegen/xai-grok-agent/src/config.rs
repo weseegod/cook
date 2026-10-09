@@ -306,7 +306,6 @@ pub fn implement_tool_ids() -> &'static [&'static str] {
         "glob",
         "grep",
         "kill_command_or_subagent",
-        "todo_write",
         "get_command_or_subagent_output",
         "wait_commands_or_subagents",
     ]
@@ -1708,6 +1707,10 @@ mod tests {
         assert!(!implement.contains(&"enter_plan_mode"));
         assert!(!implement.contains(&"web_search"));
         assert!(!implement.contains(&"spawn_subagent"));
+        // The headless implement surface drops todo_write; TaskOpen and Plan keep it.
+        assert!(!implement.contains(&"todo_write"));
+        assert!(task_open.contains(&"todo_write"));
+        assert!(plan.contains(&"todo_write"));
         for id in implement {
             assert!(
                 task_open.contains(id),
