@@ -42,7 +42,14 @@ impl SessionActor {
         if let Some(window) = selection.filter(supported) {
             sampling_config.context_window = window.get();
         }
-        let new_context_window = self.compaction.context_window_override.unwrap_or_else(|| {
+        // Re-resolve the pin for the *new* model. Spawn stores the previous model's
+        // `[model.<id>].context_window` (or debug env) on `context_window_override`; keeping
+        // that value after a switch makes usage % and auto-compact use the wrong denominator
+        // (e.g. deepseek 300k sticking after switching to a 64k local model).
+        let pin = crate::util::config::debug_context_window_override()
+            .or_else(|| self.models_manager.context_window_pin(&sampling_config.model));
+        self.compaction.context_window_override.set(pin);
+        let new_context_window = pin.unwrap_or_else(|| {
             std::num::NonZeroU64::new(sampling_config.context_window).unwrap_or_else(|| {
                 std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
                     .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
@@ -100,6 +107,11 @@ impl SessionActor {
                 reasoning_summary: sampling_config.reasoning_summary,
                 stream_tool_calls: Some(sampling_config.stream_tool_calls),
             });
+        // Refresh the usage denominator immediately so the chip / signals match the new window
+        // before the next turn's token stamp.
+        let estimated_total_tokens = self.chat_state_handle.get_estimated_total_tokens().await;
+        self.signals_handle()
+            .update_context_usage(estimated_total_tokens, new_context_window.get());
         let existing = self.chat_state_handle.get_credentials().await;
         let session_key = self
             .auth_manager
@@ -176,7 +188,6 @@ impl SessionActor {
         }
         if is_family_switch && !turn_in_flight && self.history_has_model_minted_items().await {
             self.abort_and_clear_prefire().await;
-            let estimated_total_tokens = self.chat_state_handle.get_estimated_total_tokens().await;
             let context_window = new_context_window.get();
             let trigger_info = compaction::AutoCompactTriggerInfo {
                 tokens_used: estimated_total_tokens,

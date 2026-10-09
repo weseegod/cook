@@ -867,7 +867,7 @@ pub(super) async fn run_session(
                                 cfg.model = model_name.clone();
                                 cfg.extra_headers.extend(extra_headers);
                                 if let Some(cw) = context_window
-                                    && session.compaction.context_window_override.is_none()
+                                    && session.compaction.context_window_override.get().is_none()
                                 {
                                     cfg.context_window = cw;
                                 }

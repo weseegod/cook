@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 use xai_grok_sampling_types::conversation::ConversationItem;
 
 use super::support::{build_actor, running_task_stub};
@@ -14,6 +16,58 @@ fn head_text(conv: &[ConversationItem]) -> String {
         );
     };
     sys.content.as_ref().to_owned()
+}
+
+/// Regression: a spawn-time `[model].context_window` pin must not stick after switching to a
+/// smaller model — otherwise usage % and auto-compact use the previous denominator.
+#[tokio::test(flavor = "current_thread")]
+async fn model_switch_replaces_stale_context_window_pin() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let (actor, _gateway_rx) = build_actor().await;
+            actor.compaction.context_window_override.set(NonZeroU64::new(300_000));
+            if let Some(mut cfg) = actor.chat_state_handle.get_sampling_config().await {
+                cfg.context_window = NonZeroU64::new(300_000).unwrap();
+                actor.chat_state_handle.update_sampling_config(cfg);
+            }
+
+            actor
+                .handle_set_session_model(crate::session::SessionModelSwitch {
+                    sampling_config: xai_grok_sampler::SamplerConfig {
+                        model: "qwen38-27b".to_owned(),
+                        context_window: 64_000,
+                        ..xai_grok_sampler::SamplerConfig::default()
+                    },
+                    use_concise: false,
+                    is_family_switch: false,
+                    apply_prompt_override: false,
+                    skip_prompt_rewrite: true,
+                    auto_compact_threshold_percent: 85,
+                    system_prompt_label: SWITCH_TARGET_LABEL.to_owned(),
+                    context_window_selection: SwitchContextWindow::Set(None),
+                    supported_context_windows: vec![NonZeroU64::new(64_000).unwrap()],
+                })
+                .await
+                .expect("model switch succeeds");
+
+            let cfg = actor
+                .chat_state_handle
+                .get_sampling_config()
+                .await
+                .expect("sampling config");
+            assert_eq!(
+                cfg.context_window.get(),
+                64_000,
+                "switch must apply the new model's window, not the spawn pin"
+            );
+            assert_eq!(
+                actor.compaction.context_window_override.get(),
+                None,
+                "stale spawn pin must clear when the new model has no pin in the test manager"
+            );
+            assert_eq!(cfg.model, "qwen38-27b");
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "current_thread")]

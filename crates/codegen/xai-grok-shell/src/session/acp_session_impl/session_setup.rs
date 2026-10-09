@@ -621,7 +621,7 @@ impl SessionActor {
             return;
         };
         if cfg.context_window == selection
-            || self.compaction.context_window_override.is_some()
+            || self.compaction.context_window_override.get().is_some()
             || !self
                 .models_manager
                 .model_supports_context_window(&cfg.model, selection)
@@ -636,7 +636,7 @@ impl SessionActor {
     }
     /// True when the debug override or the selection in use set `current`.
     pub(super) fn is_context_window_fixed(&self, current: std::num::NonZeroU64) -> bool {
-        self.compaction.context_window_override.is_some()
+        self.compaction.context_window_override.get().is_some()
             || crate::session::handle::load_context_window_selection(
                 &self.compaction.context_window_selection,
             ) == Some(current)
