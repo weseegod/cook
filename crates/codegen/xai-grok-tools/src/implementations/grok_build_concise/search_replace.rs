@@ -7,6 +7,7 @@ const DESCRIPTION_CONCISE: &str = r#"Replace an exact string in a file.
 
 - Do not include the "LINE_NUMBER→" prefixes from file reads in ${{ params.edit.old_string }} or ${{ params.edit.new_string }}; keep the exact indentation.
 - ${{ params.edit.old_string }} must match exactly one place in the file. If it appears more than once, add surrounding lines to make it unique, or set ${{ params.edit.replace_all }} to change every occurrence (handy for renaming an identifier).
+- For several disjoint hunks in one file, pass `edits` as an array of `{old_string, new_string}` and leave top-level ${{ params.edit.old_string }} empty.
 - To create a new file, set ${{ params.edit.old_string }} to an empty string."#;
 use crate::types::output::SearchReplaceOutput;
 use crate::types::requirements::{Expr, ToolRequirement};
@@ -141,6 +142,7 @@ mod tests {
             old_string: old.to_string(),
             new_string: new.to_string(),
             replace_all: false,
+            edits: Vec::new(),
         }
     }
 
@@ -183,6 +185,7 @@ mod tests {
             old_string: "aaa".to_string(),
             new_string: "ccc".to_string(),
             replace_all: true,
+            edits: Vec::new(),
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await

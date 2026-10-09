@@ -668,6 +668,10 @@ mod tests {
             prompt.contains("<user_guide>"),
             "interactive prompt must keep the <user_guide> block"
         );
+        assert!(
+            prompt.contains("NEVER coin acronyms, shorthand, or technical-sounding labels"),
+            "interactive prompt must keep the long communication block"
+        );
     }
 
     #[test]
@@ -699,6 +703,18 @@ mod tests {
             ),
             "non-interactive prompt must prefer the working tree over remote patches"
         );
+        assert!(
+            prompt.contains("When the request is done, stop."),
+            "non-interactive prompt must tell the model to stop when the request is done"
+        );
+        assert!(
+            prompt.contains("prefer at most four items taken from that request"),
+            "non-interactive prompt must remind the model of the short todo_write contract"
+        );
+        assert!(
+            !prompt.contains("NEVER coin acronyms, shorthand, or technical-sounding labels"),
+            "non-interactive prompt must omit the long interactive communication essay"
+        );
     }
 
     #[test]
@@ -723,6 +739,18 @@ mod tests {
                 "Prefer the working tree over searching other commits or the network for an existing patch."
             ),
             "interactive prompt must omit the headless working-tree preference"
+        );
+        assert!(
+            !prompt.contains("When the request is done, stop."),
+            "interactive prompt must omit the headless stop-when-done rule"
+        );
+        assert!(
+            !prompt.contains("prefer at most four items taken from that request"),
+            "interactive prompt must omit the headless todo_write reminder"
+        );
+        assert!(
+            prompt.contains("NEVER coin acronyms, shorthand, or technical-sounding labels"),
+            "interactive prompt must keep the long communication block"
         );
     }
 

@@ -59,12 +59,22 @@ ${% if tools.by_kind.read -%}
 - `${{ tools.by_kind.read }}` prefixes each line with "LINE_NUMBER→". That prefix is not part of the file: match only what comes after the →, with its exact indentation.
 ${% endif -%}
 - `${{ params.edit.old_string }}` must match exactly one place in the file. If it appears more than once, add surrounding lines to make it unique, or set `${{ params.edit.replace_all }}` to change every occurrence (handy for renaming an identifier).
+- For several disjoint hunks in one file, pass `edits` as an array of `{old_string, new_string}` and leave top-level `${{ params.edit.old_string }}` empty. All hunks match the original file; any miss, overlap, or ambiguous match writes nothing.
 - To create a new file, set `${{ params.edit.old_string }}` to an empty string. An empty `${{ params.edit.old_string }}` cannot overwrite an existing non-empty file."#;
 /// The overwrite-guard sentence in [`DESCRIPTION_FULL`]. Only accurate while
 /// `empty_old_string_does_not_override` is enabled (opt-in; the default is the legacy overwrite
 /// behavior); `versioned_definition` strips it unless a config enables the guard.
 pub(crate) const EMPTY_OLD_STRING_GUARD_SENTENCE: &str =
     " An empty `${{ params.edit.old_string }}` cannot overwrite an existing non-empty file.";
+/// One old/new pair in a multi-hunk [`SearchReplaceInput::edits`] call.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct SearchReplaceEdit {
+    #[schemars(description = "The text to replace")]
+    pub old_string: String,
+    #[schemars(description = "The text to replace it with")]
+    pub new_string: String,
+}
+
 /// Input for the search_replace tool.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
 pub struct SearchReplaceInput {
@@ -86,6 +96,14 @@ pub struct SearchReplaceInput {
         description = "Replace all occurrences of ${{ params.edit.old_string }} (default false)"
     )]
     pub replace_all: bool,
+    /// Several disjoint hunks matched against the original file. When non-empty, top-level
+    /// `old_string` must be empty; `replace_all` and empty-`old_string` file creation stay on the
+    /// single-pair path only.
+    #[serde(default)]
+    #[schemars(
+        description = "Optional list of disjoint {old_string, new_string} edits applied against the original file in one write. Leave top-level old_string empty when using this."
+    )]
+    pub edits: Vec<SearchReplaceEdit>,
 }
 fn default_true() -> bool {
     true
@@ -195,7 +213,7 @@ pub(crate) async fn run_search_replace(
             )));
         }
     }
-    if input.old_string == input.new_string {
+    if input.edits.is_empty() && input.old_string == input.new_string {
         return Ok(SearchReplaceOutput::InvalidInput(
             "Old string and new string are the same".to_owned(),
         ));
@@ -211,7 +229,22 @@ pub(crate) async fn run_search_replace(
             .map(|p| p.0.include_user_edit_hint)
             .unwrap_or(true);
     }
-    let result = if input.old_string.is_empty() {
+    let result = if !input.edits.is_empty() {
+        handle_multi_edits(
+            &input,
+            resources.clone(),
+            &fs,
+            &notification_handle,
+            &tool_call_id,
+            &path,
+            &policy_path,
+            &cwd,
+            display_cwd.as_deref(),
+            hints_enabled,
+            is_legacy,
+        )
+        .await?
+    } else if input.old_string.is_empty() {
         handle_new_file_creation(
             &input,
             resources.clone(),
@@ -281,6 +314,202 @@ fn validate_path_length(file_path: &str) -> Option<SearchReplaceOutput> {
     }
     None
 }
+/// Apply several disjoint hunks matched against the original file contents.
+async fn handle_multi_edits(
+    input: &SearchReplaceInput,
+    resources: SharedResources,
+    fs: &std::sync::Arc<dyn crate::computer::types::AsyncFileSystem>,
+    notification_handle: &ToolNotificationHandle,
+    tool_call_id: &str,
+    path: &std::path::Path,
+    policy_path: &std::path::Path,
+    cwd: &std::path::Path,
+    display_cwd: Option<&std::path::Path>,
+    hints_enabled: bool,
+    is_legacy: bool,
+) -> Result<SearchReplaceOutput, xai_tool_runtime::ToolError> {
+    if is_legacy {
+        return Ok(SearchReplaceOutput::InvalidInput(
+            "The edits array is not supported on the legacy-0.4.10 search_replace contract."
+                .to_owned(),
+        ));
+    }
+    if !input.old_string.is_empty() {
+        return Ok(SearchReplaceOutput::InvalidInput(
+            "Leave top-level old_string empty when using the edits array.".to_owned(),
+        ));
+    }
+    for edit in &input.edits {
+        if edit.old_string.is_empty() {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                "Each edits entry needs a non-empty old_string.".to_owned(),
+            ));
+        }
+        if edit.old_string == edit.new_string {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                "Old string and new string are the same".to_owned(),
+            ));
+        }
+    }
+    let bytes = match fs.read_file(path).await {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            let output = match e.io_error_kind() {
+                Some(std::io::ErrorKind::NotFound) => {
+                    let display_dcwd = display_cwd_or_cwd(cwd, display_cwd);
+                    let display_path = display_dcwd.join(&input.file_path);
+                    let msg = crate::util::format_not_found_error(
+                        &display_path,
+                        path,
+                        cwd,
+                        &display_dcwd,
+                        hints_enabled,
+                    )
+                    .await;
+                    SearchReplaceOutput::FileNotFound(msg)
+                }
+                Some(std::io::ErrorKind::IsADirectory) => SearchReplaceOutput::InvalidInput(
+                    format!("Error: {} is a directory, not a file.", input.file_path),
+                ),
+                Some(std::io::ErrorKind::PermissionDenied) => SearchReplaceOutput::InvalidInput(
+                    format!("Error: permission denied reading {}.", input.file_path),
+                ),
+                _ => {
+                    return Err(xai_tool_runtime::ToolError::execution(
+                        xai_tool_protocol::ToolId::new("search_replace").expect("valid"),
+                        e.to_string(),
+                    ));
+                }
+            };
+            return Ok(output);
+        }
+    };
+    let old_text = String::from_utf8_lossy(&bytes).into_owned();
+    let has_crlf = old_text.contains("\r\n");
+    let match_text: std::borrow::Cow<'_, str> = if has_crlf {
+        std::borrow::Cow::Owned(old_text.replace("\r\n", "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(&old_text)
+    };
+
+    let mut planned: Vec<(usize, usize, &str, &str)> = Vec::with_capacity(input.edits.len());
+    for edit in &input.edits {
+        let positions: Vec<usize> = match_text
+            .match_indices(&edit.old_string)
+            .map(|(index, _)| index)
+            .collect();
+        if positions.is_empty() {
+            let read_name = TemplateRenderer::resolve(&resources, "${{ tools.by_kind.read }}")
+                .await
+                .unwrap_or_else(|_| "read_file".to_owned());
+            return Ok(SearchReplaceOutput::InvalidInput(format!(
+                "An edits old_string was not found in the file; use {} and try again.",
+                read_name
+            )));
+        }
+        if positions.len() > 1 {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                "An edits old_string matched more than once; add surrounding context to make it unique."
+                    .to_owned(),
+            ));
+        }
+        let start = positions[0];
+        let end = start + edit.old_string.len();
+        planned.push((start, end, edit.old_string.as_str(), edit.new_string.as_str()));
+    }
+    planned.sort_by_key(|(start, _, _, _)| *start);
+    for window in planned.windows(2) {
+        let (_, end_a, _, _) = window[0];
+        let (start_b, _, _, _) = window[1];
+        if start_b < end_a {
+            return Ok(SearchReplaceOutput::InvalidInput(
+                "Overlapping edits: merge into one edit or target disjoint regions.".to_owned(),
+            ));
+        }
+    }
+
+    let mut new_text = String::with_capacity(match_text.len());
+    let mut details = Vec::with_capacity(planned.len());
+    let mut last = 0usize;
+    for &(start, end, old_string, new_string) in &planned {
+        new_text.push_str(&match_text[last..start]);
+        let new_start = new_text.len();
+        new_text.push_str(new_string);
+        details.extend(build_edit_details(
+            &new_text,
+            old_string,
+            new_string,
+            &[new_start],
+            CONTEXT_LINES,
+        ));
+        last = end;
+    }
+    new_text.push_str(&match_text[last..]);
+
+    let write_text = if has_crlf {
+        new_text.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        new_text.clone()
+    };
+    let is_memory_write = match crate::types::memory_v2::write_memory_v2_file(
+        &resources,
+        policy_path,
+        write_text.as_bytes(),
+    )
+    .await
+    {
+        Ok(crate::types::memory_v2::MemoryV2Write::Written { .. }) => true,
+        Ok(crate::types::memory_v2::MemoryV2Write::Outside) => false,
+        Err(error) => return Ok(SearchReplaceOutput::InvalidInput(error)),
+    };
+    if !is_memory_write && let Err(e) = fs.write_file(path, write_text.as_bytes()).await {
+        return Ok(match e.io_error_kind() {
+            Some(std::io::ErrorKind::AlreadyExists) => SearchReplaceOutput::InvalidInput(format!(
+                "Error: cannot write {}. A component of the path already exists as a file where a directory is expected.",
+                input.file_path
+            )),
+            Some(std::io::ErrorKind::InvalidFilename) => {
+                SearchReplaceOutput::FilenameTooLong(format!(
+                    "Error: file name exceeds the {NAME_MAX}-character limit. Please use a shorter file name."
+                ))
+            }
+            _ => SearchReplaceOutput::InvalidInput(format!(
+                "Error: failed to write {}: {e}",
+                input.file_path
+            )),
+        });
+    }
+    notification_handle.send_file_written(FileWritten {
+        tool_call_id: tool_call_id.to_string(),
+        absolute_path: path.to_path_buf(),
+        content: write_text.clone(),
+        previous_content: Some(old_text.clone()),
+        is_new_file: false,
+    });
+    let tool_output_for_prompt = format!(
+        "The file {} has been updated successfully ({} edits).",
+        &input.file_path,
+        details.len()
+    );
+    let tool_output_for_prompt_concise = format!(
+        "The file {} has been updated ({} edits).",
+        &input.file_path,
+        details.len()
+    );
+    Ok(SearchReplaceOutput::EditsApplied(
+        SearchReplaceEditsApplied {
+            old_string: String::new(),
+            new_string: String::new(),
+            tool_output_for_prompt,
+            tool_output_for_prompt_concise: Some(tool_output_for_prompt_concise),
+            absolute_path: path.to_path_buf(),
+            edits: SearchReplaceEditContextInformation { details },
+            patch: None,
+            unicode_normalized: false,
+        },
+    ))
+}
+
 /// Handle new file creation when `old_string` is empty.
 async fn handle_new_file_creation(
     input: &SearchReplaceInput,
@@ -931,6 +1160,7 @@ mod tests {
             old_string: old_string.to_string(),
             new_string: new_string.to_string(),
             replace_all: false,
+            edits: Vec::new(),
         }
     }
     fn description_renderer() -> TemplateRenderer {
@@ -1255,6 +1485,7 @@ mod tests {
             old_string: "aaa".to_string(),
             new_string: "ccc".to_string(),
             replace_all: true,
+            edits: Vec::new(),
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2610,6 +2841,7 @@ neutTest_set);
             old_string: "foo".to_string(),
             new_string: "qux".to_string(),
             replace_all: true,
+            edits: Vec::new(),
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2648,5 +2880,152 @@ neutTest_set);
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }
+    }
+
+    fn multi_edit_input(file: &str, edits: Vec<(&str, &str)>) -> SearchReplaceInput {
+        SearchReplaceInput {
+            file_path: file.to_string(),
+            old_string: String::new(),
+            new_string: String::new(),
+            replace_all: false,
+            edits: edits
+                .into_iter()
+                .map(|(old, new)| SearchReplaceEdit {
+                    old_string: old.to_string(),
+                    new_string: new.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_edits_apply_disjoint_hunks_from_original() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = multi_edit_input(
+            "test.txt",
+            vec![("alpha", "ALPHA"), ("gamma", "GAMMA")],
+        );
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert_eq!(applied.edits.details.len(), 2);
+                let content = std::fs::read_to_string(tmp.path().join("test.txt")).unwrap();
+                assert_eq!(content, "ALPHA\nbeta\nGAMMA\n");
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_edits_overlap_writes_nothing_and_names_merge() {
+        let tmp = TempDir::new().unwrap();
+        let original = "hello world\n";
+        std::fs::write(tmp.path().join("test.txt"), original).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = multi_edit_input(
+            "test.txt",
+            vec![("hello world", "hi"), ("world", "earth")],
+        );
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(msg.contains("merge"), "expected merge guidance: {msg}");
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("test.txt")).unwrap(),
+            original
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_edits_ambiguous_old_string_writes_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let original = "foo bar foo\n";
+        std::fs::write(tmp.path().join("test.txt"), original).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = multi_edit_input("test.txt", vec![("foo", "baz")]);
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("more than once"),
+                    "expected ambiguous guidance: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("test.txt")).unwrap(),
+            original
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_edits_with_top_level_old_string_writes_nothing() {
+        let tmp = TempDir::new().unwrap();
+        let original = "alpha\nbeta\n";
+        std::fs::write(tmp.path().join("test.txt"), original).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut input = multi_edit_input("test.txt", vec![("alpha", "ALPHA")]);
+        input.old_string = "beta".to_string();
+        input.new_string = "BETA".to_string();
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("top-level old_string"),
+                    "expected top-level guidance: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("test.txt")).unwrap(),
+            original
+        );
+    }
+
+    #[tokio::test]
+    async fn multi_edits_rejected_on_legacy_contract() {
+        let tmp = TempDir::new().unwrap();
+        let original = "alpha\nbeta\n";
+        std::fs::write(tmp.path().join("test.txt"), original).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let mut ctx = test_ctx(resources.into_shared());
+        ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
+            "legacy-0.4.10".to_string(),
+        ));
+        let input = multi_edit_input("test.txt", vec![("alpha", "ALPHA")]);
+        let result = xai_tool_runtime::Tool::run(&tool, ctx, input).await.unwrap();
+        match result {
+            SearchReplaceOutput::InvalidInput(msg) => {
+                assert!(
+                    msg.contains("legacy-0.4.10"),
+                    "expected legacy rejection: {msg}"
+                );
+            }
+            other => panic!("Expected InvalidInput, got {:?}", other),
+        }
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join("test.txt")).unwrap(),
+            original
+        );
     }
 }
