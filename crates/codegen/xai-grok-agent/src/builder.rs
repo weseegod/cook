@@ -183,6 +183,25 @@ fn task_lifecycle_satisfier(
         || has(ToolNamespace::GrokBuildConcise, "run_terminal_cmd", true)
         || has(ToolNamespace::OpenCode, "bash", false)
 }
+/// Short tool names that satisfy the `task` tool's `BackgroundTaskAction` requirement: the unified
+/// `background_task` plus the compat names of the task-output tools it replaced.
+const BACKGROUND_TASK_TOOL_NAMES: &[&str] = &[
+    "background_task",
+    "get_task_output",
+    "get_command_or_subagent_output",
+    "get_terminal_command_output",
+];
+/// True when the toolset can observe background work, so injecting `spawn_subagent` (which requires
+/// `BackgroundTaskAction`) leaves a satisfiable config. A read-only toolset with no shell has nothing
+/// to monitor, so it must not advertise spawn.
+fn can_observe_background_tasks(
+    tool_config: &xai_grok_tools::registry::types::ToolServerConfig,
+) -> bool {
+    tool_config.tools.iter().any(|tc| {
+        tc.kind == Some(xai_grok_tools::types::tool::ToolKind::BackgroundTaskAction)
+            || BACKGROUND_TASK_TOOL_NAMES.contains(&short_tool_name(&tc.id))
+    })
+}
 /// `Cursor:Shell` can background, but it does not satisfy Grok Build output tools.
 fn cursor_shell_can_background(
     tool_config: &xai_grok_tools::registry::types::ToolServerConfig,
@@ -198,6 +217,7 @@ fn cursor_shell_can_background(
     })
 }
 const TASK_LIFECYCLE_TOOLS: &[&str] = &[
+    "background_task",
     "get_task_output",
     "wait_tasks",
     "kill_task",
@@ -1046,6 +1066,7 @@ impl AgentBuilder {
                 // Only inject task onto profiles that accept default-tool layering.
                 // Curated toolsets (`inject_default_tools = false`) keep their exact list.
                 if definition.inject_default_tools
+                    && can_observe_background_tasks(&tool_config)
                     && !tool_config.tools.iter().any(|tc| tc.id == task_tool_id)
                 {
                     tool_config.tools.push(
@@ -1848,8 +1869,8 @@ mod tests {
             "should use tools.by_kind.task template variable"
         );
         assert!(
-            !desc.contains("subagent_type"),
-            "description must not tell the model to pass subagent_type"
+            desc.contains("set subagent_type to \"explore\""),
+            "description must point broad exploration at the explore subagent"
         );
         assert!(desc.contains("${{ params.task.resume_from }}"));
         assert!(desc.contains("${{ params.task.run_in_background }}"));
@@ -1911,7 +1932,7 @@ mod tests {
         );
         assert!(desc.contains("${{ params.task.run_in_background }}"));
         assert!(desc.contains("${{ params.task.isolation }}"));
-        assert!(!desc.contains("subagent_type"));
+        assert!(desc.contains("set subagent_type to \"explore\""));
     }
     #[tokio::test]
     async fn discovery_snapshot_records_gated_and_preloaded_skills() {
@@ -2572,9 +2593,7 @@ mod tests {
             "search_replace",
             "write",
             "run_terminal_command",
-            "get_command_or_subagent_output",
-            "wait_commands_or_subagents",
-            "kill_command_or_subagent",
+            "background_task",
             "todo_write",
             "enter_plan_mode",
             "exit_plan_mode",
@@ -2886,7 +2905,7 @@ mod tests {
             !disabled_names.iter().any(|name| name == "spawn_subagent"),
             "disabling general-purpose with no single fallback hides task: {disabled_names:?}"
         );
-        for kept in ["run_terminal_command", "get_command_or_subagent_output"] {
+        for kept in ["run_terminal_command", "background_task"] {
             assert!(
                 disabled_names.iter().any(|name| name == kept),
                 "hiding task must keep {kept}: {disabled_names:?}"
@@ -2937,9 +2956,7 @@ mod tests {
         );
         for gone in [
             "spawn_subagent",
-            "get_command_or_subagent_output",
-            "kill_command_or_subagent",
-            "wait_commands_or_subagents",
+            "background_task",
             "scheduler_create",
         ] {
             assert!(
@@ -2953,6 +2970,42 @@ mod tests {
             .await
             .expect("bash params");
         assert!(!bash.0.enabled_background);
+    }
+    /// A read-only subagent toolset has no way to observe background work, so the builder must not
+    /// inject `spawn_subagent` (which requires `BackgroundTaskAction`). Injecting it left the child
+    /// config unsatisfiable, so every `explore` spawn failed at session init with "task requires …".
+    #[tokio::test]
+    async fn read_only_toolset_gets_no_spawn_subagent() {
+        use xai_grok_tools::computer::local::LocalTerminalBackend;
+        use xai_grok_tools::notification::ToolNotificationHandle;
+        let agent = AgentBuilder::new(
+            std::env::temp_dir(),
+            Arc::new(LocalTerminalBackend::new()),
+            ToolNotificationHandle::noop(),
+        )
+        .from_definition(crate::config::AgentDefinition::explore())
+        .with_subagents_enabled(true)
+        .build()
+        .await
+        .expect("a read-only subagent toolset must build without a task tool");
+        let names: Vec<String> = agent
+            .tool_definitions()
+            .await
+            .into_iter()
+            .map(|definition| definition.function.name)
+            .collect();
+        assert!(
+            !names.iter().any(|name| name == "spawn_subagent"),
+            "no background-task tool means no way to monitor children: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|name| name == "background_task"),
+            "explore stays read-only: {names:?}"
+        );
+        assert!(
+            names.iter().any(|name| name == "read_file"),
+            "the read tools stay: {names:?}"
+        );
     }
     #[test]
     fn selectable_types_are_project_and_user_agents_the_parent_may_spawn() {

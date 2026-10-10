@@ -432,15 +432,15 @@ Each subagent handles its group's PRs end-to-end: query, diagnose, fix, commit, 
 
 #### 4b. Wait and collect results
 
-**Only begin this step after ALL subagents from Step 4a have been launched.** Do not call `get_command_or_subagent_output` for any subagent until every group's subagent has been started and you have all `task_id`s in hand.
+**Only begin this step after ALL subagents from Step 4a have been launched.** Do not call `background_task` with `action: "output"` for any subagent until every group's subagent has been started and you have all `task_id`s in hand.
 
-**Maintain a `task_id` to `group_key` mapping**: As you launch each subagent in Step 4a, record the returned `task_id` alongside its `group_key` (e.g., in a list of `{task_id, group_key}` pairs). When collecting results below, use this mapping to associate each `get_command_or_subagent_output` result with the correct group for state updates.
+**Maintain a `task_id` to `group_key` mapping**: As you launch each subagent in Step 4a, record the returned `task_id` alongside its `group_key` (e.g., in a list of `{task_id, group_key}` pairs). When collecting results below, use this mapping to associate each `background_task` (`action: "output"`) result with the correct group for state updates.
 
-Then, for each subagent (iterating over the `task_id`/`group_key` pairs), use `get_command_or_subagent_output` with `block: true` and `timeout_ms: 1800000` (30 minutes) to collect results.
+Then, for each subagent (iterating over the `task_id`/`group_key` pairs), use `background_task` with `action: "output"`, `task_ids: [<task_id>]`, and `timeout_ms: 1800000` (30 minutes) to collect results.
 
 **If a subagent fails**: log the error, set `last_status` to `"error"` for all PRs in that group, and continue collecting results from other groups. A single failed subagent must not block the entire check cycle.
 
-**If `get_command_or_subagent_output` times out**: the subagent may still be running in the background. Kill it with `kill_command_or_subagent(<task_id>)`, clear `groups[group_key].subagent_id` (so the next cycle launches a fresh subagent rather than trying to resume a killed one), and set `last_status` to `"error"` for all PRs in that group.
+**If `background_task` with `action: "output"` times out**: the subagent may still be running in the background. Kill it with `background_task(action="kill", task_ids=[<task_id>])`, clear `groups[group_key].subagent_id` (so the next cycle launches a fresh subagent rather than trying to resume a killed one), and set `last_status` to `"error"` for all PRs in that group.
 
 Each subagent must conclude its output with a structured JSON summary block for reliable parsing:
 

@@ -3,9 +3,11 @@
 //! Positive `timeout_ms` waits (multi-id = wait-all). Also provides helpers used
 //! by the legacy `wait_tasks` tool.
 
+pub mod background_task;
 pub mod terminal_command;
 pub mod wait_tasks;
 use std::time::Duration;
+pub use background_task::BackgroundTaskTool;
 pub use terminal_command::GetTerminalCommandOutputTool;
 pub use wait_tasks::WaitTasksTool;
 
@@ -1041,7 +1043,7 @@ pub(crate) mod test_helpers {
         }
 
         async fn kill_task(&self, _task_id: &str) -> KillOutcome {
-            unimplemented!()
+            KillOutcome::NotFound
         }
 
         async fn get_task(&self, _task_id: &str) -> Option<TaskSnapshot> {

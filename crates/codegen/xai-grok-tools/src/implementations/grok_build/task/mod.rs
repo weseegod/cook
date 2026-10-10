@@ -302,13 +302,10 @@ impl crate::types::tool_metadata::ToolMetadata for TaskTool {
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
-        // The task tool can only be used when both get_task_output
-        // (BackgroundTaskAction) and kill_task (KillTaskAction) are present,
-        // so the agent can manage background subagents it spawns.
-        Expr::And(vec![
-            Expr::Value(ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction)),
-            Expr::Value(ToolRequirement::tool_kind(ToolKind::KillTaskAction)),
-        ])
+        // The task tool can only be used when the background-task tool
+        // (BackgroundTaskAction) is present, so the agent can manage background
+        // subagents it spawns.
+        Expr::Value(ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction))
     }
 
     fn is_read_only(&self) -> bool {

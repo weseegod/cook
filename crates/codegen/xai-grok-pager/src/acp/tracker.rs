@@ -2472,14 +2472,15 @@ pub(crate) fn content_blocks_text(content: &[acp::ToolCallContent]) -> String {
         .join("\n")
 }
 /// Check if a tool call is bg-task internal plumbing.
-/// That covers get_command_or_subagent_output, kill_command_or_subagent, wait_commands_or_subagents, and the external background-await tool.
+/// That covers `background_task` (and its retired read/wait/kill names) and the external background-await tool.
 /// These are suppressed from scrollback because the bg task pane already shows task status and output.
 fn is_bg_plumbing_tool(tc: &acp::ToolCall) -> bool {
     matches!(
         tc.title.as_str(),
-        // Current names (post-rename)
-        "get_command_or_subagent_output" | "kill_command_or_subagent" | "wait_commands_or_subagents"
-        // Old names (persisted sessions / replay)
+        // Current name (unified lifecycle tool)
+        "background_task"
+        // Retired names (persisted sessions / replay)
+        | "get_command_or_subagent_output" | "kill_command_or_subagent" | "wait_commands_or_subagents"
         | "get_task_output" | "kill_task" | "wait_tasks"
         // Intermediate names (mid-rename sessions)
         | "get_task_or_subagent_output" | "kill_task_or_subagent" | "wait_tasks_or_subagents"
@@ -2493,7 +2494,7 @@ fn is_bg_plumbing_tool(tc: &acp::ToolCall) -> bool {
             .as_ref()
             .and_then(|v| v.get("variant"))
             .and_then(|v| v.as_str())
-            .is_some_and(|v| matches!(v, "TaskOutput" | "KillTask" | "WaitTasks"))
+            .is_some_and(|v| matches!(v, "BackgroundTask" | "TaskOutput" | "KillTask" | "WaitTasks"))
 }
 /// Classify a *blocking* suppressed tool into the [`WaitingReason`] the turn is waiting on.
 /// `None` for suppressed tools that don't block the turn (e.g. `kill_*`, todo/goal/scheduler).
@@ -2505,6 +2506,30 @@ fn blocking_wait_reason(tc: &acp::ToolCall) -> Option<WaitingReason> {
         .as_ref()
         .and_then(|v| v.get("variant"))
         .and_then(|v| v.as_str());
+    // Unified lifecycle tool: the `action` decides whether the turn blocks.
+    if title == "background_task" || variant == Some("BackgroundTask") {
+        let action = tc
+            .raw_input
+            .as_ref()
+            .and_then(|v| v.get("action"))
+            .and_then(|v| v.as_str());
+        return match action {
+            Some("wait") => Some(WaitingReason::TasksComplete),
+            Some("output") => {
+                let task_ids = tc
+                    .raw_input
+                    .as_ref()
+                    .map(task_ids_from_raw_input)
+                    .unwrap_or_default();
+                Some(WaitingReason::TaskOutput {
+                    task_ids,
+                    subject: None,
+                    waits: timeout_waits(tc.raw_input.as_ref()),
+                })
+            }
+            _ => None,
+        };
+    }
     if matches!(
         title,
         "get_command_or_subagent_output" | "get_task_output" | "get_task_or_subagent_output"

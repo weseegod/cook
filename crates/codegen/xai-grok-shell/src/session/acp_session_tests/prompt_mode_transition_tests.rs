@@ -88,7 +88,7 @@ fn plan_surface_keeps_research_and_coding_tools() {
     assert!(!kept.contains(&"send_feedback"));
 }
 #[test]
-fn task_open_hides_mcp_and_task_while_implement_is_narrow() {
+fn task_open_keeps_plan_and_task_while_implement_is_narrow() {
     let defs = vec![
         fn_def("read_file"),
         fn_def("search_replace"),
@@ -107,14 +107,16 @@ fn task_open_hides_mcp_and_task_while_implement_is_narrow() {
     let impl_names = names(&implement);
     assert!(task_names.contains(&"enter_plan_mode"));
     assert!(task_names.contains(&"web_search"));
+    assert!(task_names.contains(&"spawn_subagent"));
     assert!(!task_names.contains(&"search_tool"));
-    assert!(!task_names.contains(&"spawn_subagent"));
     assert!(impl_names.contains(&"write"));
     assert!(impl_names.contains(&"search_replace"));
+    // `spawn_subagent` is on Implement too: broad exploration goes to the read-only explore agent.
+    assert!(impl_names.contains(&"spawn_subagent"));
     assert!(!impl_names.contains(&"enter_plan_mode"));
     assert!(!impl_names.contains(&"ask_user_question"));
     assert!(!impl_names.contains(&"web_search"));
-    assert!(!impl_names.contains(&"spawn_subagent"));
+    assert!(!impl_names.contains(&"search_tool"));
 }
 /// Pins the `reconcile_plan_mode_with_prompt` transitions: Plan enters Pending, re-entry is idempotent, and non-plan modes exit cleanly.
 #[test]

@@ -26,14 +26,16 @@ pub use serde_lenient::{
 };
 pub use task::{
     BACKGROUND_SUBAGENT_CONTINUE_PARENT_WORK, BUILTIN_SUBAGENTS, BackgroundNoticeNaming,
-    BuiltinSubagent, EXPLORE_PROMPT, EXPLORE_SUBAGENT, ForegroundSpawnInterrupt,
+    BackgroundTaskAction, BackgroundTaskToolInput, BackgroundTaskToolNaming, BuiltinSubagent,
+    EXPLORE_PROMPT, EXPLORE_SUBAGENT, ForegroundSpawnInterrupt,
     GENERAL_PURPOSE_PROMPT, GENERAL_PURPOSE_SUBAGENT, HandedOffSubagentState, KillTaskOutput,
     KillTaskResult, KillTaskToolInput, KillTaskToolNaming, MAX_MULTI_WAIT_IDS,
     MAX_WAIT_BLOCK_MS_DEFAULT, MAX_WAIT_MS_PLACEHOLDER, MultiTaskOutputResult, PLAN_PROMPT,
     PLAN_SUBAGENT, SubagentCapabilityMode, SubagentCompletedOutput, SubagentDescriptor,
     SubagentIsolationMode, SubagentToolNaming, TaskOutputOutput, TaskOutputResult,
     TaskOutputToolInput, TaskOutputToolNaming, TaskToolInput, TaskToolNaming, WaitMode,
-    WaitTasksToolInput, WaitTasksToolNaming, build_kill_task_description, build_task_description,
+    WaitTasksToolInput, WaitTasksToolNaming, build_background_task_description,
+    build_kill_task_description, build_task_description,
     build_task_output_description, build_wait_tasks_description, builtin_subagent_by_name,
     default_subagent_type, format_resume_footer, format_subagent_auto_backgrounded,
     format_subagent_backgrounded_on_turn_end, format_subagent_completed,

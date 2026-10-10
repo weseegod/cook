@@ -126,17 +126,10 @@ fn task_tool_config() -> ToolConfig {
         .with_name("spawn_subagent")
         .with_param_rename("run_in_background", "background")
 }
-/// Task output tool renamed for clarity: `get_task_output` becomes `get_command_or_subagent_output`.
-fn task_output_tool_config() -> ToolConfig {
-    ToolConfig::from(&grok_build::TaskOutputTool).with_name("get_command_or_subagent_output")
-}
-/// `wait_tasks` becomes `wait_commands_or_subagents`.
-fn wait_tasks_tool_config() -> ToolConfig {
-    ToolConfig::from(&grok_build::WaitTasksTool).with_name("wait_commands_or_subagents")
-}
-/// `kill_task` becomes `kill_command_or_subagent`.
-fn kill_task_tool_config() -> ToolConfig {
-    ToolConfig::from(&grok_build::KillTaskTool).with_name("kill_command_or_subagent")
+/// The single model-facing background-task tool. One tool carries the three
+/// lifecycle actions (`output`, `wait`, `kill`) that used to be three tools.
+fn background_task_tool_config() -> ToolConfig {
+    ToolConfig::from(&grok_build::BackgroundTaskTool)
 }
 /// Complete workspace-executable toolset for hub registration.
 /// Extends `default_grok_build_toolset()` with tools injected by `AgentBuilder` or available only in specific modes.
@@ -277,10 +270,8 @@ fn grok_build_coding_keep_set() -> Vec<xai_grok_tools::registry::types::ToolConf
         (&grok_build::ListDirTool).into(),
         (&opencode::OpenCodeGlobTool).into(),
         (&grok_build::GrepTool).into(),
-        kill_task_tool_config(),
         (&grok_build::TodoWriteTool).into(),
-        task_output_tool_config(),
-        wait_tasks_tool_config(),
+        background_task_tool_config(),
     ]
 }
 
@@ -295,23 +286,20 @@ pub enum ToolSurface {
     Implement,
 }
 
-/// Client-facing tool names for the implement surface: coding keep-set plus write.
+/// Client-facing tool names for the implement surface: the four coding tools
+/// plus the background-task lifecycle tool and subagent spawn.
 pub fn implement_tool_ids() -> &'static [&'static str] {
     &[
         "run_terminal_command",
         "read_file",
         "search_replace",
         "write",
-        "list_dir",
-        "glob",
-        "grep",
-        "kill_command_or_subagent",
-        "get_command_or_subagent_output",
-        "wait_commands_or_subagents",
+        "background_task",
+        "spawn_subagent",
     ]
 }
 
-/// Task-open surface: implement set plus plan enter/exit, ask-user, and web tools.
+/// Task-open surface: implement set plus directory listing, search, plan enter/exit, ask-user, and web tools.
 pub fn task_open_tool_ids() -> &'static [&'static str] {
     &[
         "run_terminal_command",
@@ -321,10 +309,9 @@ pub fn task_open_tool_ids() -> &'static [&'static str] {
         "list_dir",
         "glob",
         "grep",
-        "kill_command_or_subagent",
+        "background_task",
+        "spawn_subagent",
         "todo_write",
-        "get_command_or_subagent_output",
-        "wait_commands_or_subagents",
         "enter_plan_mode",
         "exit_plan_mode",
         "ask_user_question",
@@ -335,7 +322,7 @@ pub fn task_open_tool_ids() -> &'static [&'static str] {
     ]
 }
 
-/// Plan surface: task-open set plus MCP discovery and the task tool.
+/// Plan surface: task-open set plus MCP discovery.
 pub fn plan_tool_ids() -> &'static [&'static str] {
     &[
         "run_terminal_command",
@@ -345,10 +332,9 @@ pub fn plan_tool_ids() -> &'static [&'static str] {
         "list_dir",
         "glob",
         "grep",
-        "kill_command_or_subagent",
+        "background_task",
+        "spawn_subagent",
         "todo_write",
-        "get_command_or_subagent_output",
-        "wait_commands_or_subagents",
         "enter_plan_mode",
         "exit_plan_mode",
         "ask_user_question",
@@ -356,7 +342,6 @@ pub fn plan_tool_ids() -> &'static [&'static str] {
         "web_fetch",
         "search_tool",
         "use_tool",
-        "spawn_subagent",
     ]
 }
 
@@ -386,10 +371,8 @@ fn grok_build_concise_toolset() -> ToolServerConfig {
             (&grok_build::ListDirTool).into(),
             (&opencode::OpenCodeGlobTool).into(),
             (&grok_build::GrepTool).into(),
-            kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
-            task_output_tool_config(),
-            wait_tasks_tool_config(),
+            background_task_tool_config(),
         ],
         behavior_preset: None,
     }
@@ -404,10 +387,8 @@ pub fn grok_build_hashline_toolset(
     tools.extend([
         (&grok_build::ListDirTool).into(),
         (&opencode::OpenCodeGlobTool).into(),
-        kill_task_tool_config(),
         (&grok_build::TodoWriteTool).into(),
-        task_output_tool_config(),
-        wait_tasks_tool_config(),
+        background_task_tool_config(),
     ]);
     ToolServerConfig {
         tools,
@@ -422,9 +403,8 @@ fn codex_toolset() -> ToolServerConfig {
             (&codex::ApplyPatchTool).into(),
             (&codex::CodexListDirTool).into(),
             (&codex::CodexGrepFilesTool).into(),
-            kill_task_tool_config(),
             (&grok_build::TodoWriteTool).into(),
-            task_output_tool_config(),
+            background_task_tool_config(),
             (&search_tool::SearchTool).into(),
             (&use_tool::UseTool).into(),
         ],
@@ -486,9 +466,7 @@ fn orchestrator_toolset() -> ToolServerConfig {
             (&grok_build::GrepTool).into(),
             // Subagent orchestration
             task_tool_config(),
-            task_output_tool_config(),
-            wait_tasks_tool_config(),
-            kill_task_tool_config(),
+            background_task_tool_config(),
             // Skills and MCP
             (&search_tool::SearchTool).into(),
             (&use_tool::UseTool).into(),
@@ -546,8 +524,7 @@ fn opencode_toolset() -> ToolServerConfig {
             (&opencode::OpenCodeGlobTool).into(),
             (&opencode::OpenCodeTodoWriteTool).into(),
             (&opencode::OpenCodeSkillTool).into(),
-            kill_task_tool_config(),
-            task_output_tool_config(),
+            background_task_tool_config(),
         ],
         behavior_preset: None,
     }
@@ -1667,15 +1644,12 @@ mod tests {
         }
         assert!(toolset_for_preset("does-not-exist").is_none());
     }
-    /// Default headless/`grok-build-plan` must advertise the wait tool: background bash
-    /// is kept in that toolset, and the real-model `tools.kill_and_wait` case expects
-    /// `wait_tasks` (client name `wait_commands_or_subagents`).
+    /// Default headless/`grok-build-plan` must advertise the unified background-task tool:
+    /// background bash is kept in that toolset, and the real-model `tools.kill_and_wait`
+    /// case reaches `wait_tasks` through `background_task` with `action: "wait"`.
     #[test]
-    fn grok_build_plan_toolset_includes_wait_tasks() {
-        let wait_id = wait_tasks_tool_config().id;
-        let wait_name = wait_tasks_tool_config()
-            .name_override
-            .expect("wait tool is renamed for the wire");
+    fn grok_build_plan_toolset_includes_background_task() {
+        let bg_id = background_task_tool_config().id;
         for (label, tools) in [
             ("grok-build-plan", &grok_build_plan_toolset().tools),
             (
@@ -1684,12 +1658,15 @@ mod tests {
             ),
         ] {
             assert!(
-                tools
-                    .iter()
-                    .any(|t| t.id == wait_id
-                        && t.name_override.as_deref() == Some(wait_name.as_str())),
-                "{label} toolset must include wait_tasks as {wait_name}; tools: {:?}",
+                tools.iter().any(|t| t.id == bg_id),
+                "{label} toolset must include background_task; tools: {:?}",
                 tools.iter().map(|t| t.id.as_str()).collect::<Vec<_>>()
+            );
+            assert!(
+                !tools.iter().any(|t| t.id == ToolConfig::from(&grok_build::TaskOutputTool).id
+                    || t.id == ToolConfig::from(&grok_build::WaitTasksTool).id
+                    || t.id == ToolConfig::from(&grok_build::KillTaskTool).id),
+                "{label} toolset must not advertise the retired lifecycle tools"
             );
             let skill_id = ToolConfig::from(&opencode::OpenCodeSkillTool).id;
             assert!(
@@ -1703,10 +1680,25 @@ mod tests {
         let implement = implement_tool_ids();
         let task_open = task_open_tool_ids();
         let plan = plan_tool_ids();
-        assert!(implement.contains(&"write"));
+        assert_eq!(
+            implement,
+            &[
+                "run_terminal_command",
+                "read_file",
+                "search_replace",
+                "write",
+                "background_task",
+                "spawn_subagent",
+            ]
+        );
         assert!(!implement.contains(&"enter_plan_mode"));
         assert!(!implement.contains(&"web_search"));
-        assert!(!implement.contains(&"spawn_subagent"));
+        assert!(!implement.contains(&"list_dir"));
+        assert!(!implement.contains(&"glob"));
+        assert!(!implement.contains(&"grep"));
+        assert!(!implement.contains(&"get_command_or_subagent_output"));
+        assert!(!implement.contains(&"wait_commands_or_subagents"));
+        assert!(!implement.contains(&"kill_command_or_subagent"));
         // The headless implement surface drops todo_write; TaskOpen and Plan keep it.
         assert!(!implement.contains(&"todo_write"));
         assert!(task_open.contains(&"todo_write"));
@@ -1719,6 +1711,9 @@ mod tests {
             assert!(plan.contains(id), "plan missing implement id {id}");
         }
         for id in [
+            "list_dir",
+            "glob",
+            "grep",
             "enter_plan_mode",
             "exit_plan_mode",
             "ask_user_question",
@@ -1728,7 +1723,16 @@ mod tests {
             assert!(task_open.contains(&id), "task_open missing {id}");
             assert!(plan.contains(&id), "plan missing {id}");
         }
-        for id in ["search_tool", "use_tool", "spawn_subagent"] {
+        for id in [
+            "get_command_or_subagent_output",
+            "wait_commands_or_subagents",
+            "kill_command_or_subagent",
+        ] {
+            assert!(!implement.contains(&id), "implement must hide {id}");
+            assert!(!task_open.contains(&id), "task_open must hide {id}");
+            assert!(!plan.contains(&id), "plan must hide {id}");
+        }
+        for id in ["search_tool", "use_tool"] {
             assert!(!task_open.contains(&id), "task_open must hide {id}");
             assert!(plan.contains(&id), "plan missing {id}");
         }
@@ -1742,12 +1746,37 @@ mod tests {
         assert_eq!(tool_ids_for_surface(ToolSurface::Plan), plan);
     }
     #[test]
+    fn explore_preset_keeps_read_only_path_tools() {
+        let explore = toolset_for_preset("explore").unwrap();
+        let mut ids: Vec<&str> = explore.tools.iter().map(|t| t.id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(
+            ids,
+            [
+                "GrokBuild:grep",
+                "GrokBuild:list_dir",
+                "GrokBuild:read_file",
+            ]
+        );
+    }
+    #[test]
     fn presets_select_distinct_toolsets_by_size() {
         let gb = toolset_for_preset("grok-build").unwrap();
         let plan = toolset_for_preset("plan").unwrap();
         let explore = toolset_for_preset("explore").unwrap();
         assert!(explore.tools.len() < plan.tools.len());
         assert!(plan.tools.len() < gb.tools.len());
+        // The explore subagent stays read-only: no shell, no background-task helpers.
+        let explore_ids: Vec<&str> = explore.tools.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(
+            explore_ids,
+            vec![
+                "GrokBuild:read_file",
+                "GrokBuild:list_dir",
+                "GrokBuild:grep"
+            ],
+            "explore preset must stay read-only"
+        );
     }
     fn feedback_tool_id() -> String {
         ToolConfig::from(&grok_build::SendFeedbackTool).id

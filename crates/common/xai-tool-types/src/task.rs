@@ -1307,6 +1307,7 @@ pub fn build_task_description(naming: &TaskToolNaming) -> String {
          ## Usage notes\n\
          - When the agent is done, it returns a single message with its agent ID. Use that ID to resume the agent later for follow-up work.\n\
          - {run_in_background_param}: Returns immediately with a subagent_id. Use {background_retrieval_tool} to retrieve results. This is set to true by default.\n\
+         - For broad project exploration, set subagent_type to \"explore\": that agent is read-only and already knows the exploration procedure, so give it the goal rather than step-by-step instructions.\n\
          - Subagents receive a compacted version of project instructions (AGENTS.md). If the task requires detailed conventions (e.g., build rules, testing patterns), include the relevant rules directly in the prompt.\n\
          - When launching independent subagents, you MUST incorporate the results into the task based on requirements BEFORE concluding.\n\n\
          Resuming a previous agent ({resume_from_param}):\n\
@@ -1530,6 +1531,155 @@ pub fn build_wait_tasks_description(naming: &WaitTasksToolNaming) -> String {
          - task_ids: list of task IDs from {sources}\n\
          - mode: 'wait_all' or 'wait_any'\n\
          - timeout_ms: optional max wait, default 30s, capped at {wait_cap}"
+    )
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// `background_task` tool — unified read / wait / kill
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Which background-task lifecycle action `background_task` performs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundTaskAction {
+    /// Read current output and status without blocking.
+    Output,
+    /// Block until the listed tasks reach a terminal state.
+    Wait,
+    /// Terminate one background task, monitor, or subagent.
+    Kill,
+}
+
+/// Input for the unified `background_task` tool.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct BackgroundTaskToolInput {
+    /// Which lifecycle action to run.
+    #[schemars(
+        description = "Action to run: \"output\" reads current output and status, \"wait\" blocks until the tasks finish, \"kill\" terminates one task."
+    )]
+    pub action: BackgroundTaskAction,
+
+    /// Task IDs to act on. Lenient on the wire: also accepts the singular
+    /// `task_id` key and a bare string/number instead of an array.
+    #[schemars(
+        description = "Task IDs to act on. Pass one or more; for a single task use a one-element array. \"kill\" uses the first id."
+    )]
+    #[serde(
+        default,
+        alias = "task_id",
+        deserialize_with = "crate::serde_lenient::deserialize_lenient_string_list"
+    )]
+    pub task_ids: Vec<String>,
+
+    /// When set and positive, wait up to this many milliseconds.
+    #[schemars(
+        description = "Max wait time in milliseconds, up to {max_wait_ms}. With \"output\", a positive value waits for completion; omit or pass 0 for a non-blocking status poll."
+    )]
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+
+    /// Multi-id wait mode for `action: "wait"`. Defaults to `wait_all`.
+    #[schemars(
+        description = "For \"wait\" only: 'wait_any' returns when the first task finishes, 'wait_all' waits for every task. Defaults to 'wait_all'."
+    )]
+    #[serde(default)]
+    pub mode: Option<WaitMode>,
+}
+
+impl BackgroundTaskToolInput {
+    /// Resolved, de-duplicated task IDs preserving first-seen order.
+    pub fn resolved_task_ids(&self) -> Vec<String> {
+        resolve_task_ids(&self.task_ids)
+    }
+
+    /// True only when the call blocks on completion.
+    pub fn waits(&self) -> bool {
+        match self.action {
+            BackgroundTaskAction::Wait => true,
+            BackgroundTaskAction::Output => task_output_waits(self.timeout_ms),
+            BackgroundTaskAction::Kill => false,
+        }
+    }
+}
+
+/// Naming/feature inputs for [`build_background_task_description`].
+#[derive(Clone, Copy, Debug)]
+pub struct BackgroundTaskToolNaming<'a> {
+    /// Model-facing name of the `action` input.
+    pub action_param: &'a str,
+    /// Model-facing name of the `task_ids` input.
+    pub task_ids_param: &'a str,
+    /// Model-facing name of the `timeout_ms` input.
+    pub timeout_ms_param: &'a str,
+    /// Model-facing name of the `mode` input.
+    pub mode_param: &'a str,
+    /// The bash `is_background` param name, when the bash/`execute` tool advertises one.
+    pub bash_background_param: Option<&'a str>,
+    /// The bash `block_until_ms` param name, when the bash/`execute` tool advertises one.
+    /// Ignored when [`Self::bash_background_param`] is `Some`.
+    pub bash_block_param: Option<&'a str>,
+    /// The subagent `run_in_background` param name, when a `task` tool is present.
+    pub subagent_background_param: Option<&'a str>,
+    /// Read tool name for the "large output" hint, or `None`.
+    pub read_tool: Option<&'a str>,
+    /// Monitor tool name, or `None` when no monitor tool is present.
+    pub monitor_tool: Option<&'a str>,
+    /// Singular id name for the monitor aside (kill's `task_id`).
+    pub task_id_param: &'a str,
+    /// Whether termination uses a Windows Job Object (vs POSIX signals).
+    pub is_windows: bool,
+}
+
+/// Build the unified `background_task` tool description.
+pub fn build_background_task_description(naming: &BackgroundTaskToolNaming) -> String {
+    let BackgroundTaskToolNaming {
+        action_param,
+        task_ids_param,
+        timeout_ms_param,
+        mode_param,
+        bash_background_param,
+        bash_block_param,
+        subagent_background_param,
+        read_tool,
+        monitor_tool,
+        task_id_param,
+        is_windows,
+    } = *naming;
+
+    let subagent_present = subagent_background_param.is_some();
+    let sources = background_sources(
+        bash_background_param,
+        bash_block_param,
+        subagent_background_param,
+    );
+    let monitor_note = monitor_task_id_note(monitor_tool, task_id_param);
+    let read_note = match read_tool {
+        Some(r) => format!("\n- If output is large, use {r} on the output_file path"),
+        None => String::new(),
+    };
+    let wait_cap = MAX_WAIT_MS_PLACEHOLDER;
+
+    let kill_action = if is_windows {
+        "Terminates the child's Job Object, killing every descendant process immediately."
+    } else {
+        "Sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it."
+    };
+    let kill_subagent = if subagent_present {
+        " A subagent receives Cancel+Shutdown instead."
+    } else {
+        ""
+    };
+
+    format!(
+        "Read, wait for, or terminate background tasks or subagents.\n\n\
+         Usage notes:\n\
+         - {action_param}: \"output\" reads current output and status, \"wait\" blocks until the tasks finish, \"kill\" terminates one task.\n\
+         - Pass {task_ids_param} with one or more ids from {sources}{monitor_note}; for a single task use a one-element array.\n\
+         - \"output\": omit {timeout_ms_param} or pass 0 for a non-blocking snapshot; a positive value waits for completion.\n\
+         - \"wait\": set {mode_param} to \"wait_any\" to return when the first task finishes, or \"wait_all\" to wait for every task.\n\
+         - {timeout_ms_param} is capped at {wait_cap}.\n\
+         - \"kill\": pass one id. {kill_action}{kill_subagent}\n\
+         - Returns current output, status, and exit code if completed{read_note}"
     )
 }
 
@@ -1810,7 +1960,14 @@ mod tests {
         let desc = build_task_description(&literal_naming());
         assert!(desc.starts_with("Start a subagent that works on a task independently"));
         assert!(!desc.contains("Agent types:"));
-        assert!(!desc.contains("subagent_type"));
+        assert!(
+            desc.contains("For broad project exploration, set subagent_type to \"explore\""),
+            "the task contract must point broad exploration at the read-only explore agent: {desc}"
+        );
+        assert!(
+            !desc.contains("skill"),
+            "the task contract must not route exploration through a skill: {desc}"
+        );
         assert!(desc.contains("## Usage notes"));
         assert!(desc.contains(
             "run_in_background: Returns immediately with a subagent_id. Use get_task_output to retrieve results. This is set to true by default."
@@ -2019,7 +2176,7 @@ mod tests {
             "${{ params.task.run_in_background }}: Returns immediately with a subagent_id. Use ${{ tools.by_kind.background_task_action }} to retrieve results. This is set to true by default."
         ));
         assert!(desc.contains("Use ${{ params.task.isolation }} to control"));
-        assert!(!desc.contains("subagent_type"));
+        assert!(desc.contains("For broad project exploration, set subagent_type to \"explore\""));
     }
 
     // ── Lifecycle tool descriptions ──────────────────────────────────────
