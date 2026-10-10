@@ -39,14 +39,15 @@ pub struct TaskToolInput {
 
     /// Whether to run the subagent in the background.
     ///
-    /// Returns immediately with a subagent_id. Use the task output tool to
-    /// retrieve results. This is set to true by default.
+    /// Omitted means wait: this call returns the child's result. Set true to
+    /// return a subagent_id immediately and read the result later with the
+    /// task output tool.
     #[schemars(
-        description = "Returns immediately with a subagent_id. Use the task output tool to \
-            retrieve results. This is set to true by default."
+        description = "Omitted means wait: this call returns the subagent's result. Set true to \
+            return a subagent_id immediately and read the result later with the task output tool."
     )]
     #[serde(
-        default = "default_true",
+        default = "default_false",
         deserialize_with = "crate::serde_lenient::deserialize_lenient_bool"
     )]
     pub run_in_background: bool,
@@ -139,7 +140,7 @@ struct TaskToolInputDe {
     #[serde(default)]
     subagent_type: Option<String>,
     #[serde(
-        default = "default_true",
+        default = "default_false",
         deserialize_with = "crate::serde_lenient::deserialize_lenient_bool"
     )]
     run_in_background: bool,
@@ -260,8 +261,8 @@ pub fn sanitize_optional_arg(value: Option<String>) -> Option<String> {
     })
 }
 
-fn default_true() -> bool {
-    true
+fn default_false() -> bool {
+    false
 }
 
 /// Capability mode controlling which tool classes a child agent can use.
@@ -1304,10 +1305,10 @@ pub fn build_task_description(naming: &TaskToolNaming) -> String {
 
     format!(
         "Start a subagent that works on a task independently and reports back.\n\n\
+         For broad search of code you have not read yet, use subagent_type \"explore\": it is read-only and already knows the exploration procedure, so give it the goal rather than step-by-step instructions. Keep the edits in this session.\n\n\
          ## Usage notes\n\
          - When the agent is done, it returns a single message with its agent ID. Use that ID to resume the agent later for follow-up work.\n\
-         - {run_in_background_param}: Returns immediately with a subagent_id. Use {background_retrieval_tool} to retrieve results. This is set to true by default.\n\
-         - For broad project exploration, set subagent_type to \"explore\": that agent is read-only and already knows the exploration procedure, so give it the goal rather than step-by-step instructions.\n\
+         - {run_in_background_param}: Omitted waits for the subagent and returns its result in this call. Set true to return a subagent_id immediately and read the result later with {background_retrieval_tool}.\n\
          - Subagents receive a compacted version of project instructions (AGENTS.md). If the task requires detailed conventions (e.g., build rules, testing patterns), include the relevant rules directly in the prompt.\n\
          - When launching independent subagents, you MUST incorporate the results into the task based on requirements BEFORE concluding.\n\n\
          Resuming a previous agent ({resume_from_param}):\n\
@@ -1732,20 +1733,29 @@ mod tests {
     }
 
     #[test]
-    fn task_tool_input_defaults_background_true() {
+    fn task_tool_input_defaults_background_false() {
         let input: TaskToolInput =
             serde_json::from_str(r#"{"description": "test", "prompt": "do it"}"#).unwrap();
         assert_eq!(input.subagent_type, "general-purpose");
         assert!(
-            input.run_in_background,
-            "run_in_background should default to true"
+            !input.run_in_background,
+            "run_in_background should default to false so a spawn returns the child result inline"
         );
 
-        let foreground: TaskToolInput = serde_json::from_str(
-            r#"{"description": "test", "prompt": "do it", "run_in_background": false}"#,
+        let background: TaskToolInput = serde_json::from_str(
+            r#"{"description": "test", "prompt": "do it", "run_in_background": true}"#,
         )
         .unwrap();
-        assert!(!foreground.run_in_background);
+        assert!(background.run_in_background);
+    }
+
+    #[test]
+    fn task_tool_input_schema_defaults_background_false() {
+        let schema = serde_json::to_value(schemars::schema_for!(TaskToolInput)).unwrap();
+        assert_eq!(
+            schema["properties"]["run_in_background"]["default"],
+            serde_json::Value::Bool(false)
+        );
     }
 
     #[test]
@@ -1961,8 +1971,12 @@ mod tests {
         assert!(desc.starts_with("Start a subagent that works on a task independently"));
         assert!(!desc.contains("Agent types:"));
         assert!(
-            desc.contains("For broad project exploration, set subagent_type to \"explore\""),
+            desc.contains("use subagent_type \"explore\""),
             "the task contract must point broad exploration at the read-only explore agent: {desc}"
+        );
+        assert!(
+            desc.find("use subagent_type \"explore\"") < desc.find("## Usage notes"),
+            "the explore route must lead the contract: {desc}"
         );
         assert!(
             !desc.contains("skill"),
@@ -1970,8 +1984,12 @@ mod tests {
         );
         assert!(desc.contains("## Usage notes"));
         assert!(desc.contains(
-            "run_in_background: Returns immediately with a subagent_id. Use get_task_output to retrieve results. This is set to true by default."
+            "run_in_background: Omitted waits for the subagent and returns its result in this call. Set true to return a subagent_id immediately and read the result later with get_task_output."
         ));
+        assert!(
+            !desc.contains("true by default"),
+            "the background default is false: {desc}"
+        );
         assert!(desc.contains(
             "When launching independent subagents, you MUST incorporate the results into the task based on requirements BEFORE concluding."
         ));
@@ -2173,10 +2191,10 @@ mod tests {
         assert!(desc.contains("prior ${{ tools.by_kind.task }} call"));
         assert!(desc.contains("Use ${{ params.task.resume_from }} to continue"));
         assert!(desc.contains(
-            "${{ params.task.run_in_background }}: Returns immediately with a subagent_id. Use ${{ tools.by_kind.background_task_action }} to retrieve results. This is set to true by default."
+            "${{ params.task.run_in_background }}: Omitted waits for the subagent and returns its result in this call. Set true to return a subagent_id immediately and read the result later with ${{ tools.by_kind.background_task_action }}."
         ));
         assert!(desc.contains("Use ${{ params.task.isolation }} to control"));
-        assert!(desc.contains("For broad project exploration, set subagent_type to \"explore\""));
+        assert!(desc.contains("use subagent_type \"explore\""));
     }
 
     // ── Lifecycle tool descriptions ──────────────────────────────────────

@@ -276,6 +276,47 @@ fn selectable_subagent_types(
     selectable.sort_by(|a, b| a.name.cmp(&b.name));
     selectable
 }
+/// Whether a built-in subagent type may be offered on the spawn schema. Open
+/// allowlists offer every type; a named allowlist must include the type; a
+/// false toggle drops it.
+fn builtin_subagent_spawnable(
+    name: &str,
+    allowed: Option<&[String]>,
+    toggles: &HashMap<String, bool>,
+) -> bool {
+    if toggles.get(name).copied() == Some(false) {
+        return false;
+    }
+    allowed.is_none_or(|allowed| allowed.iter().any(|entry| entry.eq_ignore_ascii_case(name)))
+}
+
+/// Built-in subagent types to prepend to the spawn schema's optional
+/// `subagent_type` enum. `explore` leads so broad search routes there;
+/// `general-purpose` follows because omitting the type already selects it.
+/// `plan` stays out: this surface is for implementation.
+fn offered_builtin_subagent_types(
+    allowed: Option<&[String]>,
+    toggles: &HashMap<String, bool>,
+) -> Vec<xai_tool_types::SubagentDescriptor> {
+    let mut offered = Vec::new();
+    if builtin_subagent_spawnable("explore", allowed, toggles) {
+        offered.push(xai_tool_types::SubagentDescriptor {
+            name: "explore".to_owned(),
+            description: "Read-only search of unfamiliar code; returns paths and snippets."
+                .to_owned(),
+            tools: None,
+        });
+    }
+    if builtin_subagent_spawnable("general-purpose", allowed, toggles) {
+        offered.push(xai_tool_types::SubagentDescriptor {
+            name: "general-purpose".to_owned(),
+            description: "A separate chunk of work that can run independently.".to_owned(),
+            tools: None,
+        });
+    }
+    offered
+}
+
 /// Single copy of the params-merge loop the per-tool param injections share.
 fn merge_tool_params(
     tool_config: &mut xai_grok_tools::registry::types::ToolServerConfig,
@@ -1248,7 +1289,9 @@ impl AgentBuilder {
                 &pinned,
             );
         }
-        let selectable = selectable_subagent_types(&subagents, allowed_types);
+        let plugin_selectable = selectable_subagent_types(&subagents, allowed_types);
+        let mut selectable = offered_builtin_subagent_types(allowed_types, &self.subagent_toggle);
+        selectable.extend(plugin_selectable.iter().cloned());
         if !selectable.is_empty()
             && let Ok(types) = serde_json::to_value(&selectable)
         {
@@ -1555,7 +1598,7 @@ context (e.g., a parallel search while you continue working).\n\
 Prefer doing the work yourself unless delegation is clearly necessary.\n\
 \n\
 Usage: specify a short ${{ params.task.description }} and a detailed ${{ params.task.prompt }}.\n\
-${{ params.task.run_in_background }}: Returns immediately with a subagent_id. Use the task output tool to retrieve results. This is set to true by default.";
+${{ params.task.run_in_background }}: Omitted waits for the subagent and returns its result in this call. Set true to return a subagent_id immediately and read the result later with the task output tool.";
 const TASK_MODEL_PARAM: &str = "${{ params.task.model }}";
 fn task_model_guidance(selection: TaskModelSelection, model_slugs: &[String]) -> String {
     if selection == TaskModelSelection::Inherited {
@@ -1869,8 +1912,16 @@ mod tests {
             "should use tools.by_kind.task template variable"
         );
         assert!(
-            desc.contains("set subagent_type to \"explore\""),
+            desc.contains("subagent_type \"explore\""),
             "description must point broad exploration at the explore subagent"
+        );
+        assert!(
+            desc.find("subagent_type \"explore\"") < desc.find("## Usage notes"),
+            "the explore route must lead the description: {desc}"
+        );
+        assert!(
+            !desc.contains("true by default"),
+            "the background default is false: {desc}"
         );
         assert!(desc.contains("${{ params.task.resume_from }}"));
         assert!(desc.contains("${{ params.task.run_in_background }}"));
@@ -1914,9 +1965,14 @@ mod tests {
     #[test]
     fn child_task_description_is_concise() {
         assert!(!CHILD_TASK_DESCRIPTION.contains("subagent_type"));
+        assert!(CHILD_TASK_DESCRIPTION.contains("Prefer doing the work yourself"));
         assert!(CHILD_TASK_DESCRIPTION.contains("${{ params.task.description }}"));
         assert!(CHILD_TASK_DESCRIPTION.contains("${{ params.task.prompt }}"));
         assert!(CHILD_TASK_DESCRIPTION.contains("${{ params.task.run_in_background }}"));
+        assert!(
+            !CHILD_TASK_DESCRIPTION.contains("true by default"),
+            "the background default is false: {CHILD_TASK_DESCRIPTION}"
+        );
         assert!(
             CHILD_TASK_DESCRIPTION.len() < 700,
             "child description should be compact, got {} chars",
@@ -1932,7 +1988,7 @@ mod tests {
         );
         assert!(desc.contains("${{ params.task.run_in_background }}"));
         assert!(desc.contains("${{ params.task.isolation }}"));
-        assert!(desc.contains("set subagent_type to \"explore\""));
+        assert!(desc.contains("subagent_type \"explore\""));
     }
     #[tokio::test]
     async fn discovery_snapshot_records_gated_and_preloaded_skills() {
@@ -2882,6 +2938,7 @@ mod tests {
         );
         let mut toggle = std::collections::HashMap::new();
         toggle.insert("general-purpose".into(), false);
+        toggle.insert("explore".into(), false);
         let bash_params = serde_json::json!({
             "auto_background_on_timeout": true,
         })
@@ -2903,7 +2960,7 @@ mod tests {
         let disabled_names = names_of(&disabled).await;
         assert!(
             !disabled_names.iter().any(|name| name == "spawn_subagent"),
-            "disabling general-purpose with no single fallback hides task: {disabled_names:?}"
+            "disabling every spawnable builtin with no single fallback hides task: {disabled_names:?}"
         );
         for kept in ["run_terminal_command", "background_task"] {
             assert!(
@@ -2928,6 +2985,7 @@ mod tests {
         use xai_grok_tools::types::resources::Params;
         let mut toggle = std::collections::HashMap::new();
         toggle.insert("general-purpose".into(), false);
+        toggle.insert("explore".into(), false);
         let bash_params = serde_json::json!({ "enabled_background": false })
             .as_object()
             .unwrap()
@@ -3048,6 +3106,33 @@ mod tests {
         assert_eq!(vec!["reviewer"], names(Some(&allowed)));
         assert!(names(Some(&[])).is_empty());
     }
+    #[test]
+    fn offered_builtin_subagent_types_follow_allowlist_and_toggles() {
+        let toggles = std::collections::HashMap::new();
+        let names = |allowed: Option<&[String]>| -> Vec<String> {
+            super::offered_builtin_subagent_types(allowed, &toggles)
+                .into_iter()
+                .map(|descriptor| descriptor.name)
+                .collect()
+        };
+        assert_eq!(
+            vec!["explore", "general-purpose"],
+            names(None)
+        );
+        let explore_only = vec!["explore".to_owned()];
+        assert_eq!(vec!["explore"], names(Some(&explore_only)));
+        let plugin_only = vec!["reviewer".to_owned()];
+        assert!(names(Some(&plugin_only)).is_empty());
+        assert!(names(Some(&[])).is_empty());
+
+        let mut disabled = std::collections::HashMap::new();
+        disabled.insert("explore".to_owned(), false);
+        let dropped: Vec<String> = super::offered_builtin_subagent_types(None, &disabled)
+            .into_iter()
+            .map(|descriptor| descriptor.name)
+            .collect();
+        assert_eq!(vec!["general-purpose"], dropped);
+    }
     #[tokio::test]
     async fn spawn_schema_offers_plugin_agent_types_by_name() {
         use crate::plugins::SharedPluginRegistryHandle;
@@ -3112,13 +3197,15 @@ mod tests {
         let offered = offered_types(&open)
             .await
             .expect("spawn_subagent is advertised");
-        assert!(
-            offered.iter().any(|name| name == "demo-plugin:reviewer"),
-            "{offered:?}"
+        assert_eq!(
+            offered,
+            vec![
+                "explore".to_owned(),
+                "general-purpose".to_owned(),
+                "demo-plugin:reviewer".to_owned(),
+            ],
+            "the open parent leads with explore, then general-purpose, then plugin types"
         );
-        for built_in in ["general-purpose", "explore", "plan"] {
-            assert!(!offered.iter().any(|name| name == built_in), "{offered:?}");
-        }
         let restricted = build(vec![
             "read_file".into(),
             "Agent(demo-plugin:reviewer, worker)".into(),

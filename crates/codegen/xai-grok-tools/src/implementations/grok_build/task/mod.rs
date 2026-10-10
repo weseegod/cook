@@ -1321,8 +1321,8 @@ mod tests {
             serde_json::from_str(r#"{"description": "test", "prompt": "do it"}"#).unwrap();
         assert_eq!(input.subagent_type, "general-purpose");
         assert!(
-            input.run_in_background,
-            "run_in_background should default to true"
+            !input.run_in_background,
+            "run_in_background should default to false so a spawn returns the child result inline"
         );
     }
 
