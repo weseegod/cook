@@ -137,6 +137,8 @@ Usage:
 - The ${{ params.read.target_file }} parameter can be a relative path in the workspace or an absolute path
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file${%- if whole_read.skill_markdown and whole_read.instruction_files %} (SKILL.md and AGENTS.md/CLAUDE.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- elif whole_read.skill_markdown %} (SKILL.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- elif whole_read.instruction_files %} (AGENTS.md/CLAUDE.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- endif %}
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
+- When the paths are already known, read those files in one turn instead of one file per turn.
+- Do not read the same span again. When more of a file is needed, read a larger window instead of another short slice.
 - This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
 - When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
 /// Schema-only advertised default (runtime still treats omit as line 1 via unwrap_or).
@@ -904,6 +906,49 @@ mod tests {
     use crate::types::tool_metadata::test_ctx;
     use std::sync::Arc;
     use tempfile::TempDir;
+
+    /// The full description tells the model to batch known paths and to widen a window
+    /// instead of re-reading a span. The speculative-batch wording stays on the concise tool.
+    #[test]
+    fn full_description_batches_known_paths_and_discourages_rereads() {
+        use crate::types::template_renderer::TemplateRenderer;
+        use crate::types::tool::ToolKind;
+        use crate::types::tool_metadata::ToolMetadata;
+        use std::collections::HashMap;
+
+        let tools = HashMap::from([(ToolKind::Read, "read_file".to_string())]);
+        let params = HashMap::from([(
+            ToolKind::Read,
+            HashMap::from([
+                ("target_file".to_string(), "target_file".to_string()),
+                ("offset".to_string(), "offset".to_string()),
+                ("limit".to_string(), "limit".to_string()),
+            ]),
+        )]);
+        let rendered = TemplateRenderer::new(tools, params)
+            .render(ToolMetadata::description_template(&ReadFileTool))
+            .unwrap();
+        let rendered = crate::types::context::TruncationConfig::default().interpolate_description(
+            &rendered,
+            "read_file",
+            crate::DEFAULT_TOOL_OUTPUT_BYTES,
+            30_000,
+        );
+
+        assert!(
+            rendered.contains("read those files in one turn instead of one file per turn"),
+            "full description must batch known paths:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("Do not read the same span again"),
+            "full description must discourage re-reading:\n{rendered}"
+        );
+        assert!(
+            !rendered.contains("speculatively"),
+            "speculative batch wording must stay on the concise tool:\n{rendered}"
+        );
+    }
+
     #[test]
     fn read_file_accepts_path_alias_without_changing_schema() {
         for key in ["target_file", "file_path"] {

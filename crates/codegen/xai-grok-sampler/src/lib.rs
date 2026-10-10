@@ -33,7 +33,9 @@ pub mod types;
 
 // Public re-exports: the API consumers see
 pub use actor::SamplerActor;
-pub use actor::request_task::{CompletionResult, REASONING_ONLY_RETRY_REMINDER};
+pub use actor::request_task::{
+    CompletionResult, REASONING_ONLY_MAX_RESAMPLES, REASONING_ONLY_RETRY_REMINDER,
+};
 pub use attribution::{
     Auth401AttributionCallback, BEARER_SUFFIX_LEN, SamplingConsumer, SharedAttributionCallback,
 };

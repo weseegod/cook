@@ -236,6 +236,7 @@ mod tests {
             old_string: "old".into(),
             new_string: "new".into(),
             replace_all: false,
+            edits: Vec::new(),
         });
         let access = AccessKind::from(&input);
         assert!(
