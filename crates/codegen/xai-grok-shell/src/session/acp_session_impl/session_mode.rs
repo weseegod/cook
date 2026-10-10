@@ -36,19 +36,36 @@ pub(crate) fn project_tools_for_surface(
         .collect()
 }
 
+/// Choose Plan / Implement / TaskOpen from session flags.
+///
+/// Order: active plan mode, then approved-plan handoff, then non-interactive
+/// Implement, otherwise TaskOpen. Headless evals start idle and must not pay
+/// for the interactive task-open extras on every request.
+pub(crate) fn resolve_tool_surface(
+    plan_mode_active: bool,
+    implementing_approved_plan: bool,
+    non_interactive: bool,
+) -> ToolSurface {
+    if plan_mode_active {
+        ToolSurface::Plan
+    } else if implementing_approved_plan {
+        ToolSurface::Implement
+    } else if non_interactive {
+        ToolSurface::Implement
+    } else {
+        ToolSurface::TaskOpen
+    }
+}
+
 impl SessionActor {
     /// Resolve the per-turn tool surface for primary Grok Build agents.
     pub(super) fn current_tool_surface(&self) -> ToolSurface {
-        if self.plan_mode.lock().is_active() {
-            ToolSurface::Plan
-        } else if self
-            .implementing_approved_plan
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            ToolSurface::Implement
-        } else {
-            ToolSurface::TaskOpen
-        }
+        resolve_tool_surface(
+            self.plan_mode.lock().is_active(),
+            self.implementing_approved_plan
+                .load(std::sync::atomic::Ordering::Relaxed),
+            self.attach_non_interactive.get(),
+        )
     }
 
     /// Whether this session should project tools onto Plan/TaskOpen/Implement allowlists.
@@ -507,5 +524,54 @@ impl SessionActor {
             .notifications
             .persistence_tx
             .send(PersistenceMsg::PlanModeState(snapshot));
+    }
+}
+
+#[cfg(test)]
+mod tool_surface_tests {
+    use super::{ToolSurface, resolve_tool_surface};
+
+    #[test]
+    fn tool_surface_idle_interactive_is_task_open() {
+        assert_eq!(
+            resolve_tool_surface(false, false, false),
+            ToolSurface::TaskOpen
+        );
+    }
+
+    #[test]
+    fn tool_surface_idle_non_interactive_is_implement() {
+        assert_eq!(
+            resolve_tool_surface(false, false, true),
+            ToolSurface::Implement
+        );
+    }
+
+    #[test]
+    fn tool_surface_plan_mode_wins_for_interactive_and_non_interactive() {
+        assert_eq!(
+            resolve_tool_surface(true, false, false),
+            ToolSurface::Plan
+        );
+        assert_eq!(
+            resolve_tool_surface(true, false, true),
+            ToolSurface::Plan
+        );
+        assert_eq!(
+            resolve_tool_surface(true, true, true),
+            ToolSurface::Plan
+        );
+    }
+
+    #[test]
+    fn tool_surface_approved_plan_handoff_is_implement() {
+        assert_eq!(
+            resolve_tool_surface(false, true, false),
+            ToolSurface::Implement
+        );
+        assert_eq!(
+            resolve_tool_surface(false, true, true),
+            ToolSurface::Implement
+        );
     }
 }

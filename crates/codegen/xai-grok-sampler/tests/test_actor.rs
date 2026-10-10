@@ -18,8 +18,9 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 use xai_grok_sampler::{
-    ApiBackend, REASONING_ONLY_RETRY_REMINDER, RequestId, RetryPolicy, SamplerActor, SamplerConfig,
-    SamplingChannel, SamplingErrorKind, SamplingEvent, StripReason,
+    ApiBackend, REASONING_ONLY_MAX_RESAMPLES, REASONING_ONLY_RETRY_REMINDER, RequestId,
+    RetryPolicy, SamplerActor, SamplerConfig, SamplingChannel, SamplingErrorKind, SamplingEvent,
+    StripReason,
 };
 use xai_grok_sampling_types::{
     ConversationItem, ConversationRequest, DoomLoopRecoveryPolicy, EmptyReason,
@@ -1861,28 +1862,47 @@ fn assert_one_guided_retry(events: &[SamplingEvent]) {
             ..
         } => {
             assert_eq!(*attempt, 1);
-            assert_eq!(*max_retries, 1);
+            assert_eq!(*max_retries, REASONING_ONLY_MAX_RESAMPLES);
         }
         _ => unreachable!(),
     }
 }
 
-fn assert_reminder_on_second_body_only(bodies: &[String]) {
-    assert_eq!(bodies.len(), 2);
+fn assert_guided_retry_ladder(events: &[SamplingEvent], expected: u32) {
+    let retries: Vec<(u32, u32)> = events
+        .iter()
+        .filter_map(|event| match event {
+            SamplingEvent::Retrying {
+                attempt,
+                max_retries,
+                ..
+            } => Some((*attempt, *max_retries)),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<(u32, u32)> = (1..=expected)
+        .map(|attempt| (attempt, REASONING_ONLY_MAX_RESAMPLES))
+        .collect();
+    assert_eq!(retries, expected, "guided retry ladder: {events:?}");
+}
+
+fn assert_reminder_on_resample_bodies_only(bodies: &[String]) {
+    assert!(bodies.len() >= 2, "expected a resample: {bodies:?}");
     assert!(
         !bodies[0].contains(REASONING_ONLY_RETRY_REMINDER),
         "the first request must not carry the reminder"
     );
-    assert!(
-        bodies[1].contains(REASONING_ONLY_RETRY_REMINDER),
-        "the resample body must contain the reminder verbatim: {}",
-        bodies[1]
-    );
-    assert_eq!(
-        bodies[1].matches(REASONING_ONLY_RETRY_REMINDER).count(),
-        1,
-        "the reminder is appended once"
-    );
+    for body in &bodies[1..] {
+        assert!(
+            body.contains(REASONING_ONLY_RETRY_REMINDER),
+            "every resample body must contain the reminder verbatim: {body}"
+        );
+        assert_eq!(
+            body.matches(REASONING_ONLY_RETRY_REMINDER).count(),
+            1,
+            "the reminder is appended once"
+        );
+    }
     assert!(
         !bodies[1].contains(REASONING_ONLY_TRACE),
         "the resample must not replay the first sample's reasoning: {}",
@@ -1890,9 +1910,9 @@ fn assert_reminder_on_second_body_only(bodies: &[String]) {
     );
 }
 
-/// `max_retries` above 2 still resamples a reasoning-only sample only once, then fails.
+/// `max_retries` above 2 still fails after the guided resample budget is spent.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn reasoning_only_resamples_once_then_fails() {
+async fn reasoning_only_resamples_then_fails() {
     let (bodies, events, hits) = submit_scripted_chat(
         6,
         "req-reasoning-only-fail",
@@ -1900,10 +1920,46 @@ async fn reasoning_only_resamples_once_then_fails() {
     )
     .await;
 
-    assert_eq!(hits, 2, "one guided resample, then fail");
-    assert_reminder_on_second_body_only(&bodies);
-    assert_one_guided_retry(&events);
+    assert_eq!(
+        hits,
+        REASONING_ONLY_MAX_RESAMPLES + 1,
+        "guided resamples, then fail"
+    );
+    assert_reminder_on_resample_bodies_only(&bodies);
+    assert_guided_retry_ladder(&events, REASONING_ONLY_MAX_RESAMPLES);
     assert_failed_empty(&events, EmptyReason::ReasoningOnly);
+}
+
+/// A second reasoning-only sample still leaves one resample, and visible text then completes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_only_second_resample_completes_with_visible_text() {
+    let (bodies, events, hits) = submit_scripted_chat(
+        6,
+        "req-reasoning-only-second-ok",
+        Arc::new(|attempt| {
+            if attempt < 2 {
+                reasoning_only_chat_events(REASONING_ONLY_TRACE)
+            } else {
+                sse::chat_completion_events("visible answer", "test-model")
+            }
+        }),
+    )
+    .await;
+
+    assert_eq!(hits, 3, "two reasoning-only samples, then visible text");
+    assert_reminder_on_resample_bodies_only(&bodies);
+    assert_guided_retry_ladder(&events, REASONING_ONLY_MAX_RESAMPLES);
+    match events.last() {
+        Some(SamplingEvent::Completed { response, .. }) => {
+            assert_eq!(
+                response
+                    .assistant()
+                    .map(|assistant| assistant.content.as_ref()),
+                Some("visible answer")
+            );
+        }
+        other => panic!("expected Completed, got {other:?}"),
+    }
 }
 
 /// The same reasoning-only first sample succeeds when the resample returns visible text.
@@ -1923,7 +1979,7 @@ async fn reasoning_only_resample_completes_with_visible_text() {
     .await;
 
     assert_eq!(hits, 2);
-    assert_reminder_on_second_body_only(&bodies);
+    assert_reminder_on_resample_bodies_only(&bodies);
     assert_one_guided_retry(&events);
     match events.last() {
         Some(SamplingEvent::Completed { response, .. }) => {

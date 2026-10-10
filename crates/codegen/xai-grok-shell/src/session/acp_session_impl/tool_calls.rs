@@ -516,15 +516,17 @@ mod frozen_edit_tests {
             &episode,
             &baseline
         ));
-        let edit =
-            |old_string: &str, new_string: &str| {
-                ToolInput::SearchReplace(
-            xai_grok_tools::implementations::grok_build::search_replace::SearchReplaceInput {
-                file_path: episode.display().to_string(),
-                old_string: old_string.into(), new_string: new_string.into(), replace_all: false,
-            },
-        )
-            };
+        let edit = |old_string: &str, new_string: &str| {
+            ToolInput::SearchReplace(
+                xai_grok_tools::implementations::grok_build::search_replace::SearchReplaceInput {
+                    file_path: episode.display().to_string(),
+                    old_string: old_string.into(),
+                    new_string: new_string.into(),
+                    replace_all: false,
+                    edits: Vec::new(),
+                },
+            )
+        };
         assert!(frozen_plan_edit_allowed(
             &edit("- [ ]", "- [x]"),
             dir.path(),
@@ -4419,6 +4421,7 @@ mod plan_mode_edit_gate_tests {
             old_string: "a".into(),
             new_string: "b".into(),
             replace_all: false,
+            edits: Vec::new(),
         })
     }
     fn write(path: &str) -> ToolInput {

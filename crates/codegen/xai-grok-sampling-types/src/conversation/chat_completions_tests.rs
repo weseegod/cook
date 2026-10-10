@@ -431,6 +431,75 @@ fn test_chat_completion_request_carries_reasoning_effort_top_level() {
 }
 
 #[test]
+fn thinking_mode_passes_back_empty_reasoning_content() {
+    let items = vec![
+        ConversationItem::user("hi"),
+        ConversationItem::assistant_tool_calls(vec![ToolCall {
+            id: "call_1".into(),
+            name: "read_file".to_string(),
+            arguments: r#"{"target_file":"a.rs"}"#.into(),
+        }]),
+        ConversationItem::tool_result("call_1", "ok"),
+        reasoning_sibling("r1", "kept thought", None),
+        ConversationItem::assistant("done"),
+    ];
+    let req = ConversationRequest {
+        reasoning_effort: Some(crate::ReasoningEffort::Medium),
+        ..ConversationRequest::from_items(items).with_model("test")
+    };
+    let chat: ChatCompletionRequest = req.into();
+    let json = serde_json::to_value(&chat).unwrap();
+    let messages = json["messages"].as_array().unwrap();
+
+    let assistant_reasoning: Vec<Option<&str>> = messages
+        .iter()
+        .filter(|m| m["role"] == "assistant")
+        .map(|m| m.get("reasoning_content").and_then(|v| v.as_str()))
+        .collect();
+    assert_eq!(
+        assistant_reasoning,
+        vec![Some(""), Some("kept thought")],
+        "a tool-only turn must pass back an empty reasoning_content, and a real thought must stay; got {json:#}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m["role"] == "tool" && m.get("reasoning_content").is_none()),
+        "tool messages must not gain reasoning_content"
+    );
+}
+
+#[test]
+fn reasoning_off_omits_empty_reasoning_content() {
+    let items = vec![
+        ConversationItem::user("hi"),
+        ConversationItem::assistant_tool_calls(vec![ToolCall {
+            id: "call_1".into(),
+            name: "read_file".to_string(),
+            arguments: "{}".into(),
+        }]),
+    ];
+    for effort in [None, Some(crate::ReasoningEffort::None)] {
+        let req = ConversationRequest {
+            reasoning_effort: effort,
+            ..ConversationRequest::from_items(items.clone()).with_model("test")
+        };
+        let chat: ChatCompletionRequest = req.into();
+        let json = serde_json::to_value(&chat).unwrap();
+        let assistant = json["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "assistant")
+            .unwrap();
+        assert!(
+            assistant.get("reasoning_content").is_none(),
+            "effort {effort:?} must omit reasoning_content; got {json:#}"
+        );
+    }
+}
+
+#[test]
 fn test_chat_completion_request_omits_reasoning_effort_when_unset() {
     let req =
         ConversationRequest::from_items(vec![ConversationItem::user("hi")]).with_model("test");

@@ -112,6 +112,7 @@ impl From<EditInput> for crate::types::tool_io::ToolInput {
             old_string: value.old_string,
             new_string: value.new_string,
             replace_all: value.replace_all,
+            edits: Vec::new(),
         }
         .into()
     }

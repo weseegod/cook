@@ -133,6 +133,19 @@ mod tests {
         );
     }
 
+    /// The speculative batch-read guidance belongs to the concise copy only.
+    #[test]
+    fn concise_description_keeps_the_speculative_batch_guidance() {
+        use crate::types::tool_metadata::ToolMetadata;
+        let concise = ToolMetadata::description_template(&ReadFileConciseTool);
+        assert!(
+            concise.contains(
+                "speculatively read multiple files as a batch that are potentially useful"
+            ),
+            "concise batch guidance must stay on the concise tool:\n{concise}"
+        );
+    }
+
     #[test]
     fn description_template_tracks_renamed_offset_limit() {
         use crate::types::template_renderer::TemplateRenderer;

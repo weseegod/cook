@@ -228,6 +228,26 @@ pub fn conversation_to_chat_messages(items: Vec<ConversationItem>) -> Vec<ChatRe
     out
 }
 
+/// Thinking-mode providers reject the next request when an assistant message
+/// omits `reasoning_content`. A tool-only turn with no Reasoning sibling would
+/// otherwise drop the field (`skip_serializing_if = Option::is_none`).
+/// When this request asks for reasoning, fill those gaps with an empty string
+/// and leave real reasoning text unchanged. `ReasoningEffort::None` and an
+/// unset effort keep omitting the field.
+pub(crate) fn pass_back_reasoning_content(
+    messages: &mut [ChatRequestMessage],
+    effort: Option<crate::ReasoningEffort>,
+) {
+    if !effort.is_some_and(|level| level != crate::ReasoningEffort::None) {
+        return;
+    }
+    for msg in messages {
+        if msg.role == Role::Assistant && msg.reasoning_content.is_none() {
+            msg.reasoning_content = Some(String::new());
+        }
+    }
+}
+
 impl From<ChatResponseMessage> for ConversationItem {
     fn from(msg: ChatResponseMessage) -> Self {
         // Reasoning is dropped: the streaming consumer synthesizes the sibling item instead
@@ -255,7 +275,8 @@ impl From<ChatResponseMessage> for ConversationItem {
 
 impl From<ConversationRequest> for ChatCompletionRequest {
     fn from(req: ConversationRequest) -> Self {
-        let messages: Vec<ChatRequestMessage> = conversation_to_chat_messages(req.items);
+        let mut messages: Vec<ChatRequestMessage> = conversation_to_chat_messages(req.items);
+        pass_back_reasoning_content(&mut messages, req.reasoning_effort);
 
         let tools_is_empty = req.tools.is_empty();
         let tools: Option<Vec<ToolDefinition>> = if tools_is_empty {

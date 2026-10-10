@@ -40,9 +40,14 @@ use crate::types::RequestId;
 /// That is long enough for cold-start reasoning and short enough to detect dead streams before the user gives up.
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 
-/// Guidance for the single resample of a sample that finished with reasoning and no visible answer or tool call.
+/// Guidance for the resample of a sample that finished with reasoning and no visible answer or tool call.
 /// The whole string is the synthetic user message; actor tests match it on the wire.
 pub const REASONING_ONLY_RETRY_REMINDER: &str = "<system_reminder>The previous sample contained only reasoning; continue with a tool call or a visible answer.</system_reminder>";
+
+/// Guided resamples allowed after a reasoning-only sample. The reminder is appended
+/// once; later resamples repeat the sample with the same history. Three reasoning-only
+/// samples in a row still fail the request.
+pub const REASONING_ONLY_MAX_RESAMPLES: u32 = 2;
 
 /// Public result returned by `SamplerHandle::submit_and_collect`.
 pub type CompletionResult = Result<(ConversationResponse, InferenceLatencyStats), SamplingError>;
@@ -55,7 +60,7 @@ enum AttemptOutcome {
         metrics: InferenceLatencyStats,
     },
     /// Stream emitted [`SamplingEvent::Completed`] but the response was empty (no text, no tool calls).
-    /// [`EmptyReason::ReasoningOnly`] is one guided resample with a reminder, not a transport error.
+    /// [`EmptyReason::ReasoningOnly`] takes guided resamples with a reminder, not a transport retry.
     /// [`EmptyReason::NoVisibleContent`] stays on the transport retry ladder.
     /// Metrics from the empty attempt are discarded; a successful retry produces fresh ones.
     Empty {
@@ -131,8 +136,9 @@ pub(crate) async fn run_request_task(
     let doom_policy = config.doom_loop_recovery;
     let doom_max_retries = doom_policy.map_or(0, |p| p.max_retries);
     let mut doom_retry_count: u32 = 0;
-    // One guided resample for a reasoning-only sample. Independent of the transport `retry_count`.
-    let mut reasoning_only_resampled = false;
+    // Guided resamples for a reasoning-only sample, independent of the transport `retry_count`.
+    // Three consecutive samples with no tool call and no visible content still fail.
+    let mut reasoning_only_resamples: u32 = 0;
     let output_observed = Arc::new(AtomicBool::new(false));
 
     loop {
@@ -232,27 +238,37 @@ pub(crate) async fn run_request_task(
                     "empty response from model: {reason} (retrying)",
                     reason = context.reason,
                 );
-                // Reasoning-only is one guided resample, not a transport error.
-                // A second reasoning-only sample fails even when the transport budget remains.
+                // Reasoning-only takes guided resamples, not transport errors.
+                // Three reasoning-only samples in a row fail even when the transport budget remains.
                 if context.reason == EmptyReason::ReasoningOnly {
                     let err = SamplingError::EmptyResponse { context };
-                    if effective_max_retries <= 1 || reasoning_only_resampled {
+                    if effective_max_retries <= 1
+                        || reasoning_only_resamples >= REASONING_ONLY_MAX_RESAMPLES
+                    {
                         let terminal_event_queued = emit_failed(&event_tx, &request_id, &err);
                         send_completion(&mut completion, Err(err), terminal_event_queued);
                         return request_id;
                     }
-                    reasoning_only_resampled = true;
-                    request.push(ConversationItem::system_reminder(
-                        REASONING_ONLY_RETRY_REMINDER,
-                    ));
+                    reasoning_only_resamples += 1;
+                    if reasoning_only_resamples == 1 {
+                        request.push(ConversationItem::system_reminder(
+                            REASONING_ONLY_RETRY_REMINDER,
+                        ));
+                    }
                     tracing::warn!(
                         target: crate::sampling_log::TARGET,
-                        attempt = 1,
-                        max_retries = 1,
+                        attempt = reasoning_only_resamples,
+                        max_retries = REASONING_ONLY_MAX_RESAMPLES,
                         outcome = "resampled_with_reminder",
-                        "reasoning-only recovery: retrying once with guidance"
+                        "reasoning-only recovery: retrying with guidance"
                     );
-                    emit_retrying(&event_tx, &request_id, 1, 1, &err);
+                    emit_retrying(
+                        &event_tx,
+                        &request_id,
+                        reasoning_only_resamples,
+                        REASONING_ONLY_MAX_RESAMPLES,
+                        &err,
+                    );
                     let backoff = retry_mod::doom_loop_backoff(1);
                     if sleep_or_cancel(backoff, &cancel_token, 1, &sampling_span).await {
                         continue;
