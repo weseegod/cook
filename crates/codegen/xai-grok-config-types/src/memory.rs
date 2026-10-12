@@ -1089,6 +1089,42 @@ mod tests {
         );
     }
 
+    /// The step-aware round window stays off by default. An omitted key resolves to 0, and an
+    /// explicit value is kept, including an explicit zero.
+    #[test]
+    fn round_window_defaults_off_and_explicit_value_is_kept() {
+        let defaults = PruningConfig::default();
+        assert_eq!(defaults.keep_last_n_tool_rounds, 0);
+        assert_eq!(defaults.recent_tool_result_char_budget, 0);
+
+        let omitted: toml::Value =
+            toml::from_str("[compaction.pruning]\nkeep_last_n_turns = 3").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &omitted, None)
+                .pruning
+                .keep_last_n_tool_rounds,
+            0
+        );
+
+        let enabled: toml::Value =
+            toml::from_str("[compaction.pruning]\nkeep_last_n_tool_rounds = 6").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &enabled, None)
+                .pruning
+                .keep_last_n_tool_rounds,
+            6
+        );
+
+        let zero: toml::Value =
+            toml::from_str("[compaction.pruning]\nkeep_last_n_tool_rounds = 0").unwrap();
+        assert_eq!(
+            MemoryConfig::resolve(false, false, &zero, None)
+                .pruning
+                .keep_last_n_tool_rounds,
+            0
+        );
+    }
+
     #[test]
     fn memory_v2_remote_gate_waterfall_is_exhaustive() {
         let cases = [

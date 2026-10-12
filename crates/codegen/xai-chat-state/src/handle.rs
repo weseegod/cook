@@ -574,7 +574,8 @@ impl ChatStateHandle {
         .await
     }
 
-    /// Apply the same tool-result prune a turn request uses (`total_tokens` over half the window).
+    /// Apply the same tool-result prune a turn request uses: the step-aware round window when
+    /// it is configured, and the legacy turn-age trim once `total_tokens` is over half the window.
     /// Returns `items` unchanged when the mailbox is closed. If the actor dies after
     /// accepting the command, returns empty.
     pub async fn apply_turn_request_pruning(

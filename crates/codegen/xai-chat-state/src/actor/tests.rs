@@ -4072,6 +4072,66 @@ async fn prune_retained_no_op_when_session_is_young() {
     }
 }
 
+/// A configured step arm runs on the request copy below the half-window gate: the gate exists
+/// for the legacy turn-age trim, and a 1M window never reaches half of itself in a tool loop.
+#[tokio::test]
+async fn apply_turn_request_pruning_runs_the_step_arm_below_the_context_gate() {
+    use crate::actor::ChatStateActor;
+    use crate::persistence::MockChatPersistence;
+    use crate::types::PruningConfig;
+    use xai_grok_sampling_types::ToolCall;
+
+    let (mock, _rx) = MockChatPersistence::new();
+    let (event_tx, _) = tokio::sync::mpsc::unbounded_channel();
+    let token = tokio_util::sync::CancellationToken::new();
+    let config = PruningConfig {
+        keep_last_n_tool_rounds: 3,
+        recent_tool_result_char_budget: 0,
+        ..Default::default()
+    };
+    let handle = ChatStateActor::spawn_with_pruning(
+        vec![],
+        test_config_with_window(1_000_000),
+        config,
+        Box::new(mock),
+        event_tx,
+        token,
+    );
+
+    let mut items = vec![ConversationItem::user("fix the failure")];
+    for id in 0..8 {
+        items.push(ConversationItem::assistant_tool_calls(vec![ToolCall {
+            id: format!("call_{id}").into(),
+            name: "bash".to_owned(),
+            arguments: "{}".into(),
+        }]));
+        items.push(ConversationItem::tool_result(
+            format!("call_{id}"),
+            "x".repeat(200),
+        ));
+    }
+
+    let pruned = handle.apply_turn_request_pruning(items).await;
+    let results: Vec<_> = pruned
+        .iter()
+        .filter_map(|item| match item {
+            ConversationItem::ToolResult(result) => Some(result.content.to_string()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 8, "tool-call pairing must be preserved");
+    assert_eq!(
+        results[0],
+        "[Tool result omitted — outside recent step budget]"
+    );
+    assert_eq!(
+        results[2],
+        "[Tool result omitted — outside recent step budget]"
+    );
+    assert_eq!(results[3].len(), 200, "round 3 starts the previous window");
+    assert_eq!(results[7].len(), 200, "the active round stays raw");
+}
+
 /// After `hard_clear_age_turns + 1` turns, tool results from the oldest
 /// turns must be hard-cleared in the in-memory conversation.
 #[tokio::test]

@@ -13,7 +13,7 @@ use crate::types::PruningConfig;
 /// `pub(super)` so `mutations.rs` can use the same string on the retained conversation.
 pub(super) const HARD_CLEAR_PLACEHOLDER: &str = "[Tool result omitted — too old]";
 
-/// Placeholder used by the opt-in step-aware pruning experiment.
+/// Placeholder for a tool result outside the step-aware round window.
 const STEP_BUDGET_PLACEHOLDER: &str = "[Tool result omitted — outside recent step budget]";
 
 /// Placeholder used when the step budget is spent keeping pinned evidence, so the model can
@@ -121,33 +121,44 @@ impl ChatStateActor {
         &self,
         mut items: Vec<ConversationItem>,
     ) -> Vec<ConversationItem> {
+        let step_configured = self.pruning_config.keep_last_n_tool_rounds > 0
+            || self.pruning_config.recent_tool_result_char_budget > 0;
+        // The step arm bounds many tool rounds inside one user turn, which a large context
+        // window never reaches half of, so it runs whether or not the gate is open. Legacy
+        // soft-trim and hard-clear exist for a filling window and stay behind the gate.
         if should_prune(
             self.state.total_tokens,
             self.state.sampling_config.context_window,
         ) {
             let report = prune_conversation(&mut items, &self.pruning_config);
-            // The step-aware policy is opt-in and changes what the model sees inside a single
-            // user turn, so a run that used it has to say so: nothing else reports it, because
-            // the pruned request copy is never persisted.
-            if report.rounds_cleared_by_step_budget > 0 || report.pinned_kept > 0 {
-                tracing::info!(
-                    rounds_cleared_by_step_budget = report.rounds_cleared_by_step_budget,
-                    pinned_kept = report.pinned_kept,
-                    soft_trimmed = report.soft_trimmed,
-                    hard_cleared = report.hard_cleared,
-                    chars_reclaimed = report.chars_reclaimed,
-                    "step-aware tool result pruning rewrote the request copy"
-                );
-            } else {
-                tracing::debug!(
-                    soft_trimmed = report.soft_trimmed,
-                    hard_cleared = report.hard_cleared,
-                    chars_reclaimed = report.chars_reclaimed,
-                    "pruned tool results in the request copy"
-                );
-            }
+            log_pruning_report(&report);
+        } else if step_configured && self.pruning_config.enabled {
+            let report = prune_conversation_with(&mut items, &self.pruning_config, false);
+            log_pruning_report(&report);
         }
         items
+    }
+}
+
+/// Log a request-copy prune pass. The step-aware policy changes what the model sees inside a
+/// single user turn and nothing else reports it, because the pruned copy is never persisted.
+fn log_pruning_report(report: &PruningReport) {
+    if report.rounds_cleared_by_step_budget > 0 || report.pinned_kept > 0 {
+        tracing::info!(
+            rounds_cleared_by_step_budget = report.rounds_cleared_by_step_budget,
+            pinned_kept = report.pinned_kept,
+            soft_trimmed = report.soft_trimmed,
+            hard_cleared = report.hard_cleared,
+            chars_reclaimed = report.chars_reclaimed,
+            "step-aware tool result pruning rewrote the request copy"
+        );
+    } else {
+        tracing::debug!(
+            soft_trimmed = report.soft_trimmed,
+            hard_cleared = report.hard_cleared,
+            chars_reclaimed = report.chars_reclaimed,
+            "pruned tool results in the request copy"
+        );
     }
 }
 
@@ -162,13 +173,35 @@ pub(crate) fn should_prune(total_tokens: u64, context_window: std::num::NonZeroU
     total_tokens > context_window.get() / 2
 }
 
+/// Whether a result in round `round_from_end` (0 is the newest) stays raw under a round window
+/// of `window` rounds, when no character budget is set.
+///
+/// The omitted prefix is everything before the previous complete window, so the boundary moves
+/// once per window instead of once per round and the cached prefix stays put between cuts.
+/// Rounds are numbered from the oldest; a round is outside the window when the conversation
+/// has at least two windows and that index is below `(total / window) * window - window`.
+fn within_whole_round_windows(
+    total_tool_rounds: usize,
+    tool_round_from_end: usize,
+    window: usize,
+) -> bool {
+    debug_assert!(window > 0);
+    let round_index = total_tool_rounds.saturating_sub(1 + tool_round_from_end);
+    let bound = if total_tool_rounds >= 2 * window {
+        (total_tool_rounds / window) * window - window
+    } else {
+        0
+    };
+    round_index >= bound
+}
+
 /// What one pass of [`prune_conversation`] did to the request copy.
 ///
 /// Counts results, not characters of prompt: only `chars_reclaimed` is a size, and it counts the
 /// characters dropped from replaced results, so it is an upper bound on what the turn saved.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PruningReport {
-    /// Older rounds inside a recent turn cleared by the opt-in step budget.
+    /// Older rounds inside a recent turn cleared by the step budget.
     pub rounds_cleared_by_step_budget: usize,
     /// Results replaced with the head/tail trim.
     pub soft_trimmed: usize,
@@ -188,6 +221,17 @@ pub(crate) fn prune_conversation(
     conversation: &mut [ConversationItem],
     config: &PruningConfig,
 ) -> PruningReport {
+    prune_conversation_with(conversation, config, true)
+}
+
+/// [`prune_conversation`] with the legacy turn-age trim (soft trim and hard clear) switchable.
+/// The request-copy entry runs the step arm with `legacy_enabled` false below the context gate,
+/// where only the round window and character budget apply.
+pub(crate) fn prune_conversation_with(
+    conversation: &mut [ConversationItem],
+    config: &PruningConfig,
+    legacy_enabled: bool,
+) -> PruningReport {
     let mut report = PruningReport::default();
     let mut total_chars_before = 0usize;
     let mut total_chars_after = 0usize;
@@ -201,6 +245,15 @@ pub(crate) fn prune_conversation(
     let mut recent_tool_result_chars: usize = 0;
     let step_policy_enabled =
         config.keep_last_n_tool_rounds > 0 || config.recent_tool_result_char_budget > 0;
+    if !step_policy_enabled && !legacy_enabled {
+        return report;
+    }
+    let total_tool_rounds = conversation
+        .iter()
+        .filter(|item| {
+            matches!(item, ConversationItem::Assistant(assistant) if !assistant.tool_calls.is_empty())
+        })
+        .count();
     // Whether any pinned result is present decides which omission placeholder the model sees,
     // so it is read before the mutating walk.
     let any_pinned = config.pin_evidence
@@ -231,17 +284,27 @@ pub(crate) fn prune_conversation(
         let content_len = tool_result.content.chars().count();
         let recent_turn = turn_from_end < config.keep_last_n_turns;
 
-        // Preserve the legacy behavior unless the step-aware experiment is
-        // explicitly configured. Under the experiment, the active round is
-        // always retained; older rounds must fit both limits that are enabled.
+        // Preserve the legacy behavior unless the step-aware policy is
+        // configured. Under the policy, the active round is always retained;
+        // older rounds must fit every limit that is enabled.
         if !step_policy_enabled && recent_turn {
             continue;
         }
         if step_policy_enabled && recent_turn {
             recent_tool_result_chars = recent_tool_result_chars.saturating_add(content_len);
             let active_round = tool_round_from_end == 0;
-            let within_round_window = config.keep_last_n_tool_rounds == 0
-                || tool_round_from_end < config.keep_last_n_tool_rounds;
+            let round_only =
+                config.recent_tool_result_char_budget == 0 && config.keep_last_n_tool_rounds > 0;
+            let within_round_window = if round_only {
+                within_whole_round_windows(
+                    total_tool_rounds,
+                    tool_round_from_end,
+                    config.keep_last_n_tool_rounds,
+                )
+            } else {
+                config.keep_last_n_tool_rounds == 0
+                    || tool_round_from_end < config.keep_last_n_tool_rounds
+            };
             let within_char_budget = config.recent_tool_result_char_budget == 0
                 || recent_tool_result_chars <= config.recent_tool_result_char_budget;
 
@@ -268,6 +331,12 @@ pub(crate) fn prune_conversation(
                 report.rounds_cleared_by_step_budget += 1;
                 tool_result.content = std::sync::Arc::<str>::from(placeholder);
             }
+            continue;
+        }
+
+        // Below the context gate the request-copy entry runs the step arm alone; the legacy
+        // turn-age trim belongs to a filling window and is not applied here.
+        if !legacy_enabled {
             continue;
         }
 
@@ -414,6 +483,120 @@ mod tests {
             pin_evidence: true,
             ..Default::default()
         }
+    }
+
+    /// Round window only, no character budget: the whole-window bound applies.
+    fn round_only_config() -> PruningConfig {
+        PruningConfig {
+            keep_last_n_tool_rounds: 3,
+            recent_tool_result_char_budget: 0,
+            ..Default::default()
+        }
+    }
+
+    fn rounds(count: usize, content_len: usize) -> Vec<ConversationItem> {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..count {
+            conv.extend(tool_round(id, content_len));
+        }
+        conv
+    }
+
+    #[test]
+    fn default_round_window_is_off_with_no_character_budget() {
+        let config = PruningConfig::default();
+        assert_eq!(config.keep_last_n_tool_rounds, 0);
+        assert_eq!(config.recent_tool_result_char_budget, 0);
+    }
+
+    #[test]
+    fn whole_round_windows_omit_the_prefix_before_the_previous_window() {
+        let mut conv = rounds(8, 200);
+        prune_conversation(&mut conv, &round_only_config());
+
+        let results = result_contents(&conv);
+        assert_eq!(results.len(), 8, "tool-call pairing must be preserved");
+        for (i, result) in results.iter().enumerate().take(3) {
+            assert_eq!(
+                *result, STEP_BUDGET_PLACEHOLDER,
+                "round {i} is before the bound"
+            );
+        }
+        for (i, result) in results.iter().enumerate().skip(3) {
+            assert_eq!(result.len(), 200, "round {i} is inside the window");
+        }
+    }
+
+    #[test]
+    fn whole_round_windows_bound_moves_at_each_window_multiple() {
+        // Nine rounds: the bound is the start of the previous complete window, `(9/3)*3 - 3 = 6`.
+        let mut conv = rounds(9, 200);
+        prune_conversation(&mut conv, &round_only_config());
+        let results = result_contents(&conv);
+        assert_eq!(
+            results[5], STEP_BUDGET_PLACEHOLDER,
+            "round 5 is before the bound"
+        );
+        assert_eq!(
+            results[6].len(),
+            200,
+            "round 6 starts the window at 9 rounds"
+        );
+
+        // Twelve rounds: the bound reaches `(12/3)*3 - 3 = 9`.
+        let mut conv = rounds(12, 200);
+        prune_conversation(&mut conv, &round_only_config());
+        let results = result_contents(&conv);
+        assert_eq!(
+            results[8], STEP_BUDGET_PLACEHOLDER,
+            "round 8 is before the bound"
+        );
+        assert_eq!(results[9].len(), 200, "round 9 starts the window");
+    }
+
+    #[test]
+    fn zero_round_window_leaves_results_raw_below_the_gate() {
+        let mut conv = rounds(8, 200);
+        let config = PruningConfig {
+            keep_last_n_tool_rounds: 0,
+            ..round_only_config()
+        };
+
+        // The below-gate entry runs the step arm alone; with both knobs at zero there is none.
+        let report = prune_conversation_with(&mut conv, &config, false);
+
+        assert_eq!(report, PruningReport::default());
+        assert!(
+            result_contents(&conv)
+                .iter()
+                .all(|result| result.len() == 200),
+            "an explicit zero must leave every result raw"
+        );
+    }
+
+    #[test]
+    fn whole_round_windows_keep_a_pinned_failure_before_the_bound() {
+        let mut conv = vec![ConversationItem::user("fix the failure")];
+        for id in 0..8 {
+            let provenance = ToolResultProvenance {
+                failed: id == 1,
+                ..Default::default()
+            };
+            conv.extend(tool_round_with(id, 200, provenance));
+        }
+
+        let report = prune_conversation(
+            &mut conv,
+            &PruningConfig {
+                pin_evidence: true,
+                ..round_only_config()
+            },
+        );
+
+        let results = result_contents(&conv);
+        assert_eq!(results[1].len(), 200, "the failed round must stay raw");
+        assert_eq!(results[0], STEP_BUDGET_PINNED_PLACEHOLDER);
+        assert_eq!(report.pinned_kept, 1);
     }
 
     fn result_contents(conv: &[ConversationItem]) -> Vec<String> {
@@ -656,7 +839,13 @@ mod tests {
             conv.extend(tool_round(turn, 10_000));
         }
 
-        let report = prune_conversation(&mut conv, &PruningConfig::default());
+        let report = prune_conversation(
+            &mut conv,
+            &PruningConfig {
+                keep_last_n_tool_rounds: 0,
+                ..Default::default()
+            },
+        );
 
         assert_eq!(report.rounds_cleared_by_step_budget, 0);
         assert_eq!(report.soft_trimmed, 7);
@@ -671,7 +860,13 @@ mod tests {
             conv.extend(tool_round(id, 8_000));
         }
 
-        prune_conversation(&mut conv, &PruningConfig::default());
+        prune_conversation(
+            &mut conv,
+            &PruningConfig {
+                keep_last_n_tool_rounds: 0,
+                ..Default::default()
+            },
+        );
 
         assert!(conv.iter().all(|item| match item {
             ConversationItem::ToolResult(result) => result.content.len() == 8_000,
