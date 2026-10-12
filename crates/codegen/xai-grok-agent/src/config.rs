@@ -287,7 +287,8 @@ pub enum ToolSurface {
 }
 
 /// Client-facing tool names for the implement surface: the four coding tools
-/// plus the background-task lifecycle tool and subagent spawn.
+/// plus the background-task lifecycle tool. Subagent spawn stays on the wider
+/// TaskOpen and Plan surfaces.
 pub fn implement_tool_ids() -> &'static [&'static str] {
     &[
         "run_terminal_command",
@@ -295,7 +296,6 @@ pub fn implement_tool_ids() -> &'static [&'static str] {
         "search_replace",
         "write",
         "background_task",
-        "spawn_subagent",
     ]
 }
 
@@ -1688,7 +1688,6 @@ mod tests {
                 "search_replace",
                 "write",
                 "background_task",
-                "spawn_subagent",
             ]
         );
         assert!(!implement.contains(&"enter_plan_mode"));
@@ -1703,6 +1702,10 @@ mod tests {
         assert!(!implement.contains(&"todo_write"));
         assert!(task_open.contains(&"todo_write"));
         assert!(plan.contains(&"todo_write"));
+        // Subagent spawn leaves Implement with grep/glob/list_dir; the wider surfaces keep it.
+        assert!(!implement.contains(&"spawn_subagent"));
+        assert!(task_open.contains(&"spawn_subagent"));
+        assert!(plan.contains(&"spawn_subagent"));
         for id in implement {
             assert!(
                 task_open.contains(id),

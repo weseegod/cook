@@ -111,8 +111,8 @@ fn task_open_keeps_plan_and_task_while_implement_is_narrow() {
     assert!(!task_names.contains(&"search_tool"));
     assert!(impl_names.contains(&"write"));
     assert!(impl_names.contains(&"search_replace"));
-    // `spawn_subagent` is on Implement too: broad exploration goes to the read-only explore agent.
-    assert!(impl_names.contains(&"spawn_subagent"));
+    // `spawn_subagent` stays on TaskOpen; Implement keeps only the coding tools.
+    assert!(!impl_names.contains(&"spawn_subagent"));
     assert!(!impl_names.contains(&"enter_plan_mode"));
     assert!(!impl_names.contains(&"ask_user_question"));
     assert!(!impl_names.contains(&"web_search"));
