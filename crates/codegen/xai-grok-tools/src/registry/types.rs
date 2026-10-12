@@ -4053,8 +4053,10 @@ mod tests {
             "task tool should be rejected without get_task_output and kill_task"
         );
         assert!(
-            errors.iter().any(|e| e.tool == "GrokBuild:task"
-                && e.message.contains("GrokBuild:background_task")),
+            errors
+                .iter()
+                .any(|e| e.tool == "GrokBuild:task"
+                    && e.message.contains("GrokBuild:background_task")),
             "error should name the missing background-task tool: {errors:?}",
         );
     }

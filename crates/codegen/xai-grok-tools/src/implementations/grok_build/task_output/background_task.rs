@@ -247,20 +247,14 @@ mod tests {
     async fn kill_action_with_an_unknown_id_matches_kill_task() {
         let via_background = BackgroundTaskTool
             .run(
-                test_ctx_with_call_id(
-                    resources_with_terminal(None).into_shared(),
-                    "call-kill",
-                ),
+                test_ctx_with_call_id(resources_with_terminal(None).into_shared(), "call-kill"),
                 input(BackgroundTaskAction::Kill, &["task-abc"]),
             )
             .await
             .expect("kill not-found is an outcome, not an error");
         let direct = KillTaskTool
             .run(
-                test_ctx_with_call_id(
-                    resources_with_terminal(None).into_shared(),
-                    "call-direct",
-                ),
+                test_ctx_with_call_id(resources_with_terminal(None).into_shared(), "call-direct"),
                 KillTaskToolInput {
                     task_id: "task-abc".into(),
                 },
@@ -281,17 +275,11 @@ mod tests {
     async fn kill_action_without_ids_is_invalid_arguments() {
         let err = BackgroundTaskTool
             .run(
-                test_ctx_with_call_id(
-                    resources_with_terminal(None).into_shared(),
-                    "call-empty",
-                ),
+                test_ctx_with_call_id(resources_with_terminal(None).into_shared(), "call-empty"),
                 input(BackgroundTaskAction::Kill, &[]),
             )
             .await
             .expect_err("an empty id list is invalid");
-        assert!(
-            err.to_string().contains("non-empty task_ids"),
-            "got {err}"
-        );
+        assert!(err.to_string().contains("non-empty task_ids"), "got {err}");
     }
 }

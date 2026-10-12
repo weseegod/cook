@@ -5526,7 +5526,11 @@ mod tests {
                 assert!(!out.contains(retired), "{retired:?} must not appear: {out}");
             }
             // The block ceiling is explained once and the search tools are named in one line.
-            assert_eq!(out.matches("You can specify an optional").count(), 1, "{out}");
+            assert_eq!(
+                out.matches("You can specify an optional").count(),
+                1,
+                "{out}"
+            );
 
             // Completion notifications live in the system prompt; reminders on/off match.
             let off = desc(&BashParams::default(), false);

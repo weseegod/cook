@@ -300,10 +300,12 @@ mod tests {
         let schema = crate::registry::types::generate_schema::<CodexReadFileInput>();
         assert!(schema["properties"].get("file_path").is_some());
         assert!(schema["properties"].get("target_file").is_none());
-        assert!(serde_json::from_value::<CodexReadFileInput>(serde_json::json!({
-            "file_path": "a.rs", "target_file": "b.rs"
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<CodexReadFileInput>(serde_json::json!({
+                "file_path": "a.rs", "target_file": "b.rs"
+            }))
+            .is_err()
+        );
     }
 
     /// Set up Resources with real filesystem for tests.

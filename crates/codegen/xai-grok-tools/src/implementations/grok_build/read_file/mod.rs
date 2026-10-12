@@ -966,10 +966,12 @@ mod tests {
         let schema = crate::registry::types::generate_schema::<ReadFileInput>();
         assert!(schema["properties"].get("target_file").is_some());
         assert!(schema["properties"].get("file_path").is_none());
-        assert!(serde_json::from_value::<ReadFileInput>(serde_json::json!({
-            "target_file": "a.rs", "file_path": "b.rs"
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<ReadFileInput>(serde_json::json!({
+                "target_file": "a.rs", "file_path": "b.rs"
+            }))
+            .is_err()
+        );
     }
     /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
     /// fits, and it takes a whole extra token's worth of bytes to exceed it.

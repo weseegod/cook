@@ -84,7 +84,10 @@ fn single_line_anchor_write_as_replace(content: &str) -> Option<HashlineOp> {
 
 /// Parse a single-line `SOMETHING→text` write. `resolve` maps the left-hand side
 /// to a full `LINE:HASH` anchor (or `None` when it cannot).
-fn parse_arrow_write(content: &str, resolve: impl FnOnce(&str) -> Option<String>) -> Option<HashlineOp> {
+fn parse_arrow_write(
+    content: &str,
+    resolve: impl FnOnce(&str) -> Option<String>,
+) -> Option<HashlineOp> {
     let trimmed = content.trim_end_matches('\n');
     if trimmed.contains('\n') {
         return None;
@@ -179,7 +182,11 @@ fn full_anchor_listing(content: &str, scheme: &dyn AnchorScheme) -> String {
         .join("\n")
 }
 
-fn single_line_write_rejected_error(content: &str, write: &str, scheme: &dyn AnchorScheme) -> HashlineEditError {
+fn single_line_write_rejected_error(
+    content: &str,
+    write: &str,
+    scheme: &dyn AnchorScheme,
+) -> HashlineEditError {
     let listing = full_anchor_listing(content, scheme);
     let example_line = content.lines().nth(1).unwrap_or("LINE_CONTENT");
     HashlineEditError {
@@ -2453,9 +2460,7 @@ mod tests {
         let anchors = anchors_for(SAMPLE);
         let target = nth(&anchors, 2);
         let pasted = format!("{target}\u{2192}replaced line");
-        let ops = vec![HashlineOp::Write {
-            content: pasted,
-        }];
+        let ops = vec![HashlineOp::Write { content: pasted }];
         let result = apply_edits(SAMPLE, &ops, &test_path(), &*test_scheme());
         let HashlineEditOutput::EditsApplied(applied) = &result.output else {
             panic!("expected success, got: {:?}", result.output);
@@ -2463,12 +2468,18 @@ mod tests {
         assert_eq!(applied.applied, 1);
         let new_content = result.new_content.expect("new content");
         assert!(new_content.contains("replaced line"), "got: {new_content}");
-        assert!(new_content.contains("fn main()"), "wiped first line: {new_content}");
+        assert!(
+            new_content.contains("fn main()"),
+            "wiped first line: {new_content}"
+        );
         assert!(
             new_content.contains("println!"),
             "wiped later lines: {new_content}"
         );
-        assert!(!new_content.contains(&target), "anchor must not remain: {new_content}");
+        assert!(
+            !new_content.contains(&target),
+            "anchor must not remain: {new_content}"
+        );
     }
 
     #[test]
@@ -2496,7 +2507,14 @@ mod tests {
         let ops = vec![HashlineOp::Write {
             content: "DONE-EDIT".to_owned(),
         }];
-        match apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme()).output {
+        match apply_edits(
+            "first\nREPLACE_ME\nlast\n",
+            &ops,
+            &test_path(),
+            &*test_scheme(),
+        )
+        .output
+        {
             HashlineEditOutput::Error(e) => {
                 assert_eq!(e.error, HashlineEditErrorKind::InvalidInput);
                 assert!(e.message.contains("replace"), "msg: {}", e.message);
@@ -2560,11 +2578,19 @@ mod tests {
         let ops = vec![HashlineOp::Write {
             content: "first\nDONE-EDIT\nlast\n".to_owned(),
         }];
-        let result = apply_edits("first\nREPLACE_ME\nlast\n", &ops, &test_path(), &*test_scheme());
+        let result = apply_edits(
+            "first\nREPLACE_ME\nlast\n",
+            &ops,
+            &test_path(),
+            &*test_scheme(),
+        );
         let HashlineEditOutput::EditsApplied(_) = result.output else {
             panic!("expected success, got: {:?}", result.output);
         };
-        assert_eq!(result.new_content.as_deref(), Some("first\nDONE-EDIT\nlast\n"));
+        assert_eq!(
+            result.new_content.as_deref(),
+            Some("first\nDONE-EDIT\nlast\n")
+        );
     }
 
     #[test]
@@ -2582,9 +2608,7 @@ mod tests {
         assert_eq!(content, "DONE-EDIT");
 
         let Some(HashlineOp::Replace {
-            anchor,
-            content,
-            ..
+            anchor, content, ..
         }) = single_line_anchor_write_as_replace("22:abc:rst->code here")
         else {
             panic!("expected replace for ascii arrow");

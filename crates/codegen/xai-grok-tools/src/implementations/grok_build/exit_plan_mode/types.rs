@@ -39,7 +39,9 @@ mod tests {
             session_id: "sess-1".into(),
             tool_call_id: "tc-1".into(),
             plan_content: Some("# Plan".into()),
-            plan_file_path: Some("/home/u/.cook/sessions/p/abc/plans/2026-09-19T14-30-22Z.md".into()),
+            plan_file_path: Some(
+                "/home/u/.cook/sessions/p/abc/plans/2026-09-19T14-30-22Z.md".into(),
+            ),
         };
         let json = serde_json::to_value(&req).unwrap();
         assert!(json.get("sessionId").is_some());
@@ -65,7 +67,8 @@ mod tests {
         assert!(json.get("planFilePath").is_none());
         // Older clients/agents: a payload without the field still deserializes.
         let back: ExitPlanModeExtRequest =
-            serde_json::from_str(r#"{"sessionId":"s","toolCallId":"t","planContent":null}"#).unwrap();
+            serde_json::from_str(r#"{"sessionId":"s","toolCallId":"t","planContent":null}"#)
+                .unwrap();
         assert!(back.plan_file_path.is_none());
     }
 

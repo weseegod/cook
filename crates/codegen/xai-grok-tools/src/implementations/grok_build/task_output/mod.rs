@@ -6,8 +6,8 @@
 pub mod background_task;
 pub mod terminal_command;
 pub mod wait_tasks;
-use std::time::Duration;
 pub use background_task::BackgroundTaskTool;
+use std::time::Duration;
 pub use terminal_command::GetTerminalCommandOutputTool;
 pub use wait_tasks::WaitTasksTool;
 

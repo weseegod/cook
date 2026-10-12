@@ -453,8 +453,8 @@ mod tests {
 
     #[test]
     fn description_prefers_edit_for_small_in_place_changes() {
-        use crate::types::tool_metadata::ToolMetadata;
         use crate::types::template_renderer::TemplateRenderer;
+        use crate::types::tool_metadata::ToolMetadata;
         let edit_params = std::collections::HashMap::from([
             ("old_string".to_string(), "old_string".to_string()),
             ("new_string".to_string(), "new_string".to_string()),

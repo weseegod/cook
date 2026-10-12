@@ -29,7 +29,7 @@ use crate::types::tool::{ToolKind, ToolNamespace};
 use crate::util::truncate_str_with_marker;
 use crate::{notification::types::ToolNotificationHandle, register_resource};
 use helpers::{
-    NormalizedMatchResult, build_edit_details, find_normalized_match_positions,
+    NormalizedMatchResult, build_edit_details, find_normalized_match_positions, render_snippet,
     replace_normalized_matches, replace_using_positions,
 };
 pub(crate) const CONTEXT_LINES: usize = 3;
@@ -456,11 +456,13 @@ async fn handle_multi_edits(
 
     let mut new_text = String::with_capacity(match_text.len());
     let mut details = Vec::with_capacity(planned.len());
+    let mut snippet_anchors: Vec<(usize, &str)> = Vec::with_capacity(planned.len());
     let mut last = 0usize;
     for &(start, end, old_string, new_string) in &planned {
         new_text.push_str(&match_text[last..start]);
         let new_start = new_text.len();
         new_text.push_str(new_string);
+        snippet_anchors.push((new_start, new_string));
         details.extend(build_edit_details(
             &new_text,
             old_string,
@@ -512,15 +514,30 @@ async fn handle_multi_edits(
         previous_content: Some(old_text.clone()),
         is_new_file: false,
     });
-    let tool_output_for_prompt = format!(
+    let applied = details.len();
+    let mut tool_output_for_prompt = format!(
         "The file {} has been updated successfully ({} edits).",
-        &input.file_path,
-        details.len()
+        &input.file_path, applied
     );
+    let mut shown = 0usize;
+    for &(start_pos, new_string) in &snippet_anchors {
+        let (snippet, _, _) = render_snippet(&new_text, new_string, start_pos, CONTEXT_LINES);
+        let block = format!("\n\n{snippet}");
+        if tool_output_for_prompt.len() + block.len() > crate::DEFAULT_TOOL_OUTPUT_CHARS {
+            break;
+        }
+        tool_output_for_prompt.push_str(&block);
+        shown += 1;
+    }
+    if shown < applied {
+        let unshown = applied - shown;
+        tool_output_for_prompt.push_str(&format!(
+            "\n\n{applied} edits were applied and {shown} are shown; {unshown} hunks are not shown."
+        ));
+    }
     let tool_output_for_prompt_concise = format!(
         "The file {} has been updated ({} edits).",
-        &input.file_path,
-        details.len()
+        &input.file_path, applied
     );
     Ok(SearchReplaceOutput::EditsApplied(
         SearchReplaceEditsApplied {
@@ -1003,9 +1020,15 @@ async fn handle_replacement(
         CONTEXT_LINES,
     );
     let (tool_output_for_prompt, tool_output_for_prompt_concise) = if new_positions.len() == 1 {
+        let (snippet, _, _) = render_snippet(
+            &new_text,
+            &input.new_string,
+            new_positions[0],
+            CONTEXT_LINES,
+        );
         let default_msg = format!(
-            "The file {} has been updated successfully.",
-            &input.file_path
+            "The file {} has been updated. Here's a relevant snippet of the edited file:\n\n{snippet}",
+            &input.file_path,
         );
         let concise_msg = format!("The file {} has been updated.", &input.file_path);
         (default_msg, concise_msg)
@@ -1287,6 +1310,32 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn single_replacement_prompt_includes_snippet_and_concise_does_not() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = make_input("test.txt", "beta", "BETA");
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert!(applied.tool_output_for_prompt.contains("has been updated"));
+                assert!(applied.tool_output_for_prompt.contains("BETA"));
+                assert!(
+                    applied.tool_output_for_prompt.contains("2→BETA"),
+                    "snippet should be line-numbered, got: {}",
+                    applied.tool_output_for_prompt
+                );
+                let concise = applied.tool_output_for_prompt_concise.as_deref().unwrap();
+                assert_eq!(concise, "The file test.txt has been updated.");
+                assert!(!concise.contains('→'));
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+    #[tokio::test]
     async fn new_file_creation() {
         let tmp = TempDir::new().unwrap();
         let tool = SearchReplaceTool;
@@ -1525,6 +1574,13 @@ mod tests {
                         .tool_output_for_prompt
                         .contains("successfully replaced")
                 );
+                assert!(
+                    !applied.tool_output_for_prompt.contains('→'),
+                    "replace_all prompt must stay a count sentence, got: {}",
+                    applied.tool_output_for_prompt
+                );
+                let concise = applied.tool_output_for_prompt_concise.as_deref().unwrap();
+                assert!(!concise.contains('→'));
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }
@@ -2942,6 +2998,132 @@ neutTest_set);
                 assert_eq!(applied.edits.details.len(), 2);
                 let content = std::fs::read_to_string(tmp.path().join("test.txt")).unwrap();
                 assert_eq!(content, "ALPHA\nbeta\nGAMMA\n");
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_edits_prompt_shows_each_small_hunk_and_concise_stays_one_line() {
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("test.txt"), "alpha\nbeta\ngamma\n").unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = multi_edit_input(
+            "test.txt",
+            vec![("alpha", "ALPHA"), ("gamma", "GAMMA")],
+        );
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                assert!(applied.tool_output_for_prompt.contains("1→ALPHA"));
+                assert!(applied.tool_output_for_prompt.contains("3→GAMMA"));
+                assert!(!applied.tool_output_for_prompt.contains("not shown"));
+                let concise = applied.tool_output_for_prompt_concise.as_deref().unwrap();
+                assert_eq!(concise, "The file test.txt has been updated (2 edits).");
+                assert!(!concise.contains('\n'));
+                assert!(!concise.contains('→'));
+            }
+            other => panic!("Expected EditsApplied, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_edits_prompt_stops_at_output_budget_and_names_unshown_hunks() {
+        const HUNKS: usize = 12;
+        const PAD: &str = "xxxx";
+        let tmp = TempDir::new().unwrap();
+        let mut original = String::new();
+        let mut pairs = Vec::with_capacity(HUNKS);
+        for i in 0..HUNKS {
+            let old = format!("OLD{i:04}");
+            let new = format!("NEW{i:04}{}", "x".repeat(2_500));
+            original.push_str(&old);
+            original.push('\n');
+            for _ in 0..4 {
+                original.push_str(PAD);
+                original.push('\n');
+            }
+            pairs.push((old, new));
+        }
+        std::fs::write(tmp.path().join("test.txt"), &original).unwrap();
+        let tool = SearchReplaceTool;
+        let resources = test_resources(tmp.path());
+        let input = multi_edit_input(
+            "test.txt",
+            pairs.iter().map(|(old, new)| (old.as_str(), new.as_str())).collect(),
+        );
+        let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
+            .await
+            .unwrap();
+        match result {
+            SearchReplaceOutput::EditsApplied(applied) => {
+                let content = std::fs::read_to_string(tmp.path().join("test.txt")).unwrap();
+                let mut uncapped = format!(
+                    "The file test.txt has been updated successfully ({HUNKS} edits)."
+                );
+                for (old, new) in &pairs {
+                    let pos = content
+                        .find(new.as_str())
+                        .unwrap_or_else(|| panic!("missing replacement for {old}"));
+                    let (snippet, _, _) = render_snippet(&content, new, pos, CONTEXT_LINES);
+                    uncapped.push_str("\n\n");
+                    uncapped.push_str(&snippet);
+                }
+                assert!(
+                    uncapped.len() > crate::DEFAULT_TOOL_OUTPUT_CHARS,
+                    "fixture must exceed the tool-output budget, got {}",
+                    uncapped.len()
+                );
+                let prompt = &applied.tool_output_for_prompt;
+                let (body, sentence) = prompt.rsplit_once("\n\n").unwrap();
+                assert!(
+                    body.len() <= crate::DEFAULT_TOOL_OUTPUT_CHARS,
+                    "snippets ran past the budget: {}",
+                    body.len()
+                );
+                assert!(
+                    prompt.len() <= crate::DEFAULT_TOOL_OUTPUT_CHARS + 2 + sentence.len(),
+                    "omission sentence grew the result by more than itself"
+                );
+                let applied_n: usize = sentence
+                    .split(" edits were applied")
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                let shown: usize = sentence
+                    .split(" are shown")
+                    .next()
+                    .unwrap()
+                    .rsplit(' ')
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                let unshown: usize = sentence
+                    .split(" hunks are not shown.")
+                    .next()
+                    .unwrap()
+                    .rsplit(' ')
+                    .next()
+                    .unwrap()
+                    .parse()
+                    .unwrap();
+                assert_eq!(applied_n, HUNKS);
+                assert!(shown > 0 && shown < HUNKS);
+                assert_eq!(unshown, applied_n - shown);
+                assert!(sentence.contains("not shown"));
+                assert!(prompt.contains("NEW0000"));
+                assert!(!prompt.contains(&format!("NEW{:04}", HUNKS - 1)));
+                let concise = applied.tool_output_for_prompt_concise.as_deref().unwrap();
+                assert_eq!(
+                    concise,
+                    format!("The file test.txt has been updated ({HUNKS} edits).")
+                );
+                assert!(!concise.contains('→'));
             }
             other => panic!("Expected EditsApplied, got {:?}", other),
         }

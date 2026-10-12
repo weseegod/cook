@@ -650,14 +650,14 @@ pub fn consumed_completion_ids(output: &ToolOutput) -> Vec<&str> {
             ids.push(r.task_id.as_str());
         }
         ToolOutput::KillTask(KillTaskOutput::TaskNotFound(_)) => {}
-        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(
-            TaskOutputOutput::Result(r),
-        )) if wait_result_consumed(r) => {
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(TaskOutputOutput::Result(r)))
+            if wait_result_consumed(r) =>
+        {
             ids.push(r.task_id.as_str());
         }
-        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(TaskOutputOutput::MultiResult(
-            mr,
-        ))) => {
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(
+            TaskOutputOutput::MultiResult(mr),
+        )) => {
             for r in mr.results.iter().filter(|r| wait_result_consumed(r)) {
                 ids.push(r.task_id.as_str());
             }
