@@ -899,6 +899,72 @@ After.";
         assert!(result.contains("After."));
     }
 
+    /// The bash description names only the dedicated tools the active toolset registers. The
+    /// coding surface the audit runs on has read, edit, and write, and no search or list tool,
+    /// so `grep`, `glob`, and `list_dir` must not appear there.
+    #[test]
+    fn bash_description_names_only_the_registered_dedicated_tools() {
+        let renderer_for = |kinds: &[(ToolKind, &str)]| {
+            let mut tools = kinds.to_vec();
+            tools.push((ToolKind::Execute, "run_terminal_cmd"));
+            tools.push((ToolKind::BackgroundTaskAction, "background_task"));
+            make_renderer(
+                &tools,
+                &[(
+                    ToolKind::Execute,
+                    &[("block_until_ms", "block_until_ms"), ("workdir", "workdir")],
+                )],
+            )
+        };
+        let extras = serde_json::json!({"is_windows": false, "has_unix_utilities": true});
+        let template = crate::implementations::grok_build::bash::BashTool::
+            single_knob_description_template_enabled();
+
+        // Read, edit, and write only: the audit surface.
+        let coding = renderer_for(&[
+            (ToolKind::Read, "read_file"),
+            (ToolKind::Edit, "search_replace"),
+            (ToolKind::Write, "write"),
+        ]);
+        let rendered = coding.render_with_extra(template, &extras).unwrap();
+        for present in ["read_file", "search_replace", "write"] {
+            assert!(
+                rendered.contains(present),
+                "{present} must appear: {rendered}"
+            );
+        }
+        for absent in ["grep", "glob", "list_dir"] {
+            assert!(
+                !rendered.contains(absent),
+                "{absent} must not appear: {rendered}"
+            );
+        }
+
+        // With search and list registered, those tools are named too.
+        let full = renderer_for(&[
+            (ToolKind::Read, "read_file"),
+            (ToolKind::Edit, "search_replace"),
+            (ToolKind::Write, "write"),
+            (ToolKind::Search, "grep"),
+            (ToolKind::List, "glob"),
+        ]);
+        let rendered = full.render_with_extra(template, &extras).unwrap();
+        for present in ["grep", "glob", "read_file", "search_replace", "write"] {
+            assert!(
+                rendered.contains(present),
+                "{present} must appear: {rendered}"
+            );
+        }
+
+        // Only the shell: the sentence drops out instead of naming absent tools.
+        let shell_only = renderer_for(&[]);
+        let rendered = shell_only.render_with_extra(template, &extras).unwrap();
+        assert!(
+            !rendered.contains("Prefer the dedicated tools"),
+            "the sentence must be omitted: {rendered}"
+        );
+    }
+
     #[test]
     fn render_with_extra_bool_conditional() {
         let r = make_renderer(&[], &[]);

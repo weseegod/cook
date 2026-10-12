@@ -37,8 +37,6 @@ fn input(path: &std::path::Path) -> ReadFileInput {
         path: path.to_string_lossy().into_owned(),
         offset: None,
         limit: None,
-        pages: None,
-        format: None,
     }
 }
 
@@ -133,10 +131,14 @@ async fn line_and_byte_caps_record_multiple() {
 }
 
 #[tokio::test]
-async fn image_size_error_is_not_succeeded() {
+async fn incomplete_png_preview_is_not_succeeded() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let path = tmp.path().join("oversized.jpg");
-    std::fs::write(&path, jpeg_over_decode_ceiling()).unwrap();
+    let path = tmp.path().join("preview.svg");
+    std::fs::write(
+        &path,
+        crate::implementations::read_file::metadata::truncated_png_prefix(),
+    )
+    .unwrap();
     let slot = SourceSummarySlot::new();
     let mut ctx = test_ctx(resources(tmp.path()).into_shared());
     ctx.insert(slot.clone());
@@ -151,7 +153,7 @@ async fn image_size_error_is_not_succeeded() {
 }
 
 #[tokio::test]
-async fn embedded_image_stays_succeeded() {
+async fn raster_image_read_fails_as_binary() {
     let tmp = tempfile::TempDir::new().unwrap();
     let path = tmp.path().join("icon.png");
     let bytes = crate::implementations::read_file::metadata::png_with_svg_bytes_in_idat();
@@ -160,13 +162,14 @@ async fn embedded_image_stays_succeeded() {
     let mut ctx = test_ctx(resources(tmp.path()).into_shared());
     ctx.insert(slot.clone());
     let output = Tool::run(&ReadFileTool, ctx, input(&path)).await.unwrap();
-    assert!(matches!(output, ReadFileOutput::ImageContent(_)));
+    assert!(matches!(output, ReadFileOutput::FileReadError(_)));
     let summary = slot.snapshot();
-    assert_eq!(summary.result, ToolSourceResult::Succeeded);
+    assert_eq!(
+        summary.result,
+        ToolSourceResult::Failed(Some(ReadReason::Binary))
+    );
     let read = summary.read().expect("read profile");
-    assert_eq!(read.tokens.applicability, CapApplicability::NotApplicable);
-    assert_eq!(read.limit_kind(), ReadLimitKind::None);
-    assert_eq!(summary.output_limit, ToolOutputLimit::NotLimited);
+    assert_eq!(read.limit_kind(), ReadLimitKind::Unknown);
     assert_eq!(read.source_bytes, Some(bytes.len() as i64));
 }
 
@@ -477,24 +480,4 @@ async fn small_skill_whole_read_stays_within_token_limit() {
     assert_eq!(read.limit_kind(), ReadLimitKind::None);
     assert_eq!(summary.output_limit, ToolOutputLimit::NotLimited);
     assert_eq!(read.source_bytes, Some(body.len() as i64));
-}
-
-/// Declared dimensions are above the decode ceiling. The SOI marker stays a JPEG.
-fn jpeg_over_decode_ceiling() -> Vec<u8> {
-    use image::codecs::jpeg::JpegEncoder;
-    use image::{DynamicImage, ImageBuffer, Rgb};
-    let img: ImageBuffer<Rgb<u8>, Vec<u8>> = ImageBuffer::from_pixel(64, 64, Rgb([7, 8, 9]));
-    let mut jpeg = Vec::new();
-    JpegEncoder::new_with_quality(&mut jpeg, 85)
-        .encode_image(&DynamicImage::ImageRgb8(img))
-        .unwrap();
-    let sof = jpeg
-        .windows(2)
-        .position(|w| w == [0xFF, 0xC0])
-        .expect("baseline SOF0 present");
-    let Some(dims) = jpeg.get_mut(sof + 5..sof + 9) else {
-        panic!("SOF0 dimensions missing at {sof}");
-    };
-    dims.copy_from_slice(&[0x40, 0x00, 0x40, 0x00]);
-    jpeg
 }

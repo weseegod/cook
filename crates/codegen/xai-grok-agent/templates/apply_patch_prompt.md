@@ -119,9 +119,9 @@ Example 2:
 
 Example 3:
 
-1. Create single-file HTML game
-2. Run quick sanity check
-3. Summarize usage instructions
+1. Refactor the parser
+2. Run the test suite
+3. Summarize changes
 
 If you need to write a plan, only write high quality plans, not low quality ones.
 ${%- endif %}

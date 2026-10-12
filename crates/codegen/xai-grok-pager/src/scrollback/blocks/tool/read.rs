@@ -24,8 +24,6 @@ use xai_grok_tools::implementations::skills::types::skill_name_from_path;
 pub enum ReadMediaKind {
     /// Image file (PNG, JPEG, etc.)
     Image,
-    /// PDF rendered as page images.
-    Pdf { pages: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -40,13 +38,13 @@ pub struct ReadToolCallBlock {
     pub started_at: Option<std::time::Instant>,
     /// Elapsed time in ms after completion.
     pub elapsed_ms: Option<i64>,
-    /// Raw file content (unformatted). `None` for errors, images, PDFs.
+    /// Raw file content (unformatted). `None` for errors and images.
     pub content: Option<String>,
     /// Total number of lines in the file (from `FileContent.total_lines`).
     pub total_lines: Option<usize>,
     /// Inline image reference (for image file reads).
     pub image_ref: Option<ScrollbackImageRef>,
-    /// Non-text media kind (image, PDF).
+    /// Non-text media kind (image).
     pub media_kind: Option<ReadMediaKind>,
     /// Whether this ordinary read targets a memory v2 scope.
     pub is_memory_activity: bool,
@@ -197,7 +195,6 @@ impl ReadToolCallBlock {
         } else if let Some(media) = &self.media_kind {
             match media {
                 ReadMediaKind::Image => " (image)".to_string(),
-                ReadMediaKind::Pdf { pages } => format!(" ({pages} pages)"),
             }
         } else {
             String::new()

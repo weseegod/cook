@@ -3799,8 +3799,7 @@ impl SessionActor {
         ) {
             let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
             if let Some(contract) = self.render_plan_contract(&plan_path).await {
-                result.prompt_text =
-                    format!("{}\n\n{contract}", result.prompt_text.trim_end());
+                result.prompt_text = format!("{}\n\n{contract}", result.prompt_text.trim_end());
             }
         }
         if let ToolsToolOutput::Todo(
@@ -4024,7 +4023,6 @@ impl SessionActor {
             && !matches!(
                 *output,
                 ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(_))
-                    | ToolsToolOutput::ReadFile(ReadFileOutput::PdfPageImages(_))
             ) {
             xai_grok_tools::util::base64_images::extract_base64_images(prompt_text)
         } else {
@@ -4068,26 +4066,6 @@ impl SessionActor {
                     prompt_text = format!("Read image file: {path}");
                 }
             }
-        }
-        if attach_images
-            && let ToolsToolOutput::ReadFile(ReadFileOutput::PdfPageImages(ref pdf)) = *output
-        {
-            for page in &pdf.pages {
-                let url = format!("data:{};base64,{}", page.mime_type, page.data);
-                inline_images.push(ContentPart::Image {
-                    url: std::sync::Arc::<str>::from(url),
-                });
-            }
-            let path = tool_parsed_args
-                .get("target_file")
-                .or_else(|| tool_parsed_args.get("path"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            prompt_text = format!(
-                "Read PDF file: {path} ({} pages rendered, {} total)",
-                pdf.pages.len(),
-                pdf.total_pages,
-            );
         }
         (prompt_text, inline_images, extracted_images)
     }
@@ -4156,14 +4134,14 @@ impl SessionActor {
             crate::session::plan_mode::plan_mode_edit_rejected_template(),
         );
         self.render_plan_template(&template, &plan_path, false)
-        .await
-        .unwrap_or_else(|| {
-            format!(
-                "Rejected: file edits are not allowed in plan mode - the only editable \
+            .await
+            .unwrap_or_else(|| {
+                format!(
+                    "Rejected: file edits are not allowed in plan mode - the only editable \
                  file is the plan file ({}).",
-                plan_path.display()
-            )
-        })
+                    plan_path.display()
+                )
+            })
     }
     pub(super) async fn handle_tool_not_executed(
         &self,

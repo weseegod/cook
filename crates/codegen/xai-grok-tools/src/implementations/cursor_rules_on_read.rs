@@ -696,8 +696,6 @@ mod tests {
             path: "main.rs".to_owned(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let first = xai_tool_runtime::Tool::run(&GrokReadFileTool, test_ctx(shared), input)

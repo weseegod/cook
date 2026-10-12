@@ -168,8 +168,6 @@ mod tests {
             path: "x".into(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         })
         .try_into();
         assert_eq!(rf.unwrap().path, "x");

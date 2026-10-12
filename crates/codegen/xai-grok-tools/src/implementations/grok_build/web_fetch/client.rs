@@ -17,8 +17,6 @@ use crate::implementations::grok_build::storage::SessionFileWriter;
 use crate::types::output::{WebFetchContent, WebFetchOutput, WebFetchSourceArtifact};
 use scraper::{Html, Selector};
 
-const DEFAULT_DOWNLOAD_DIR: &str = "downloads";
-
 /// Shared HTTP client and cache for web fetching.
 #[derive(Clone)]
 pub struct WebFetchClient {
@@ -26,7 +24,6 @@ pub struct WebFetchClient {
     cache: Arc<parking_lot::RwLock<FetchCache>>,
     converter: Arc<htmd::HtmlToMarkdown>,
     params: WebFetchParams,
-    download_writer: SessionFileWriter,
     image_writer: SessionFileWriter,
     video_writer: SessionFileWriter,
     overflow: OverflowHandler,
@@ -60,7 +57,6 @@ impl WebFetchClient {
             ))),
             converter,
             params: params.clone(),
-            download_writer: SessionFileWriter::new(DEFAULT_DOWNLOAD_DIR, "pdf"),
             image_writer: SessionFileWriter::new("images", "jpg"),
             video_writer: SessionFileWriter::new("videos", "mp4"),
             overflow: OverflowHandler::new(),
@@ -132,22 +128,6 @@ impl WebFetchClient {
         };
         http_span.record("bytes", body.len() as i64);
         drop(http_span);
-
-        // PDF: save raw bytes to disk instead of lossy UTF-8 conversion.
-        if is_pdf(&content_type) {
-            let media_session_folder = require_media_session_folder(session_folder)?;
-            let output = save_pdf(
-                &self.download_writer,
-                media_session_folder,
-                &body,
-                final_url,
-                content_type,
-                status_code,
-                read_tool_name,
-            )
-            .await?;
-            return Ok(output);
-        }
 
         // Image: validate magic bytes, save to disk.
         if is_image(&content_type) {
@@ -464,10 +444,6 @@ fn is_html(content_type: &str) -> bool {
     content_type.contains("text/html") || content_type.contains("application/xhtml")
 }
 
-fn is_pdf(content_type: &str) -> bool {
-    content_type.contains("application/pdf")
-}
-
 /// Returns `true` for image content types, excluding SVG (which can contain
 /// `<script>` tags and event handlers — an XSS vector if saved and opened).
 fn is_image(content_type: &str) -> bool {
@@ -575,49 +551,6 @@ fn is_binary_content_type(content_type: &str) -> bool {
             | "application/yaml"
             | "application/toml"
     )
-}
-
-/// Save fetched PDF bytes to the session download directory and return a
-/// `WebFetchOutput` pointing the model at the saved file.
-async fn save_pdf(
-    writer: &SessionFileWriter,
-    session_folder: &Path,
-    body: &[u8],
-    final_url: String,
-    content_type: String,
-    status_code: u16,
-    read_tool_name: Option<&str>,
-) -> Result<WebFetchOutput, WebFetchError> {
-    let path = writer
-        .save(session_folder, body, None)
-        .await
-        .map_err(|e| WebFetchError::IoError(std::io::Error::other(e.to_string())))?;
-
-    tracing::info!(
-        path = %path.display(),
-        bytes = body.len(),
-        "PDF saved to disk"
-    );
-
-    let read_hint = read_tool_name.map_or_else(String::new, |name| {
-        format!(" Use the {name} tool to view its contents.")
-    });
-    let content = format!(
-        "PDF downloaded ({} bytes) and saved to {}.{}",
-        body.len(),
-        path.display(),
-        read_hint,
-    );
-    Ok(WebFetchOutput::Content(WebFetchContent {
-        url: final_url,
-        content: content.clone(),
-        content_type,
-        status_code,
-        bytes: body.len(),
-        source_artifact: None,
-        inline_fallback: Some(content),
-        output_location: None,
-    }))
 }
 
 /// Save fetched image bytes to the session images directory and return a
@@ -1039,22 +972,6 @@ mod tests {
         assert!(!is_html("text/markdown"));
         assert!(!is_html("application/json"));
         assert!(!is_html("application/pdf"));
-    }
-
-    // ── PDF content type detection ────────────────────────────────────
-
-    #[test]
-    fn is_pdf_detects_pdf_types() {
-        assert!(is_pdf("application/pdf"));
-        assert!(is_pdf("application/pdf; charset=utf-8"));
-    }
-
-    #[test]
-    fn is_pdf_rejects_non_pdf() {
-        assert!(!is_pdf("text/html"));
-        assert!(!is_pdf("text/plain"));
-        assert!(!is_pdf("application/json"));
-        assert!(!is_pdf("application/octet-stream"));
     }
 
     // ── Binary content type detection ────────────────────────────────

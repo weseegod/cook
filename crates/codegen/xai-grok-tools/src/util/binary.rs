@@ -1,12 +1,12 @@
 /// Known binary file extensions — skip content reading for these.
-/// PDF is intentionally excluded since it has dedicated handling.
 ///
-/// NOTE: opencode has its own local copy of this list.
+/// NOTE: read tools classify by this list, so PDF and PPTX (no text extraction) are
+/// refusals here rather than readable documents.
 pub const BINARY_EXTENSIONS: &[&str] = &[
     "7z", "a", "avi", "avif", "bin", "bmp", "class", "dat", "dll", "doc", "docx", "dylib", "exe",
     "gif", "gz", "ico", "jar", "jpeg", "jpg", "lib", "mov", "mp3", "mp4", "o", "obj", "odp", "ods",
-    "odt", "png", "ppt", "pyc", "pyd", "pyo", "qoi", "rar", "so", "tar", "tif", "tiff", "war",
-    "wasm", "webp", "xls", "xlsx", "zip",
+    "odt", "pdf", "png", "ppt", "pptx", "pyc", "pyd", "pyo", "qoi", "rar", "so", "tar", "tif",
+    "tiff", "war", "wasm", "webp", "xls", "xlsx", "zip",
 ];
 
 const SAMPLE_SIZE: usize = 8192;
@@ -55,27 +55,17 @@ mod tests {
     }
 
     #[test]
-    fn pdf_not_in_binary_extensions() {
-        assert!(
-            !BINARY_EXTENSIONS.contains(&"pdf"),
-            "pdf must not be in BINARY_EXTENSIONS"
-        );
-        assert!(
-            !is_binary("pdf", &[]),
-            "pdf extension alone should not be binary"
-        );
-    }
-
-    #[test]
-    fn pptx_not_in_binary_extensions() {
-        assert!(
-            !BINARY_EXTENSIONS.contains(&"pptx"),
-            "pptx must not be in BINARY_EXTENSIONS — it has dedicated handling"
-        );
-        assert!(
-            !is_binary("pptx", &[]),
-            "pptx extension alone should not be binary"
-        );
+    fn pdf_and_pptx_are_binary() {
+        // No text extraction for these, so a read is refused by extension.
+        for ext in ["pdf", "pptx"] {
+            assert!(
+                BINARY_EXTENSIONS.contains(&ext),
+                "{ext} must be in BINARY_EXTENSIONS"
+            );
+            assert!(is_binary(ext, &[]), "{ext} extension alone is binary");
+        }
+        assert!(is_binary("pdf", b"%PDF-1.4"));
+        assert!(is_binary("pptx", b"PK\x03\x04"));
     }
 
     #[test]

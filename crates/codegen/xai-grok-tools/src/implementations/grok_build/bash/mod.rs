@@ -960,6 +960,130 @@ struct BareEchoHintState {
     call_count: usize,
 }
 
+/// An identical-output collapse must not fire on trivial output, where the stub would be as long as
+/// the text it replaces. Sizes below this stay verbatim.
+const MIN_REPEAT_COLLAPSE_BYTES: usize = 1024;
+
+/// Cap on remembered runs per (cwd, command). Older entries are dropped, so a loop that alternates
+/// between many outputs stays bounded.
+const MAX_REMEMBERED_RUNS_PER_COMMAND: usize = 16;
+
+/// One remembered foreground result for a `(cwd, command)` pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RunFingerprint {
+    output_hash: u64,
+    exit_code: i32,
+    timed_out: bool,
+    output_bytes: usize,
+}
+
+/// Session-scoped memory of foreground results keyed by `(cwd, command)`. A later run whose output
+/// bytes, exit code, and timeout flag match a remembered fingerprint gets a short model-facing
+/// prompt instead of the full text. The command still runs; only the transcript shrinks.
+#[derive(Debug, Clone, Default)]
+struct RepeatedOutputState {
+    runs: std::collections::HashMap<(String, String), Vec<RunFingerprint>>,
+}
+
+/// Stable hash of output bytes, used only for equality, never persisted.
+fn output_fingerprint(output: &[u8], exit_code: i32, timed_out: bool) -> RunFingerprint {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    output.hash(&mut hasher);
+    RunFingerprint {
+        output_hash: hasher.finish(),
+        exit_code,
+        timed_out,
+        output_bytes: output.len(),
+    }
+}
+
+/// True when `output` looks like a missing executable or a missing interpreter module, the two
+/// failures that send a model hunting the filesystem for a runtime.
+fn looks_like_missing_runtime(output: &str) -> bool {
+    const NEEDLES: [&str; 6] = [
+        ": command not found",
+        "command not found:",
+        ": not found",
+        "No module named",
+        "ModuleNotFoundError",
+        "is not recognized as an internal or external command",
+    ];
+    NEEDLES.iter().any(|needle| output.contains(needle))
+}
+
+/// One workspace runtime marker to name in the hint, nearest the workspace root first. `None` when
+/// the workspace itself carries no runtime. Reads only inside `cwd`; the host is never searched.
+fn workspace_runtime_marker(cwd: &std::path::Path) -> Option<String> {
+    const MARKERS: [&str; 7] = [
+        ".venv",
+        "venv",
+        "pyproject.toml",
+        "requirements.txt",
+        "setup.py",
+        "package.json",
+        "go.mod",
+    ];
+    if cwd.as_os_str().is_empty() || !cwd.is_dir() {
+        return None;
+    }
+    MARKERS
+        .iter()
+        .find(|marker| cwd.join(marker).exists())
+        .map(|marker| cwd.join(marker).display().to_string())
+}
+
+/// The single-line hint appended to a foreground failure when the workspace has a runtime. Names the
+/// marker so the model uses the workspace runtime instead of searching other directories. Empty when
+/// the workspace has none.
+fn workspace_runtime_hint(cwd: &std::path::Path) -> String {
+    match workspace_runtime_marker(cwd) {
+        Some(marker) => format!(
+            "\nThis workspace provides a runtime at {marker}; use it directly rather than searching other directories for one."
+        ),
+        None => String::new(),
+    }
+}
+
+/// Record this foreground result and, when it repeats an earlier run of the same command with the
+/// same output, replace the model-facing text with a short stub. The command has already run; only
+/// the transcript shrinks. Returns `None` when the text should stay verbatim.
+fn collapse_repeated_output(
+    state: &mut RepeatedOutputState,
+    cwd: &str,
+    command: &str,
+    output: &[u8],
+    exit_code: i32,
+    timed_out: bool,
+    output_file: &str,
+) -> Option<String> {
+    if output.len() < MIN_REPEAT_COLLAPSE_BYTES {
+        return None;
+    }
+    let fingerprint = output_fingerprint(output, exit_code, timed_out);
+    let runs = state
+        .runs
+        .entry((cwd.to_owned(), command.to_owned()))
+        .or_default();
+    if runs.contains(&fingerprint) {
+        let header = if timed_out {
+            "exit: killed (timeout)".to_owned()
+        } else {
+            format!("exit: {exit_code}")
+        };
+        return Some(format!(
+            "{header} [output identical to an earlier run of this command in this session; \
+             shown once, {bytes} bytes. Full output at: {output_file}]",
+            bytes = fingerprint.output_bytes
+        ));
+    }
+    runs.push(fingerprint);
+    if runs.len() > MAX_REMEMBERED_RUNS_PER_COMMAND {
+        runs.remove(0);
+    }
+    None
+}
+
 /// Returns true for simple "bare echo" commands whose primary purpose appears to be emitting a short literal message
 /// (as opposed to scripting, logging with complex formatting, or part of a larger pipeline). Starts with `echo`
 /// (possibly with output-control flags -n/-e/-E). Followed by what looks like a single message token (quoted or bare).
@@ -1557,7 +1681,8 @@ impl BashTool {
     /// The `current` template. It is the two-knob enabled template with `block_until_ms` in place of `is_background` and `timeout`.
     /// The kill-at-timeout sentences are gone. Under `current` the foreground command is never killed.
     /// Completion notifications live in the system prompt, so this copy does not repeat them.
-    fn single_knob_description_template_enabled() -> &'static str {
+    /// `pub(crate)` so the render tests in `types::template_renderer` exercise this exact text.
+    pub(crate) fn single_knob_description_template_enabled() -> &'static str {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
 Usage notes:
@@ -1566,7 +1691,9 @@ Usage notes:
   - If the output exceeds {max_output_bytes} characters,${%- if return_output_on_block | default(false) %} you keep the end and the result names the log file with the full output, which you can read or search.${%- else %} the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.${%- endif %}
   - Set `${{ params.execute.block_until_ms }}` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
   - The shell is already in the workspace. Pass ${{ params.execute.workdir }} instead of `cd <dir> &&`.
-  - Prefer grep, glob, list_dir, read_file, search_replace, and write over shell grep, rg, find, ls, cat, head, tail, sed, awk, or echo; use those shell commands when the tool you need is not in your tool list.
+${%- if tools.by_kind.search or tools.by_kind.list or tools.by_kind.read or tools.by_kind.edit or tools.by_kind.write %}
+  - Prefer the dedicated tools over the shell when one exists${%- if tools.by_kind.search %}; ${{ tools.by_kind.search }} for content search${%- endif %}${%- if tools.by_kind.list %}; ${{ tools.by_kind.list }} for listing files${%- endif %}${%- if tools.by_kind.read %}; ${{ tools.by_kind.read }} for reading files${%- endif %}${%- if tools.by_kind.edit %}; ${{ tools.by_kind.edit }} for editing files${%- endif %}${%- if tools.by_kind.write %}; ${{ tools.by_kind.write }} for writing files${%- endif %}. Use the shell for anything that has no dedicated tool.
+${%- endif %}
   - Put independent calls in one response.${%- if not shell_uses_semicolon | default(false) %} Chain dependent commands with `&&`.${%- endif %}
 ${%- if shell_uses_semicolon %}
   - '&&' is not supported in this shell; chain sequential commands with ';'.
@@ -2324,6 +2451,34 @@ impl xai_tool_runtime::Tool for BashTool {
                 was_bare_echo: false,
             };
             bash.output_for_prompt = format_default_prompt(&bash);
+
+            // One identical-output collapse per repeated command: the transcript keeps the first
+            // full result and shrinks later repeats. The command above has already run either way.
+            {
+                let mut res = resources.lock().await;
+                let state = res.get_or_default::<RepeatedOutputState>();
+                if let Some(stub) = collapse_repeated_output(
+                    state,
+                    &bash.current_dir,
+                    &bash.command,
+                    &bash.output,
+                    bash.exit_code,
+                    bash.timed_out,
+                    &bash.output_file,
+                ) {
+                    bash.output_for_prompt = stub;
+                }
+            }
+
+            // A missing executable or module inside a workspace that ships its own runtime is the
+            // failure that sends a model hunting the filesystem. Name the workspace marker once.
+            if bash.exit_code != 0 && looks_like_missing_runtime(&bash.output_for_prompt) {
+                bash.output_for_prompt
+                    .push_str(&workspace_runtime_hint(std::path::Path::new(
+                        &bash.current_dir,
+                    )));
+            }
+
             if params.return_output_on_block && bash.timed_out {
                 let block_param = Self::execute_param_name(&resources, "block_until_ms").await;
                 bash.output_for_prompt.push_str(&format!(
@@ -2534,9 +2689,14 @@ mod tests {
         captured_bg_request: CapturedRequest,
         /// Captured foreground request for assertions.
         captured_fg_request: CapturedRequest,
+        /// Number of foreground `run()` calls, so a test can prove a collapsed command still ran.
+        run_count: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
-
     impl MockTerminal {
+        /// Counter that survives `make_resources`, so a test can assert the command ran.
+        fn run_count_handle(&self) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+            self.run_count.clone()
+        }
         fn success(output: &str, exit_code: i32) -> Self {
             Self {
                 foreground_result: Ok(TerminalRunResult {
@@ -2554,6 +2714,7 @@ mod tests {
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
                 captured_fg_request: CapturedRequest::default(),
+                run_count: Default::default(),
             }
         }
 
@@ -2574,6 +2735,7 @@ mod tests {
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
                 captured_fg_request: CapturedRequest::default(),
+                run_count: Default::default(),
             }
         }
 
@@ -2585,6 +2747,7 @@ mod tests {
                 bg_error: Some("command failed".to_string()),
                 captured_bg_request: CapturedRequest::default(),
                 captured_fg_request: CapturedRequest::default(),
+                run_count: Default::default(),
             }
         }
 
@@ -2605,6 +2768,7 @@ mod tests {
                 bg_error: None,
                 captured_bg_request: CapturedRequest::default(),
                 captured_fg_request: CapturedRequest::default(),
+                run_count: Default::default(),
             }
         }
 
@@ -2630,6 +2794,8 @@ mod tests {
             request: TerminalRunRequest,
         ) -> Result<TerminalRunResult, ComputerError> {
             *self.captured_fg_request.lock().unwrap() = Some(request);
+            self.run_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             self.foreground_result.clone()
         }
 
@@ -2713,6 +2879,15 @@ mod tests {
                 ..BashParams::default()
             },
         )
+    }
+
+    /// Resources plus the mock's run counter, so a test can prove that a
+    /// collapsed command still executed.
+    fn make_resources_counted(
+        mock: MockTerminal,
+    ) -> (Resources, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let counter = mock.run_count_handle();
+        (make_resources(mock), counter)
     }
 
     fn make_input(command: &str) -> BashToolInput {
@@ -3302,6 +3477,274 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("command failed"));
+    }
+
+    /// The collapse path keeps working across identical runs of the same command in one session.
+    #[test]
+    fn collapse_repeated_output_shrinks_the_second_identical_run() {
+        let mut state = RepeatedOutputState::default();
+        let output = "failing test output\n".repeat(200);
+        let bytes = output.as_bytes();
+
+        assert!(
+            collapse_repeated_output(&mut state, "/w", "pytest -q", bytes, 1, false, "/tmp/a.log")
+                .is_none(),
+            "the first run must keep the full text"
+        );
+        let stub =
+            collapse_repeated_output(&mut state, "/w", "pytest -q", bytes, 1, false, "/tmp/b.log")
+                .expect("the second identical run must collapse");
+        assert!(
+            stub.starts_with("exit: 1"),
+            "the stub must carry the exit code: {stub}"
+        );
+        assert!(
+            stub.contains("identical to an earlier run"),
+            "the stub must say why the text is short: {stub}"
+        );
+        assert!(
+            stub.contains("/tmp/b.log"),
+            "the stub must point at the new run's log: {stub}"
+        );
+        assert!(
+            stub.len() < 400,
+            "the stub must be far shorter than the output it replaced: {} bytes",
+            stub.len()
+        );
+    }
+
+    #[test]
+    fn collapse_repeated_output_keeps_a_different_run_verbatim() {
+        let mut state = RepeatedOutputState::default();
+        let first = "one output\n".repeat(200);
+        let second = "another output\n".repeat(200);
+
+        assert!(
+            collapse_repeated_output(
+                &mut state,
+                "/w",
+                "pytest -q",
+                first.as_bytes(),
+                1,
+                false,
+                "/tmp/a.log"
+            )
+            .is_none()
+        );
+        assert!(
+            collapse_repeated_output(
+                &mut state,
+                "/w",
+                "pytest -q",
+                second.as_bytes(),
+                1,
+                false,
+                "/tmp/b.log"
+            )
+            .is_none(),
+            "different output must stay verbatim"
+        );
+    }
+
+    #[test]
+    fn collapse_repeated_output_ignores_small_output() {
+        let mut state = RepeatedOutputState::default();
+        let small = b"ok\n";
+
+        assert!(
+            collapse_repeated_output(&mut state, "/w", "ls", small, 0, false, "/tmp/a.log")
+                .is_none()
+        );
+        assert!(
+            collapse_repeated_output(&mut state, "/w", "ls", small, 0, false, "/tmp/b.log")
+                .is_none(),
+            "output under the threshold is not worth a stub"
+        );
+    }
+
+    #[test]
+    fn collapse_repeated_output_separates_commands_and_dirs() {
+        let mut state = RepeatedOutputState::default();
+        let output = "failing test output\n".repeat(200);
+        let bytes = output.as_bytes();
+
+        assert!(
+            collapse_repeated_output(&mut state, "/w", "pytest -q", bytes, 1, false, "/tmp/a.log")
+                .is_none()
+        );
+        assert!(
+            collapse_repeated_output(&mut state, "/w", "pytest -x", bytes, 1, false, "/tmp/b.log")
+                .is_none(),
+            "a different command is a different entry"
+        );
+        assert!(
+            collapse_repeated_output(
+                &mut state,
+                "/other",
+                "pytest -q",
+                bytes,
+                1,
+                false,
+                "/tmp/c.log"
+            )
+            .is_none(),
+            "the same command in another directory is a different entry"
+        );
+    }
+
+    /// A later identical run must still execute: the terminal sees two foreground calls.
+    #[tokio::test]
+    async fn repeated_foreground_command_still_runs_and_shrinks() {
+        let big = "x".repeat(MIN_REPEAT_COLLAPSE_BYTES + 100);
+        let (resources, counter) = make_resources_counted(MockTerminal::success(&big, 0));
+        let shared = resources.into_shared();
+        let tool = BashTool;
+
+        let first =
+            xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), make_input("pytest -q"))
+                .await
+                .unwrap();
+        let second =
+            xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), make_input("pytest -q"))
+                .await
+                .unwrap();
+
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the repeated command must still reach the terminal"
+        );
+        match (first, second) {
+            (BashToolOutput::Foreground(a), BashToolOutput::Foreground(b)) => {
+                assert!(
+                    a.output_for_prompt.len() > MIN_REPEAT_COLLAPSE_BYTES,
+                    "the first run keeps the full text"
+                );
+                assert!(
+                    b.output_for_prompt.contains("identical to an earlier run"),
+                    "the second run collapses: {}",
+                    b.output_for_prompt
+                );
+                assert!(
+                    b.output_for_prompt.starts_with("exit: 0"),
+                    "the collapsed text keeps the exit code: {}",
+                    b.output_for_prompt
+                );
+            }
+            other => panic!("expected two foreground outputs, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_runtime_detection_matches_shell_and_python_failures() {
+        assert!(looks_like_missing_runtime(
+            "bash: python: command not found"
+        ));
+        assert!(looks_like_missing_runtime("sh: 1: pytest: not found"));
+        assert!(looks_like_missing_runtime(
+            "ModuleNotFoundError: No module named 'numpy'"
+        ));
+        assert!(!looks_like_missing_runtime("1 passed in 0.03s"));
+        assert!(!looks_like_missing_runtime("exit: 0"));
+    }
+
+    #[test]
+    fn workspace_runtime_hint_names_only_a_present_marker() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert!(
+            workspace_runtime_hint(tmp.path()).is_empty(),
+            "an empty workspace has no runtime to name"
+        );
+
+        std::fs::create_dir_all(tmp.path().join(".venv")).unwrap();
+        let hint = workspace_runtime_hint(tmp.path());
+        assert!(
+            hint.contains(".venv"),
+            "the hint must name the marker: {hint}"
+        );
+        assert!(
+            hint.contains("use it directly"),
+            "the hint must tell the model to use the workspace runtime: {hint}"
+        );
+    }
+
+    /// The hint is appended to a missing-module failure only, and only when the workspace has a marker.
+    #[tokio::test]
+    async fn foreground_failure_gets_the_workspace_runtime_hint() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".venv")).unwrap();
+        let output =
+            "Traceback (most recent call last):\nModuleNotFoundError: No module named 'numpy'\n";
+        let mut resources = make_resources(MockTerminal::success(output, 1));
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        resources.insert(SessionFolder(tmp.path().to_path_buf()));
+
+        let result = xai_tool_runtime::Tool::run(
+            &BashTool,
+            test_ctx(resources.into_shared()),
+            make_input("python3 -c 'import numpy'"),
+        )
+        .await
+        .unwrap();
+
+        match result {
+            BashToolOutput::Foreground(bash) => {
+                assert!(
+                    bash.output_for_prompt.contains(".venv"),
+                    "the workspace marker must be named: {}",
+                    bash.output_for_prompt
+                );
+            }
+            other => panic!("expected a foreground output, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn workspace_less_failure_adds_no_hint() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let output =
+            "Traceback (most recent call last):\nModuleNotFoundError: No module named 'numpy'\n";
+        let mut resources = make_resources(MockTerminal::success(output, 1));
+        resources.insert(Cwd(tmp.path().to_path_buf()));
+        resources.insert(SessionFolder(tmp.path().to_path_buf()));
+
+        let result = xai_tool_runtime::Tool::run(
+            &BashTool,
+            test_ctx(resources.into_shared()),
+            make_input("python3 -c 'import numpy'"),
+        )
+        .await
+        .unwrap();
+
+        match result {
+            BashToolOutput::Foreground(bash) => {
+                assert!(
+                    !bash.output_for_prompt.contains("use it directly"),
+                    "no marker means no hint: {}",
+                    bash.output_for_prompt
+                );
+            }
+            other => panic!("expected a foreground output, got {other:?}"),
+        }
+    }
+
+    /// Reading outside the workspace keeps working; the tool never refuses a path.
+    #[tokio::test]
+    async fn outside_workspace_command_is_not_refused() {
+        let (resources, counter) = make_resources_counted(MockTerminal::success("found\n", 0));
+        let result = xai_tool_runtime::Tool::run(
+            &BashTool,
+            test_ctx(resources.into_shared()),
+            make_input("find / -maxdepth 2 -name 'python*'"),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+        match result {
+            BashToolOutput::Foreground(bash) => assert_eq!(bash.exit_code, 0),
+            other => panic!("expected a foreground output, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -5036,6 +5479,8 @@ mod tests {
         }
 
         /// A renderer set up the way the registry does it, with every bash param and the task tools.
+        /// The dedicated-tool kinds match the coding surface the audit runs on: read, edit, and write
+        /// are registered; there is no search tool and no list tool.
         fn renderer(system_reminders_enabled: bool) -> TemplateRenderer {
             TemplateRenderer::new(
                 HashMap::from([
@@ -5044,6 +5489,9 @@ mod tests {
                         ToolKind::BackgroundTaskAction,
                         "background_task".to_string(),
                     ),
+                    (ToolKind::Read, "read_file".to_string()),
+                    (ToolKind::Edit, "search_replace".to_string()),
+                    (ToolKind::Write, "write".to_string()),
                 ]),
                 HashMap::from([(
                     ToolKind::Execute,
@@ -5498,7 +5946,7 @@ mod tests {
             BashTool::rendered_description(None, &renderer(reminders), params, BashVersion::Current)
         }
 
-        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with background_task.\n  - background_task reads, waits for, or stops a background command (actions \"output\", \"wait\", \"kill\"). Background commands run until they exit, until you stop them, or until the 10h background cap. background_task action \"kill\" sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Prefer grep, glob, list_dir, read_file, search_replace, and write over shell grep, rg, find, ls, cat, head, tail, sed, awk, or echo; use those shell commands when the tool you need is not in your tool list.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
+        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with background_task.\n  - background_task reads, waits for, or stops a background command (actions \"output\", \"wait\", \"kill\"). Background commands run until they exit, until you stop them, or until the 10h background cap. background_task action \"kill\" sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Prefer the dedicated tools over the shell when one exists; read_file for reading files; search_replace for editing files; write for writing files. Use the shell for anything that has no dedicated tool.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
 
         /// The `current` description is the two-knob text with `block_until_ms` in place of `timeout` and `is_background`.
         /// Retired tool names and the completion-notification essay are gone.
@@ -5507,8 +5955,13 @@ mod tests {
         fn current_description_is_the_two_knob_text_with_minimal_edits() {
             let out = desc(&BashParams::default(), true);
             assert_eq!(out, CURRENT_DESCRIPTION_PRODUCT);
-            for required in ["block_until_ms", "workdir", "grep", "background_task"] {
+            for required in ["block_until_ms", "workdir", "read_file", "background_task"] {
                 assert!(out.contains(required), "{required:?} must appear: {out}");
+            }
+            // The dedicated-tool line names only kinds the toolset registers. This fixture has
+            // read, edit, and write, and no search or list tool.
+            for absent in ["grep", "glob", "list_dir"] {
+                assert!(!out.contains(absent), "{absent:?} must not appear: {out}");
             }
             for retired in [
                 "is_background",
@@ -5525,7 +5978,7 @@ mod tests {
             ] {
                 assert!(!out.contains(retired), "{retired:?} must not appear: {out}");
             }
-            // The block ceiling is explained once and the search tools are named in one line.
+            // The block ceiling is explained once.
             assert_eq!(
                 out.matches("You can specify an optional").count(),
                 1,
@@ -5827,8 +6280,6 @@ mod tests {
             for note in [
                 "workdir",
                 "workspace",
-                "grep",
-                "glob",
                 "read_file",
                 "search_replace",
                 "write",
@@ -5836,6 +6287,10 @@ mod tests {
                 "&&",
             ] {
                 assert!(headless.contains(note), "missing {note} in {headless}");
+            }
+            // No search tool and no list tool on this surface, so the line must not promise them.
+            for absent in ["grep", "glob", "list_dir"] {
+                assert!(!headless.contains(absent), "{absent} in {headless}");
             }
             let deadline = headless
                 .lines()

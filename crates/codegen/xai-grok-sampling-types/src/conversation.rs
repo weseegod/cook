@@ -316,7 +316,7 @@ pub struct ToolResultItem {
     pub tool_call_id: String,
     /// The result content
     pub content: Arc<str>,
-    /// Inline images associated with this tool result (e.g. from `read_file` on an image/PDF).
+    /// Inline images associated with this tool result (e.g. from `read_file` on an image).
     /// When non-empty, the API conversion layers embed these directly in the tool result message rather than in a separate follow-up user message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ContentPart>,
@@ -2432,8 +2432,10 @@ mod tests {
         assert_eq!(usage.cached_prompt_tokens, 400);
 
         // A reported field with zero hits is still "present".
-        assert!(TokenUsage::from(reported(Some(PromptTokensDetails::default())))
-            .cached_prompt_tokens_present);
+        assert!(
+            TokenUsage::from(reported(Some(PromptTokensDetails::default())))
+                .cached_prompt_tokens_present
+        );
 
         // No details object at all: the cache-hit share is unknown, never zero.
         let usage = TokenUsage::from(reported(None));
@@ -4265,7 +4267,11 @@ mod tests {
         req.items.push(user);
 
         assert_eq!(req.strip_images_for_text_only(), 1);
-        assert_eq!(req.strip_images_for_text_only(), 0, "second pass is a no-op");
+        assert_eq!(
+            req.strip_images_for_text_only(),
+            0,
+            "second pass is a no-op"
+        );
         assert_eq!(req.strip_images_for_text_only(), 0);
     }
 
@@ -4289,7 +4295,10 @@ mod tests {
                     ConversationItem::User(u) => Some(u),
                     _ => None,
                 })
-                .all(|u| !u.content.iter().any(|p| matches!(p, ContentPart::Image { .. }))),
+                .all(|u| !u
+                    .content
+                    .iter()
+                    .any(|p| matches!(p, ContentPart::Image { .. }))),
             "no image parts may survive"
         );
     }
@@ -4583,7 +4592,9 @@ mod tests {
         let mut items = vec![ConversationItem::assistant("")];
         inject_streaming_text_fallback(&mut items, "Hi! How can I help?".into());
         match items.as_slice() {
-            [ConversationItem::Assistant(a)] => assert_eq!(a.content.as_ref(), "Hi! How can I help?"),
+            [ConversationItem::Assistant(a)] => {
+                assert_eq!(a.content.as_ref(), "Hi! How can I help?")
+            }
             other => panic!("expected one assistant, got {other:?}"),
         }
     }

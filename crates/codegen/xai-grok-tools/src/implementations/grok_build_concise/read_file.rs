@@ -181,8 +181,6 @@ mod tests {
             path: "test.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)

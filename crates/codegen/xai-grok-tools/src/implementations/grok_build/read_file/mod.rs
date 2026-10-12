@@ -6,9 +6,6 @@
 //! - Notifications emitted via `NotificationHandle` from Resources.
 //!
 //! Reminders are NOT implemented here (Phase 5).
-use crate::implementations::read_file::{
-    handle_pdf, is_pdf_file, raw_text_to_file_content, run_document_extraction,
-};
 use crate::types::compat::INSTRUCTION_FILENAMES;
 use crate::types::context::TruncationConfig;
 use crate::types::output::{FileContent, ReadFileOutput};
@@ -87,9 +84,7 @@ pub(crate) fn split_trailing_continuation_marker(content: &str) -> (&str, Option
         (content, None)
     }
 }
-pub use crate::implementations::read_file::{
-    FileMetadata, PDF_MAX_PAGES_PER_READ, bytes_to_metadata, parse_page_range,
-};
+pub use crate::implementations::read_file::{FileMetadata, bytes_to_metadata};
 /// Max size of one streamed delta: strictly below `stream_chunk`'s 16 KiB
 /// cap (so a delta is never capped/gapped) and char-aligned (so concatenated
 /// deltas reproduce the terminal `content` byte-for-byte).
@@ -107,29 +102,6 @@ static READ_FILE_CAPABILITIES: LazyLock<xai_tool_protocol::ToolCapabilities> =
         }),
         ..Default::default()
     });
-const MAX_PPTX_BYTES: usize = 50 * 1024 * 1024;
-const PPTX_PROCESS_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-async fn handle_pptx(
-    file_bytes: Vec<u8>,
-    path: &std::path::Path,
-) -> Result<ReadFileOutput, xai_tool_runtime::ToolError> {
-    run_document_extraction(
-        file_bytes,
-        path,
-        "PPTX",
-        MAX_PPTX_BYTES,
-        PPTX_PROCESS_TIMEOUT,
-        extract_pptx_text,
-    )
-    .await
-}
-/// Extract text from a PPTX file (zip + DrawingML text runs). Returns line-numbered text via the
-/// shared `raw_text_to_file_content` helper.
-fn extract_pptx_text(file_bytes: Vec<u8>) -> Result<ReadFileOutput, String> {
-    let text = crate::implementations::read_file::pptx::extract_pptx_text_from_bytes(&file_bytes)
-        .map_err(|e| format!("Failed to extract text from PPTX: {e}"))?;
-    Ok(raw_text_to_file_content(text))
-}
 /// Description for default toolset (full/non-concise)
 pub(crate) const DESCRIPTION_FULL: &str = r#"Read a file.
 
@@ -138,9 +110,7 @@ Usage:
 - By default, it reads up to {max_lines_read} lines starting from the beginning of the file${%- if whole_read.skill_markdown and whole_read.instruction_files %} (SKILL.md and AGENTS.md/CLAUDE.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- elif whole_read.skill_markdown %} (SKILL.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- elif whole_read.instruction_files %} (AGENTS.md/CLAUDE.md files are always returned whole; ${{ params.read.offset }} and ${{ params.read.limit }} are ignored for them)${%- endif %}
 - Line numbers (1-based) appear as anchors in the format LINE_NUMBER→LINE_CONTENT on the first returned line and on every 10th line of the file; the lines in between show content only. Count from the nearest anchor when referring to a specific line
 - When the paths are already known, read those files in one turn instead of one file per turn.
-- Do not read the same span again. When more of a file is needed, read a larger window instead of another short slice.
-- This tool can read PDF files (.pdf), PowerPoint files (.pptx), Jupyter notebooks (.ipynb files), and image files (e.g. PNG, JPG, etc).
-- When reading an image file the contents are presented visually as this tool uses multimodal LLMs."#;
+- Do not read the same span again. When more of a file is needed, read a larger window instead of another short slice."#;
 /// Schema-only advertised default (runtime still treats omit as line 1 via unwrap_or).
 fn schema_default_offset() -> Option<i64> {
     Some(1)
@@ -169,16 +139,6 @@ pub struct ReadFileInput {
         description = "The number of lines to read. Only provide if the file is too large to read at once."
     )]
     pub limit: Option<usize>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(
-        description = "Page range for PDF files (e.g. '1-5', '3', '10-'). Required for PDFs with more than 10 pages. Max 20 pages per call. Ignored for non-PDF files."
-    )]
-    pub pages: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(
-        description = "Output format for PDF files. 'image' (default) renders pages as images. 'text' extracts text content. Ignored for non-PDF files."
-    )]
-    pub format: Option<String>,
 }
 async fn cursor_rules_on_read_enabled(resources: &SharedResources) -> bool {
     let res = resources.lock().await;
@@ -407,6 +367,16 @@ pub fn extract_file_content_lines(
         extracted_images,
     }
 }
+/// Short, stable rejection for the file classes the coding surface does not read: PDF, PowerPoint,
+/// and raster images. The extractors stay compiled in `implementations::read_file` for other hosts;
+/// this reader never calls them and never attaches image bytes.
+fn unsupported_binary_read(path: &std::path::Path, kind: &str) -> ReadFileOutput {
+    ReadFileOutput::FileReadError(format!(
+        "Cannot read {kind} file: {}. This tool returns source text only.",
+        path.display()
+    ))
+}
+
 /// Core read-file logic shared by `ReadFileTool` and `ReadFileConciseTool`. Always uses the padded
 /// `content` field. Concise post-processing (swapping in `content_concise`) is done by
 /// `ReadFileConciseTool` after this returns.
@@ -547,13 +517,8 @@ pub(crate) async fn run_read_file(
             &file_bytes,
             &metadata.mime_type,
         ) {
-            let output = crate::implementations::read_file::image::image_read_output(
-                file_bytes,
-                metadata.mime_type,
-            )
-            .await;
-            observed.note_typed_output(&output);
-            return Ok(output);
+            observed.note_binary();
+            return Ok(unsupported_binary_read(&path, "image"));
         }
         if let Some(svg_text) = crate::implementations::read_file::extract_svg_text(&file_bytes) {
             file_bytes = svg_text.into_bytes();
@@ -572,28 +537,8 @@ pub(crate) async fn run_read_file(
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    if is_pdf_file(&file_bytes, &extension) {
-        let mut output =
-            handle_pdf(file_bytes, &path, input.pages, input.format.as_deref()).await?;
-        if let ReadFileOutput::FileContent(ref mut fc) = output {
-            crate::implementations::cursor_rules_on_read::append_cursor_rules_for_read(
-                cursor_rules_on_read_enabled(&resources).await,
-                resources.clone(),
-                &cwd,
-                &path,
-                &mut fc.content,
-                &mut fc.content_concise,
-            )
-            .await;
-        }
-        observed.note_typed_output(&output);
-        return Ok(output);
-    }
-    if extension == "pptx" {
-        let output = handle_pptx(file_bytes, &path).await?;
-        observed.note_typed_output(&output);
-        return Ok(output);
-    }
+    // PDF and PowerPoint carry no text extraction: they fall through to the binary guard
+    // below, which refuses them by extension.
     if crate::util::binary::is_binary(&extension, &file_bytes) {
         tracing::info!(
             path = %path.display(),
@@ -790,8 +735,8 @@ impl xai_tool_runtime::Tool for ReadFileTool {
         READ_FILE_CAPABILITIES.clone()
     }
     /// Streaming entry point. Only the line-oriented text path streams: the final `content` is
-    /// replayed as char-aligned deltas whose concatenation reproduces the card byte-for-byte;
-    /// image/PDF/PPTX stay terminal-only. Gated by `WorkspaceViewerContext::stream_tool_progress`.
+    /// replayed as char-aligned deltas whose concatenation reproduces the card byte-for-byte.
+    /// Gated by `WorkspaceViewerContext::stream_tool_progress`.
     async fn execute(
         &self,
         ctx: xai_tool_runtime::ToolCallContext,
@@ -897,7 +842,6 @@ impl ReadFileTool {
 mod tests {
     use super::*;
     use crate::computer::local::LocalFs;
-    use crate::implementations::read_file::MAX_PDF_BYTES;
     use crate::implementations::read_file::compress_image_for_conversation;
     use crate::implementations::skills::types::SkillInfo;
     use crate::notification::types::ToolNotificationHandle;
@@ -973,6 +917,25 @@ mod tests {
             .is_err()
         );
     }
+    /// The advertised schema is text-only. `pages` and `format` went away with PDF support, so the
+    /// contract no longer offers a page range or an output format.
+    #[test]
+    fn read_file_schema_has_no_pdf_fields() {
+        let schema = crate::registry::types::generate_schema::<ReadFileInput>();
+        let properties = schema["properties"].as_object().expect("properties");
+        for present in ["target_file", "offset", "limit"] {
+            assert!(
+                properties.contains_key(present),
+                "{present} must be advertised: {schema}"
+            );
+        }
+        for absent in ["pages", "format"] {
+            assert!(
+                !properties.contains_key(absent),
+                "{absent} must not be advertised: {schema}"
+            );
+        }
+    }
     /// The cap is token-granular over bytes (not chars): text of exactly `READ_FILE_MAX_TOKENS` tokens
     /// fits, and it takes a whole extra token's worth of bytes to exceed it.
     #[test]
@@ -1041,8 +1004,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let out = xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(shared), input)
             .await
@@ -1088,8 +1049,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: Some(50),
             limit: None,
-            pages: None,
-            format: None,
         };
         let out = xai_tool_runtime::Tool::run(&ReadFileTool, ctx, input)
             .await
@@ -1114,8 +1073,6 @@ mod tests {
             path: "small.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let out = xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(shared), input)
             .await
@@ -1135,8 +1092,6 @@ mod tests {
             path: "SKILL.md".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let out = xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(shared), input)
             .await
@@ -1166,8 +1121,6 @@ mod tests {
             path: "test.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let shared = resources.into_shared();
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(shared.clone()), input)
@@ -1193,8 +1146,6 @@ mod tests {
             path: "nonexistent.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
@@ -1223,8 +1174,6 @@ mod tests {
             path: "nonexistent.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1246,8 +1195,6 @@ mod tests {
             path: path.to_owned(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result =
             xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
@@ -1378,8 +1325,6 @@ mod tests {
             path: "subdir".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
@@ -1408,8 +1353,6 @@ mod tests {
             path: "subdir".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1431,8 +1374,6 @@ mod tests {
             path: "empty.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1457,8 +1398,6 @@ mod tests {
             path: "multi.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1483,8 +1422,6 @@ mod tests {
             path: file_path.to_string_lossy().to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1506,8 +1443,6 @@ mod tests {
             path: "hello.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1530,8 +1465,6 @@ mod tests {
             path: "test.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1562,8 +1495,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1598,8 +1529,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: Some(1),
             limit: Some(800),
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1648,8 +1577,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: Some(1),
             limit: Some(800),
-            pages: None,
-            format: None,
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions
@@ -1833,8 +1760,6 @@ mod tests {
             path: "baidu.svg".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1868,8 +1793,6 @@ mod tests {
             path: "preview.svg".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1915,8 +1838,6 @@ mod tests {
             path: "build/output.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1951,8 +1872,6 @@ mod tests {
             path: "build/output.o".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -1986,8 +1905,6 @@ mod tests {
             path: "build/output.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let mut ctx = test_ctx(resources.into_shared());
         ctx.extensions.insert(xai_tool_runtime::BehaviorVersion(
@@ -2021,8 +1938,6 @@ mod tests {
             path: "src/main.rs".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2049,8 +1964,6 @@ mod tests {
             path: "debug.log".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2079,8 +1992,6 @@ mod tests {
             path: "build/output.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2368,8 +2279,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: ".grok/skills/commit/SKILL.md".to_string(),
             offset: Some(3),
             limit: Some(1),
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2415,8 +2324,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "skills/SKILL.md".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2437,8 +2344,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "skills/SKILL.md".to_string(),
             offset: Some(3),
             limit: Some(2),
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2468,8 +2373,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: ".grok/skills/my-skill/reference.md".to_string(),
             offset: Some(3),
             limit: Some(1),
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2508,8 +2411,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "sub/AGENTS.md".to_string(),
             offset: Some(3),
             limit: Some(1),
-            pages: None,
-            format: None,
         };
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
             .await
@@ -2565,8 +2466,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
                 path: rel_path.to_string(),
                 offset: Some(3),
                 limit: Some(1),
-                pages: None,
-                format: None,
             };
             let result = xai_tool_runtime::Tool::run(
                 &ReadFileTool,
@@ -2602,90 +2501,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             );
         }
     }
-    #[test]
-    fn parse_single_page() {
-        assert_eq!(parse_page_range("3", 10).unwrap(), vec![2]);
-    }
-    #[test]
-    fn parse_page_range_inclusive() {
-        assert_eq!(parse_page_range("2-5", 10).unwrap(), vec![1, 2, 3, 4]);
-    }
-    #[test]
-    fn parse_open_ended_range() {
-        assert_eq!(parse_page_range("8-", 10).unwrap(), vec![7, 8, 9]);
-    }
-    #[test]
-    fn parse_comma_separated_mixed() {
-        assert_eq!(
-            parse_page_range("1,3,7-9", 10).unwrap(),
-            vec![0, 2, 6, 7, 8]
-        );
-    }
-    #[test]
-    fn parse_deduplicates_and_sorts() {
-        assert_eq!(parse_page_range("5,3,1,3,5", 10).unwrap(), vec![0, 2, 4]);
-    }
-    #[test]
-    fn parse_page_range_clamps_open_end() {
-        assert_eq!(parse_page_range("8-", 9).unwrap(), vec![7, 8]);
-    }
-    #[test]
-    fn parse_page_range_rejects_zero() {
-        let err = parse_page_range("0", 10).unwrap_err();
-        assert!(err.contains("out of range"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_rejects_beyond_count() {
-        let err = parse_page_range("11", 10).unwrap_err();
-        assert!(err.contains("out of range"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_rejects_start_gt_end() {
-        let err = parse_page_range("5-3", 10).unwrap_err();
-        assert!(err.contains("start must be"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_rejects_invalid_number() {
-        let err = parse_page_range("abc", 10).unwrap_err();
-        assert!(err.contains("invalid page number"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_rejects_empty() {
-        let err = parse_page_range("", 10).unwrap_err();
-        assert!(err.contains("no pages specified"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_rejects_only_commas() {
-        let err = parse_page_range(",,,", 10).unwrap_err();
-        assert!(err.contains("no pages specified"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_rejects_too_many_pages() {
-        let err = parse_page_range("1-21", 30).unwrap_err();
-        assert!(err.contains("maximum is"), "got: {err}");
-    }
-    #[test]
-    fn parse_page_range_max_pages_ok() {
-        let result = parse_page_range("1-20", 30).unwrap();
-        assert_eq!(result.len(), 20);
-    }
-    #[test]
-    fn parse_page_range_whitespace_tolerance() {
-        assert_eq!(parse_page_range(" 1 , 3 , 5 ", 10).unwrap(), vec![0, 2, 4]);
-    }
-    #[test]
-    fn parse_page_range_single_page_doc() {
-        assert_eq!(parse_page_range("1", 1).unwrap(), vec![0]);
-    }
-    #[test]
-    fn parse_page_range_range_clamped_to_doc_end() {
-        assert_eq!(parse_page_range("1-100", 5).unwrap(), vec![0, 1, 2, 3, 4]);
-    }
-    #[test]
-    fn parse_page_range_zero_page_doc() {
-        let err = parse_page_range("1", 0).unwrap_err();
-        assert!(err.contains("out of range"), "got: {err}");
-    }
     async fn run_read_file_on(filename: &str, content: &[u8]) -> ReadFileOutput {
         let tmp = TempDir::new().unwrap();
         std::fs::write(tmp.path().join(filename), content).unwrap();
@@ -2694,8 +2509,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: filename.to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         xai_tool_runtime::Tool::run(&ReadFileTool, test_ctx(resources.into_shared()), input)
             .await
@@ -2729,56 +2542,43 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             other => panic!("Expected FileReadError for binary content, got {:?}", other),
         }
     }
+    /// A `.pdf` and a `.pptx` carry no text extraction, so a read is refused by extension — same
+    /// short sentence as any other binary file. No page is rendered and no slide text is parsed.
     #[tokio::test]
-    async fn pdf_detection_by_extension() {
-        let result = run_read_file_on("bad.pdf", b"not really a pdf").await;
-        match result {
-            ReadFileOutput::FileReadError(msg) => {
-                assert!(
-                    msg.contains("PDF") || msg.contains("pdf"),
-                    "expected PDF-related error, got: {msg}"
-                );
-            }
-            other => panic!("Expected FileReadError for invalid PDF, got {:?}", other),
+    async fn pdf_and_pptx_reads_are_rejected_as_binary() {
+        for (name, bytes) in [
+            ("bad.pdf", b"not really a pdf".to_vec()),
+            ("deck.pptx", b"not a zip at all".to_vec()),
+        ] {
+            let result = run_read_file_on(name, &bytes).await;
+            let ReadFileOutput::FileReadError(msg) = result else {
+                panic!("expected FileReadError for {name}, got {result:?}");
+            };
+            assert!(msg.starts_with("Cannot read binary file:"), "{name}: {msg}");
         }
     }
+    /// A PDF whose name hides the format is still refused: the extension guard is not the only
+    /// gate the reader has, and `%PDF-` bytes are not printable text.
     #[tokio::test]
-    async fn pdf_detection_by_magic_bytes() {
+    async fn pdf_bytes_in_a_bin_file_are_rejected() {
         let result = run_read_file_on("mystery.bin", b"%PDF-1.4 invalid rest").await;
-        match result {
-            ReadFileOutput::FileReadError(msg) => {
-                assert!(
-                    msg.contains("PDF") || msg.contains("pdf"),
-                    "expected PDF-related error from magic byte detection, got: {msg}"
-                );
-            }
-            other => panic!("Expected FileReadError for corrupt PDF, got {:?}", other),
-        }
+        let ReadFileOutput::FileReadError(msg) = result else {
+            panic!("expected FileReadError, got {result:?}");
+        };
+        assert!(msg.starts_with("Cannot read binary file:"), "{msg}");
     }
+    /// A raster image is rejected as well: its bytes are never attached to the conversation.
     #[tokio::test]
-    async fn pdf_size_gate_rejects_oversized() {
-        let mut data = b"%PDF-1.4".to_vec();
-        data.resize(MAX_PDF_BYTES + 1, 0);
-        let result = run_read_file_on("huge.pdf", &data).await;
-        match result {
-            ReadFileOutput::FileReadError(msg) => {
-                assert!(
-                    msg.contains("exceeds") && msg.contains("MB"),
-                    "expected size limit error, got: {msg}"
-                );
-            }
-            other => panic!("Expected FileReadError for oversized PDF, got {:?}", other),
-        }
-    }
-    #[test]
-    fn pdf_not_caught_by_binary_guard() {
+    async fn raster_image_read_is_rejected_with_a_short_text_error() {
+        let png = make_noisy_png(4, 4);
+        let result = run_read_file_on("shot.png", &png).await;
+        let ReadFileOutput::FileReadError(msg) = result else {
+            panic!("expected FileReadError for a png read, got {result:?}");
+        };
+        assert!(msg.starts_with("Cannot read image file:"), "{msg}");
         assert!(
-            !crate::util::binary::BINARY_EXTENSIONS.contains(&"pdf"),
-            "pdf must not be in BINARY_EXTENSIONS"
-        );
-        assert!(
-            !crate::util::binary::is_binary("pdf", b"%PDF-1.4"),
-            "PDF content should not be detected as binary"
+            msg.ends_with("This tool returns source text only."),
+            "{msg}"
         );
     }
     /// Drive `execute` to completion; returns ordered deltas + terminal.
@@ -2824,8 +2624,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let resources = test_resources(tmp.path());
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
@@ -2862,8 +2660,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "f.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let mut ctx = xai_tool_runtime::ToolCallContext::default();
         ctx.extensions
@@ -2876,81 +2672,50 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
         );
         assert!(matches!(terminal, ReadFileOutput::FileContent(_)));
     }
-    /// PDF `format="text"` returns `FileContent` yet must NOT stream (returns
-    /// before the text path; PPTX shares the same early-return shape).
+    /// A refused PDF read yields the short error as the only terminal item: nothing streams.
     #[tokio::test]
-    async fn read_file_pdf_text_path_is_terminal_only() {
+    async fn read_file_pdf_read_does_not_stream() {
         let tmp = TempDir::new().unwrap();
-        let pdf_bytes = crate::implementations::read_file::pdf::make_test_pdf(&["Hello World"]);
-        std::fs::write(tmp.path().join("doc.pdf"), &pdf_bytes).unwrap();
+        std::fs::write(tmp.path().join("doc.pdf"), b"%PDF-1.4\nnot really a pdf\n").unwrap();
         let input = ReadFileInput {
             path: "doc.pdf".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: Some("text".to_string()),
         };
         let resources = test_resources(tmp.path());
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         assert!(
             deltas.is_empty(),
-            "PDF text extraction must be terminal-only, got {} deltas",
+            "a refused read must be terminal-only, got {} deltas",
             deltas.len()
         );
         assert!(
-            matches!(terminal, ReadFileOutput::FileContent(_)),
-            "PDF format=text yields FileContent, got {terminal:?}"
+            matches!(
+                terminal,
+                ReadFileOutput::FileReadError(ref msg)
+                    if msg.starts_with("Cannot read binary file:")
+            ),
+            "expected the short rejection, got {terminal:?}"
         );
     }
-    /// PDF read with the default (image) format renders to `PdfPageImages` — a
-    /// single non-incremental result, so it must not stream.
+    /// Regression: a refused read must not make a concurrent text read on the same
+    /// `Resources` stream (streamability is call-local).
     #[tokio::test]
-    async fn read_file_pdf_image_path_is_terminal_only() {
-        let tmp = TempDir::new().unwrap();
-        let pdf_bytes = crate::implementations::read_file::pdf::make_test_pdf(&["Some Text"]);
-        std::fs::write(tmp.path().join("img.pdf"), &pdf_bytes).unwrap();
-        let input = ReadFileInput {
-            path: "img.pdf".to_string(),
-            offset: None,
-            limit: None,
-            pages: None,
-            format: None,
-        };
-        let resources = test_resources(tmp.path());
-        let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
-        assert!(
-            deltas.is_empty(),
-            "PDF image rendering must be terminal-only, got {} deltas",
-            deltas.len()
-        );
-        assert!(
-            matches!(terminal, ReadFileOutput::PdfPageImages(_)),
-            "PDF default format renders images, got {terminal:?}"
-        );
-    }
-    /// Regression: a concurrent text read must not make a PDF-text read on
-    /// the same `Resources` stream (streamability is call-local).
-    #[tokio::test]
-    async fn read_file_concurrent_text_and_pdf_text_do_not_cross_talk() {
+    async fn read_file_concurrent_text_and_rejected_read_do_not_cross_talk() {
         let tmp = TempDir::new().unwrap();
         let body: String = (1..=300).map(|i| format!("line number {i}\n")).collect();
         std::fs::write(tmp.path().join("big.txt"), &body).unwrap();
-        let pdf_bytes = crate::implementations::read_file::pdf::make_test_pdf(&["Hello World"]);
-        std::fs::write(tmp.path().join("doc.pdf"), &pdf_bytes).unwrap();
+        std::fs::write(tmp.path().join("doc.pdf"), b"%PDF-1.4\nnot really a pdf\n").unwrap();
         let shared = test_resources(tmp.path()).into_shared();
         let text_input = || ReadFileInput {
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let pdf_input = || ReadFileInput {
             path: "doc.pdf".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: Some("text".to_string()),
         };
         for _ in 0..10 {
             let (text, pdf) = tokio::join!(
@@ -2961,10 +2726,10 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             let (pdf_deltas, pdf_terminal) = pdf;
             assert!(
                 pdf_deltas.is_empty(),
-                "concurrent PDF-text read must stay terminal-only, got {} deltas",
+                "a refused read must stay terminal-only, got {} deltas",
                 pdf_deltas.len()
             );
-            assert!(matches!(pdf_terminal, ReadFileOutput::FileContent(_)));
+            assert!(matches!(pdf_terminal, ReadFileOutput::FileReadError(_)));
             assert!(!text_deltas.is_empty(), "the text read should still stream");
             match text_terminal {
                 ReadFileOutput::FileContent(fc) => {
@@ -2986,8 +2751,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "long.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let (deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         assert!(
@@ -3030,8 +2793,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "payload.json".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {
@@ -3058,8 +2819,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "huge.json".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         terminal
@@ -3116,8 +2875,6 @@ pub fn verify(req: &HttpRequest) -> Result<Claims, Error> {
             path: "huge.json".to_string(),
             offset: Some(2),
             limit: Some(1),
-            pages: None,
-            format: None,
         };
         let (_deltas, terminal) = execute_collect(test_ctx(resources.into_shared()), input).await;
         match terminal {

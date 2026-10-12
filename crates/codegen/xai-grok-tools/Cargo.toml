@@ -38,13 +38,6 @@ infer = { workspace = true }
 globset = { workspace = true }
 image = { workspace = true, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff", "ico"] }
 kamadak-exif = { workspace = true, optional = true }
-pdf_oxide = { workspace = true }
-# PPTX text extraction (implementations/read_file/pptx.rs). Deliberately NOT
-# `workspace = true`: the workspace `zip` pin has default features on, which
-# drag aes/bzip2/lzma/zstd into the shipped pager binary. PPTX entries are
-# only ever stored or deflated.
-zip = { version = "3", default-features = false, features = ["deflate-flate2"] }
-quick-xml = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 minijinja = { version = "2", features = ["custom_syntax"] }
 parking_lot = { workspace = true }

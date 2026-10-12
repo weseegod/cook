@@ -13,16 +13,6 @@ impl FileMetadata {
     pub fn is_image(&self) -> bool {
         self.mime_type.starts_with("image/")
     }
-
-    pub fn is_pdf(&self) -> bool {
-        self.mime_type == "application/pdf"
-    }
-}
-
-const PDF_MAGIC: &[u8; 5] = b"%PDF-";
-
-pub(crate) fn is_pdf_magic(bytes: &[u8]) -> bool {
-    bytes.get(..5) == Some(PDF_MAGIC.as_slice())
 }
 
 /// Infer file metadata (MIME type, extension) from raw bytes using magic-byte inspection.
@@ -173,53 +163,12 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn is_pdf_magic_valid() {
-        assert!(is_pdf_magic(b"%PDF-1.7 rest of file"));
-        assert!(is_pdf_magic(b"%PDF-2.0"));
-    }
-
-    #[test]
-    fn is_pdf_magic_invalid() {
-        assert!(!is_pdf_magic(b"not a pdf"));
-        assert!(!is_pdf_magic(b"%PD"));
-        assert!(!is_pdf_magic(b""));
-    }
-
-    #[test]
-    fn file_metadata_is_pdf() {
-        let meta = FileMetadata {
-            size: 100,
-            mime_type: "application/pdf".to_string(),
-        };
-        assert!(meta.is_pdf());
-        assert!(!meta.is_image());
-    }
-
-    #[test]
-    fn file_metadata_image_is_not_pdf() {
+    fn file_metadata_image_is_image() {
         let meta = FileMetadata {
             size: 100,
             mime_type: "image/png".to_string(),
         };
-        assert!(!meta.is_pdf());
         assert!(meta.is_image());
-    }
-
-    #[test]
-    fn metadata_is_image_and_is_pdf_are_exclusive() {
-        let pdf_meta = FileMetadata {
-            size: 0,
-            mime_type: "application/pdf".to_string(),
-        };
-        assert!(pdf_meta.is_pdf());
-        assert!(!pdf_meta.is_image());
-
-        let img_meta = FileMetadata {
-            size: 0,
-            mime_type: "image/jpeg".to_string(),
-        };
-        assert!(img_meta.is_image());
-        assert!(!img_meta.is_pdf());
     }
 
     #[test]

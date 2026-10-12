@@ -96,25 +96,6 @@ impl ReadObservation {
     }
 
     // `source_bytes` is already the same buffer, recorded before the media branch.
-    pub(super) fn note_media_success(&mut self) {
-        self.mark_text_caps_not_applicable();
-        if let Some(detail) = self.detail_mut() {
-            detail.selection = ReadSelection::Unknown;
-        }
-        self.summary.result = ToolSourceResult::Succeeded;
-        self.finish();
-    }
-
-    pub(super) fn note_early_content(&mut self, content: &crate::types::output::FileContent) {
-        self.note_returned(content);
-        self.summary.result = if content.content.is_empty() {
-            ToolSourceResult::Empty
-        } else {
-            ToolSourceResult::Succeeded
-        };
-        self.finish();
-    }
-
     /// Empty file returns before the token check. Applicable caps are within limit at zero.
     pub(super) fn note_empty_file(&mut self, offset: Option<i64>, limit: Option<usize>) {
         let configured_lines = self.max_lines;
@@ -137,23 +118,6 @@ impl ReadObservation {
         }
         self.summary.result = ToolSourceResult::Empty;
         self.finish();
-    }
-
-    pub(super) fn note_typed_output(&mut self, output: &crate::types::output::ReadFileOutput) {
-        use crate::types::output::ReadFileOutput;
-        match output {
-            ReadFileOutput::FileContent(content) => self.note_early_content(content),
-            ReadFileOutput::PdfPageImages(_) | ReadFileOutput::ImageContent(_) => {
-                self.note_media_success()
-            }
-            ReadFileOutput::FileNotFound(_) => self.note_not_found(),
-            ReadFileOutput::IsADirectory(_) => self.note_directory(),
-            ReadFileOutput::PermissionDenied(_) => self.note_denied(),
-            ReadFileOutput::FileTooLarge(_) => self.reject_tokens(),
-            ReadFileOutput::FileReadError(_) | ReadFileOutput::ImageSizeError(_) => {
-                self.note_untyped_failure()
-            }
-        }
     }
 
     pub(super) fn note_whole_read(&mut self, is_skill: bool) {
@@ -325,28 +289,6 @@ impl ReadObservation {
             detail.tokens.disposition = CapDisposition::Unobserved;
         }
         self.finish();
-    }
-
-    fn note_returned(&mut self, content: &crate::types::output::FileContent) {
-        if let Some(detail) = self.detail_mut() {
-            detail.returned_bytes = Some(as_i64(content.content.len()));
-            detail.returned_lines = Some(as_i64(line_count(&content.raw_output)));
-        }
-    }
-
-    fn mark_text_caps_not_applicable(&mut self) {
-        let Some(detail) = self.detail_mut() else {
-            return;
-        };
-        detail.lines.applicability = CapApplicability::NotApplicable;
-        detail.lines.disposition = CapDisposition::Unobserved;
-        detail.lines.observed = None;
-        detail.formatted_bytes.applicability = CapApplicability::NotApplicable;
-        detail.formatted_bytes.disposition = CapDisposition::Unobserved;
-        detail.formatted_bytes.observed = None;
-        detail.tokens.applicability = CapApplicability::NotApplicable;
-        detail.tokens.disposition = CapDisposition::Unobserved;
-        detail.tokens.observed = None;
     }
 
     fn finish(&mut self) {

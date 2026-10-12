@@ -87,7 +87,6 @@ Usage:
 - The ${{ params.read.target_file }} parameter accepts either a relative path in the workspace or an absolute path
 - By default reads up to {max_lines_read} lines from the beginning
 - Optionally specify ${{ params.read.offset }} and ${{ params.read.limit }} for large files
-- Can read images (PNG, JPG, etc.) and PDF files (each page rendered as an image; use ${{ params.read.pages }} for PDFs with more than 10 pages, max 20 per call)
 - You can call multiple tools in a single response
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents."#;
 
@@ -441,8 +440,6 @@ mod tests {
             path: "test.rs".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -484,8 +481,6 @@ mod tests {
             path: "long.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -523,8 +518,6 @@ mod tests {
             path: "with_img.html".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -559,8 +552,6 @@ mod tests {
                 path: "memory/topics/facts.md".to_string(),
                 offset: None,
                 limit: None,
-                pages: None,
-                format: None,
             },
         )
         .await
@@ -582,8 +573,6 @@ mod tests {
             path: "does_not_exist.rs".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -607,8 +596,6 @@ mod tests {
             path: "multi.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -641,8 +628,6 @@ mod tests {
             path: "five.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -705,8 +690,6 @@ mod tests {
             path: "five.txt".to_string(),
             offset: Some(2),
             limit: Some(2),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -756,8 +739,6 @@ mod tests {
             path: "large.rs".to_string(),
             offset: Some(100),
             limit: Some(5),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -794,8 +775,6 @@ mod tests {
             path: "short.txt".to_string(),
             offset: Some(100),
             limit: Some(5),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -831,8 +810,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: None,
             limit: None,
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -875,8 +852,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: None,
             limit: Some(50),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)
@@ -905,8 +880,6 @@ mod tests {
             path: "big.txt".to_string(),
             offset: None,
             limit: Some(2000),
-            pages: None,
-            format: None,
         };
 
         let result = xai_tool_runtime::Tool::run(&tool, test_ctx(resources.into_shared()), input)

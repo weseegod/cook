@@ -162,18 +162,6 @@ pub(crate) fn acp_tool_update(
                     ))]);
                     (content, acp::ToolCallStatus::Failed)
                 }
-                ReadFileOutput::PdfPageImages(pdf) => {
-                    let blocks: Vec<acp::ToolCallContent> = pdf
-                        .pages
-                        .iter()
-                        .map(|page| {
-                            acp::ToolCallContent::from(acp::ContentBlock::Image(
-                                acp::ImageContent::new(page.data.clone(), page.mime_type.clone()),
-                            ))
-                        })
-                        .collect();
-                    (Some(blocks), acp::ToolCallStatus::Completed)
-                }
             };
             Some(acp::ToolCallUpdate::new(
                 acp::ToolCallId::new(Arc::from(tool_call_id)),
@@ -1376,37 +1364,25 @@ mod tests {
     }
 
     #[test]
-    fn test_acp_tool_update_pdf_page_images() {
-        let output = ToolOutput::ReadFile(ReadFileOutput::PdfPageImages(PdfPageImages {
-            pages: vec![
-                PdfPageImage {
-                    data: "base64_page1".to_string(),
-                    mime_type: "image/jpeg".to_string(),
-                    page_number: 1,
-                },
-                PdfPageImage {
-                    data: "base64_page2".to_string(),
-                    mime_type: "image/jpeg".to_string(),
-                    page_number: 2,
-                },
-            ],
-            total_pages: 10,
-            file_size: 4096,
+    fn test_acp_tool_update_image_content() {
+        use xai_grok_tools::types::output::ImageContent;
+        let output = ToolOutput::ReadFile(ReadFileOutput::ImageContent(ImageContent {
+            data: "base64_page1".to_string(),
+            mime_type: "image/png".to_string(),
+            annotations: None,
+            uri: None,
+            meta: None,
         }));
-        let update = acp_tool_update(&output, "call-pdf", None, None).unwrap();
+        let update = acp_tool_update(&output, "call-image", None, None).unwrap();
         assert_eq!(update.fields.status, Some(acp::ToolCallStatus::Completed));
         let content = update.fields.content.as_ref().expect("should have content");
-        assert_eq!(content.len(), 2, "should have 2 image blocks");
-        for block in content {
-            match block {
-                acp::ToolCallContent::Content(acp::Content {
-                    content: acp::ContentBlock::Image(img),
-                    ..
-                }) => {
-                    assert_eq!(img.mime_type, "image/jpeg");
-                }
-                other => panic!("expected Image block, got {other:?}"),
-            }
+        assert_eq!(content.len(), 1, "should have 1 image block");
+        match &content[0] {
+            acp::ToolCallContent::Content(acp::Content {
+                content: acp::ContentBlock::Image(img),
+                ..
+            }) => assert_eq!(img.mime_type, "image/png"),
+            other => panic!("expected Image block, got {other:?}"),
         }
     }
 }

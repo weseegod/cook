@@ -719,8 +719,6 @@ mod tests {
                 path: "memory/topics/facts.md".to_string(),
                 offset: None,
                 limit: None,
-                pages: None,
-                format: None,
             },
         )
         .await

@@ -226,7 +226,6 @@ opentelemetry-proto = { version = "0.32", features = ["gen-tonic"] }
 opentelemetry_sdk = { version = "0.32.1", features = ["spec_unstable_metrics_views"] }
 parking_lot = "0.12.4"
 pbjson-build = "0.9"
-pdf_oxide = { version = "0.3.43", features = ["rendering"] }
 petgraph = { version = "0.6.5", default-features = false, features = ["serde-1", "stable_graph"] }
 portable-pty = "0.9"
 pprof = "0.15"
@@ -236,7 +235,6 @@ prost = "0.14"
 prost-build = "0.14"
 prost-reflect = "0.16"
 pulldown-cmark = "0.13"
-quick-xml = "0.41"
 rand = "0.9"
 ratatui = { version = "0.29" }
 ratatui-core = "0.1"

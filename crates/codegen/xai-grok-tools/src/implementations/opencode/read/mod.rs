@@ -1,4 +1,4 @@
-//! OpenCode `read` tool — reads files, directories, images, and PDFs.
+//! OpenCode `read` tool — reads files, directories, and images.
 //!
 //! Follows the opencode parameter naming conventions (`filePath`, `offset`,
 //! `limit`) and wraps output in XML tags (`<path>`, `<type>`, `<content>`).
@@ -9,10 +9,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use base64::Engine as _;
-use base64::engine::general_purpose;
-
-use crate::types::output::{FileContent, ImageContent, ReadFileOutput};
+use crate::types::output::{FileContent, ReadFileOutput};
 use crate::types::requirements::Expr;
 #[allow(unused_imports)]
 use crate::types::resources::{Cwd, DisplayCwd, FileSystem, SharedResources, resolve_model_path};
@@ -45,7 +42,6 @@ Usage:
 - Contents are returned with each line prefixed by its line number as `LINE_NUMBER: LINE_CONTENT`, with line numbers starting at 1. For example, if a file has contents "foo\n", you will receive "1: foo"
 - For directories, entries are returned one per line (without line numbers) with a trailing `/` for subdirectories
 - This tool can read images (eg PNG, JPG, etc). When reading an image file the contents are presented visually as this tool uses multimodal LLMs.
-- This tool can read PDF files (.pdf). PDFs are presented visually to the multimodal LLM as attachments.
 - You can call multiple tools in a single response. It is always better to speculatively read multiple potentially useful files in parallel.
 - You will regularly be asked to read screenshots. If the user provides a path to a screenshot, ALWAYS use this tool to view the file at the path. This tool will work with all temporary file paths.
 - If you read a file that exists but has empty contents you will receive a system reminder warning in place of file contents."#;
@@ -92,7 +88,7 @@ impl From<ReadInput> for ToolInput {
 
 // ─── Tool ───────────────────────────────────────────────────────────
 
-/// OpenCode `read` tool — reads files, directories, images, and PDFs.
+/// OpenCode `read` tool — reads files, directories, and images.
 #[derive(Debug, Default)]
 pub struct ReadTool;
 
@@ -205,7 +201,7 @@ impl xai_tool_runtime::Tool for ReadTool {
         }
 
         // ═══════════════════════════════════════════════════════════
-        // BRANCH B: IMAGE / PDF
+        // BRANCH B: IMAGE
         // ═══════════════════════════════════════════════════════════
         let extension = path
             .extension()
@@ -243,18 +239,6 @@ impl xai_tool_runtime::Tool for ReadTool {
                 meta.mime_type,
             )
             .await);
-        }
-
-        // Check for PDF by extension (magic-byte detection doesn't always catch PDFs).
-        if extension == "pdf" {
-            let image_b64 = general_purpose::STANDARD.encode(&file_bytes);
-            return Ok(ReadFileOutput::ImageContent(ImageContent {
-                data: image_b64,
-                mime_type: "application/pdf".to_string(),
-                annotations: None,
-                uri: None,
-                meta: None,
-            }));
         }
 
         // ═══════════════════════════════════════════════════════════
@@ -522,6 +506,8 @@ mod tests {
     use crate::notification::types::ToolNotificationHandle;
     #[allow(unused_imports)]
     use crate::types::resources::{NotificationHandle, Resources};
+    use base64::Engine as _;
+    use base64::engine::general_purpose;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -1128,13 +1114,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pdf_file_detection() {
+    async fn pdf_file_is_rejected_as_binary() {
         let tmp = TempDir::new().unwrap();
         let canonical_tmp = dunce::canonicalize(tmp.path()).unwrap();
         let file_path = canonical_tmp.join("test.pdf");
 
-        // Arbitrary bytes — not a real PDF, but the extension triggers PDF handling.
-        std::fs::write(&file_path, [0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x42]).unwrap();
+        std::fs::write(&file_path, b"%PDF-1.4 not really a pdf").unwrap();
 
         let tool = ReadTool;
         let resources = test_resources(&canonical_tmp);
@@ -1149,17 +1134,10 @@ mod tests {
             .await
             .unwrap();
         match result {
-            ReadFileOutput::ImageContent(img) => {
-                assert!(
-                    img.mime_type.contains("pdf"),
-                    "Expected mime_type containing 'pdf', got: {}",
-                    img.mime_type,
-                );
-                // Verify the base64 data decodes back to our bytes.
-                let decoded = general_purpose::STANDARD.decode(&img.data).unwrap();
-                assert_eq!(decoded, &[0xDE, 0xAD, 0xBE, 0xEF, 0x42, 0x42]);
+            ReadFileOutput::FileReadError(msg) => {
+                assert!(msg.contains("Cannot read binary file"), "got: {msg}");
             }
-            other => panic!("Expected ImageContent for PDF, got {:?}", other),
+            other => panic!("Expected FileReadError for a PDF, got {other:?}"),
         }
     }
 

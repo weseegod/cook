@@ -1933,11 +1933,6 @@ fn tool_call_to_block(
                         block.image_ref =
                             crate::prompt_images::ScrollbackImageRef::from_path(&path);
                     }
-                    ReadFileOutput::PdfPageImages(pdf) => {
-                        block.media_kind = Some(ReadMediaKind::Pdf {
-                            pages: pdf.total_pages,
-                        });
-                    }
                 },
                 _ if !success => {
                     let text = content_text(tc);
@@ -2494,7 +2489,12 @@ fn is_bg_plumbing_tool(tc: &acp::ToolCall) -> bool {
             .as_ref()
             .and_then(|v| v.get("variant"))
             .and_then(|v| v.as_str())
-            .is_some_and(|v| matches!(v, "BackgroundTask" | "TaskOutput" | "KillTask" | "WaitTasks"))
+            .is_some_and(|v| {
+                matches!(
+                    v,
+                    "BackgroundTask" | "TaskOutput" | "KillTask" | "WaitTasks"
+                )
+            })
 }
 /// Classify a *blocking* suppressed tool into the [`WaitingReason`] the turn is waiting on.
 /// `None` for suppressed tools that don't block the turn (e.g. `kill_*`, todo/goal/scheduler).
