@@ -1383,12 +1383,13 @@ impl BashTool {
         }
     }
 
-    /// Sets the params the `current` contract needs. With [`BashParams::return_output_on_block`] off,
-    /// the command moves to the background exactly at the block, with no short budget. With it on,
-    /// a positive block waits and the timeout kill returns output. `0` still backgrounds.
+    /// Sets the params the `current` contract needs. The caller's block is the whole wait
+    /// (`foreground_block_budget_ms = 0`): no short budget. A command still running at that block
+    /// moves to the background when backgrounding is enabled, including when
+    /// [`BashParams::return_output_on_block`] is set. `0` still backgrounds immediately.
     /// The foreground kill ceiling rises to the background cap unless an operator set one.
     fn apply_single_knob_params(params: &mut BashParams) {
-        params.auto_background_on_timeout = !params.return_output_on_block;
+        params.auto_background_on_timeout = Self::background_enabled(params);
         params.foreground_block_budget_ms = Some(0);
         if !Self::max_timeout_configured(params) {
             params.max_timeout_secs = Some(ABSOLUTE_MAX_TIMEOUT_MS as f64 / 1000.0);
@@ -1610,7 +1611,7 @@ impl BashTool {
             let default_ms = Self::effective_default_block_until_ms(params);
             let description = if params.return_output_on_block {
                 format!(
-                    "How long to block and wait for the command to complete before returning its output (in milliseconds). Defaults to {default_ms}ms. The deadline returns the output and kills the command. Set to 0 to run the command in the background. The timer includes the shell startup time."
+                    "How long to block and wait for the command to complete before returning its output (in milliseconds). Defaults to {default_ms}ms. Set this long enough when the next step needs the result: this call waits and returns the output. If the command is still running at the deadline, it keeps running in the background and you receive a task id. Set to 0 only when later work does not depend on this command. The timer includes the shell startup time."
                 )
             } else {
                 format!(
@@ -1686,7 +1687,7 @@ impl BashTool {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
 Usage notes:
-  - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms).${%- if return_output_on_block | default(false) %} A foreground command still running at ${{ params.execute.block_until_ms }} is killed and its output is returned. Pass a larger ${{ params.execute.block_until_ms }} to wait longer. Only `${{ params.execute.block_until_ms }}: 0` runs the command in the background.${%- else %} A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}.${%- endif %}
+  - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms).${%- if return_output_on_block | default(false) %} Set ${{ params.execute.block_until_ms }} long enough to cover a command whose result you need before continuing: this call waits and returns the output. If it is still running at that deadline, it keeps running in the background and you receive a task id. Set ${{ params.execute.block_until_ms }} to 0 only when later work does not depend on this command.${%- else %} A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}.${%- endif %}
   - ${{ tools.by_kind.background_task_action }} reads, waits for, or stops a background command (actions "output", "wait", "kill"). Background commands run until they exit, until you stop them, or until the ${{ background_cap_hours }}h background cap. ${{ tools.by_kind.background_task_action }} action "kill"${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately.${%- else %} sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.${%- endif %}
   - If the output exceeds {max_output_bytes} characters,${%- if return_output_on_block | default(false) %} you keep the end and the result names the log file with the full output, which you can read or search.${%- else %} the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.${%- endif %}
   - Set `${{ params.execute.block_until_ms }}` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
@@ -2300,7 +2301,8 @@ impl xai_tool_runtime::Tool for BashTool {
                 &params,
             );
             // Backgroundable commands get the terminal's short budget (the requested `timeout` stays as the kill backstop, nothing
-            // to clamp). A return-output block waits the resolved deadline and is killed there, so it also skips the 300s clamp.
+            // to clamp). A return-output block waits the resolved deadline and, when backgrounding is enabled, moves to the
+            // background there instead of being killed, so it also skips the 300s clamp.
             // Other non-backgroundable commands have no background path, so a large `timeout` would wedge the turn — clamp those
             // to `MAX_FOREGROUND_BLOCK`.
             let timeout = if Self::auto_background_on_timeout_enabled(&params)
@@ -6193,7 +6195,8 @@ mod tests {
             );
         }
 
-        /// Omitted block 120000 returns output, `0` backgrounds, and a positive block is not shortened to 300s.
+        /// Omitted block 120000 returns output, `0` backgrounds, a positive block is not shortened
+        /// to 300s, and a command still running at the block is moved to the background.
         #[tokio::test]
         async fn return_output_on_block_waits_without_the_foreground_clamp() {
             let params = BashParams {
@@ -6214,9 +6217,9 @@ mod tests {
             assert!(matches!(result, BashToolOutput::Foreground(_)));
             let request = captured.lock().unwrap().take().expect("foreground request");
             assert_eq!(request.timeout, Duration::from_millis(120_000));
-            assert!(!request.auto_background_on_timeout);
+            assert!(request.auto_background_on_timeout);
             assert!(request.tail_only);
-            assert_eq!(request.foreground_block_budget, None);
+            assert_eq!(request.foreground_block_budget, Some(Duration::MAX));
 
             let (mock, captured) = MockTerminal::background_ok_capturing("bg-0");
             let resources = make_resources_with_params(mock, params.clone());
@@ -6243,12 +6246,18 @@ mod tests {
             let request = captured.lock().unwrap().take().expect("foreground request");
             assert_eq!(request.timeout, Duration::from_millis(400_000));
             assert_ne!(request.timeout, MAX_FOREGROUND_BLOCK);
+            assert!(request.auto_background_on_timeout);
 
             let mut mock = MockTerminal::timed_out("partial\n");
             if let Ok(result) = mock.foreground_result.as_mut() {
-                result.signal = Some("timeout".to_string());
+                result.signal = Some("auto_backgrounded".to_string());
+                result.timed_out = false;
             }
-            let resources = make_resources_with_params(mock, params);
+            let (resources, captured) = {
+                let captured = CapturedRequest::default();
+                mock.captured_fg_request = captured.clone();
+                (make_resources_with_params(mock, params), captured)
+            };
             let result = xai_tool_runtime::Tool::run(
                 &BashTool,
                 test_ctx(resources.into_shared()),
@@ -6256,15 +6265,23 @@ mod tests {
             )
             .await
             .unwrap();
-            let BashToolOutput::Foreground(bash) = result else {
-                panic!("a killed block returns output, not a task id");
+            let request = captured.lock().unwrap().take().expect("foreground request");
+            assert!(request.auto_background_on_timeout);
+            assert_eq!(request.timeout, Duration::from_millis(120_000));
+            let BashToolOutput::Background(started) = result else {
+                panic!("a block that is still running returns a task id, not a killed result");
             };
-            assert!(bash.timed_out);
-            assert!(bash.output_for_prompt.contains("exit: killed (timeout)"));
-            assert!(bash.output_for_prompt.contains("The wait expired"));
-            assert!(bash.output_for_prompt.contains("block_until_ms"));
-            assert!(bash.output_for_prompt.contains(&bash.output_file));
-            assert!(!bash.output_file.is_empty());
+            assert!(!started.task_id.is_empty());
+            assert!(
+                started.summary.contains("still running"),
+                "{}",
+                started.summary
+            );
+            assert!(
+                !started.summary.contains("killed"),
+                "{}",
+                started.summary
+            );
         }
 
         #[test]
@@ -6296,10 +6313,18 @@ mod tests {
                 .lines()
                 .find(|line| line.contains("optional block_until_ms"))
                 .expect("deadline note");
-            assert!(deadline.contains("output is returned"), "{deadline}");
-            assert!(deadline.contains("Only `block_until_ms: 0`"), "{deadline}");
+            assert!(
+                deadline.contains("this call waits and returns the output"),
+                "{deadline}"
+            );
+            assert!(deadline.contains("keeps running in the background"), "{deadline}");
+            assert!(
+                deadline.contains("only when later work does not depend"),
+                "{deadline}"
+            );
+            assert!(!deadline.contains("killed"), "{deadline}");
+            assert!(!deadline.contains("Only `block_until_ms: 0`"), "{deadline}");
             assert!(!deadline.contains("poll"), "{deadline}");
-            assert!(!deadline.contains("task id"), "{deadline}");
             assert!(!headless.contains("moved to the background instead of killed"));
 
             let interactive = desc(&BashParams::default(), true);
@@ -6319,6 +6344,12 @@ mod tests {
             let property = property_desc(&exported, "block_until_ms");
             assert!(property.contains("returns the output"));
             assert!(property.contains("Defaults to 120000ms"));
+            assert!(property.contains("keeps running in the background"), "{property}");
+            assert!(
+                property.contains("only when later work does not depend"),
+                "{property}"
+            );
+            assert!(!property.contains("kills the command"), "{property}");
             assert!(!property.contains("poll"), "{property}");
         }
     }
