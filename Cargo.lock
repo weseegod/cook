@@ -14749,6 +14749,7 @@ dependencies = [
  "xai-tool-runtime",
  "xai-tool-types",
  "xai-tty-utils",
+ "zip",
  "zstd",
 ]
 

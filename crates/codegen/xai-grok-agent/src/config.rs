@@ -270,6 +270,8 @@ fn grok_build_coding_keep_set() -> Vec<xai_grok_tools::registry::types::ToolConf
         (&grok_build::ListDirTool).into(),
         (&opencode::OpenCodeGlobTool).into(),
         (&grok_build::GrepTool).into(),
+        (&grok_build::AstGrepTool).into(),
+        (&grok_build::CodeNavTool).into(),
         (&grok_build::TodoWriteTool).into(),
         background_task_tool_config(),
     ]
@@ -286,9 +288,9 @@ pub enum ToolSurface {
     Implement,
 }
 
-/// Client-facing tool names for the implement surface: the four coding tools
-/// plus the background-task lifecycle tool. Subagent spawn stays on the wider
-/// TaskOpen and Plan surfaces.
+/// Client-facing tool names for the implement surface: the four coding tools,
+/// the unified background-task tool, and the two code-search tools. Subagent
+/// spawn stays on the wider TaskOpen and Plan surfaces.
 pub fn implement_tool_ids() -> &'static [&'static str] {
     &[
         "run_terminal_command",
@@ -296,6 +298,8 @@ pub fn implement_tool_ids() -> &'static [&'static str] {
         "search_replace",
         "write",
         "background_task",
+        "ast_grep",
+        "code_nav",
     ]
 }
 
@@ -309,6 +313,8 @@ pub fn task_open_tool_ids() -> &'static [&'static str] {
         "list_dir",
         "glob",
         "grep",
+        "ast_grep",
+        "code_nav",
         "background_task",
         "spawn_subagent",
         "todo_write",
@@ -332,6 +338,8 @@ pub fn plan_tool_ids() -> &'static [&'static str] {
         "list_dir",
         "glob",
         "grep",
+        "ast_grep",
+        "code_nav",
         "background_task",
         "spawn_subagent",
         "todo_write",
@@ -420,6 +428,8 @@ fn explore_toolset() -> ToolServerConfig {
             (&grok_build::ReadFileTool).into(),
             (&grok_build::ListDirTool).into(),
             (&grok_build::GrepTool).into(),
+            (&grok_build::AstGrepTool).into(),
+            (&grok_build::CodeNavTool).into(),
         ],
         behavior_preset: None,
     }
@@ -433,6 +443,8 @@ fn plan_toolset() -> ToolServerConfig {
             (&grok_build::ReadFileTool).into(),
             (&grok_build::ListDirTool).into(),
             (&grok_build::GrepTool).into(),
+            (&grok_build::AstGrepTool).into(),
+            (&grok_build::CodeNavTool).into(),
             // (&grok_build::SkillTool).into(),
             (&grok_build::TodoWriteTool).into(),
             // search_replace and run_terminal_command intentionally omitted (read-only)
@@ -464,6 +476,8 @@ fn orchestrator_toolset() -> ToolServerConfig {
             (&grok_build::ReadFileTool).into(),
             (&grok_build::ListDirTool).into(),
             (&grok_build::GrepTool).into(),
+            (&grok_build::AstGrepTool).into(),
+            (&grok_build::CodeNavTool).into(),
             // Subagent orchestration
             task_tool_config(),
             background_task_tool_config(),
@@ -1688,6 +1702,8 @@ mod tests {
                 "search_replace",
                 "write",
                 "background_task",
+                "ast_grep",
+                "code_nav",
             ]
         );
         assert!(!implement.contains(&"enter_plan_mode"));
@@ -1756,6 +1772,8 @@ mod tests {
         assert_eq!(
             ids,
             [
+                "GrokBuild:ast_grep",
+                "GrokBuild:code_nav",
                 "GrokBuild:grep",
                 "GrokBuild:list_dir",
                 "GrokBuild:read_file",
@@ -1776,7 +1794,9 @@ mod tests {
             vec![
                 "GrokBuild:read_file",
                 "GrokBuild:list_dir",
-                "GrokBuild:grep"
+                "GrokBuild:grep",
+                "GrokBuild:ast_grep",
+                "GrokBuild:code_nav",
             ],
             "explore preset must stay read-only"
         );

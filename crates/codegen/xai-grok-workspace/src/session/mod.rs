@@ -1,5 +1,8 @@
 pub(crate) mod checkpoint;
 pub(crate) mod checkpoint_store;
+/// Codebase-index adapter behind the `code_nav` model tool. Public so the shell
+/// can pin the same backend over its own index manager.
+pub mod code_nav_backend;
 pub mod file_state;
 pub mod git;
 pub(crate) mod git_gate;
@@ -675,6 +678,9 @@ pub struct WorkspaceShared {
     pub(crate) fuzzy_searches:
         std::sync::Arc<tokio::sync::Mutex<crate::file_system::FuzzySearchManager>>,
     pub(crate) lsp: Option<std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    /// Shared `code_nav` model-tool backend over `codebase_indexes`.
+    pub(crate) code_nav:
+        Option<std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>>,
     pub(crate) codebase_indexes:
         std::sync::Arc<parking_lot::Mutex<crate::file_system::CodebaseIndexManager>>,
     /// Finalize the FS rewind checkpoint on non-`Completed` turn-end outcomes (from `GROK_WORKSPACE_REWIND_ALL_OUTCOMES`, default off).
@@ -945,6 +951,7 @@ impl WorkspaceShared {
                 self.session_factory.as_ref(),
                 Some(self.local_registry.clone()),
                 self.lsp.clone(),
+                self.code_nav.clone(),
                 session.viewer_ctx().cloned(),
                 self.compose_session_notification_handle(session.system_notify_handle()),
                 session.terminal_backend().clone(),

@@ -2604,6 +2604,7 @@ async fn fork_session_inherits_parent_tool_config_when_none() {
         None,
         None,
         None,
+        None,
     )
     .expect("re-resolve should succeed");
     parent.replace(Arc::new(eff), ts);
@@ -2666,6 +2667,7 @@ async fn fork_session_uses_main_session_when_parent_session_id_is_none() {
         main.session_env().clone(),
         "main",
         factory.as_ref(),
+        None,
         None,
         None,
         None,

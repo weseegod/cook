@@ -64,6 +64,8 @@ pub struct AgentBuilder {
     backend_search: bool,
     web_fetch_config: xai_grok_tools::implementations::grok_build::web_fetch::WebFetchConfig,
     lsp: Option<std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    code_nav:
+        Option<std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>>,
     image_gen_config: xai_grok_tools::implementations::grok_build::image_gen::ImageGenConfig,
     video_gen_config: xai_grok_tools::implementations::grok_build::video_gen::VideoGenConfig,
     app_builder_deployer_config:
@@ -392,6 +394,7 @@ impl AgentBuilder {
             backend_search: false,
             web_fetch_config: Default::default(),
             lsp: None,
+            code_nav: None,
             image_gen_config: Default::default(),
             video_gen_config: Default::default(),
             app_builder_deployer_config: Default::default(),
@@ -620,6 +623,13 @@ impl AgentBuilder {
         handle: std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>,
     ) -> Self {
         self.lsp = Some(handle);
+        self
+    }
+    pub fn with_code_nav(
+        mut self,
+        handle: std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>,
+    ) -> Self {
+        self.code_nav = Some(handle);
         self
     }
     pub fn with_image_gen_config(
@@ -1371,6 +1381,7 @@ impl AgentBuilder {
                 web_search_config: self.web_search_config,
                 web_fetch_config: self.web_fetch_config,
                 lsp: self.lsp,
+                code_nav: self.code_nav,
                 image_gen_config: self.image_gen_config,
                 video_gen_config: self.video_gen_config,
                 app_builder_deployer_config: self.app_builder_deployer_config,

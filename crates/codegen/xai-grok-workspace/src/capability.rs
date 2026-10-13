@@ -67,7 +67,9 @@ pub(crate) const ALL_TOOL_KINDS: &[ToolKind] = &[
     ToolKind::Write,
     ToolKind::Move,
     ToolKind::Search,
+    ToolKind::AstGrep,
     ToolKind::Lsp,
+    ToolKind::CodeNav,
     ToolKind::Execute,
     ToolKind::Plan,
     ToolKind::WebSearch,
@@ -124,12 +126,12 @@ pub(crate) fn kind_allowed(mode: CapabilityMode, kind: ToolKind) -> bool {
         }
 
         // Search class.
-        Search | WebSearch | WebFetch => {
+        Search | AstGrep | WebSearch | WebFetch => {
             matches!(mode, M::ReadOnly | M::ReadWrite | M::Execute)
         }
 
         // Inspect class.
-        Lsp | ListDir | List => matches!(mode, M::ReadOnly | M::ReadWrite | M::Execute),
+        Lsp | CodeNav | ListDir | List => matches!(mode, M::ReadOnly | M::ReadWrite | M::Execute),
 
         // Edit class.
         Edit | Write | Delete | Move | Feedback | ImageGen | VideoGen | ImageToVideo

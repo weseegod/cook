@@ -86,6 +86,14 @@ pub fn canonical_input(input: &ToolInput) -> Option<serde_json::Value> {
             (field::PATTERN, req(&g.pattern)),
             (field::PATH, opt(g.path.as_ref())),
         ]),
+        ToolInput::AstGrep(a) => obj([
+            (field::PATTERN, req(&a.pattern)),
+            (field::PATH, opt(a.path.as_ref())),
+        ]),
+        ToolInput::CodeNav(c) => obj([
+            (field::SYMBOL, opt(c.symbol.as_ref())),
+            (field::PATH, opt(c.path.as_ref())),
+        ]),
         ToolInput::TodoWrite(_)
         | ToolInput::Skill(_)
         | ToolInput::MCPTool(_)

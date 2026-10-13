@@ -34,6 +34,7 @@ fn spawn_ctx(parent_cwd: PathBuf) -> SubagentSpawnContext {
     let (tx, _rx) = mpsc::unbounded_channel();
     SubagentSpawnContext {
         lsp: None,
+        code_nav: None,
         process_scope: None,
         parent_max_turns: None,
         client_hooks: Default::default(),

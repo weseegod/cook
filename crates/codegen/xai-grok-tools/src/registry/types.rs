@@ -246,6 +246,11 @@ pub struct SessionContext {
     /// passed to every session. Same pattern as `fs` and `backend`.
     /// When `Some`, inserted into `Resources` so `LspTool` can use it.
     pub lsp: Option<std::sync::Arc<dyn crate::implementations::lsp::LspBackend>>,
+    /// Optional shared code-navigation backend over the codebase index.
+    /// When `Some`, inserted into `Resources` so `CodeNavTool` can answer
+    /// definition and reference queries. When `None`, the tool reports that
+    /// code navigation is unavailable.
+    pub code_nav: Option<std::sync::Arc<dyn crate::implementations::grok_build::CodeNavBackend>>,
     /// Optional image generation configuration. When `Enabled`, an `ImageGenClient` is created and
     /// injected into `Resources` so the `image_gen` tool can call the xAI Imagine API. When
     /// `Disabled` (default), the tool is not registered and image generation is unavailable.
@@ -722,6 +727,8 @@ impl ToolRegistryBuilder {
             >();
         b.register_with_params::<grok_build::ListDirTool, grok_build::list_dir::ListDirParams>();
         b.register_with_params::<grok_build::GrepTool, grok_build::grep::GrepParams>();
+        b.register::<grok_build::AstGrepTool>();
+        b.register::<grok_build::CodeNavTool>();
         b.register::<grok_build::KillTaskTool>();
         b.register::<grok_build::KillTerminalCommandTool>();
         b.register::<grok_build::TodoWriteTool>();
@@ -1135,6 +1142,11 @@ impl ToolRegistryBuilder {
         }
         if let Some(lsp) = ctx.lsp {
             resources.insert(lsp);
+        }
+        if let Some(code_nav) = ctx.code_nav {
+            resources.insert(crate::implementations::grok_build::CodeNavBackendHandle(
+                code_nav,
+            ));
         }
         let image_gen_config = ctx.image_gen_config;
         let video_gen_config = ctx.video_gen_config;
@@ -2475,6 +2487,7 @@ mod tests {
             web_fetch_config:
                 crate::implementations::grok_build::web_fetch::WebFetchConfig::default(),
             lsp: None,
+            code_nav: None,
             image_gen_config:
                 crate::implementations::grok_build::image_gen::ImageGenConfig::default(),
             video_gen_config:
@@ -2722,6 +2735,8 @@ mod tests {
                 "get_task_output",
                 "kill_task",
                 "grep",
+                "ast_grep",
+                "code_nav",
                 "list_dir",
                 "ask_user_question",
                 "enter_plan_mode",

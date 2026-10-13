@@ -183,6 +183,9 @@ impl RunShellChildHarnessConfig {
 pub(crate) struct SubagentSpawnContext {
     /// Parent's LSP runtime, inherited via ToolContext, same as fs/terminal.
     pub lsp: Option<std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    /// Parent's codebase-index backend for the `code_nav` model tool, inherited the same way as `lsp`.
+    pub code_nav:
+        Option<std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>>,
     /// Root session's process scope, inherited so the subagent's own child processes are reaped when the parent session closes. It is the root's, not an intermediate parent's.
     /// The Spawn arm of `handle_command` in xai-grok-tools task/coordinator.rs re-parents nested Spawn requests to the root parent. Every subagent therefore resolves back to the root session.
     pub process_scope: Option<xai_tty_utils::ProcessScope>,

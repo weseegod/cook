@@ -11,7 +11,9 @@
 #[path = "app_builder_stub.rs"]
 pub mod app_builder;
 pub mod ask_user_question;
+pub mod ast_grep;
 pub mod bash;
+pub mod code_nav;
 #[path = "deploy_app_stub.rs"]
 pub mod deploy_app;
 pub mod enter_plan_mode;
@@ -43,7 +45,9 @@ pub mod workflow;
 pub mod working_plan;
 pub use app_builder::AppBuilderDeployerConfig;
 pub use ask_user_question::AskUserQuestionTool;
+pub use ast_grep::AstGrepTool;
 pub use bash::BashTool;
+pub use code_nav::{CodeNavBackend, CodeNavBackendHandle, CodeNavLocation, CodeNavTool};
 pub use deploy_app::DEPLOY_APP_TOOL_NAME;
 pub use enter_plan_mode::EnterPlanModeTool;
 pub use exit_plan_mode::ExitPlanModeTool;

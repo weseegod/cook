@@ -4694,6 +4694,19 @@ impl MvpAgent {
                 tool_ctx.lsp = Some(adapter as std::sync::Arc<dyn LspBackend>);
             }
         }
+        if tool_ctx.code_nav.is_none()
+            && !matches!(
+                self.cfg.borrow().features.codebase_indexing,
+                crate::agent::config::CodebaseIndexingSetting::Enabled(false)
+            )
+        {
+            tool_ctx.code_nav = Some(std::sync::Arc::new(
+                xai_grok_workspace::session::code_nav_backend::CodeNavIndexBackend::new(
+                    std::sync::Arc::clone(&self.codebase_indexes),
+                    tool_ctx.cwd.as_path().to_path_buf(),
+                ),
+            ));
+        }
         let inference_idle_timeout_secs = {
             let models = self.models_manager.models();
             let cfg = self.cfg.borrow();

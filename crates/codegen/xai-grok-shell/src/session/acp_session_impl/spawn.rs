@@ -1310,6 +1310,7 @@ pub(crate) async fn spawn_session_actor(
         read_file_max_output_bytes: session_pruning_config.read_file_max_output_bytes,
         prompt_working_directory: prompt_display_cwd.clone(),
         lsp: tool_context.lsp.clone(),
+        code_nav: tool_context.code_nav.clone(),
         plugin_registry: plugin_registry.clone(),
         api_key_provider: api_key_provider.clone(),
         attribution_callback: attribution_callback_for_spec,

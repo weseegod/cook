@@ -59,6 +59,8 @@ pub enum ToolInput {
     SearchReplace(SearchReplaceInput),
     Bash(BashToolInput),
     Grep(GrepSearchInput),
+    AstGrep(crate::implementations::grok_build::ast_grep::AstGrepInput),
+    CodeNav(crate::implementations::grok_build::code_nav::CodeNavInput),
     ListDir(ListDirInput),
     TodoWrite(TodoWriteInput),
     Skill(SkillInput),
