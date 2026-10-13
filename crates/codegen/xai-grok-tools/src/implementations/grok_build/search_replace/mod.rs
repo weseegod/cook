@@ -59,7 +59,7 @@ ${% if tools.by_kind.read -%}
 - `${{ tools.by_kind.read }}` prefixes each line with "LINE_NUMBER→". That prefix is not part of the file: match only what comes after the →, with its exact indentation.
 ${% endif -%}
 - `${{ params.edit.old_string }}` must match exactly one place in the file. If it appears more than once, add surrounding lines to make it unique, or set `${{ params.edit.replace_all }}` to change every occurrence (handy for renaming an identifier).
-- For several disjoint hunks in one file, pass `edits` as an array of `{old_string, new_string}` and leave top-level `${{ params.edit.old_string }}` empty. All hunks match the original file; any miss, overlap, or ambiguous match writes nothing.
+- When one file needs several changes you already know, send them in one call. Set `edits` to `[{"old_string": "...", "new_string": "..."}, {"old_string": "...", "new_string": "..."}]` and leave top-level `${{ params.edit.old_string }}` empty. Every hunk is matched against the original file. A miss, an overlap, or an ambiguous match writes nothing.
 - To create a new file, set `${{ params.edit.old_string }}` to an empty string. An empty `${{ params.edit.old_string }}` cannot overwrite an existing non-empty file."#;
 /// The overwrite-guard sentence in [`DESCRIPTION_FULL`]. Only accurate while
 /// `empty_old_string_does_not_override` is enabled (opt-in; the default is the legacy overwrite
@@ -105,7 +105,7 @@ pub struct SearchReplaceInput {
     /// single-pair path only.
     #[serde(default)]
     #[schemars(
-        description = "Optional list of disjoint {old_string, new_string} edits applied against the original file in one write. Leave top-level old_string empty when using this."
+        description = "Several disjoint {old_string, new_string} edits for this one file, applied together against the original contents. Leave top-level old_string empty. Use this when more than one change in the file is already known."
     )]
     pub edits: Vec<SearchReplaceEdit>,
 }
@@ -1270,6 +1270,11 @@ mod tests {
         assert!(
             rendered.contains("Prefer this for small in-place edits"),
             "search_replace must steer toward in-place edits:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("several changes you already know")
+                && rendered.contains(r#"[{"old_string": "...", "new_string": "..."}"#),
+            "multi-hunk call must show a concrete edits example:\n{rendered}"
         );
         let edit_params = std::collections::HashMap::from([
             ("old_string".to_string(), "old_string".to_string()),

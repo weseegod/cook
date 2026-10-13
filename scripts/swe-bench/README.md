@@ -91,6 +91,15 @@ bash -n scripts/evaluate.sh scripts/evaluate/agent.sh scripts/swe-bench/run.sh
 MODEL_SH=/bin/false scripts/swe-bench/run.sh --dry-run --seed 1
 ```
 
+Trace tool calls and loops in a finished bundle (phase split, repeated
+commands, git-history lookups, unbounded searches, timelines of the longest
+tasks). Reuse this instead of writing a new parser:
+
+```bash
+python3 scripts/swe-bench/trace_audit.py docs/audits/<audit-dir>
+python3 scripts/swe-bench/trace_audit.py docs/audits/<audit-dir> -o /tmp/trace.txt
+```
+
 Rebuilding the checked-in levels requires `datasets` and network access:
 
 ```bash
