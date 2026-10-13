@@ -590,6 +590,16 @@ impl WorkspaceHandle {
                 Some(adapter)
             }
         };
+        let codebase_indexes = Arc::new(parking_lot::Mutex::new(
+            crate::file_system::CodebaseIndexManager::new(),
+        ));
+        let code_nav: Option<Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>> =
+            Some(Arc::new(
+                crate::session::code_nav_backend::CodeNavIndexBackend::new(
+                    Arc::clone(&codebase_indexes),
+                    config.root_cwd.clone(),
+                ),
+            ));
         let session_event_writers: Arc<
             dashmap::DashMap<String, xai_grok_session_events::EventWriter>,
         > = Arc::new(dashmap::DashMap::new());
@@ -660,9 +670,8 @@ impl WorkspaceHandle {
                 crate::file_system::FuzzySearchManager::new(std::time::Duration::from_secs(300)),
             )),
             lsp,
-            codebase_indexes: Arc::new(parking_lot::Mutex::new(
-                crate::file_system::CodebaseIndexManager::new(),
-            )),
+            code_nav,
+            codebase_indexes,
             workspace_rewind_all_outcomes,
             workspace_home,
             upload_queue,
@@ -879,6 +888,7 @@ impl WorkspaceHandle {
                 self.shared.session_factory.as_ref(),
                 Some(self.shared.local_registry.clone()),
                 self.shared.lsp.clone(),
+                self.shared.code_nav.clone(),
                 viewer_ctx.clone(),
                 self.shared
                     .compose_session_notification_handle(system_notify_handle),
@@ -1047,6 +1057,7 @@ impl WorkspaceHandle {
         let factory = self.shared.session_factory.clone();
         let lr = self.shared.local_registry.clone();
         let lsp = self.shared.lsp.clone();
+        let code_nav = self.shared.code_nav.clone();
         let sid = session_id.to_owned();
         let viewer_ctx = session.viewer_ctx().cloned();
         let notification_handle = self
@@ -1067,6 +1078,7 @@ impl WorkspaceHandle {
                 factory.as_ref(),
                 Some(lr),
                 lsp,
+                code_nav,
                 viewer_ctx,
                 notification_handle,
                 terminal_backend,
@@ -3015,6 +3027,7 @@ impl WorkspaceHandle {
             self.shared.session_factory.as_ref(),
             Some(self.shared.local_registry.clone()),
             self.shared.lsp.clone(),
+            self.shared.code_nav.clone(),
             inherited_viewer_ctx.clone(),
             self.shared.compose_session_notification_handle(None),
             self.shared.host_kind,
@@ -3868,6 +3881,7 @@ impl WorkspaceHandle {
                 self.shared.session_factory.as_ref(),
                 Some(self.shared.local_registry.clone()),
                 self.shared.lsp.clone(),
+                self.shared.code_nav.clone(),
                 None,
                 None,
                 self.shared.host_kind,

@@ -426,6 +426,73 @@ mod tests {
         assert!(!prompt.contains("memory_save"));
     }
 
+    // ── Search-tool roles ───────────────────────────────────────────
+
+    fn renderer_with_kinds(tools: &[(ToolKind, &str)]) -> TemplateRenderer {
+        TemplateRenderer::new(
+            tools
+                .iter()
+                .map(|(kind, name)| (*kind, (*name).to_string()))
+                .collect(),
+            HashMap::new(),
+        )
+    }
+
+    /// Text search, syntactic shape, and symbol navigation each get their own
+    /// sentence, so the model can tell which job belongs to which tool.
+    #[test]
+    fn test_prompt_separates_text_shape_and_symbol_roles() {
+        let r = renderer_with_kinds(&[
+            (ToolKind::Read, "read_file"),
+            (ToolKind::Edit, "search_replace"),
+            (ToolKind::Search, "grep"),
+            (ToolKind::AstGrep, "ast_grep"),
+            (ToolKind::CodeNav, "code_nav"),
+        ]);
+        let p = default_placeholders();
+        for (name, prompt) in [
+            ("prompt.md", render_base(&r, &p)),
+            ("subagent_prompt.md", render_subagent(&r, &p)),
+        ] {
+            assert!(
+                prompt.contains("`grep` finds raw text or a regular expression"),
+                "{name} must give grep the text job:\n{prompt}"
+            );
+            assert!(
+                prompt.contains("`ast_grep` finds a syntactic shape"),
+                "{name} must give ast_grep the syntactic job:\n{prompt}"
+            );
+            assert!(
+                prompt.contains("`code_nav` answers for one symbol"),
+                "{name} must give code_nav the symbol job:\n{prompt}"
+            );
+        }
+    }
+
+    /// With either new kind absent, neither its name nor its sentence renders.
+    #[test]
+    fn test_prompt_omits_new_search_roles_when_kinds_absent() {
+        let r = renderer_with_kinds(&[(ToolKind::Read, "read_file"), (ToolKind::Search, "grep")]);
+        let p = default_placeholders();
+        for (name, prompt) in [
+            ("prompt.md", render_base(&r, &p)),
+            ("subagent_prompt.md", render_subagent(&r, &p)),
+        ] {
+            assert!(
+                prompt.contains("`grep` finds raw text or a regular expression"),
+                "{name} must keep the text-search sentence:\n{prompt}"
+            );
+            assert!(
+                !prompt.contains("ast_grep") && !prompt.contains("syntactic shape"),
+                "{name} must omit ast_grep when the kind is absent:\n{prompt}"
+            );
+            assert!(
+                !prompt.contains("code_nav"),
+                "{name} must omit code_nav when the kind is absent:\n{prompt}"
+            );
+        }
+    }
+
     // ── Web search disabled ─────────────────────────────────────────
 
     // ── Apply-patch template rendering ───────────────────────────────────

@@ -20,6 +20,7 @@ pub mod field {
     pub const CWD: &str = "cwd";
     pub const DIRECTORY: &str = "directory";
     pub const PATTERN: &str = "pattern";
+    pub const SYMBOL: &str = "symbol";
 }
 /// The single `_meta` key holding the canonical tool identity as one nested
 /// object (mirroring `x.ai/mcp_tool`). Consumers deserialize it into
@@ -42,7 +43,9 @@ impl ToolKind {
             ToolKind::ListDir => "List Files",
             ToolKind::List => "List Files",
             ToolKind::Search => "Search",
+            ToolKind::AstGrep => "Search Code Patterns",
             ToolKind::Lsp => "Code Intelligence",
+            ToolKind::CodeNav => "Code Navigation",
             ToolKind::Execute => "Run Command",
             ToolKind::Plan => "Plan",
             ToolKind::WebSearch => "Web Search",
@@ -80,7 +83,9 @@ impl ToolKind {
         match self {
             ToolKind::Read
             | ToolKind::Search
+            | ToolKind::AstGrep
             | ToolKind::Lsp
+            | ToolKind::CodeNav
             | ToolKind::ListDir
             | ToolKind::List
             | ToolKind::MemorySearch

@@ -213,6 +213,10 @@ pub struct ToolContext {
     >,
     /// Shared LSP runtime, cloned cheaply (Arc) from parent to child.
     pub lsp: Option<Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    /// Shared codebase-index backend for the `code_nav` model tool, cloned
+    /// cheaply (Arc) from parent to child. `None` when `codebase_indexing` is
+    /// disabled in config.
+    pub code_nav: Option<Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>>,
     /// LSP server names captured at session creation (not updated mid-session).
     pub lsp_server_names: Vec<String>,
     /// Shared turn-active flag: set `true` at turn start, `false` at turn end.
@@ -334,6 +338,7 @@ impl ToolContext {
             subagent_event_tx: None,
             subagent_coordinator_sender: None,
             lsp: None,
+            code_nav: None,
             lsp_server_names: Vec::new(),
             is_turn_active: None,
             unattributed_background_usage: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -430,6 +435,7 @@ mod tests {
                 subagent_event_tx: None,
                 subagent_coordinator_sender: None,
                 lsp: None,
+                code_nav: None,
                 lsp_server_names: Vec::new(),
                 is_turn_active: None,
                 unattributed_background_usage: Arc::new(std::sync::atomic::AtomicBool::new(false)),

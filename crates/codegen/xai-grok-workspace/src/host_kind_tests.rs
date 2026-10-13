@@ -93,6 +93,7 @@ async fn session_for(host: WorkspaceHostKind) -> Arc<FinalizedToolset> {
         None,
         None,
         None,
+        None,
     )
     .expect("the host's catalog must finalize");
     toolset

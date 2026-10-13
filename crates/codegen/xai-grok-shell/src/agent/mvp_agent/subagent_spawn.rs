@@ -179,10 +179,13 @@ impl MvpAgent {
             )
         })?;
         let available_models = self.models_manager.models();
-        let (parent_lsp, parent_process_scope) = {
+        let (parent_lsp, parent_code_nav, parent_process_scope) = {
             let parent = parent_handle.as_ref();
             (
                 parent.as_ref().and_then(|h| h.tool_context.lsp.clone()),
+                parent
+                    .as_ref()
+                    .and_then(|h| h.tool_context.code_nav.clone()),
                 parent
                     .as_ref()
                     .and_then(|h| h.tool_context.process_scope.clone()),
@@ -250,6 +253,7 @@ impl MvpAgent {
         let memory_config = self.memory_config_snapshot();
         let mut ctx = crate::agent::subagent::SubagentSpawnContext {
             lsp: parent_lsp,
+            code_nav: parent_code_nav,
             process_scope: parent_process_scope,
             client_hooks: Default::default(),
             sampling_config: self.sampling_config.borrow().clone(),

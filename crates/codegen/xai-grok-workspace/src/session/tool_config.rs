@@ -30,6 +30,9 @@ pub(crate) fn resolve_session_toolset(
     factory: &dyn SessionContextFactory,
     local_registry: Option<xai_computer_hub_sdk::LocalRegistry>,
     lsp: Option<std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    code_nav: Option<
+        std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>,
+    >,
     viewer_ctx: Option<xai_tool_runtime::WorkspaceViewerContext>,
     notification_handle: Option<xai_grok_tools::notification::types::ToolNotificationHandle>,
 ) -> WorkspaceResult<(
@@ -49,6 +52,7 @@ pub(crate) fn resolve_session_toolset(
         factory,
         local_registry,
         lsp,
+        code_nav,
         viewer_ctx,
         notification_handle,
         terminal_backend.backend().clone(),
@@ -69,6 +73,9 @@ pub(crate) fn resolve_session_toolset_for_host(
     factory: &dyn SessionContextFactory,
     local_registry: Option<xai_computer_hub_sdk::LocalRegistry>,
     lsp: Option<std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    code_nav: Option<
+        std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>,
+    >,
     viewer_ctx: Option<xai_tool_runtime::WorkspaceViewerContext>,
     notification_handle: Option<xai_grok_tools::notification::types::ToolNotificationHandle>,
     host_kind: crate::host_kind::WorkspaceHostKind,
@@ -89,6 +96,7 @@ pub(crate) fn resolve_session_toolset_for_host(
         factory,
         local_registry,
         lsp,
+        code_nav,
         viewer_ctx,
         notification_handle,
         terminal_backend.backend().clone(),
@@ -121,6 +129,9 @@ pub(crate) fn resolve_session_toolset_rebuild(
     factory: &dyn SessionContextFactory,
     local_registry: Option<xai_computer_hub_sdk::LocalRegistry>,
     lsp: Option<std::sync::Arc<dyn xai_grok_tools::implementations::lsp::LspBackend>>,
+    code_nav: Option<
+        std::sync::Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>,
+    >,
     viewer_ctx: Option<xai_tool_runtime::WorkspaceViewerContext>,
     notification_handle: Option<xai_grok_tools::notification::types::ToolNotificationHandle>,
     terminal_backend: Arc<dyn xai_grok_tools::computer::types::TerminalBackend>,
@@ -152,6 +163,9 @@ pub(crate) fn resolve_session_toolset_rebuild(
     let mut ctx = factory.build_session_context(session_id, cwd, session_env, terminal_backend);
     if let Some(lsp_handle) = lsp {
         ctx.lsp = Some(lsp_handle);
+    }
+    if let Some(code_nav_backend) = code_nav {
+        ctx.code_nav = Some(code_nav_backend);
     }
     if let Some(handle) = notification_handle {
         ctx.notification_handle = handle;
@@ -526,6 +540,7 @@ impl SessionContextFactory for WorkspaceSessionContextFactory {
             web_search_config,
             web_fetch_config: build_web_fetch_config(),
             lsp: None,
+            code_nav: None,
             image_gen_config,
             video_gen_config,
             app_builder_deployer_config,
@@ -680,6 +695,7 @@ pub mod test_support {
                 web_search_config: Default::default(),
                 web_fetch_config: Default::default(),
                 lsp: None,
+                code_nav: None,
                 image_gen_config: Default::default(),
                 video_gen_config: Default::default(),
                 app_builder_deployer_config: Default::default(),
@@ -759,6 +775,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             crate::host_kind::WorkspaceHostKind::Sandbox,
         )
         .unwrap();
@@ -785,6 +802,7 @@ mod tests {
             empty_env(),
             "daemon-cap",
             factory.as_ref(),
+            None,
             None,
             None,
             None,
@@ -816,6 +834,7 @@ mod tests {
             empty_env(),
             "main",
             factory.as_ref(),
+            None,
             None,
             None,
             None,
@@ -853,6 +872,7 @@ mod tests {
             empty_env(),
             "main",
             factory.as_ref(),
+            None,
             None,
             None,
             None,
@@ -932,6 +952,7 @@ mod tests {
             empty_env(),
             "main",
             factory.as_ref(),
+            None,
             None,
             None,
             None,
@@ -1302,6 +1323,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("build toolset A");
         {
@@ -1322,6 +1344,7 @@ mod tests {
             empty_env(),
             "sess-A",
             &factory,
+            None,
             None,
             None,
             None,
@@ -1347,6 +1370,7 @@ mod tests {
             empty_env(),
             "sess-B",
             &factory,
+            None,
             None,
             None,
             None,

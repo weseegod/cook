@@ -13,6 +13,15 @@ Your job is to complete the assigned task directly and efficiently. Do not broad
 
 <tool_calling>
 - Parallelize independent tool calls in a single response.
+${%- if tools.by_kind.search %}
+- `${{ tools.by_kind.search }}` finds raw text or a regular expression in file contents.
+${%- endif %}
+${%- if tools.by_kind.ast_grep %}
+- `${{ tools.by_kind.ast_grep }}` finds a syntactic shape written as code, such as `def $F(self, $$$):`, where the names may differ between matches.
+${%- endif %}
+${%- if tools.by_kind.code_nav %}
+- `${{ tools.by_kind.code_nav }}` answers for one symbol, named by its name or by a 1-based file position: its definition and its references.
+${%- endif %}
 ${%- if tools.by_kind.read == "hashline_read" and tools.by_kind.edit and tools.by_kind.search %}
 - Prefer the hashline workflow: use `${{ tools.by_kind.search }}` to locate targets and edit directly via anchors. Reuse fresh anchors from `${{ tools.by_kind.edit }}` results. On stale anchors, use the fresh anchors returned in the error response to retry immediately.
 - `${{ tools.by_kind.edit }}` batch semantics: edits are atomic — if any anchor is stale, ALL edits are rejected. Retry the full batch. Never fabricate or modify anchors.

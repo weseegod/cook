@@ -13,6 +13,29 @@ const UGREP_VER: &str = "7.7.0";
 const FD_VER: &str = "10.4.2";
 // fd stopped publishing x86_64-apple-darwin assets after 10.3.0.
 const FD_VER_MACOS_X64: &str = "10.3.0";
+const SG_VER: &str = "0.50.0";
+
+/// Pinned SHA-256 of each ast-grep release archive we embed. ast-grep ships
+/// `app-<triple>.zip` with no version in the file name, so the version above
+/// and these hashes must move together.
+const SG_ARCHIVE_SHA256: &[(&str, &str)] = &[
+    (
+        "x86_64-unknown-linux-gnu",
+        "0fd3f489639abb8465a914b74b8779171577582318d8a940d00399f59dba81c5",
+    ),
+    (
+        "aarch64-unknown-linux-gnu",
+        "3a4ad22dd1dca7a4900a173de65885578617af57fa13dd93b8d345d6b352770e",
+    ),
+    (
+        "x86_64-apple-darwin",
+        "b057d51bc3b0fa55c71c40774cdef687656e57b630a891c1a7d4e96e57b27d35",
+    ),
+    (
+        "aarch64-apple-darwin",
+        "b7de40f9c4a29b1c6e26619b776d02b432902550de9a79e4a71a416e86cc41f5",
+    ),
+];
 
 /// Pinned SHA-256 of each `(version, triple)` fd release tarball we embed.
 const FD_TARBALL_SHA256: &[(&str, &str, &str)] = &[
@@ -40,9 +63,103 @@ const FD_TARBALL_SHA256: &[(&str, &str, &str)] = &[
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     bundle_rg()?;
+    bundle_sg()?;
     bundle_fd()?;
     bundle_search_tool("bfs", "BFS", BFS_VER)?;
     bundle_search_tool("ugrep", "UGREP", UGREP_VER)?;
+    Ok(())
+}
+
+/// Download + embed the ast-grep CLI as the engine behind the `ast_grep`
+/// tool, mirroring the ripgrep bundling (release-only or
+/// `GROK_TOOLS_BUNDLE_SG_PATH` override). The `sg` entry of ast-grep's
+/// `app-<triple>.zip` is a thin deprecated shim that re-execs the sibling
+/// `ast-grep` binary, so the embedded file is that `ast-grep` entry.
+fn bundle_sg() -> Result<(), Box<dyn std::error::Error>> {
+    println!("cargo:rerun-if-env-changed=GROK_TOOLS_BUNDLE_SG_PATH");
+    println!("cargo:rustc-check-cfg=cfg(bundle_sg)");
+
+    let path_override = env::var("GROK_TOOLS_BUNDLE_SG_PATH").ok();
+    let is_release = env::var("PROFILE").as_deref() == Ok("release");
+    if path_override.is_none() && !is_release {
+        return Ok(());
+    }
+
+    // The vendored-binary extraction is unix-only; on Windows the runtime
+    // falls back to `sg` on PATH.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "windows" && path_override.is_none() {
+        return Ok(());
+    }
+
+    let gen_dir = PathBuf::from(env::var("OUT_DIR")?).join("bundle-sg");
+    fs::create_dir_all(&gen_dir)?;
+
+    println!("cargo:rustc-cfg=bundle_sg");
+    println!("cargo:rustc-env=GROK_TOOLS_SG_VER={SG_VER}");
+
+    if let Some(path) = path_override {
+        let dest = gen_dir.join(format!("ast-grep-{SG_VER}-override.bin"));
+        println!("cargo:rustc-env=GROK_TOOLS_SG_TARGET=override");
+        let _ = fs::remove_file(&dest);
+        fs::copy(PathBuf::from(path.clone()), &dest).map_err(|e| {
+            format!(
+                "Failed copying GROK_TOOLS_BUNDLE_SG_PATH: {e} from path {path} to dest {}",
+                dest.display()
+            )
+        })?;
+        compress_and_pin(&dest, "SG")?;
+        return Ok(());
+    }
+
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let asset_triple = match (target_os.as_str(), target_arch.as_str()) {
+        ("macos", "aarch64") => "aarch64-apple-darwin",
+        ("macos", "x86_64") => "x86_64-apple-darwin",
+        ("linux", "x86_64") => "x86_64-unknown-linux-gnu",
+        ("linux", "aarch64") => "aarch64-unknown-linux-gnu",
+        _ => {
+            return Err(format!(
+                "Unsupported target for ast-grep bundling: {target_os}-{target_arch}. Set GROK_TOOLS_BUNDLE_SG_PATH to a local sg binary for offline or unsupported builds.",
+            )
+            .into());
+        }
+    };
+
+    println!("cargo:rustc-env=GROK_TOOLS_SG_TARGET={asset_triple}");
+    let dest = gen_dir.join(format!("ast-grep-{SG_VER}-{asset_triple}.bin"));
+    let _ = fs::remove_file(&dest);
+
+    let url = format!(
+        "https://github.com/ast-grep/ast-grep/releases/download/{SG_VER}/app-{asset_triple}.zip"
+    );
+    let bytes = download_with_retries(&url, "ast-grep", "GROK_TOOLS_BUNDLE_SG_PATH")?;
+
+    let expected_sha = SG_ARCHIVE_SHA256
+        .iter()
+        .find(|(t, _)| *t == asset_triple)
+        .map(|(_, sha)| *sha)
+        .ok_or_else(|| format!("No pinned SHA-256 for ast-grep {asset_triple}"))?;
+    let actual_sha = {
+        use sha2::Digest as _;
+        hex_encode(&sha2::Sha256::digest(&bytes))
+    };
+    if actual_sha != expected_sha {
+        return Err(format!(
+            "SHA-256 mismatch for {url}:\n  expected {expected_sha}\n  actual   {actual_sha}"
+        )
+        .into());
+    }
+
+    let mut archive = zip::ZipArchive::new(io::Cursor::new(bytes.as_slice()))?;
+    let mut sg = archive
+        .by_name("ast-grep")
+        .map_err(|_| format!("Could not find 'ast-grep' in ast-grep archive {url}"))?;
+    let mut data = Vec::new();
+    io::copy(&mut sg, &mut data)?;
+    fs::write(&dest, &data)?;
+
+    compress_and_pin(&dest, "SG")?;
     Ok(())
 }
 

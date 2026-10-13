@@ -3212,6 +3212,20 @@ impl SessionActor {
                 Vec::new(),
             ),
             ToolInput::Grep(gs) => (gs.pattern.clone(), acp::ToolKind::Search, vec![], vec![]),
+            ToolInput::AstGrep(a) => (
+                format!("Pattern: {}", a.pattern),
+                acp::ToolKind::Other,
+                vec![],
+                vec![],
+            ),
+            ToolInput::CodeNav(c) => {
+                let title = match (c.symbol.as_deref(), c.path.as_deref(), c.line) {
+                    (Some(symbol), _, _) => format!("Find `{symbol}`"),
+                    (None, Some(path), Some(line)) => format!("{path}:{line}"),
+                    _ => "Code navigation".to_string(),
+                };
+                (title, acp::ToolKind::Other, vec![], vec![])
+            }
             ToolInput::WebSearch(ws) => (
                 format!("Web search: \"{}\"", ws.query),
                 acp::ToolKind::Search,

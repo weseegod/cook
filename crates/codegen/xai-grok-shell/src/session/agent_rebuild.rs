@@ -147,6 +147,7 @@ pub(crate) struct AgentRebuildSpec {
     pub read_file_max_output_bytes: usize,
     pub prompt_working_directory: Option<String>,
     pub lsp: Option<Arc<dyn LspBackend>>,
+    pub code_nav: Option<Arc<dyn xai_grok_tools::implementations::grok_build::CodeNavBackend>>,
     pub plugin_registry: Option<Arc<xai_grok_agent::plugins::PluginRegistry>>,
     pub api_key_provider: Option<SharedApiKeyProvider>,
     pub attribution_callback: Option<xai_grok_tools::SharedAttributionCallback>,
@@ -260,6 +261,7 @@ impl AgentRebuildSpec {
             read_file_max_output_bytes,
             prompt_working_directory,
             lsp,
+            code_nav,
             plugin_registry,
             api_key_provider,
             attribution_callback,
@@ -373,6 +375,9 @@ impl AgentRebuildSpec {
         }
         if let Some(lsp) = lsp.clone() {
             builder = builder.with_lsp(lsp);
+        }
+        if let Some(code_nav) = code_nav.clone() {
+            builder = builder.with_code_nav(code_nav);
         }
         if let Some(plugin_registry) = plugin_registry.clone() {
             builder = builder.with_plugin_registry(plugin_registry);
@@ -552,6 +557,7 @@ pub(crate) fn test_rebuild_spec_default() -> Arc<AgentRebuildSpec> {
         read_file_max_output_bytes: 0,
         prompt_working_directory: None,
         lsp: None,
+        code_nav: None,
         plugin_registry: None,
         api_key_provider: None,
         attribution_callback: None,

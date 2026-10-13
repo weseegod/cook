@@ -40,7 +40,9 @@ pub fn max_calls_per_batch(kind: ToolKind, limits: &MediaGenBatchLimits) -> Opti
         | ToolKind::Write
         | ToolKind::Move
         | ToolKind::Search
+        | ToolKind::AstGrep
         | ToolKind::Lsp
+        | ToolKind::CodeNav
         | ToolKind::Execute
         | ToolKind::Plan
         | ToolKind::WebSearch
@@ -486,7 +488,7 @@ mod tests {
         );
         assert_eq!(
             ToolKind::VARIANT_COUNT,
-            media_kinds.len() + 33,
+            media_kinds.len() + 35,
             "ToolKind grew/shrank; update max_calls_per_batch arms and this count"
         );
     }

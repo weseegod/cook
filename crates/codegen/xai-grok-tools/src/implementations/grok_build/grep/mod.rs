@@ -253,7 +253,13 @@ impl crate::types::tool_metadata::ToolMetadata for GrepTool {
 - Pass ${{ params.search.pattern }} as a raw regex string — no surrounding quotes.
 - Respects .gitignore unless you pass a broad glob like '--glob *'.
 - Only filter by '${{ params.search.type }}' or '${{ params.search.glob }}' when you are sure of the file type; import paths may not match source file types (.js vs .ts).
-- Output is ripgrep-style: ':' marks match lines, '-' marks context lines, grouped by file. Large results are capped and report "at least" counts."#
+- Output is ripgrep-style: ':' marks match lines, '-' marks context lines, grouped by file. Large results are capped and report "at least" counts.
+${%- if tools.by_kind.ast_grep %}
+- For a syntactic shape whose names vary between matches, use ${{ tools.by_kind.ast_grep }}.
+${%- endif %}
+${%- if tools.by_kind.code_nav %}
+- For one symbol's definition or references, use ${{ tools.by_kind.code_nav }}.
+${%- endif %}"#
     }
 }
 
@@ -889,6 +895,51 @@ mod tests {
     fn tool_name_and_description() {
         let tool = GrepTool;
         assert_eq!(xai_tool_runtime::Tool::id(&tool).as_str(), "grep");
+    }
+
+    /// The description points the other two search jobs at their own tools, and
+    /// drops a pointer when that tool is not in the registry.
+    #[test]
+    fn description_points_shape_and_symbol_jobs_at_their_tools() {
+        use crate::types::template_renderer::TemplateRenderer;
+        use crate::types::tool::ToolKind;
+        use crate::types::tool_metadata::ToolMetadata;
+        use std::collections::HashMap;
+
+        let template = ToolMetadata::description_template(&GrepTool);
+        let params = HashMap::from([(
+            ToolKind::Search,
+            HashMap::from([
+                ("pattern".to_string(), "pattern".to_string()),
+                ("type".to_string(), "type".to_string()),
+                ("glob".to_string(), "glob".to_string()),
+            ]),
+        )]);
+        let tools = HashMap::from([
+            (ToolKind::Search, "grep".to_string()),
+            (ToolKind::AstGrep, "ast_grep".to_string()),
+            (ToolKind::CodeNav, "code_nav".to_string()),
+        ]);
+        let rendered = TemplateRenderer::new(tools, params.clone())
+            .render(template)
+            .unwrap();
+        assert!(
+            rendered.contains("a syntactic shape whose names vary between matches, use ast_grep"),
+            "ast_grep pointer missing:\n{rendered}"
+        );
+        assert!(
+            rendered.contains("one symbol's definition or references, use code_nav"),
+            "code_nav pointer missing:\n{rendered}"
+        );
+
+        let tools = HashMap::from([(ToolKind::Search, "grep".to_string())]);
+        let rendered = TemplateRenderer::new(tools, params)
+            .render(template)
+            .unwrap();
+        assert!(
+            !rendered.contains("ast_grep") && !rendered.contains("code_nav"),
+            "pointers must not name absent tools:\n{rendered}"
+        );
     }
 
     #[test]
