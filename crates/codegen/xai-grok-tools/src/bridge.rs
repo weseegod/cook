@@ -155,6 +155,16 @@ impl ToolBridge {
         self.registry.tool_definitions_builtins_only_inline_mcp()
     }
 
+    /// Definitions for `client_names`, with descriptions and schema descriptions rendered against
+    /// only those tools. A per-turn surface that advertises fewer tools than the finalized toolset
+    /// must use this so a surviving description does not name a tool the surface dropped.
+    pub async fn tool_definitions_for_client_names(
+        &self,
+        client_names: &[&str],
+    ) -> Vec<ToolDefinition> {
+        self.registry.tool_definitions_for_client_names(client_names)
+    }
+
     /// Render a prompt template through [`TemplateRenderer`] with extra agent-specific context fields. The template can use
     /// both `${{ tools.by_kind.* }}` (resolved from the finalized tool registry) and caller-provided fields like `${{
     /// os_name }}`, `${{ memory_enabled }}`, etc. Returns `None` if the renderer is not yet available.
@@ -179,6 +189,21 @@ impl ToolBridge {
             .await
             .get::<TemplateRenderer>()
             .cloned()
+    }
+
+    /// Finalized renderer restricted to the kinds of the named tools. A prompt rendered through it
+    /// branches as if the tools outside the list were absent, so the copy names only tools the
+    /// active surface advertises. `None` when the renderer is not yet available.
+    pub async fn template_renderer_snapshot_for(
+        &self,
+        client_names: &[&str],
+    ) -> Option<TemplateRenderer> {
+        let snapshot = self.template_renderer_snapshot().await?;
+        let kinds: std::collections::HashSet<ToolKind> = client_names
+            .iter()
+            .filter_map(|name| self.registry.get_tool_metadata(name).map(|m| m.kind()))
+            .collect();
+        Some(snapshot.restricted_to(&kinds))
     }
 
     /// Sync on purpose: registration is a plain registry write, and callers gate it

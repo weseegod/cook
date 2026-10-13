@@ -194,14 +194,57 @@ impl Agent {
             .unwrap_or_default();
     }
 
+    /// Re-render the cached system prompt through `renderer` and install it. Used when a turn
+    /// surface advertises fewer tools than the finalized toolset, so the prompt copy names only
+    /// the advertised tools.
+    pub fn refresh_system_prompt_with(&mut self, renderer: &xai_grok_tools::types::template_renderer::TemplateRenderer) {
+        if let Some(prompt) = self.prompt_context.render_with_renderer(renderer) {
+            self.system_prompt = prompt;
+        }
+    }
+
     /// The pair comes only from [`PromptContext::render_paired`], so the installed context always matches its prompt.
     pub fn set_rendered_prompt(&mut self, rendered: RenderedPrompt) {
         (self.prompt_context, self.system_prompt) = rendered.into_parts();
     }
 
+    /// [`Self::render_prompt_for_definition`] with a renderer restricted to `allowed` client names,
+    /// so the copy names only the tools that surface advertises. Falls back to the full renderer
+    /// when the registry renderer is not available.
+    pub async fn render_prompt_for_definition_on_surface(
+        &self,
+        definition: &AgentDefinition,
+        allowed: &[&str],
+    ) -> String {
+        match self
+            .tool_bridge
+            .template_renderer_snapshot_for(allowed)
+            .await
+        {
+            Some(renderer) => self
+                .render_prompt_for_definition_with(definition, &renderer)
+                .await,
+            None => self.render_prompt_for_definition(definition).await,
+        }
+    }
+
     /// Re-render the system prompt for a different definition, reusing the existing ToolBridge.
     /// Used for mid-session mode switching.
     pub async fn render_prompt_for_definition(&self, definition: &AgentDefinition) -> String {
+        let renderer = self.tool_bridge.template_renderer_snapshot().await;
+        match renderer {
+            Some(renderer) => self.render_prompt_for_definition_with(definition, &renderer).await,
+            None => String::new(),
+        }
+    }
+
+    /// Shared body of the `render_prompt_for_definition*` pair: rebuild the context from
+    /// `definition` and render it through `renderer`.
+    async fn render_prompt_for_definition_with(
+        &self,
+        definition: &AgentDefinition,
+        renderer: &xai_grok_tools::types::template_renderer::TemplateRenderer,
+    ) -> String {
         let mut ctx = self.prompt_context.clone();
         ctx.prompt_mode = definition.prompt_mode.clone();
         ctx.prompt_body = definition.prompt_body.clone();
@@ -213,6 +256,6 @@ impl Agent {
             ctx.agents_md_files.clear();
         }
 
-        ctx.render(&self.tool_bridge).await.unwrap_or_default()
+        ctx.render_with_renderer(renderer).unwrap_or_default()
     }
 }

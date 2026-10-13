@@ -22,6 +22,28 @@ pub(super) fn session_mode_id_from_prompt_mode(prompt_mode: PromptMode) -> acp::
     acp::SessionModeId::new(mode.as_id())
 }
 
+/// Agent names whose tools are projected onto the per-turn surfaces.
+fn surface_projected_agent(agent_name: &str) -> bool {
+    matches!(
+        agent_name,
+        "grok-build"
+            | "grok-build-plan"
+            | "grok-build-plan-no-subagents"
+            | "grok-build-ask-user"
+            | "grok-build-concise"
+    )
+}
+
+/// The surface an idle primary session starts on before any plan handoff.
+pub(crate) fn initial_idle_surface(non_interactive: bool) -> ToolSurface {
+    resolve_tool_surface(false, false, non_interactive)
+}
+
+/// Whether `agent_name` is a primary agent whose tools are projected onto the per-turn surfaces.
+pub(crate) fn is_surface_projected_agent(agent_name: &str) -> bool {
+    surface_projected_agent(agent_name)
+}
+
 /// Project registered tool definitions onto the active [`ToolSurface`] allowlist.
 pub(crate) fn project_tools_for_surface(
     defs: Vec<ToolDefinition>,
@@ -73,15 +95,75 @@ impl SessionActor {
         if self.startup_hints.is_subagent {
             return false;
         }
-        let agent = self.agent.borrow();
-        matches!(
-            agent.definition().name.as_str(),
-            "grok-build"
-                | "grok-build-plan"
-                | "grok-build-plan-no-subagents"
-                | "grok-build-ask-user"
-                | "grok-build-concise"
-        )
+        surface_projected_agent(self.agent.borrow().definition().name.as_str())
+    }
+
+    /// Render `definition` with a renderer restricted to the active surface's tools, so the copy
+    /// names only the tools that surface advertises. A session that does not project a surface
+    /// keeps the full render.
+    pub(super) async fn render_prompt_for_surface(
+        &self,
+        definition: &xai_grok_agent::AgentDefinition,
+    ) -> String {
+        if !self.projects_tool_surface() {
+            return self
+                .agent
+                .borrow()
+                .render_prompt_for_definition(definition)
+                .await;
+        }
+        let allowed = tool_ids_for_surface(self.current_tool_surface());
+        self.agent
+            .borrow()
+            .render_prompt_for_definition_on_surface(definition, allowed)
+            .await
+    }
+
+    /// Re-render the installed system prompt for the active surface, keeping any injected memory
+    /// manifest suffix. Called after a surface change, where the installed prompt still names the
+    /// previous surface's tools.
+    pub(super) async fn refresh_system_prompt_for_surface(&self) {
+        if !self.projects_tool_surface() {
+            return;
+        }
+        let allowed = tool_ids_for_surface(self.current_tool_surface());
+        let Some(renderer) = self
+            .agent
+            .borrow()
+            .tool_bridge()
+            .template_renderer_snapshot_for(allowed)
+            .await
+        else {
+            return;
+        };
+        let fresh = self
+            .agent
+            .borrow()
+            .prompt_context()
+            .render_with_renderer(&renderer);
+        let Some(fresh) = fresh else {
+            return;
+        };
+
+        let mut conversation = self.chat_state_handle.get_conversation().await;
+        let Some(ConversationItem::System(sys)) = conversation.first_mut() else {
+            return;
+        };
+        // The memory index is appended after the rendered head, so keep it.
+        let manifest = sys
+            .content
+            .find(xai_chat_state::MEMORY_CONTEXT_OPEN_TAG)
+            .and_then(|start| sys.content.get(start..))
+            .map(str::to_owned);
+        let next = match manifest {
+            Some(block) => format!("{}\n\n{block}", fresh.trim_end_matches('\n')),
+            None => fresh,
+        };
+        if next.as_str() == sys.content.as_ref() {
+            return;
+        }
+        sys.content = std::sync::Arc::<str>::from(next);
+        self.chat_state_handle.replace_conversation(conversation);
     }
 
     pub(super) fn set_implementing_approved_plan(&self, value: bool) {
@@ -249,7 +331,7 @@ impl SessionActor {
             *self.active_agent_type.lock() = Some(def.name.clone());
         }
         if let Some(ref def) = agent_def {
-            let new_prompt = self.agent.borrow().render_prompt_for_definition(def).await;
+            let new_prompt = self.render_prompt_for_surface(def).await;
             let mut conversation = self.chat_state_handle.get_conversation().await;
             for item in conversation.iter_mut() {
                 if let ConversationItem::System(sys) = item {

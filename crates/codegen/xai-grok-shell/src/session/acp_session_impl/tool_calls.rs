@@ -2616,6 +2616,7 @@ impl SessionActor {
                                 .await;
                         }
                         self.set_implementing_approved_plan(true);
+                        self.refresh_system_prompt_for_surface().await;
                         return self
                             .complete_exit_plan_intercept(
                                 &call,
@@ -2635,6 +2636,7 @@ impl SessionActor {
                                 .await;
                         }
                         self.set_implementing_approved_plan(true);
+                        self.refresh_system_prompt_for_surface().await;
                         self.persist_plan_mode_state();
                         let result = self.complete_exit_plan_intercept(&call, &tool_call_id,
                             "The plan was approved for a clean run. Context cleared — implementing plan.".into()).await;
@@ -2662,6 +2664,7 @@ impl SessionActor {
                                 .await;
                         }
                         self.set_implementing_approved_plan(true);
+                        self.refresh_system_prompt_for_surface().await;
                         let plan_body =
                             std::fs::read_to_string(self.plan_mode.lock().plan_file_path())
                                 .map_err(|error| {
@@ -3042,6 +3045,7 @@ impl SessionActor {
                     return;
                 }
                 self.set_implementing_approved_plan(true);
+                self.refresh_system_prompt_for_surface().await;
                 let message = self.plan_approved_implement_message().await;
                 self.start_resume_turn(message, PromptMode::Agent, completion_tx)
                     .await;
@@ -3058,6 +3062,7 @@ impl SessionActor {
                     return;
                 }
                 self.set_implementing_approved_plan(true);
+                self.refresh_system_prompt_for_surface().await;
                 self.persist_plan_mode_state();
                 let anchor = self.clean_plan_anchor(approval_feedback.as_deref()).await;
                 let conversation = self.chat_state_handle.get_conversation().await;
@@ -3089,6 +3094,7 @@ impl SessionActor {
                     return;
                 }
                 self.set_implementing_approved_plan(true);
+                self.refresh_system_prompt_for_surface().await;
                 let plan_body = std::fs::read_to_string(self.plan_mode.lock().plan_file_path())
                     .unwrap_or(plan_body);
                 let objective = plan_title_or_default(&plan_body);

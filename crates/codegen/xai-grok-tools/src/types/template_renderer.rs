@@ -291,6 +291,21 @@ impl TemplateRenderer {
         self
     }
 
+    /// A clone that resolves only the given tool kinds. Shell flags, the reminder flag, the
+    /// whole-read policy, and the drafts path are copied, so a template renders the same way
+    /// except that a dropped kind reads as absent. Use this to render a copy for a per-turn
+    /// surface that advertises fewer tools than the finalized toolset.
+    #[must_use]
+    pub fn restricted_to(&self, kinds: &std::collections::HashSet<ToolKind>) -> Self {
+        let mut restricted = self.clone();
+        restricted.ctx.tools.by_kind.retain(|kind, _| kinds.contains(kind));
+        restricted.ctx.params.retain(|key, _| {
+            serde_json::from_value::<ToolKind>(serde_json::Value::String(key.clone()))
+                .is_ok_and(|kind| kinds.contains(&kind))
+        });
+        restricted
+    }
+
     /// Render a template string with the full context. `${{ tools.by_kind.read }}` — resolves to the client-facing Read tool name `${{
     /// params.edit.old_string }}` — resolves to the client-facing param name `${%- if tools.by_kind.search %}...${%- endif %}` — conditional
     /// sections Returns the raw template unchanged (without error) if it contains no template markers (`${{` or `${%`).

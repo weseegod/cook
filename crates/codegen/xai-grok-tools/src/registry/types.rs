@@ -415,6 +415,12 @@ struct FinalizedTool {
     /// internal schema used for `InputParam` requirement checks and TemplateRenderer param-name
     /// exposure, even if the exported tool definition schema is specialized per effective params.
     input_schema: serde_json::Value,
+    /// { canonical param → client-facing param } used to rebuild this definition for a projected
+    /// surface. Kept from finalize so a restricted re-render matches the original schema keys.
+    param_map: HashMap<String, String>,
+    /// Replaces the description template when set, from the tool config. Kept so a restricted
+    /// re-render keeps a host-supplied description instead of falling back to the template.
+    description_override: Option<String>,
     /// Client-facing param → canonical param, for reverse-remapping at dispatch.
     reverse_params: HashMap<String, String>,
     /// useful for parsing input to specific type
@@ -447,6 +453,9 @@ pub struct FinalizedToolset {
     /// Cloned into `ToolCallContext::extensions` on each `call()` so tools
     /// can resolve names without acquiring the `resources` mutex.
     renderer: Arc<TemplateRenderer>,
+    /// Finalize-time truncation settings. Kept so a projected-surface re-render
+    /// interpolates `{max_output_bytes}` the same way the finalize pass did.
+    truncation_config: crate::types::context::TruncationConfig,
     /// Tag name for system-reminder wrappers in tool result text.
     system_reminder_tag: &'static str,
     /// Per-user feature-flag bag stamped on every dispatch ctx by
@@ -1243,7 +1252,8 @@ impl ToolRegistryBuilder {
                 );
             }
             let build_definition = |effective_params: &serde_json::Value| {
-                let mut definition = entry.metadata.versioned_definition(
+                FinalizedToolset::build_definition(
+                    entry.metadata.as_ref(),
                     contract_version.as_deref(),
                     &client_name,
                     tool_config.description_override.as_deref(),
@@ -1251,24 +1261,8 @@ impl ToolRegistryBuilder {
                     &param_map,
                     &entry.input_schema,
                     effective_params,
-                );
-                if let Some(desc) = &definition.function.description {
-                    definition.function.description =
-                        Some(truncation_config.interpolate_description(
-                            desc,
-                            &client_name,
-                            crate::DEFAULT_TOOL_OUTPUT_BYTES,
-                            xai_tool_types::max_wait_block_ms(),
-                        ));
-                }
-                renderer.render_schema_descriptions(&mut definition.function.parameters);
-                truncation_config.apply_to_schema(
-                    &mut definition.function.parameters,
-                    &client_name,
-                    crate::DEFAULT_TOOL_OUTPUT_BYTES,
-                    xai_tool_types::max_wait_block_ms(),
-                );
-                definition
+                    &truncation_config,
+                )
             };
             let definition = build_definition(&effective_params);
             let inline_mcp_definition = (entry.kind == ToolKind::UseTool
@@ -1291,6 +1285,8 @@ impl ToolRegistryBuilder {
                 inline_mcp_definition,
                 effective_params,
                 input_schema: entry.input_schema,
+                param_map,
+                description_override: tool_config.description_override.clone(),
                 reverse_params,
                 parse_input: Arc::from(entry.parse_input),
                 contract_version,
@@ -1348,7 +1344,9 @@ impl ToolRegistryBuilder {
                 );
                 (Some(scheduler_cmd_rx), Some(cancel_token))
             };
-        resources.insert(crate::types::resources::TruncationCfg(truncation_config));
+        resources.insert(crate::types::resources::TruncationCfg(
+            truncation_config.clone(),
+        ));
         let shared_resources = resources.into_shared();
         if let (Some(cmd_rx), Some(cancel_token)) = (scheduler_cmd_rx, &scheduler_cancel_token) {
             let actor = crate::implementations::grok_build::scheduler::actor::SchedulerActor {
@@ -1371,6 +1369,7 @@ impl ToolRegistryBuilder {
             scheduler_cancel: scheduler_cancel_token,
             local_registry,
             renderer: renderer_arc,
+            truncation_config: truncation_config.clone(),
             system_reminder_tag: ctx.system_reminder_tag,
             workspace_viewer_ctx,
         })
@@ -1453,6 +1452,7 @@ impl FinalizedToolset {
                 std::collections::HashMap::new(),
                 std::collections::HashMap::new(),
             )),
+            truncation_config: crate::types::context::TruncationConfig::default(),
             system_reminder_tag: "system-reminder",
             workspace_viewer_ctx: None,
         }
@@ -1467,13 +1467,98 @@ impl FinalizedToolset {
             false
         }
     }
-    /// Get all tool definitions to send to the client.
+    /// Client-facing tool definitions, each description and schema description rendered against
+    /// the finalized toolset's full kind map.
+    ///
+    /// A per-turn surface that advertises fewer tools must use
+    /// [`Self::tool_definitions_for_client_names`] instead: the copy here names tools the surface
+    /// does not send.
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         self.tools
             .read()
             .iter()
             .map(|t| t.definition.clone())
             .collect()
+    }
+
+    /// Definitions for `client_names`, with every description and schema description rendered again
+    /// from a renderer whose kind map holds only those tools.
+    ///
+    /// Templates branch on `${{ tools.by_kind.<kind> }}`, so a tool that is not selected drops out
+    /// of every surviving description. That is what a per-turn surface needs: the definitions built
+    /// at finalize name the search and list tools the Implement allowlist removes. Selected tools
+    /// keep their config order. Inline `use_tool` forms are not rebuilt here because the surfaces
+    /// that project tools do not advertise `use_tool`.
+    pub fn tool_definitions_for_client_names(&self, client_names: &[&str]) -> Vec<ToolDefinition> {
+        let tools = self.tools.read();
+        let selected: Vec<&FinalizedTool> = tools
+            .iter()
+            .filter(|t| client_names.contains(&t.client_name.as_str()))
+            .collect();
+        if selected.is_empty() {
+            return Vec::new();
+        }
+        let kinds: std::collections::HashSet<ToolKind> =
+            selected.iter().map(|t| t.metadata.kind()).collect();
+        let renderer = self.renderer.restricted_to(&kinds);
+        selected
+            .iter()
+            .map(|t| {
+                Self::build_definition(
+                    t.metadata.as_ref(),
+                    t.contract_version.as_deref(),
+                    &t.client_name,
+                    t.description_override.as_deref(),
+                    &renderer,
+                    &t.param_map,
+                    &t.input_schema,
+                    &t.effective_params,
+                    &self.truncation_config,
+                )
+            })
+            .collect()
+    }
+
+    /// Build one client-facing definition from its stored inputs and a renderer. The finalize loop
+    /// and [`Self::tool_definitions_for_client_names`] share this so a description cannot drift
+    /// between the full toolset and a projected surface.
+    #[allow(clippy::too_many_arguments)]
+    fn build_definition(
+        metadata: &dyn ToolMetadata,
+        contract_version: Option<&str>,
+        client_name: &str,
+        description_override: Option<&str>,
+        renderer: &TemplateRenderer,
+        param_map: &HashMap<String, String>,
+        input_schema: &serde_json::Value,
+        effective_params: &serde_json::Value,
+        truncation_config: &crate::types::context::TruncationConfig,
+    ) -> ToolDefinition {
+        let mut definition = metadata.versioned_definition(
+            contract_version,
+            client_name,
+            description_override,
+            renderer,
+            param_map,
+            input_schema,
+            effective_params,
+        );
+        if let Some(desc) = &definition.function.description {
+            definition.function.description = Some(truncation_config.interpolate_description(
+                desc,
+                client_name,
+                crate::DEFAULT_TOOL_OUTPUT_BYTES,
+                xai_tool_types::max_wait_block_ms(),
+            ));
+        }
+        renderer.render_schema_descriptions(&mut definition.function.parameters);
+        truncation_config.apply_to_schema(
+            &mut definition.function.parameters,
+            client_name,
+            crate::DEFAULT_TOOL_OUTPUT_BYTES,
+            xai_tool_types::max_wait_block_ms(),
+        );
+        definition
     }
     /// Client-facing name of the (first) enabled tool of `kind`, honoring `name_override` / preset
     /// renames — `None` if no tool of that kind is enabled. Mirrors `${{ tools.by_kind.<kind> }}`
@@ -2067,6 +2152,8 @@ impl FinalizedToolset {
             definition,
             effective_params: serde_json::Value::Object(Default::default()),
             input_schema,
+            param_map: HashMap::new(),
+            description_override: None,
             reverse_params: HashMap::new(),
             parse_input: Arc::new(move |json| {
                 Ok(ToolInput::MCPTool(crate::types::tool_io::MCPToolInput {
@@ -5390,6 +5477,173 @@ mod tests {
             .expect("finalize succeeds");
         (Arc::new(toolset), tmp)
     }
+    /// Finalize the coding keep-set a session builds before surface projection: bash, read, edit,
+    /// write, background-task, plus the search and list tools the Implement allowlist drops. Bash
+    /// carries the headless params so its description uses the one-wait branch.
+    fn coding_keep_set_toolset() -> (Arc<FinalizedToolset>, TempDir) {
+        let tmp = TempDir::new().unwrap();
+        let bash = ToolConfig {
+            params: Some(serde_json::Map::from_iter([(
+                "return_output_on_block".to_string(),
+                serde_json::json!(true),
+            )])),
+            ..ToolConfig::from(&crate::implementations::grok_build::BashTool)
+                .with_name("run_terminal_command")
+        };
+        let config = ToolServerConfig {
+            tools: vec![
+                bash,
+                ToolConfig::from(&crate::implementations::grok_build::ReadFileTool),
+                ToolConfig::from(&crate::implementations::grok_build::SearchReplaceTool),
+                ToolConfig::from(&crate::implementations::opencode::OpenCodeWriteTool),
+                ToolConfig::from(&crate::implementations::grok_build::BackgroundTaskTool),
+                ToolConfig::from(&crate::implementations::grok_build::GrepTool),
+                ToolConfig::from(&crate::implementations::grok_build::ListDirTool),
+                ToolConfig::from(&crate::implementations::opencode::OpenCodeGlobTool),
+            ],
+            behavior_preset: None,
+        };
+        let toolset = ToolRegistryBuilder::new()
+            .finalize(config, test_session_context(&tmp))
+            .expect("finalize succeeds");
+        (Arc::new(toolset), tmp)
+    }
+
+    /// The coding surface drops the search and list tools, so the bash prefer-tools sentence must
+    /// not name them. The same toolset projected to TaskOpen keeps those names.
+    #[tokio::test]
+    async fn implement_projection_drops_the_search_and_list_mentions() {
+        let (toolset, _tmp) = coding_keep_set_toolset();
+        let bash_description = |names: &[&str]| {
+            toolset
+                .tool_definitions_for_client_names(names)
+                .into_iter()
+                .find(|d| d.function.name == "run_terminal_command")
+                .and_then(|d| d.function.description)
+                .expect("bash stays on every surface")
+        };
+
+        let implement = [
+            "run_terminal_command",
+            "read_file",
+            "search_replace",
+            "write",
+            "background_task",
+        ];
+        assert_eq!(
+            toolset.tool_definitions_for_client_names(&implement).len(),
+            implement.len(),
+            "every selected tool is returned"
+        );
+        let desc = bash_description(&implement);
+        for present in [
+            "read_file",
+            "search_replace",
+            "write",
+            "this call waits and returns the output",
+        ] {
+            assert!(desc.contains(present), "{present} must appear: {desc}");
+        }
+        for absent in ["for content search", "for listing files", "list_dir", "glob"] {
+            assert!(!desc.contains(absent), "{absent} must not appear: {desc}");
+        }
+
+        let task_open = [
+            "run_terminal_command",
+            "read_file",
+            "search_replace",
+            "write",
+            "list_dir",
+            "glob",
+            "grep",
+            "background_task",
+        ];
+        let desc = bash_description(&task_open);
+        assert!(desc.contains("for content search"), "{desc}");
+        assert!(desc.contains("for listing files"), "{desc}");
+
+        // The restricted re-render keeps the selected tools' schema properties.
+        let defs = toolset.tool_definitions_for_client_names(&implement);
+        let bash = defs
+            .iter()
+            .find(|d| d.function.name == "run_terminal_command")
+            .expect("bash selected");
+        let props = bash.function.parameters["properties"]
+            .as_object()
+            .expect("bash schema keeps properties");
+        for param in ["block_until_ms", "command", "workdir"] {
+            assert!(props.contains_key(param), "bash lost {param}: {props:?}");
+        }
+
+        // Re-rendering must change copy only, never the advertised set: it has to match the
+        // name-filtered full toolset exactly.
+        let mut projected: Vec<String> = defs.iter().map(|d| d.function.name.clone()).collect();
+        projected.sort();
+        let mut filtered: Vec<String> = toolset
+            .tool_definitions()
+            .into_iter()
+            .map(|d| d.function.name)
+            .filter(|name| implement.contains(&name.as_str()))
+            .collect();
+        filtered.sort();
+        assert_eq!(projected, filtered, "the advertised set must not change");
+    }
+
+    /// A host-supplied description and a renamed schema property survive the projected re-render.
+    #[tokio::test]
+    async fn projection_keeps_a_description_override_and_param_rename() {
+        let tmp = TempDir::new().unwrap();
+        let config = ToolServerConfig {
+            tools: vec![
+                ToolConfig::from(&crate::implementations::grok_build::ReadFileTool),
+                ToolConfig {
+                    params_name_overrides: Some(HashMap::from([(
+                        "old_string".to_string(),
+                        "find".to_string(),
+                    )])),
+                    ..ToolConfig::from(&crate::implementations::grok_build::SearchReplaceTool)
+                },
+                ToolConfig::from(&crate::implementations::grok_build::BashTool)
+                    .with_name("run_terminal_command")
+                    .with_description("Host bash description."),
+                // Bash requires the background-task kind.
+                ToolConfig::from(&crate::implementations::grok_build::BackgroundTaskTool),
+            ],
+            behavior_preset: None,
+        };
+        let toolset = ToolRegistryBuilder::new()
+            .finalize(config, test_session_context(&tmp))
+            .expect("finalize succeeds");
+        let defs = toolset.tool_definitions_for_client_names(&[
+            "read_file",
+            "search_replace",
+            "run_terminal_command",
+        ]);
+        let bash = defs
+            .iter()
+            .find(|d| d.function.name == "run_terminal_command")
+            .expect("bash selected");
+        assert_eq!(
+            bash.function.description.as_deref(),
+            Some("Host bash description."),
+            "a description override must survive the projected re-render"
+        );
+        let sr = defs
+            .iter()
+            .find(|d| d.function.name == "search_replace")
+            .expect("search_replace selected");
+        assert!(
+            sr.function.parameters["properties"].get("find").is_some(),
+            "renamed param must survive: {}",
+            sr.function.parameters
+        );
+        assert!(
+            sr.function.parameters["properties"].get("old_string").is_none(),
+            "canonical param name must not reappear: {}",
+            sr.function.parameters
+        );
+    }
+
     #[tokio::test]
     async fn prepare_dispatch_stamps_workspace_viewer_ctx_when_present() {
         let (toolset, _tmp) = toolset_with_viewer_ctx(

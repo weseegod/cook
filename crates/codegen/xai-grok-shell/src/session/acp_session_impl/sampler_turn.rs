@@ -433,16 +433,21 @@ impl SessionActor {
         let bridge = self.agent.borrow().tool_bridge().clone();
 
         // Local mode: tool search is always enabled
-        let defs = if self.mcp_file_forms_hidden().await {
-            bridge.tool_definitions_builtins_only_inline_mcp().await
-        } else {
-            bridge.tool_definitions_builtins_only().await
+        let defs = || async {
+            if self.mcp_file_forms_hidden().await {
+                bridge.tool_definitions_builtins_only_inline_mcp().await
+            } else {
+                bridge.tool_definitions_builtins_only().await
+            }
         };
 
         if !self.projects_tool_surface() {
-            return defs;
+            return defs().await;
         }
-        project_tools_for_surface(defs, self.current_tool_surface())
+        // Render the surviving tools' copy from the surface's kind set. Filtering the finalized
+        // definitions by name leaves descriptions naming the tools this surface drops.
+        let allowed = xai_grok_agent::tool_ids_for_surface(self.current_tool_surface());
+        bridge.tool_definitions_for_client_names(allowed).await
     }
 
     /// Messages-backed models never see `use_tool`'s file forms: the Anthropic Messages API rejects the schema's

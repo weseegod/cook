@@ -1340,7 +1340,7 @@ pub(crate) async fn spawn_session_actor(
     let agent_build_span = spawn_ctx
         .as_ref()
         .map(|ctx| phase_region_under(SubagentSpawnPhase::AgentBuild, &ctx.parent));
-    let (agent, agent_build_elapsed) = rebuild_spec
+    let (mut agent, agent_build_elapsed) = rebuild_spec
         .build_agent_with_initial_overrides(
             agent_definition,
             system_prompt_label,
@@ -1478,12 +1478,27 @@ pub(crate) async fn spawn_session_actor(
     drop(tool_setup_span);
     crate::waterfall::mark(&wf_sid, crate::waterfall::stage::SB_AGENT_BUILT);
     let prefix_build = spawn_step!("prefix_build");
+    let is_subagent_spawn = startup_hints.is_subagent;
+    let session_non_interactive = startup_hints.non_interactive;
+    // A primary session renders its prompt against the surface it starts on, so the copy does not
+    // name tools that surface does not advertise.
+    if !is_subagent_spawn
+        && super::session_mode::is_surface_projected_agent(agent.definition().name.as_str())
+    {
+        let surface = super::session_mode::initial_idle_surface(session_non_interactive);
+        let allowed = xai_grok_agent::tool_ids_for_surface(surface);
+        if let Some(renderer) = agent
+            .tool_bridge()
+            .template_renderer_snapshot_for(allowed)
+            .await
+        {
+            agent.refresh_system_prompt_with(&renderer);
+        }
+    }
     let system_prompt = agent.system_prompt().to_string();
     let mut prompt_context = agent.prompt_context().clone();
     prompt_context.normalize_for_persistence();
     save_prompt_context(&session_info, &prompt_context);
-    let is_subagent_spawn = startup_hints.is_subagent;
-    let session_non_interactive = startup_hints.non_interactive;
     install_system_prompt(
         &mut conversation,
         &mut startup_hints.inherited_prefix_len,

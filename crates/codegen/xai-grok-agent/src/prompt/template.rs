@@ -690,8 +690,8 @@ mod tests {
             "non-interactive prompt must keep the workspace-file follow-through rule"
         );
         assert!(
-            prompt.contains("confirm with memory_search before claiming it is stored"),
-            "non-interactive prompt must require tool-backed durable memory writes"
+            !prompt.contains("confirm with memory_search before claiming it is stored"),
+            "the memory confirmation is gated on the memory tool, which default_renderer omits"
         );
         assert!(
             prompt.contains("On a turn that only calls tools, keep reasoning to the decision."),
@@ -751,6 +751,66 @@ mod tests {
         assert!(
             prompt.contains("NEVER coin acronyms, shorthand, or technical-sounding labels"),
             "interactive prompt must keep the long communication block"
+        );
+    }
+
+    /// The headless work loop names only the tools the surface advertises. Implement has neither
+    /// `todo_write` nor `memory_search`, so both sentences must drop out; the unconditional
+    /// working-tree and stop lines stay. A surface that has the tools keeps both sentences.
+    #[test]
+    fn non_interactive_prompt_names_only_the_tools_it_advertises() {
+        let mut p = default_placeholders();
+        jset(&mut p, "is_non_interactive", serde_json::json!(true));
+
+        let implement: HashMap<ToolKind, String> = [
+            (ToolKind::Read, "read_file"),
+            (ToolKind::Edit, "search_replace"),
+            (ToolKind::Write, "write"),
+            (ToolKind::Execute, "run_terminal_command"),
+            (ToolKind::BackgroundTaskAction, "background_task"),
+        ]
+        .into_iter()
+        .map(|(kind, name)| (kind, name.to_string()))
+        .collect();
+        let prompt = render_base(&TemplateRenderer::new(implement, HashMap::new()), &p);
+        assert!(
+            !prompt.contains("todo_write"),
+            "todo_write must drop out of the implement prompt: {prompt}"
+        );
+        assert!(
+            !prompt.contains("memory_search"),
+            "memory_search must drop out of the implement prompt: {prompt}"
+        );
+        assert!(
+            prompt.contains("When the request is done, stop."),
+            "the stop line is unconditional: {prompt}"
+        );
+        assert!(
+            prompt.contains(
+                "Prefer the working tree over searching other commits or the network for an existing patch."
+            ),
+            "the working-tree line is unconditional: {prompt}"
+        );
+
+        let full: HashMap<ToolKind, String> = [
+            (ToolKind::Read, "read_file"),
+            (ToolKind::Edit, "search_replace"),
+            (ToolKind::Write, "write"),
+            (ToolKind::Execute, "run_terminal_command"),
+            (ToolKind::Plan, "todo_write"),
+            (ToolKind::MemorySearch, "memory_search"),
+        ]
+        .into_iter()
+        .map(|(kind, name)| (kind, name.to_string()))
+        .collect();
+        let prompt = render_base(&TemplateRenderer::new(full, HashMap::new()), &p);
+        assert!(
+            prompt.contains("write one short todo_write list"),
+            "a surface with the plan tool keeps the todo sentence: {prompt}"
+        );
+        assert!(
+            prompt.contains("confirm with memory_search before claiming it is stored"),
+            "a surface with the memory tool keeps the confirmation: {prompt}"
         );
     }
 
