@@ -302,8 +302,6 @@ pub fn implement_tool_ids() -> &'static [&'static str] {
         "read_file",
         "search_replace",
         "write",
-        "list_dir",
-        "glob",
         "grep",
         "kill_command_or_subagent",
         "get_command_or_subagent_output",
@@ -1704,6 +1702,13 @@ mod tests {
         let task_open = task_open_tool_ids();
         let plan = plan_tool_ids();
         assert!(implement.contains(&"write"));
+        assert!(implement.contains(&"grep"));
+        assert!(!implement.contains(&"list_dir"));
+        assert!(!implement.contains(&"glob"));
+        assert!(task_open.contains(&"list_dir"));
+        assert!(task_open.contains(&"glob"));
+        assert!(plan.contains(&"list_dir"));
+        assert!(plan.contains(&"glob"));
         assert!(!implement.contains(&"enter_plan_mode"));
         assert!(!implement.contains(&"web_search"));
         assert!(!implement.contains(&"spawn_subagent"));
