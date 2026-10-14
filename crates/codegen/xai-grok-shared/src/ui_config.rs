@@ -329,12 +329,13 @@ impl UiConfig {
     }
 
     /// Canonical default for `[ui].follow_up_behavior`.
-    pub const FOLLOW_UP_BEHAVIOR_DEFAULT: &'static str = "queue";
+    pub const FOLLOW_UP_BEHAVIOR_DEFAULT: &'static str = "steer";
 
     /// Resolved follow-up behavior: `"queue"` or `"steer"`.
-    /// Unknown values fall back to queue.
+    /// Unset and unknown values fall back to the default (steer); an explicit `"queue"` is kept.
     pub fn follow_up_behavior(&self) -> &'static str {
         match self.follow_up_behavior.as_deref() {
+            Some("queue") => "queue",
             Some("steer") => "steer",
             _ => Self::FOLLOW_UP_BEHAVIOR_DEFAULT,
         }

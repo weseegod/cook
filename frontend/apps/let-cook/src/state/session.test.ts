@@ -256,6 +256,79 @@ describe("session transcript reducer", () => {
     expect(next.blocks[0]).toMatchObject({ text: "look", images: ["data:image/png;base64,AAAA"] });
   });
 
+  it("renders a replayed mid-turn steer from its displayText", () => {
+    const transcript: TranscriptState = {
+      blocks: [{ type: "message", id: "u1", turnId: "turn-u1", role: "user", text: "first prompt", images: [], streaming: false }],
+      cursor: { turnId: "turn-u1", assistantId: "a1", thoughtId: null, optimisticUserId: null },
+    };
+    const next = reduceTranscript(transcript, {
+      sessionUpdate: "user_message_chunk",
+      _meta: { modelId: "m", interjection: true },
+      content: {
+        type: "text",
+        text: "The user sent a message while you were working:\n<user_query>\nsteer left\n</user_query>",
+        _meta: { displayText: "steer left" },
+      },
+    });
+    expect(next.blocks).toHaveLength(2);
+    expect(next.blocks[0]).toMatchObject({ id: "u1", text: "first prompt" });
+    expect(next.blocks[1]).toMatchObject({
+      type: "message",
+      role: "user",
+      text: "steer left",
+      interjection: true,
+      turnId: "turn-u1",
+    });
+  });
+
+  it("keeps a steer's own image part on the steer bubble", () => {
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "user_message_chunk",
+      _meta: { interjection: true },
+      content: { type: "text", text: "frame", _meta: { displayText: "look at this" } },
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "user_message_chunk",
+      _meta: { interjection: true },
+      content: { type: "image", mimeType: "image/png", data: "AAAA" },
+    });
+    expect(transcript.blocks).toHaveLength(1);
+    expect(transcript.blocks[0]).toMatchObject({
+      text: "look at this",
+      images: ["data:image/png;base64,AAAA"],
+      interjection: true,
+    });
+  });
+
+  it("does not let a steer adopt or clear the optimistic prompt this window sent", () => {
+    const transcript: TranscriptState = {
+      blocks: [{ type: "message", id: "local-1", turnId: "turn-1", role: "user", text: "mine", images: [], streaming: false }],
+      cursor: { turnId: "turn-1", assistantId: null, thoughtId: null, optimisticUserId: "local-1" },
+    };
+    const next = reduceTranscript(transcript, {
+      sessionUpdate: "user_message_chunk",
+      _meta: { interjection: true },
+      content: { type: "text", text: "frame", _meta: { displayText: "steer left" } },
+    });
+    expect(next.blocks).toHaveLength(2);
+    expect(next.blocks[0]).toMatchObject({ id: "local-1", text: "mine" });
+    expect(next.cursor.optimisticUserId).toBe("local-1");
+  });
+
+  it("does not merge a prompt onto a steer bubble", () => {
+    let transcript = reduceTranscript(empty(), {
+      sessionUpdate: "user_message_chunk",
+      _meta: { interjection: true },
+      content: { type: "text", text: "frame", _meta: { displayText: "steer left" } },
+    });
+    transcript = reduceTranscript(transcript, {
+      sessionUpdate: "user_message_chunk",
+      content: { type: "text", text: "next prompt" },
+    });
+    expect(transcript.blocks).toHaveLength(2);
+    expect(transcript.blocks[1]).toMatchObject({ text: "next prompt", turnId: "turn-user-1" });
+  });
+
   it("renders an image content part as a data URL", () => {
     const next = reduceTranscript(empty(), {
       sessionUpdate: "agent_message_chunk",

@@ -83,9 +83,9 @@ collapsed_edit_blocks = false          # show edits as one-line +N/-M diffstat s
 page_flip_on_send = true               # pin a just-sent prompt at the top of the viewport so the
                                        # response starts on a fresh page (default: true); set false
                                        # so sending never moves the scroll position
-follow_up_behavior = "queue"           # mid-turn follow-ups: "queue" (wait for turn end; default) or
-                                       # "steer" (plain Enter still queues visibly, then injects at the
-                                       # next tool/model safe gap). See Keyboard Shortcuts → Mid-turn.
+follow_up_behavior = "steer"           # mid-turn follow-ups: "steer" (plain Enter still queues visibly,
+                                       # then injects at the next tool/model safe gap; default) or
+                                       # "queue" (wait for turn end). See Keyboard Shortcuts → Mid-turn.
 screen_mode = "fullscreen"             # default render mode: "fullscreen" | "minimal"
                                        # (unset → fullscreen); set via /settings → Default screen mode
 

@@ -599,9 +599,9 @@ pub fn default_settings() -> Vec<SettingMeta> {
             owner: SettingOwner::Shared,
             label: "Follow-up behavior",
             description: "What to do with messages you send while a turn is \
-                          running. Queue waits for the turn to finish; Steer \
-                          injects them mid-turn at the next tool batch or \
-                          model step. Default: Queue.",
+                          running. Steer injects them mid-turn at the next \
+                          tool batch or model step; Queue waits for the turn \
+                          to finish. Default: Steer.",
             keywords: &[
                 "queue",
                 "steer",

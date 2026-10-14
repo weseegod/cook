@@ -629,7 +629,7 @@ User-level configuration lives in `$GROK_HOME/config.toml` (default `~/.cook/con
 | `ui.cursor_blink` | `boolean` | `yes` | `user` | Force blinking (true) or steady (false) block cursor. Unset inherits the terminal. |
 | `ui.default_selected_permission` | `string` | `yes` | `user` | Preselected approval row on the first prompt of a session. Also GROK_DEFAULT_SELECTED_PERMISSION. |
 | `ui.display_refresh.auto_cadence_enabled` | `boolean` | `yes` | `user` | Match stream/scroll cadence to display refresh rate. Also GROK_DISPLAY_REFRESH_AUTO_CADENCE. |
-| `ui.follow_up_behavior` | `queue / steer` | `yes` | `user` | Mid-turn follow-up routing. |
+| `ui.follow_up_behavior` | `steer / queue` | `yes` | `user` | Mid-turn follow-up routing (default `steer`). |
 | `ui.fork_secondary_model` | `string` | `yes` | `user` | Model for the secondary agent when forking. Defaults to the main default model. |
 | `ui.group_tool_verbs` | `boolean` | `yes` | `user` | Fold consecutive read/search/list tool rows. Also GROK_GROUP_TOOL_VERBS. |
 | `ui.hunk_tracker_mode` | `agent_only / all_dirty / off` | `yes` | `user` | File-change hunk tracking. Also GROK_HUNK_TRACKER and `--hunk-tracker-mode`. |
