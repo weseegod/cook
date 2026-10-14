@@ -104,6 +104,12 @@ pub(super) fn tool_output_span_outcome(
 /// Blocking wait tools that should abort when a mid-turn interjection is pending.
 fn is_interruptible_wait_tool(tool_name: &str, args: &serde_json::Value) -> bool {
     match tool_name {
+        // The unified lifecycle tool blocks only for `wait`, or for `output` with a positive timeout.
+        "background_task" => match args.get("action").and_then(|v| v.as_str()) {
+            Some("wait") => true,
+            Some("output") => xai_tool_types::task_output_waits_from_json(args),
+            _ => false,
+        },
         "get_task_output"
         | "get_command_or_subagent_output"
         | "get_task_or_subagent_output"

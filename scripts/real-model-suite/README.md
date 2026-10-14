@@ -21,7 +21,7 @@ Tool arguments are recovered from `chat_history.jsonl` assistant records. The fi
 
 The ACP smoke follows the in-tree method constants and uses `initialize`, `session/new`, and `session/prompt`.
 
-The stock agent profile exposes five clearer aliases. Scoring maps them back to the canonical case ids: `run_terminal_command` → `run_terminal_cmd`, `spawn_subagent` → `task`, `get_command_or_subagent_output` → `get_task_output`, `wait_commands_or_subagents` → `wait_tasks`, and `kill_command_or_subagent` → `kill_task`.
+The stock agent profile exposes clearer aliases. Scoring maps them back to the canonical case ids: `run_terminal_command` → `run_terminal_cmd`, `spawn_subagent` → `task`, and the unified `background_task` → `get_task_output` / `wait_tasks` / `kill_task` by its `action` (`output` / `wait` / `kill`). The retired names `get_command_or_subagent_output`, `wait_commands_or_subagents`, and `kill_command_or_subagent` still map to the same three ids.
 
 ## Coverage boundaries
 

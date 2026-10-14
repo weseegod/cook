@@ -1376,7 +1376,7 @@ impl BashTool {
         // renders as empty-`Ok`, so a `Result` fallback never fires.
         let get_task_name = renderer
             .tool_for_kind(ToolKind::BackgroundTaskAction)
-            .unwrap_or("get_task_output")
+            .unwrap_or("background_task")
             .to_string();
         let task_ids_param = renderer
             .param_for_kind(ToolKind::BackgroundTaskAction, "task_ids")
@@ -1561,8 +1561,8 @@ impl BashTool {
         r#"Run a ${%- if is_windows %} shell command${%- else %} bash command${%- endif %} and return its output.
 
 Usage notes:
-  - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms).${%- if return_output_on_block | default(false) %} A foreground command still running at ${{ params.execute.block_until_ms }} is killed and its output is returned. Pass a larger ${{ params.execute.block_until_ms }} to wait longer. Only `${{ params.execute.block_until_ms }}: 0` runs the command in the background.${%- else %} A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}. `${{ params.execute.block_until_ms }}: 0` runs the command in the background immediately.${%- endif %}
-  - Background commands run until they exit${%- if tools.by_kind.kill_task_action %}, until you stop them with ${{ tools.by_kind.kill_task_action }},${%- endif %} or until the ${{ background_cap_hours }}h background cap.${%- if tools.by_kind.kill_task_action %} ${{ tools.by_kind.kill_task_action }}${%- else %} Stopping a command${%- endif %}${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately.${%- else %} sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.${%- endif %}
+  - You can specify an optional ${{ params.execute.block_until_ms }} in milliseconds (up to ${{ max_block_until_ms | default(36000000) }}ms).${%- if return_output_on_block | default(false) %} A foreground command still running at ${{ params.execute.block_until_ms }} is killed and its output is returned. Pass a larger ${{ params.execute.block_until_ms }} to wait longer. Only `${{ params.execute.block_until_ms }}: 0` runs the command in the background.${%- else %} A foreground command still running at ${{ params.execute.block_until_ms }} is moved to the background instead of killed; once backgrounded it runs until it exits (background cap ${{ background_cap_hours }}h). You will receive a task id; wait for it with ${{ tools.by_kind.background_task_action }}.${%- endif %}
+  - ${{ tools.by_kind.background_task_action }} reads, waits for, or stops a background command (actions "output", "wait", "kill"). Background commands run until they exit, until you stop them, or until the ${{ background_cap_hours }}h background cap. ${{ tools.by_kind.background_task_action }} action "kill"${%- if is_windows %} terminates the child's Job Object, killing every descendant process immediately.${%- else %} sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.${%- endif %}
   - If the output exceeds {max_output_bytes} characters,${%- if return_output_on_block | default(false) %} you keep the end and the result names the log file with the full output, which you can read or search.${%- else %} the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.${%- endif %}
   - Set `${{ params.execute.block_until_ms }}` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background.${%- if has_unix_utilities %} You do not need to use '&' at the end of the command when using this parameter.${%- endif %}
   - The shell is already in the workspace. Pass ${{ params.execute.workdir }} instead of `cd <dir> &&`.
@@ -1738,19 +1738,13 @@ impl crate::types::tool_metadata::ToolMetadata for BashTool {
     }
 
     fn requires_expr(&self) -> Expr<ToolRequirement> {
-        // If our param `enabled_background` is true (the default), we need both a
-        // BackgroundTaskAction tool (get_task_output) and a KillTaskAction tool (kill_task) so the
-        // agent can interact with backgrounded commands.
-        Expr::And(vec![
-            Expr::Value(ToolRequirement::if_params(
-                ToolParamsRequirement::new("enabled_background", true),
-                ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction),
-            )),
-            Expr::Value(ToolRequirement::if_params(
-                ToolParamsRequirement::new("enabled_background", true),
-                ToolRequirement::tool_kind(ToolKind::KillTaskAction),
-            )),
-        ])
+        // If our param `enabled_background` is true (the default), we need the
+        // background-task tool (`background_task`) so the agent can read, wait
+        // on, and kill backgrounded commands.
+        Expr::Value(ToolRequirement::if_params(
+            ToolParamsRequirement::new("enabled_background", true),
+            ToolRequirement::tool_kind(ToolKind::BackgroundTaskAction),
+        ))
     }
 }
 
@@ -2698,7 +2692,7 @@ mod tests {
         resources.insert(TemplateRenderer::new(
             HashMap::from([(
                 ToolKind::BackgroundTaskAction,
-                "get_task_output".to_string(),
+                "background_task".to_string(),
             )]),
             HashMap::from([
                 (ToolKind::Execute, execute_params),
@@ -2780,7 +2774,7 @@ mod tests {
         resources.insert(TemplateRenderer::new(
             HashMap::from([(
                 ToolKind::BackgroundTaskAction,
-                "get_task_output".to_string(),
+                "background_task".to_string(),
             )]),
             HashMap::from([
                 (
@@ -3329,7 +3323,7 @@ mod tests {
                 assert_eq!(bg.task_type, "bash");
                 assert_eq!(bg.status, "running");
                 assert_eq!(bg.command, "sleep 3600");
-                assert!(bg.retrieval_hint.contains("get_task_output"));
+                assert!(bg.retrieval_hint.contains("background_task"));
                 assert!(bg.retrieval_hint.contains("task_id"));
                 assert!(bg.retrieval_hint.contains("bg-task-42"));
             }
@@ -3743,9 +3737,9 @@ mod tests {
         }
     }
 
-    /// The get-output tool is absent from the finalized toolset (no `BackgroundTaskAction` mapping): the retrieval hint
-    /// must fall back to the canonical `get_task_output` name instead of rendering an empty tool name. A missing kind
-    /// renders as empty-`Ok` (lenient undefined), so the old `Result`-based fallback never fired.
+    /// The background-task tool is absent from the finalized toolset (no `BackgroundTaskAction` mapping): the retrieval
+    /// hint must fall back to the canonical `background_task` name instead of rendering an empty tool name. A missing
+    /// kind renders as empty-`Ok` (lenient undefined), so the old `Result`-based fallback never fired.
     #[tokio::test]
     async fn background_hint_falls_back_when_get_output_tool_absent() {
         let mut resources = make_resources(MockTerminal::background_ok("t2"));
@@ -3764,7 +3758,7 @@ mod tests {
             BashToolOutput::Background(bg) => {
                 assert!(
                     bg.retrieval_hint.contains(
-                        "Use get_task_output with task_ids=[\"t2\"] when you need the output."
+                        "Use background_task with task_ids=[\"t2\"] when you need the output."
                     ),
                     "Hint should fall back to canonical names: {}",
                     bg.retrieval_hint
@@ -4529,7 +4523,7 @@ mod tests {
                 HashMap::from([
                     (
                         ToolKind::BackgroundTaskAction,
-                        "get_task_output".to_string(),
+                        "background_task".to_string(),
                     ),
                     (ToolKind::KillTaskAction, "kill_task".to_string()),
                 ]),
@@ -4950,7 +4944,7 @@ mod tests {
                 "tool desc must match the post-background cap: {desc}"
             );
             assert!(
-                desc.contains("get_task_output"),
+                desc.contains("background_task"),
                 "tool desc must name the get-output tool via ToolKind: {desc}"
             );
             assert!(
@@ -5048,11 +5042,7 @@ mod tests {
                     (ToolKind::Execute, "run_terminal_cmd".to_string()),
                     (
                         ToolKind::BackgroundTaskAction,
-                        "get_command_or_subagent_output".to_string(),
-                    ),
-                    (
-                        ToolKind::KillTaskAction,
-                        "kill_command_or_subagent".to_string(),
+                        "background_task".to_string(),
                     ),
                 ]),
                 HashMap::from([(
@@ -5448,7 +5438,7 @@ mod tests {
                 bg.summary,
                 "Command \"build the crate\" is still running after 45s (block_until_ms) and has been moved to the background as task call-9."
             );
-            assert!(bg.retrieval_hint.contains("get_task_output"));
+            assert!(bg.retrieval_hint.contains("background_task"));
         }
 
         /// With backgrounding disabled `block_until_ms` is ignored. The legacy `timeout` contract applies.
@@ -5508,7 +5498,7 @@ mod tests {
             BashTool::rendered_description(None, &renderer(reminders), params, BashVersion::Current)
         }
 
-        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with get_command_or_subagent_output. `block_until_ms: 0` runs the command in the background immediately.\n  - Background commands run until they exit, until you stop them with kill_command_or_subagent, or until the 10h background cap. kill_command_or_subagent sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
+        const CURRENT_DESCRIPTION_PRODUCT: &str = "Run a bash command and return its output.\n\nUsage notes:\n  - You can specify an optional block_until_ms in milliseconds (up to 36000000ms). A foreground command still running at block_until_ms is moved to the background instead of killed; once backgrounded it runs until it exits (background cap 10h). You will receive a task id; wait for it with background_task.\n  - background_task reads, waits for, or stops a background command (actions \"output\", \"wait\", \"kill\"). Background commands run until they exit, until you stop them, or until the 10h background cap. background_task action \"kill\" sends SIGTERM to the process group, then SIGKILL after ~1s; processes that did not detach via `setsid` / `nohup` are killed with it.\n  - If the output exceeds {max_output_bytes} characters, the middle is truncated (you keep the beginning and end) and the result includes the path to a log file with the full output, which you can read or search.\n  - Set `block_until_ms` to 0 to run the command in the background (e.g., dev servers, long builds): it returns a task id immediately and keeps running in the background. You do not need to use '&' at the end of the command when using this parameter.\n  - The shell is already in the workspace. Pass workdir instead of `cd <dir> &&`.\n  - Use grep, glob, read_file, search_replace, and write instead of shell grep, rg, find, cat, head, tail, sed, awk, or echo.\n  - Put independent calls in one response. Chain dependent commands with `&&`.";
 
         /// The `current` description is the two-knob text with `block_until_ms` in place of `timeout` and `is_background`.
         /// Retired tool names and the completion-notification essay are gone.
@@ -5517,7 +5507,7 @@ mod tests {
         fn current_description_is_the_two_knob_text_with_minimal_edits() {
             let out = desc(&BashParams::default(), true);
             assert_eq!(out, CURRENT_DESCRIPTION_PRODUCT);
-            for required in ["block_until_ms", "workdir", "grep"] {
+            for required in ["block_until_ms", "workdir", "grep", "background_task"] {
                 assert!(out.contains(required), "{required:?} must appear: {out}");
             }
             for retired in [
@@ -5528,10 +5518,15 @@ mod tests {
                 "not bounded by the default",
                 "get_task_output",
                 "kill_task",
+                "get_command_or_subagent_output",
+                "kill_command_or_subagent",
+                "wait_commands_or_subagents",
                 "You are notified when it completes",
             ] {
                 assert!(!out.contains(retired), "{retired:?} must not appear: {out}");
             }
+            // The block ceiling is explained once and the search tools are named in one line.
+            assert_eq!(out.matches("You can specify an optional").count(), 1, "{out}");
 
             // Completion notifications live in the system prompt; reminders on/off match.
             let off = desc(&BashParams::default(), false);
@@ -5579,11 +5574,7 @@ mod tests {
                     (ToolKind::Execute, "run_terminal_command".to_string()),
                     (
                         ToolKind::BackgroundTaskAction,
-                        "get_command_or_subagent_output".to_string(),
-                    ),
-                    (
-                        ToolKind::KillTaskAction,
-                        "kill_command_or_subagent".to_string(),
+                        "background_task".to_string(),
                     ),
                 ]),
                 HashMap::from([(
@@ -5603,14 +5594,13 @@ mod tests {
 
             assert!(
                 out.contains("optional wait_ms in milliseconds")
-                    && out.contains("`wait_ms: 0` runs the command")
-                    && out.contains("Set `wait_ms` to 0"),
+                    && out.contains("Set `wait_ms` to 0")
+                    && out.contains("background_task reads, waits for, or stops"),
                 "{out}"
             );
             assert!(
-                out.contains("wait for it with get_command_or_subagent_output")
-                    && out.contains("stop them with kill_command_or_subagent")
-                    && out.contains("kill_command_or_subagent sends SIGTERM"),
+                out.contains("wait for it with background_task")
+                    && out.contains("background_task action \"kill\" sends SIGTERM"),
                 "{out}"
             );
             assert!(!out.contains("block_until_ms"), "{out}");
@@ -6358,7 +6348,7 @@ mod tests {
                     (ToolKind::Write, "write".to_string()),
                     (
                         ToolKind::BackgroundTaskAction,
-                        "get_task_output".to_string(),
+                        "background_task".to_string(),
                     ),
                 ]),
                 HashMap::from([(
@@ -6397,7 +6387,7 @@ mod tests {
                     (ToolKind::KillTaskAction, "kill_task".to_string()),
                     (
                         ToolKind::BackgroundTaskAction,
-                        "get_task_output".to_string(),
+                        "background_task".to_string(),
                     ),
                 ]),
                 HashMap::from([(

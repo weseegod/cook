@@ -449,10 +449,10 @@ while ready_queue is not empty OR in_progress is not empty:
         task_id = launch_implementer(pr)
         in_progress[pr.id] = task_id
 
-    result = wait_commands_or_subagents(task_ids=list(in_progress.values()), mode="wait_any", timeout_ms=600000)
+    result = background_task(action="wait", task_ids=list(in_progress.values()), mode="wait_any", timeout_ms=600000)
 
     for pr_id, task_id in in_progress where elapsed > PR_TIMEOUT:
-        kill_command_or_subagent(task_id)
+        background_task(action="kill", task_ids=[task_id])
         mark pr as "failed" with error "Implementation timed out after 15 minutes"
         cascade_skip(pr_id)
         remove from in_progress
@@ -542,9 +542,9 @@ Report to the user: `"Launching <pr.id> (<pr.title>)..."`
 
 ### Step 4b: Process Completion
 
-When a subagent completes (returned by `wait_commands_or_subagents`):
+When a subagent completes (returned by `background_task` with `action: "wait"`):
 
-1. Identify which PR finished by matching the returned `task_id` against `in_progress`. The `wait_commands_or_subagents` result contains entries with `task_id`, `status`, and `output` fields. Match `task_id` against the `in_progress` map to find the corresponding PR.
+1. Identify which PR finished by matching the returned `task_id` against `in_progress`. The `background_task` (`action: "wait"`) result contains entries with `task_id`, `status`, and `output` fields. Match `task_id` against the `in_progress` map to find the corresponding PR.
 2. Extract subagent metadata from the result. The `worktree_path` and `subagent_id` are embedded in the `spawn_subagent` result's output text, wrapped in structured tags. Extract these values for state tracking.
 3. Read the subagent's result:
    - If the subagent succeeded:
@@ -1047,9 +1047,9 @@ After successful stack assembly:
 ```bash
 for each pr in dag.nodes:
     if pr.subagent_id is not null:
-        kill_command_or_subagent(pr.subagent_id)
+        background_task(action="kill", task_ids=[pr.subagent_id])
     if pr.reviewer_subagent_id is not null:
-        kill_command_or_subagent(pr.reviewer_subagent_id)
+        background_task(action="kill", task_ids=[pr.reviewer_subagent_id])
 
 # PR worktrees are normally cleaned during Step 8a (per-PR prologue) so the
 # stack branches can be safely manipulated. This loop is the safety net for
@@ -1244,7 +1244,7 @@ Follow these rules strictly:
 - **`isolation: "worktree"` for implementers only** -- implementers get fresh worktrees. Reviewers use `cwd=<worktree_path>` to access an existing worktree.
 - **Include design context in initial prompts** -- the initial implementer and initial reviewer launches should include all relevant design context in their task prompts. All subsequent rounds use `resume_from` instead, which carries the subagent's own transcript forward.
 - **`resume_from` for fix and re-review cycles** -- when resuming an implementer to fix review issues, use `resume_from` with the stored `subagent_id` (implementer -> implementer). When resuming a reviewer for subsequent review rounds, use `resume_from` with the stored `reviewer_subagent_id` (reviewer -> reviewer). Both are same-persona resumptions.
-- **`background: true` for parallel launches** -- implementation subagents are launched in background. Use `wait_commands_or_subagents(task_ids=[...], mode="wait_any")` for event-driven waiting.
+- **`background: true` for parallel launches** -- implementation subagents are launched in background. Use `background_task(action="wait", task_ids=[...], mode="wait_any")` for event-driven waiting.
 - **Save every subagent_id** returned by `spawn_subagent` -- needed for `resume_from` on both implementer fix cycles and reviewer re-review rounds. Update `pr.subagent_id` after each implementer task and `pr.reviewer_subagent_id` after each reviewer task.
 - **Read review files yourself** after each review to count open issues and decide whether to continue.
 - **Do not modify the implementation yourself** -- all code changes go through the implementer persona subagent.

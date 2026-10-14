@@ -25,7 +25,7 @@ const TIMELINE_DEFAULT: bool = UiConfig::SHOW_TIMELINE_DEFAULT;
 const PAGE_FLIP_ON_SEND_DEFAULT: bool = UiConfig::PAGE_FLIP_ON_SEND_DEFAULT;
 /// Rollout flag.
 const COMBINE_QUEUED_PROMPTS_DEFAULT: bool = false;
-const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = FollowUpBehavior::Queue;
+const FOLLOW_UP_BEHAVIOR_DEFAULT: FollowUpBehavior = FollowUpBehavior::Steer;
 const SIMPLE_MODE_DEFAULT: bool = true;
 /// This matches the previous on-disk default.
 const VIM_MODE_DEFAULT: bool = false;

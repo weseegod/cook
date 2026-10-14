@@ -8,7 +8,14 @@ use xai_grok_tools::types::tool::ToolKind;
 use crate::config::{AGENT_TASK_CLASSIFIER_RE, short_tool_name, tool_id_eq, tool_id_matches};
 
 /// An `Agent` or `Task` allowlist entry keeps the task tool and its lifecycle companions.
-const TASK_DEPS: &[&str] = &["task", "get_task_output", "kill_task", "wait_tasks"];
+/// The retired lifecycle ids stay listed so a vendor allowlist written against an older build still keeps the companion.
+const TASK_DEPS: &[&str] = &[
+    "task",
+    "background_task",
+    "get_task_output",
+    "kill_task",
+    "wait_tasks",
+];
 
 /// The Grok [`ToolKind`] a vendor-compat `tools:` allowlist entry resolves to, so a plugin's upstream allowlist still binds.
 /// Backed by the shared vendor-to-Grok tool registry in `xai-grok-tools` (also used by the hook matcher).

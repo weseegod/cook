@@ -454,126 +454,18 @@ pub(super) fn maybe_drain_queue(agent: &mut AgentView, notices: &mut Vec<String>
     // Ours means drive it, and drop a stale post-rewind chunk on a mismatch
     agent.note_self_originated_prompt(&prompt_id);
 
+    // These command rows run as the client's own prompt turn: the shell resolves the literal slash
+    // text. They skip the extension arm, which would run them through a side channel with no
+    // user-visible turn.
+    if queued.kind == QueueEntryKind::Command && command_runs_as_prompt(&queued.text) {
+        agent.begin_local_turn(&prompt_id);
+        return drain_command_as_prompt(agent, queued, prompt_id, agent_id, session_id, notices);
+    }
+
     match queued.kind {
         QueueEntryKind::Prompt => {
             agent.begin_local_turn(&prompt_id);
-            // Scrollback shows display text (never raw skill XML)
-            // Combined drains paint one bubble per original follow-up
-            let is_skill = queued.display_as_skill;
-            let multi = xai_prompt_queue::is_combined(&queued.combined_texts);
-            let (prompt_idx, prompt_entry_id, combined_entries) = if multi {
-                let (first_idx, _, last_id, all_ids) =
-                    paint_or_reuse_combined_user_bubbles(agent, &queued.combined_texts);
-                (first_idx, last_id, all_ids)
-            } else {
-                let block = if is_skill {
-                    RenderBlock::skill_prompt(&queued.text)
-                } else if !queued.skill_token_ranges.is_empty() {
-                    RenderBlock::user_prompt_with_skill_tokens(
-                        &queued.text,
-                        queued.skill_token_ranges.clone(),
-                    )
-                } else {
-                    RenderBlock::user_prompt(&queued.text)
-                };
-                let id = agent.scrollback.push_block(block);
-                (agent.scrollback.len().saturating_sub(1), id, vec![id])
-            };
-            // Stash for cancel-with-restore
-            // Only plain (non-skill) prompts can be reversed back into the input box
-            if queued.wire_blocks.is_none() {
-                let earlier = combined_entries
-                    .iter()
-                    .copied()
-                    .filter(|id| *id != prompt_entry_id)
-                    .collect();
-                agent.session.in_flight_prompt = Some(crate::app::agent::InFlightPrompt {
-                    text: queued.text.clone(),
-                    images: queued.images.clone(),
-                    scrollback_entry: prompt_entry_id,
-                    combined_scrollback_entries: earlier,
-                    chip_elements: queued.chip_elements.clone(),
-                });
-            }
-            let flip = page_flip_on_send();
-            agent.scrollback.follow_new_turn(Some(prompt_idx), flip);
-
-            let combined_segs = queued.combined_texts.clone();
-            let effects = if let Some(mut blocks) = queued.wire_blocks {
-                // Skill injection: send structured blocks.
-                // Annotate the first text block's meta with the display text
-                // Without the annotation, replay shows the raw skill instructions instead of the user-facing display text
-                if let Some(acp::ContentBlock::Text(tb)) = blocks.first_mut() {
-                    let map = tb.meta.get_or_insert_with(acp::Meta::new);
-                    map.insert(
-                        user_prompt_meta::DISPLAY_TEXT.into(),
-                        serde_json::Value::String(queued.text),
-                    );
-                    if is_skill {
-                        map.insert(
-                            user_prompt_meta::DISPLAY_AS_SKILL.into(),
-                            serde_json::Value::Bool(true),
-                        );
-                    }
-                    xai_prompt_queue::stamp_combined_display_texts(map, &combined_segs);
-                } else {
-                    tracing::debug!(
-                        "wire_blocks[0] is not TextContent — displayText annotation skipped"
-                    );
-                }
-                vec![Effect::SendPromptBlocks {
-                    agent_id,
-                    session_id,
-                    blocks,
-                    prompt_id,
-                }]
-            } else if !queued.images.is_empty() {
-                // Image-bearing prompt: build text and image content blocks
-                // Pass the session cwd so orphan `[Image #N: <path>]` placeholders can be recovered from disk via the shared helper
-                // Token ranges are not stamped here: the builder rewrites the text (placeholder stripping), which would shift byte offsets
-                let build = crate::prompt_images::build_content_blocks_with_workspace_report(
-                    queued.text,
-                    queued.images,
-                    Some(std::path::Path::new(&agent.session.cwd)),
-                );
-                notices.extend(agent.skipped_image_send_notice(&build.skipped_display_numbers));
-                let mut blocks = build.blocks;
-                if let Some(acp::ContentBlock::Text(tb)) = blocks.first_mut() {
-                    let map = tb.meta.get_or_insert_with(acp::Meta::new);
-                    xai_prompt_queue::stamp_combined_display_texts(map, &combined_segs);
-                }
-                vec![Effect::SendPromptBlocks {
-                    agent_id,
-                    session_id,
-                    blocks,
-                    prompt_id,
-                }]
-            } else if multi {
-                // Stamp combinedDisplayTexts so reload paints multi-bubble
-                // No skillTokenRanges: dequeue_combined_prompt clears them on every combined drain (multi paints plain per-segment bubbles)
-                let mut tb = acp::TextContent::new(queued.text);
-                let map = tb.meta.get_or_insert_with(acp::Meta::new);
-                xai_prompt_queue::stamp_combined_display_texts(map, &combined_segs);
-                vec![Effect::SendPromptBlocks {
-                    agent_id,
-                    session_id,
-                    blocks: vec![acp::ContentBlock::Text(tb)],
-                    prompt_id,
-                }]
-            } else {
-                // Normal prompt: send text as-is.
-                vec![Effect::SendPrompt {
-                    agent_id,
-                    session_id,
-                    text: queued.text,
-                    prompt_id,
-                    skill_token_ranges: queued.skill_token_ranges,
-                }]
-            };
-            QueueDrain {
-                effects,
-                page_flip_entry: flip.then_some(prompt_entry_id),
-            }
+            drain_plain_prompt(agent, queued, prompt_id, agent_id, session_id, notices)
         }
         QueueEntryKind::Command => {
             let token = crate::slash::parse_invocation(&queued.text).map_or("", |inv| inv.token);
@@ -598,21 +490,15 @@ pub(super) fn maybe_drain_queue(agent: &mut AgentView, notices: &mut Vec<String>
                         session_id,
                     },
                 ),
-                _ => (
-                    AgentCommand::Compact,
-                    SessionEvent::CompactStarted,
-                    Effect::Compact {
-                        agent_id,
-                        session_id,
-                    },
-                ),
+                // `command_runs_as_prompt` handled `commit`, `commit-and-push`, and `compact`
+                // above; only the memory commands reach this extension arm.
+                other => unreachable!("command row /{other} is not an extension command"),
             };
             agent.session.start_command(command);
             // The command owns the pane; a leftover wake marker must not shadow stop.
             agent.running_wake_turn = None;
             agent.turn_started_at = Some(Instant::now());
             // Invocation marker: each run visibly owns its outcome line (completed/cancelled/failed)
-            // For `/compact` this matches the auto path's "Context N% full. Compacting…".
             // Local block only: like the outcome lines it is not persisted, so resume replays neither
             agent
                 .scrollback
@@ -643,6 +529,159 @@ pub(super) fn maybe_drain_queue(agent: &mut AgentView, notices: &mut Vec<String>
                 page_flip_entry: None,
             }
         }
+    }
+}
+
+/// Command tokens whose drain is a normal prompt turn rather than a client-side extension effect.
+/// The shell resolves the literal slash text: `/commit` and `/commit-and-push` run an isolated
+/// child turn, and `/compact` compacts on its own turn. The row stays `Command` kind so the steer
+/// path cannot inject it into a running turn.
+fn command_runs_as_prompt(text: &str) -> bool {
+    matches!(
+        crate::slash::parse_invocation(text).map_or("", |inv| inv.token),
+        "commit" | "commit-and-push" | "compact"
+    )
+}
+
+/// Drain a `Command` row that the shell resolves, as its own prompt turn.
+fn drain_command_as_prompt(
+    agent: &mut AgentView,
+    queued: crate::app::agent::QueuedPrompt,
+    prompt_id: String,
+    agent_id: AgentId,
+    session_id: acp::SessionId,
+    notices: &mut Vec<String>,
+) -> QueueDrain {
+    let mut queued = queued;
+    // The row carries no token styling; command text renders plain.
+    queued.skill_token_ranges.clear();
+    drain_plain_prompt(agent, queued, prompt_id, agent_id, session_id, notices)
+}
+
+/// Push the user bubble for a queued prompt, stash it for cancel-with-restore, and build its send
+/// effect. Shared by plain prompt rows and the command rows the shell resolves.
+fn drain_plain_prompt(
+    agent: &mut AgentView,
+    queued: crate::app::agent::QueuedPrompt,
+    prompt_id: String,
+    agent_id: AgentId,
+    session_id: acp::SessionId,
+    notices: &mut Vec<String>,
+) -> QueueDrain {
+    // Scrollback shows display text (never raw skill XML)
+    // Combined drains paint one bubble per original follow-up
+    let is_skill = queued.display_as_skill;
+    let multi = xai_prompt_queue::is_combined(&queued.combined_texts);
+    let (prompt_idx, prompt_entry_id, combined_entries) = if multi {
+        let (first_idx, _, last_id, all_ids) =
+            paint_or_reuse_combined_user_bubbles(agent, &queued.combined_texts);
+        (first_idx, last_id, all_ids)
+    } else {
+        let block = if is_skill {
+            RenderBlock::skill_prompt(&queued.text)
+        } else if !queued.skill_token_ranges.is_empty() {
+            RenderBlock::user_prompt_with_skill_tokens(
+                &queued.text,
+                queued.skill_token_ranges.clone(),
+            )
+        } else {
+            RenderBlock::user_prompt(&queued.text)
+        };
+        let id = agent.scrollback.push_block(block);
+        (agent.scrollback.len().saturating_sub(1), id, vec![id])
+    };
+    // Stash for cancel-with-restore
+    // Only plain (non-skill) prompts can be reversed back into the input box
+    if queued.wire_blocks.is_none() {
+        let earlier = combined_entries
+            .iter()
+            .copied()
+            .filter(|id| *id != prompt_entry_id)
+            .collect();
+        agent.session.in_flight_prompt = Some(crate::app::agent::InFlightPrompt {
+            text: queued.text.clone(),
+            images: queued.images.clone(),
+            scrollback_entry: prompt_entry_id,
+            combined_scrollback_entries: earlier,
+            chip_elements: queued.chip_elements.clone(),
+        });
+    }
+    let flip = page_flip_on_send();
+    agent.scrollback.follow_new_turn(Some(prompt_idx), flip);
+
+    let combined_segs = queued.combined_texts.clone();
+    let effects = if let Some(mut blocks) = queued.wire_blocks {
+        // Skill injection: send structured blocks.
+        // Annotate the first text block's meta with the display text
+        // Without the annotation, replay shows the raw skill instructions instead of the user-facing display text
+        if let Some(acp::ContentBlock::Text(tb)) = blocks.first_mut() {
+            let map = tb.meta.get_or_insert_with(acp::Meta::new);
+            map.insert(
+                user_prompt_meta::DISPLAY_TEXT.into(),
+                serde_json::Value::String(queued.text),
+            );
+            if is_skill {
+                map.insert(
+                    user_prompt_meta::DISPLAY_AS_SKILL.into(),
+                    serde_json::Value::Bool(true),
+                );
+            }
+            xai_prompt_queue::stamp_combined_display_texts(map, &combined_segs);
+        } else {
+            tracing::debug!("wire_blocks[0] is not TextContent — displayText annotation skipped");
+        }
+        vec![Effect::SendPromptBlocks {
+            agent_id,
+            session_id,
+            blocks,
+            prompt_id,
+        }]
+    } else if !queued.images.is_empty() {
+        // Image-bearing prompt: build text and image content blocks
+        // Pass the session cwd so orphan `[Image #N: <path>]` placeholders can be recovered from disk via the shared helper
+        // Token ranges are not stamped here: the builder rewrites the text (placeholder stripping), which would shift byte offsets
+        let build = crate::prompt_images::build_content_blocks_with_workspace_report(
+            queued.text,
+            queued.images,
+            Some(std::path::Path::new(&agent.session.cwd)),
+        );
+        notices.extend(agent.skipped_image_send_notice(&build.skipped_display_numbers));
+        let mut blocks = build.blocks;
+        if let Some(acp::ContentBlock::Text(tb)) = blocks.first_mut() {
+            let map = tb.meta.get_or_insert_with(acp::Meta::new);
+            xai_prompt_queue::stamp_combined_display_texts(map, &combined_segs);
+        }
+        vec![Effect::SendPromptBlocks {
+            agent_id,
+            session_id,
+            blocks,
+            prompt_id,
+        }]
+    } else if multi {
+        // Stamp combinedDisplayTexts so reload paints multi-bubble
+        // No skillTokenRanges: dequeue_combined_prompt clears them on every combined drain (multi paints plain per-segment bubbles)
+        let mut tb = acp::TextContent::new(queued.text);
+        let map = tb.meta.get_or_insert_with(acp::Meta::new);
+        xai_prompt_queue::stamp_combined_display_texts(map, &combined_segs);
+        vec![Effect::SendPromptBlocks {
+            agent_id,
+            session_id,
+            blocks: vec![acp::ContentBlock::Text(tb)],
+            prompt_id,
+        }]
+    } else {
+        // Normal prompt: send text as-is.
+        vec![Effect::SendPrompt {
+            agent_id,
+            session_id,
+            text: queued.text,
+            prompt_id,
+            skill_token_ranges: queued.skill_token_ranges,
+        }]
+    };
+    QueueDrain {
+        effects,
+        page_flip_entry: flip.then_some(prompt_entry_id),
     }
 }
 
@@ -1393,41 +1432,42 @@ mod tests {
     }
 
     #[test]
-    fn compact_drain_pushes_one_marker_paired_with_its_outcome() {
-        use crate::app::actions::TaskResult;
-        use crate::app::dispatch::task_result::dispatch_task_result;
-        use crate::scrollback::blocks::SessionEvent;
-        use xai_grok_shell::session::helpers::session_compact::{
-            CompactErrorKind, compact_error_data,
-        };
-
+    fn compact_drain_sends_the_command_as_its_own_turn() {
         let mut app = test_app_with_agent();
         let id = AgentId(0);
-        let wire_error = agent_client_protocol::Error::internal_error().data(compact_error_data(
-            CompactErrorKind::Failed,
-            "API error (status 500 Internal Server Error): should never be seen",
-        ));
 
-        // Two back-to-back invocations: each drain pushes exactly one marker, so each failure line is visibly owned by its own `/compact`
-        for _ in 0..2 {
-            let agent = app.agents.get_mut(&id).unwrap();
-            agent.session.enqueue_command("/compact".into());
-            let drain = maybe_drain_queue(agent, &mut app.pending_image_notices);
-            assert!(
-                matches!(drain.effects.as_slice(), [Effect::Compact { .. }]),
-                "command drain must start one compact, got {:?}",
-                drain.effects
-            );
-            dispatch_task_result(
-                TaskResult::CompactComplete {
-                    agent_id: id,
-                    result: Err(crate::app::effects::compact_error(&wire_error)),
-                },
-                &mut app,
-            );
-        }
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.enqueue_command("/compact".into());
+        let drain = maybe_drain_queue(agent, &mut app.pending_image_notices);
+
+        assert!(
+            matches!(
+                drain.effects.as_slice(),
+                [Effect::SendPrompt { text, .. }] if text == "/compact"
+            ),
+            "the drain must send the literal command as a prompt, got {:?}",
+            drain.effects
+        );
+        assert!(
+            test_agent(&app, id)
+                .session
+                .pending_prompts
+                .is_empty(),
+            "the row is consumed by its own turn"
+        );
 
         let agent = test_agent(&app, id);
+        let user_prompts: Vec<String> = (0..agent.scrollback.len())
+            .filter_map(|i| match agent.scrollback.entry(i).map(|e| &e.block) {
+                Some(RenderBlock::UserPrompt(ub)) => Some(ub.text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            user_prompts,
+            vec!["/compact".to_string()],
+            "the command paints as the turn's user block"
+        );
         let events: Vec<SessionEvent> = (0..agent.scrollback.len())
             .filter_map(|i| match agent.scrollback.entry(i).map(|e| &e.block) {
                 Some(RenderBlock::SessionEvent(ev)) => Some(ev.event.clone()),
@@ -1435,22 +1475,8 @@ mod tests {
             })
             .collect();
         assert!(
-            matches!(
-                events.as_slice(),
-                [
-                    SessionEvent::CompactStarted,
-                    SessionEvent::CompactionFailed { .. },
-                    SessionEvent::CompactStarted,
-                    SessionEvent::CompactionFailed { .. },
-                ]
-            ),
-            "each invocation must render marker → outcome, got {events:?}"
-        );
-        assert!(
-            !events
-                .iter()
-                .any(|ev| matches!(ev, SessionEvent::CompactionStarted { .. })),
-            "the manual marker must not double as the auto marker"
+            events.is_empty(),
+            "the slash drain no longer owns a CompactStarted marker, got {events:?}"
         );
     }
 

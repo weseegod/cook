@@ -214,7 +214,7 @@ TUI match: `acp_handler/mod.rs` L605–628. Plus session-update carriers via `is
 | N-sessions | `x.ai/sessions/changed` | `handle_sessions_changed` | ignored (sidebar polls `session/list`) | `partial` | surface |
 | N-queue | `x.ai/queue/changed` | `handle_queue_changed` | syncs `queuedPromptCount` | `partial` (no queue list UI yet) | surface |
 | N-pcomplete | `x.ai/session/prompt_complete` | `handle_prompt_complete` | `finishTurn` for the open session; a background turn becomes a right-side toast plus `sessionAlerts` | `ok` | protocol |
-| N-interject | `x.ai/session/interjection` | `handle_interjection` | ignored | `gap` | surface |
+| N-interject | `x.ai/session/interjection` | `handle_interjection` | `notifications/handlers.ts` paints the row; a replayed steer paints its `displayText` | `ok` | surface |
 | N-mon | `x.ai/monitor_event` | `handle_monitor_event` | ignored | `gap` | surface |
 | N-sched-c | `x.ai/scheduled_task_created` | handler | ignored | `gap` | surface |
 | N-sched-f | `x.ai/scheduled_task_fired` | handler | ignored | `gap` | surface |

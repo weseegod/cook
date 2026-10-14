@@ -90,6 +90,7 @@ pub fn canonical_input(input: &ToolInput) -> Option<serde_json::Value> {
         | ToolInput::Skill(_)
         | ToolInput::MCPTool(_)
         | ToolInput::TaskOutput(_)
+        | ToolInput::BackgroundTask(_)
         | ToolInput::WaitTasks(_)
         | ToolInput::KillTask(_)
         | ToolInput::Task(_)

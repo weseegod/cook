@@ -86,8 +86,6 @@ def argument_objects(root: Path, tool: str) -> list[dict[str, Any]]:
                     or node.get("toolName")
                     or node.get("title")
                 )
-                if canonical_tool(name) != tool:
-                    continue
                 args = fn.get(
                     "arguments",
                     node.get("arguments", node.get("input", node.get("rawInput"))),
@@ -97,6 +95,8 @@ def argument_objects(root: Path, tool: str) -> list[dict[str, Any]]:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         continue
+                if canonical_tool(name, args) != tool:
+                    continue
                 if isinstance(args, dict):
                     found.append(args)
     return found
@@ -121,26 +121,78 @@ TOOL_ALIASES = {
     "kill_command_or_subagent": "kill_task",
 }
 
+# The unified lifecycle tool carries its verb in `action`. Map each action onto
+# the canonical case id the suite already scores.
+BACKGROUND_TASK_ACTIONS = {
+    "output": "get_task_output",
+    "wait": "wait_tasks",
+    "kill": "kill_task",
+}
 
-def canonical_tool(name: Any) -> Any:
+
+def canonical_tool(name: Any, args: Any = None) -> Any:
+    if name == "background_task":
+        action = args.get("action") if isinstance(args, dict) else None
+        return BACKGROUND_TASK_ACTIONS.get(action, "background_task")
     return TOOL_ALIASES.get(name, name)
+
+
+def raw_names_for(canonical: Any) -> list[str]:
+    """Every raw tool name that resolves to `canonical`."""
+    names = [raw for raw, target in TOOL_ALIASES.items() if target == canonical]
+    if canonical in BACKGROUND_TASK_ACTIONS.values():
+        names.append("background_task")
+    return names
+
+
+def call_args_by_id(root: Path) -> dict[str, Any]:
+    """Map assistant tool-call ids to their parsed arguments.
+
+    `tool_started` / `tool_completed` events name the tool but omit its
+    arguments, so the `background_task` action has to be recovered from
+    `chat_history.jsonl` through the shared `tool_call_id`.
+    """
+    mapping: dict[str, Any] = {}
+    for record in json_lines(root / "chat_history.jsonl"):
+        if not isinstance(record, dict) or record.get("type") != "assistant":
+            continue
+        for call in record.get("tool_calls") or []:
+            if not isinstance(call, dict) or not call.get("id"):
+                continue
+            args = call.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = None
+            mapping[call["id"]] = args
+    return mapping
 
 
 def check_tool_called(case: dict[str, Any], root: Path) -> None:
     completed = tool_events(root, "tool_completed")
+    args_by_id = call_args_by_id(root)
+
+    def called(name: Any) -> bool:
+        return any(
+            canonical_tool(e.get("tool_name"), args_by_id.get(e.get("tool_call_id"))) == name
+            and e.get("outcome") == "success"
+            for e in completed
+        )
+
     expected = case.get("expect_tools", [])
     any_groups = case.get("expect_any_tools", [])
     for name in expected:
-        if not any(canonical_tool(e.get("tool_name")) == name and e.get("outcome") == "success" for e in completed):
+        if not called(name):
             raise Failure(f"tool_called: no successful {name}")
     for group in any_groups:
-        if not any(canonical_tool(e.get("tool_name")) in group and e.get("outcome") == "success" for e in completed):
+        if not any(called(name) for name in group):
             raise Failure(f"tool_called: none successful from {','.join(group)}")
     wire = (root / "wire.log").read_text(encoding="utf-8", errors="replace") if (root / "wire.log").exists() else ""
     for name in expected + [n for group in any_groups for n in group]:
-        matching_names = [raw for raw in {name, *TOOL_ALIASES} if canonical_tool(raw) == name]
-        if not any(canonical_tool(e.get("tool_name")) == name and e.get("outcome") == "success" for e in completed):
+        if not called(name):
             continue
+        matching_names = [name, *raw_names_for(name)]
         args = [arg for raw in matching_names for arg in argument_objects(root, raw)]
         if "<tool_call>" in wire and (not args or any(not x for x in args)):
             raise Failure(f"tool_called: empty {name} arguments with XML envelope")
@@ -152,7 +204,12 @@ def check_tool_called(case: dict[str, Any], root: Path) -> None:
 
 def check_tool_not_called(case: dict[str, Any], root: Path) -> None:
     forbidden = set(case.get("forbid_tools", []))
-    bad = [e.get("tool_name") for e in tool_events(root) if canonical_tool(e.get("tool_name")) in forbidden]
+    args_by_id = call_args_by_id(root)
+    bad = [
+        e.get("tool_name")
+        for e in tool_events(root)
+        if canonical_tool(e.get("tool_name"), args_by_id.get(e.get("tool_call_id"))) in forbidden
+    ]
     if bad:
         raise Failure(f"tool_not_called: forbidden tool {bad[0]}")
 

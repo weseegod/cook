@@ -63,6 +63,15 @@ fn tool_call(id: &str, kind: acp::ToolKind, title: &str) -> acp::SessionUpdate {
             .locations(vec![]),
     )
 }
+fn tool_call_with_input(id: &str, title: &str, input: serde_json::Value) -> acp::SessionUpdate {
+    let mut call = acp::ToolCall::new(acp::ToolCallId::new(Arc::from(id)), title.to_string())
+        .kind(acp::ToolKind::Other)
+        .status(acp::ToolCallStatus::Pending)
+        .content(vec![])
+        .locations(vec![]);
+    call.raw_input = Some(input);
+    acp::SessionUpdate::ToolCall(call)
+}
 fn tool_call_completed(id: &str, kind: acp::ToolKind, title: &str) -> acp::SessionUpdate {
     acp::SessionUpdate::ToolCall(
         acp::ToolCall::new(acp::ToolCallId::new(Arc::from(id)), title.to_string())
@@ -2986,6 +2995,47 @@ fn activity_waiting_for_blocking_bg_plumbing_tools() {
         );
     }
 }
+/// The unified lifecycle tool carries its verb in `action`: `wait` blocks on task completion, `output` is the
+/// task-output wait (advertised only once `timeout_ms` proves it blocking), and `kill` never blocks the turn.
+#[test]
+fn background_task_action_decides_the_blocking_wait() {
+    for action in ["kill", "output"] {
+        let mut sb = ScrollbackState::new();
+        let mut tracker = AcpUpdateTracker::new();
+        tracker.handle_update(
+            tool_call_with_input("t1", "background_task", serde_json::json!({ "action": action })),
+            &meta(),
+            &mut sb,
+        );
+        assert_eq!(tracker.activity(), None, "action {action:?} must not block");
+    }
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.handle_update(
+        tool_call_with_input("t1", "background_task", serde_json::json!({ "action": "wait" })),
+        &meta(),
+        &mut sb,
+    );
+    assert_eq!(
+        tracker.activity(),
+        Some(TurnActivity::Waiting(WaitingReason::TasksComplete))
+    );
+    let mut sb = ScrollbackState::new();
+    let mut tracker = AcpUpdateTracker::new();
+    tracker.handle_update(
+        tool_call_with_input(
+            "t1",
+            "background_task",
+            serde_json::json!({ "action": "output", "timeout_ms": 30_000 }),
+        ),
+        &meta(),
+        &mut sb,
+    );
+    assert_eq!(
+        tracker.activity(),
+        Some(TurnActivity::Waiting(WaitingReason::task_output()))
+    );
+}
 /// A known-blocking wait must beat an open (residual/pre-created) thought entry.
 #[test]
 fn activity_known_blocking_wait_outranks_thinking() {
@@ -3733,6 +3783,13 @@ fn is_bg_plumbing_tool_recognizes_all_name_generations() {
     )));
     assert!(is_bg_plumbing_tool(&initial_tool_call("t10", "AwaitShell")));
     assert!(is_bg_plumbing_tool(&initial_tool_call("t10b", "Await")));
+    assert!(is_bg_plumbing_tool(&initial_tool_call(
+        "t10c",
+        "background_task"
+    )));
+    let mut bg_variant = initial_tool_call("t10d", "anything");
+    bg_variant.raw_input = Some(serde_json::json!({"variant": "BackgroundTask"}));
+    assert!(is_bg_plumbing_tool(&bg_variant));
     let mut with_variant = initial_tool_call("t11", "anything");
     with_variant.raw_input = Some(serde_json::json!({"variant": "WaitTasks"}));
     assert!(is_bg_plumbing_tool(&with_variant));

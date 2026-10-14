@@ -12,6 +12,12 @@ export interface MessageBlock {
   text: string;
   images: string[];
   streaming: boolean;
+  /**
+   * A mid-turn steer: the shell framed it for the model and carried the typed text in the chunk
+   * meta. Keeps the row out of another prompt's bubble and lets the painter mark it (TUI
+   * `UserPromptBlock::interjection`).
+   */
+  interjection?: boolean;
   /** Thinking rows only: local clock frozen on finish; drives `Thought for 1.2s`. */
   startedAt?: number;
   elapsedMs?: number | null;

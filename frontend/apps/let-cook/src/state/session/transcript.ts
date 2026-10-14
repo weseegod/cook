@@ -260,11 +260,17 @@ function recordTurnActivity(state: SessionState, activity: TurnActivity | null):
 
 function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknown>): TranscriptState {
   const content = asRecord(raw.content);
-  const text = content?.type === "text" && typeof content.text === "string" ? content.text : "";
+  const wireText = content?.type === "text" && typeof content.text === "string" ? content.text : "";
+  // A mid-turn interjection persists the model-facing frame in `text`, the typed text in the content
+  // `_meta`, and the flag on the chunk. The TUI renders the override and marks the row; without both,
+  // a reloaded session shows the frame ("The user sent a message while you were working: …").
+  const text = contentMetaString(content, USER_PROMPT_DISPLAY_TEXT) ?? wireText;
+  const interjection = chunkMetaFlag(raw, USER_CHUNK_INTERJECTION);
   const image = contentImage(content);
   const serverId = stringOr(raw.messageId) ?? `user-${transcript.blocks.length}`;
   const optimisticId = transcript.cursor.optimisticUserId;
-  const optimisticIndex = optimisticId
+  // An interjection is never the prompt this window sent, so it must not adopt that optimistic row.
+  const optimisticIndex = optimisticId && !interjection
     ? transcript.blocks.findIndex((block) => block.type === "message" && block.id === optimisticId)
     : -1;
 
@@ -284,7 +290,14 @@ function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknow
   }
 
   const last = transcript.blocks.at(-1);
-  if (last?.type === "message" && last.role === "user" && transcript.cursor.turnId === last.turnId) {
+  if (
+    last?.type === "message"
+    && last.role === "user"
+    && transcript.cursor.turnId === last.turnId
+    // An interjection merges only with its own extra parts (a multi-part steer), and a prompt this
+    // window sent never appends onto an interjection bubble.
+    && interjection === (last.interjection === true)
+  ) {
     return {
       blocks: transcript.blocks.map((block) =>
         block.id === last.id && block.type === "message"
@@ -295,13 +308,32 @@ function reduceUserChunk(transcript: TranscriptState, raw: Record<string, unknow
     };
   }
 
-  const turnId = `turn-${serverId}`;
+  // A steer belongs to the turn it interrupted, so it keeps the open turn id (the TUI keeps the
+  // interjection inside the running turn) instead of opening a turn of its own.
+  const turnId = interjection && transcript.cursor.turnId
+    ? transcript.cursor.turnId
+    : `turn-${serverId}`;
   return {
     blocks: [
       ...finishStreamingBlocks(transcript.blocks),
-      { type: "message", id: serverId, turnId, role: "user", text, images: image ? [image] : [], streaming: true },
+      {
+        type: "message",
+        id: serverId,
+        turnId,
+        role: "user",
+        text,
+        images: image ? [image] : [],
+        streaming: true,
+        ...(interjection ? { interjection: true } : {}),
+      },
     ],
-    cursor: { turnId, assistantId: null, thoughtId: null, optimisticUserId: null },
+    cursor: {
+      turnId,
+      assistantId: null,
+      thoughtId: null,
+      // A steer is never this window's pending send, so the optimistic claim must survive it.
+      optimisticUserId: interjection ? transcript.cursor.optimisticUserId : null,
+    },
   };
 }
 
@@ -456,6 +488,24 @@ function notificationMeta(notification: SessionNotification): Record<string, unk
 function notificationEnvelope(notification: SessionNotification): Record<string, unknown> | null {
   const meta = notificationMeta(notification);
   return meta ? { _meta: meta } : null;
+}
+
+/** User-prompt content-block `_meta` key holding the clean display text (pager `user_prompt_meta`). */
+const USER_PROMPT_DISPLAY_TEXT = "displayText";
+/** Chunk `_meta` flag marking a persisted mid-turn interjection (pager `user_message_chunk_meta`). */
+const USER_CHUNK_INTERJECTION = "interjection";
+
+/** `content._meta.<key>` as a non-empty string, or `null`. */
+function contentMetaString(content: Record<string, unknown> | null, key: string): string | null {
+  const meta = asRecord(content?._meta) ?? asRecord(content?.meta);
+  const value = meta?.[key];
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** A chunk `_meta` flag; only a literal `true` counts, matching the pager's reader. */
+function chunkMetaFlag(raw: Record<string, unknown>, key: string): boolean {
+  const meta = asRecord(raw._meta) ?? asRecord(raw.meta);
+  return meta?.[key] === true;
 }
 
 /** The agent's clean-run marker text, streamed as one `agent_message_chunk`. */

@@ -3524,10 +3524,94 @@ fn slash_compact_enqueues_command() {
 
     let effects = dispatch(Action::SendPrompt("/compact".into()), &mut app);
 
-    // /compact enqueues as Command and drains immediately (agent was idle).
+    // /compact enqueues as Command and drains immediately (agent was idle) as its own prompt turn,
+    // so the shell resolves the slash and the command is visible in the transcript.
     assert_eq!(effects.len(), 1);
-    assert!(matches!(effects.first(), Some(Effect::Compact { .. })));
+    assert!(
+        matches!(effects.first(), Some(Effect::SendPrompt { text, .. }) if text == "/compact"),
+        "expected the literal command to be sent, got {effects:?}"
+    );
     assert!(agent_ref(&app, id).prompt.text().is_empty());
+    let painted: Vec<String> = (0..agent_ref(&app, id).scrollback.len())
+        .filter_map(|i| match agent_ref(&app, id).scrollback.entry(i).map(|e| &e.block) {
+            Some(crate::scrollback::block::RenderBlock::UserPrompt(ub)) => Some(ub.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(painted, vec!["/compact".to_string()]);
+}
+
+/// The command the user typed reaches the shell verbatim, as its own turn, so the shell can
+/// resolve it into the isolated commit task.
+fn assert_commit_sends(typed: &str) {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+
+    let effects = dispatch(Action::SendPrompt(typed.into()), &mut app);
+
+    assert_eq!(effects.len(), 1, "one effect, got {effects:?}");
+    assert!(
+        matches!(effects.first(), Some(Effect::SendPrompt { text, .. }) if text == typed),
+        "expected the literal command {typed:?}, got {effects:?}"
+    );
+    assert!(
+        agent_ref(&app, id)
+            .session
+            .pending_prompts
+            .is_empty(),
+        "the row is consumed by its own turn"
+    );
+    let painted: Vec<String> = (0..agent_ref(&app, id).scrollback.len())
+        .filter_map(|i| match agent_ref(&app, id).scrollback.entry(i).map(|e| &e.block) {
+            Some(crate::scrollback::block::RenderBlock::UserPrompt(ub)) => Some(ub.text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(painted, vec![typed.to_string()]);
+}
+
+#[test]
+fn slash_commit_sends_the_literal_command() {
+    assert_commit_sends("/commit");
+}
+
+#[test]
+fn slash_commit_keeps_the_hint_and_push_flag_verbatim() {
+    assert_commit_sends("/commit wire retries --push");
+}
+
+#[test]
+fn slash_commit_and_push_sends_the_literal_command() {
+    assert_commit_sends("/commit-and-push ship it");
+}
+
+/// A busy turn holds the commit command as a `Command` row: it must not be sent now and must not be
+/// steered into the running turn as an interjection.
+#[test]
+fn slash_commit_while_running_stays_queued_as_a_command() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    {
+        let agent = app.agents.get_mut(&id).unwrap();
+        agent.session.state = AgentState::TurnRunning;
+    }
+
+    let effects = dispatch(Action::SendPrompt("/commit".into()), &mut app);
+
+    assert!(
+        effects.iter().all(|e| !matches!(
+            e,
+            Effect::SendPrompt { .. } | Effect::SendInterject { .. }
+        )),
+        "a busy turn must not send or steer the command, got {effects:?}"
+    );
+    let rows: Vec<(&str, crate::app::agent::QueueEntryKind)> = agent_ref(&app, id)
+        .session
+        .pending_prompts
+        .iter()
+        .map(|p| (p.text.as_str(), p.kind))
+        .collect();
+    assert_eq!(rows, vec![("/commit", crate::app::agent::QueueEntryKind::Command)]);
 }
 
 #[test]
@@ -3612,9 +3696,13 @@ fn palette_dispatch_preserves_prompt_draft() {
         &mut app,
     );
 
-    // The slash command still runs end-to-end: it produces the same Compact effect that Action::SendPrompt would
+    // The slash command still runs end-to-end: it sends the literal command as its own turn, the same
+    // prompt the typed path would send.
     assert_eq!(effects.len(), 1);
-    assert!(matches!(effects.first(), Some(Effect::Compact { .. })));
+    assert!(
+        matches!(effects.first(), Some(Effect::SendPrompt { text, .. }) if text == "/compact"),
+        "expected the literal command to be sent, got {effects:?}"
+    );
     // But the user's draft text is intact.
     assert_eq!(agent_ref(&app, id).prompt.text(), "hello");
     // And the slash command was not inserted into prompt history, because the user didn't type it
@@ -6221,7 +6309,7 @@ fn compact_with_images_toasts_and_drops() {
     let effects = dispatch(Action::SendPrompt(text), &mut app);
 
     assert!(
-        matches!(effects.as_slice(), [Effect::Compact { .. }]),
+        matches!(effects.as_slice(), [Effect::SendPrompt { text, .. }] if text == "/compact"),
         "the command must still run, got {effects:?}"
     );
     assert_eq!(

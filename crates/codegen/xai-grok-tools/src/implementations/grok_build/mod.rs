@@ -70,7 +70,9 @@ pub use send_subagent_message::{
     SEND_SUBAGENT_MESSAGE_TOOL_NAME, SendSubagentMessageDisposition, SendSubagentMessageTool,
 };
 pub use task::{TaskTool, is_task_tool_id};
-pub use task_output::{GetTerminalCommandOutputTool, TaskOutputTool, WaitTasksTool};
+pub use task_output::{
+    BackgroundTaskTool, GetTerminalCommandOutputTool, TaskOutputTool, WaitTasksTool,
+};
 pub use todo::TodoWriteTool;
 pub use update_goal::{UPDATE_GOAL_TOOL_NAME, UpdateGoalTool};
 pub use video_gen::{

@@ -304,6 +304,20 @@ fn tool_name_sanitization() {
         "custom_tool",
         "unknown tool names must not pass verbatim"
     );
+    // The unified lifecycle tool and the three names it replaces all pass verbatim,
+    // so replayed sessions and historical events keep their tool label.
+    for name in [
+        "background_task",
+        "get_command_or_subagent_output",
+        "wait_commands_or_subagents",
+        "kill_command_or_subagent",
+    ] {
+        assert_eq!(
+            schema::sanitize_tool_name(name),
+            name,
+            "{name} must pass verbatim"
+        );
+    }
 }
 
 #[test]

@@ -719,6 +719,7 @@ impl ToolRegistryBuilder {
         b.register::<grok_build::UpdateGoalTool>();
         b.register::<grok_build::WorkflowTool>();
         b.register::<grok_build::TaskOutputTool>();
+        b.register::<grok_build::BackgroundTaskTool>();
         b.register_with_params::<
                 grok_build::GetTerminalCommandOutputTool,
                 grok_build::task_output::terminal_command::TerminalCommandOutputParams,
@@ -2202,46 +2203,26 @@ fn explain_requirement_failure(
             .get("enabled_background")
             .and_then(|value| value.as_bool())
             .unwrap_or(true) => {
-            let mut missing = vec![];
-            if !has_tool_kind(proposed, ToolKind::BackgroundTaskAction) {
-                missing.push("GrokBuild:get_task_output");
-            }
-            if !has_tool_kind(proposed, ToolKind::KillTaskAction) {
-                missing.push("GrokBuild:kill_task");
-            }
-            let message = if missing.is_empty() {
+            let message = if has_tool_kind(proposed, ToolKind::BackgroundTaskAction) {
                 "unsatisfied requirements".to_string()
             } else {
-                format!(
-                    "enabled_background=true requires {} so background bash tasks can be observed and cancelled",
-                    missing.join(" and ")
-                )
+                "enabled_background=true requires GrokBuild:background_task so background bash tasks can be observed and cancelled".to_string()
             };
             RequirementError::new(fq_tool_id, message)
                 .with_field_path("params.enabled_background")
-                .with_expected(
-                    "set enabled_background=false or include get_task_output and kill_task",
-                )
+                .with_expected("set enabled_background=false or include background_task")
                 .with_bad_value(serde_json::Value::Bool(true))
                 .with_category("requirements")
         }
         "GrokBuild:task" => {
-            let mut missing = vec![];
-            if !has_tool_kind(proposed, ToolKind::BackgroundTaskAction) {
-                missing.push("GrokBuild:get_task_output");
-            }
-            if !has_tool_kind(proposed, ToolKind::KillTaskAction) {
-                missing.push("GrokBuild:kill_task");
-            }
-            RequirementError::new(
-                    fq_tool_id,
-                    format!(
-                    "task requires {} so spawned background subagents can be monitored and cancelled",
-                    missing.join(" and ")
-                ),
-                )
+            let message = if has_tool_kind(proposed, ToolKind::BackgroundTaskAction) {
+                "unsatisfied requirements".to_string()
+            } else {
+                "task requires GrokBuild:background_task so spawned background subagents can be monitored and cancelled".to_string()
+            };
+            RequirementError::new(fq_tool_id, message)
                 .with_field_path("tools")
-                .with_expected("include get_task_output and kill_task")
+                .with_expected("include background_task")
                 .with_category("requirements")
         }
         "GrokBuild:get_task_output" => {
@@ -4050,8 +4031,7 @@ mod tests {
             );
         }
     }
-    /// `task` tool must be rejected when neither `get_task_output` nor
-    /// `kill_task` are present in the toolset.
+    /// `task` tool must be rejected when no background-task tool is present.
     #[test]
     fn task_tool_rejected_without_get_task_output_and_kill_task() {
         let builder = ToolRegistryBuilder::new();
@@ -4074,15 +4054,16 @@ mod tests {
         );
         assert!(
             errors.iter().any(|e| e.tool == "GrokBuild:task"
-                && e.message.contains("GrokBuild:get_task_output")
-                && e.message.contains("GrokBuild:kill_task")),
-            "error should mention missing background task tools: {errors:?}",
+                && e.message.contains("GrokBuild:background_task")),
+            "error should name the missing background-task tool: {errors:?}",
         );
     }
-    /// `task` tool must be rejected when only `get_task_output` is present
-    /// (missing `kill_task`).
+    /// `task` tool is accepted with only the background-task tool present: the
+    /// unified `background_task` carries read, wait, and kill, so a single
+    /// `BackgroundTaskAction` tool satisfies the requirement. The compat alias
+    /// `get_task_output` maps to the same kind and satisfies it too.
     #[test]
-    fn task_tool_rejected_with_only_get_task_output() {
+    fn task_tool_accepted_with_only_the_background_task_tool() {
         let builder = ToolRegistryBuilder::new();
         let config = ToolServerConfig {
             tools: vec![
@@ -4109,14 +4090,12 @@ mod tests {
         };
         let errors = builder.validate_config(&config);
         assert!(
-            errors
-                .iter()
-                .any(|e| e.tool == "GrokBuild:task" && e.message.contains("GrokBuild:kill_task")),
-            "task tool should be rejected without kill_task: {errors:?}",
+            !errors.iter().any(|e| e.tool == "GrokBuild:task"),
+            "the background-task tool alone must satisfy the task requirement: {errors:?}",
         );
     }
     /// `task` tool must be rejected when only `kill_task` is present
-    /// (missing `get_task_output`).
+    /// (no background-task tool).
     #[test]
     fn task_tool_rejected_with_only_kill_task() {
         let builder = ToolRegistryBuilder::new();
@@ -4148,8 +4127,8 @@ mod tests {
             errors
                 .iter()
                 .any(|e| e.tool == "GrokBuild:task"
-                    && e.message.contains("GrokBuild:get_task_output")),
-            "task tool should be rejected without get_task_output: {errors:?}",
+                    && e.message.contains("GrokBuild:background_task")),
+            "task tool should be rejected without a background-task tool: {errors:?}",
         );
     }
     /// `task` tool must be accepted when both `get_task_output` and
@@ -4641,8 +4620,7 @@ mod tests {
             Some("params.enabled_background")
         );
         assert_eq!(error.bad_value, Some(serde_json::json!(true)));
-        assert!(error.message.contains("GrokBuild:get_task_output"));
-        assert!(error.message.contains("GrokBuild:kill_task"));
+        assert!(error.message.contains("GrokBuild:background_task"));
         assert!(
             error
                 .expected
@@ -4676,8 +4654,7 @@ mod tests {
             panic!("expected one task requirement error: {errors:?}");
         };
         assert_eq!(error.tool, "GrokBuild:task");
-        assert!(error.message.contains("GrokBuild:get_task_output"));
-        assert!(error.message.contains("GrokBuild:kill_task"));
+        assert!(error.message.contains("GrokBuild:background_task"));
         assert_eq!(error.field_path.as_deref(), Some("tools"));
     }
     #[test]

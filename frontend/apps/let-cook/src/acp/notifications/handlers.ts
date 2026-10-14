@@ -490,6 +490,7 @@ export const notificationEntries: NotificationEntry[] = [
             text,
             images: [],
             streaming: false,
+            interjection: true,
           },
         ],
       });

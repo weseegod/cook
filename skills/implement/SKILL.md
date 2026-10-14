@@ -419,7 +419,7 @@ If `config.persona_to_inject` is non-null, prepend the corresponding persona ins
 
 Use the specialization-specific prompt (see Specialized Review Prompts below).
 
-After launching all reviewers, wait for all to complete via `get_command_or_subagent_output(task_id=..., block=true)` for each.
+After launching all reviewers, wait for all to complete via `background_task(action="output", task_ids=[...], timeout_ms=...)` for each.
 
 Save each returned `subagent_id` to the corresponding `reviewer_configs` entry.
 
@@ -743,7 +743,7 @@ Rewrite your review file at: <individual_review_file>
 - Stay within the same review scope as your initial review.
 ```
 
-After launching all re-reviewers, wait for all to complete via `get_command_or_subagent_output(task_id=..., block=true)` for each.
+After launching all re-reviewers, wait for all to complete via `background_task(action="output", task_ids=[...], timeout_ms=...)` for each.
 
 Update each `subagent_id` in `reviewer_configs` with the new ones returned.
 
