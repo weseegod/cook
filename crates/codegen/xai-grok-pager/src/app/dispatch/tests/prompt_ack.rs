@@ -67,13 +67,15 @@ fn local_drain_arms_the_watch_for_prompts_but_not_commands() {
         agent_ref(&app, id).prompt_ack.is_none(),
         "the turn's response disarms the watch"
     );
+    // `/flush` keeps the extension path: the command owns the pane through its own completion and
+    // never arms the prompt-ack watch. `/compact` now runs as a prompt turn, so it does arm it.
     app.agents
         .get_mut(&id)
         .unwrap()
         .session
-        .enqueue_command("/compact".into());
+        .enqueue_command("/flush".into());
     let effects = dispatch(Action::DrainQueue, &mut app);
-    assert!(matches!(effects.as_slice(), [Effect::Compact { .. }]));
+    assert!(matches!(effects.as_slice(), [Effect::MemoryFlush { .. }]));
     assert!(
         agent_ref(&app, id).prompt_ack.is_none(),
         "a slash command owns the pane through its own completion"

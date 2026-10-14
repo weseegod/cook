@@ -7,9 +7,10 @@ use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand, slash_m
 
 /// `/commit` and `/commit-and-push` differ only in their default `push` value.
 ///
-/// Both send the literal command text through to the shell, which runs the isolated commit turn.
-/// The pager never expands them into a prompt, so the parent conversation never carries the
-/// instruction.
+/// Both enqueue the literal command text (command name plus the user's arguments) so the shell
+/// resolves it as an isolated commit turn. The pager never expands them into a prompt, so the
+/// parent conversation never carries the instruction and the command text stays visible in the
+/// transcript as the turn it starts.
 pub struct CommitCommand;
 
 pub struct CommitAndPushCommand;
@@ -24,7 +25,7 @@ impl SlashCommand for CommitCommand {
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
-        commit_result(args, false)
+        commit_result(COMMIT_COMMAND_NAME, args, false)
     }
 }
 
@@ -38,11 +39,14 @@ impl SlashCommand for CommitAndPushCommand {
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
-        commit_result(args, true)
+        commit_result(COMMIT_AND_PUSH_COMMAND_NAME, args, true)
     }
 }
 
-fn commit_result(args: &str, force_push: bool) -> CommandResult {
+/// Build the command row the shell resolves. The name is preserved (`/commit` stays `/commit`,
+/// even with a trailing `--push`) and the user's arguments ride after it verbatim, so the shell
+/// re-parses the same invocation the user typed.
+fn commit_result(command_name: &str, args: &str, force_push: bool) -> CommandResult {
     let parsed = parse_commit_args(args, force_push);
     if parsed.help {
         return CommandResult::Message(
@@ -54,8 +58,14 @@ fn commit_result(args: &str, force_push: bool) -> CommandResult {
             .to_string(),
         );
     }
-    // Literal passthrough: the shell resolves and runs the isolated commit turn.
-    CommandResult::PassThrough(args.trim().to_string())
+    let args = args.trim();
+    let text = if args.is_empty() {
+        format!("/{command_name}")
+    } else {
+        format!("/{command_name} {args}")
+    };
+    // Enqueued as a command row: the drain sends it to the shell, which runs the isolated turn.
+    CommandResult::QueueCommand(text)
 }
 
 #[cfg(test)]
@@ -64,10 +74,10 @@ mod tests {
     use crate::acp::model_state::ModelState;
     use crate::slash::command::CommandExecCtx;
 
-    fn passed(result: CommandResult) -> String {
+    fn queued(result: CommandResult) -> String {
         match result {
-            CommandResult::PassThrough(text) => text,
-            other => panic!("expected PassThrough, got {other:?}"),
+            CommandResult::QueueCommand(text) => text,
+            other => panic!("expected QueueCommand, got {other:?}"),
         }
     }
 
@@ -75,7 +85,7 @@ mod tests {
     fn commit_sends_the_literal_command() {
         let models = ModelState::default();
         let mut ctx = super::super::tests::make_ctx(&models);
-        assert_eq!(passed(CommitCommand.run(&mut ctx, "")), "");
+        assert_eq!(queued(CommitCommand.run(&mut ctx, "")), "/commit");
     }
 
     #[test]
@@ -83,8 +93,8 @@ mod tests {
         let models = ModelState::default();
         let mut ctx = super::super::tests::make_ctx(&models);
         assert_eq!(
-            passed(CommitCommand.run(&mut ctx, "wire retries --push")),
-            "wire retries --push"
+            queued(CommitCommand.run(&mut ctx, "wire retries --push")),
+            "/commit wire retries --push"
         );
     }
 
@@ -92,7 +102,17 @@ mod tests {
     fn commit_and_push_sends_the_literal_command() {
         let models = ModelState::default();
         let mut ctx = super::super::tests::make_ctx(&models);
-        assert_eq!(passed(CommitAndPushCommand.run(&mut ctx, "ship it")), "ship it");
+        assert_eq!(
+            queued(CommitAndPushCommand.run(&mut ctx, "ship it")),
+            "/commit-and-push ship it"
+        );
+    }
+
+    #[test]
+    fn commit_and_push_without_a_hint_keeps_its_name() {
+        let models = ModelState::default();
+        let mut ctx = super::super::tests::make_ctx(&models);
+        assert_eq!(queued(CommitAndPushCommand.run(&mut ctx, "  ")), "/commit-and-push");
     }
 
     #[test]
