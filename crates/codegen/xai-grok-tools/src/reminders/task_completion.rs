@@ -19,7 +19,7 @@ use crate::implementations::grok_build::task::types::{
 };
 use crate::implementations::grok_build::task_output::{WaitHint, format_subagent_snapshot};
 use crate::types::TaskSnapshot;
-use crate::types::output::ToolOutput;
+use crate::types::output::{BackgroundTaskOutput, ToolOutput};
 use crate::types::resources::{SharedResources, State, Terminal};
 use crate::types::tool::{Reminder, ToolKind};
 use crate::util::truncate::{PREVIEW_SIZE, PartialOutput, truncate_str, truncate_with_preview};
@@ -650,6 +650,24 @@ pub fn consumed_completion_ids(output: &ToolOutput) -> Vec<&str> {
             ids.push(r.task_id.as_str());
         }
         ToolOutput::KillTask(KillTaskOutput::TaskNotFound(_)) => {}
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(
+            TaskOutputOutput::Result(r),
+        )) if wait_result_consumed(r) => {
+            ids.push(r.task_id.as_str());
+        }
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(TaskOutputOutput::MultiResult(
+            mr,
+        ))) => {
+            for r in mr.results.iter().filter(|r| wait_result_consumed(r)) {
+                ids.push(r.task_id.as_str());
+            }
+        }
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(_)) => {}
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Kill(KillTaskOutput::Result(r))) => {
+            ids.push(r.task_id.as_str());
+        }
+        ToolOutput::BackgroundTask(BackgroundTaskOutput::Kill(KillTaskOutput::TaskNotFound(_))) => {
+        }
         ToolOutput::SubagentCompleted(SubagentCompletedOutput { subagent_id, .. }) => {
             ids.push(subagent_id.as_str());
         }

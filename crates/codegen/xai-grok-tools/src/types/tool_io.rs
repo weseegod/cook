@@ -38,6 +38,7 @@ use crate::implementations::search_tool::SearchToolInput;
 use crate::implementations::skills::skill::SkillInput;
 use crate::implementations::use_tool::UseToolInput;
 use serde::{Deserialize, Serialize};
+use xai_tool_types::BackgroundTaskToolInput;
 use xai_tool_types::KillTaskToolInput;
 use xai_tool_types::TaskOutputToolInput;
 use xai_tool_types::TaskToolInput;
@@ -63,6 +64,7 @@ pub enum ToolInput {
     Skill(SkillInput),
     MCPTool(MCPToolInput),
     TaskOutput(TaskOutputToolInput),
+    BackgroundTask(BackgroundTaskToolInput),
     WaitTasks(WaitTasksToolInput),
     KillTask(KillTaskToolInput),
     Task(TaskToolInput),

@@ -470,6 +470,7 @@ pub(crate) const BUILTIN_TOOL_NAMES: &[&str] = &[
     "delete_file",
     "run_terminal_cmd",
     "run_terminal_command",
+    "background_task",
     "get_task_output",
     "get_command_or_subagent_output",
     "get_terminal_command_output",

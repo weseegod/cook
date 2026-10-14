@@ -198,6 +198,7 @@ fn cursor_shell_can_background(
     })
 }
 const TASK_LIFECYCLE_TOOLS: &[&str] = &[
+    "background_task",
     "get_task_output",
     "wait_tasks",
     "kill_task",
@@ -2572,9 +2573,7 @@ mod tests {
             "search_replace",
             "write",
             "run_terminal_command",
-            "get_command_or_subagent_output",
-            "wait_commands_or_subagents",
-            "kill_command_or_subagent",
+            "background_task",
             "todo_write",
             "enter_plan_mode",
             "exit_plan_mode",
@@ -2886,7 +2885,7 @@ mod tests {
             !disabled_names.iter().any(|name| name == "spawn_subagent"),
             "disabling general-purpose with no single fallback hides task: {disabled_names:?}"
         );
-        for kept in ["run_terminal_command", "get_command_or_subagent_output"] {
+        for kept in ["run_terminal_command", "background_task"] {
             assert!(
                 disabled_names.iter().any(|name| name == kept),
                 "hiding task must keep {kept}: {disabled_names:?}"
@@ -2937,9 +2936,7 @@ mod tests {
         );
         for gone in [
             "spawn_subagent",
-            "get_command_or_subagent_output",
-            "kill_command_or_subagent",
-            "wait_commands_or_subagents",
+            "background_task",
             "scheduler_create",
         ] {
             assert!(

@@ -56,6 +56,15 @@ impl From<serde_json::Value> for DynamicOutput {
         Self { value }
     }
 }
+/// Unified output for the `background_task` tool. The `output` and `wait`
+/// actions return the task-output shape; `kill` returns the kill shape.
+/// Externally tagged so a `kill` not-found string cannot deserialize into the
+/// `output` arm.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BackgroundTaskOutput {
+    Output(TaskOutputOutput),
+    Kill(KillTaskOutput),
+}
 /// Typed saved path for the media tools (`image_gen` / `video_gen` / `image_edit`), so consumers
 /// read it directly instead of scraping the prose. A struct (not a bare `PathBuf`) is required:
 /// `ToolOutput` is internally tagged and only accepts map payloads.
@@ -581,6 +590,7 @@ pub enum ToolOutput {
     MCP(MCPOutput),
     TaskOutput(TaskOutputOutput),
     KillTask(KillTaskOutput),
+    BackgroundTask(BackgroundTaskOutput),
     Skill(SkillOutput),
     ApplyPatch(ApplyPatchOutput),
     CodexGrepFiles(CodexGrepFilesOutput),
@@ -632,6 +642,12 @@ impl ToolOutput {
             ToolOutput::ReadFile(_) => true,
             ToolOutput::TaskOutput(TaskOutputOutput::TaskNotFound(_)) => true,
             ToolOutput::KillTask(KillTaskOutput::TaskNotFound(_)) => true,
+            ToolOutput::BackgroundTask(BackgroundTaskOutput::Output(
+                TaskOutputOutput::TaskNotFound(_),
+            )) => true,
+            ToolOutput::BackgroundTask(BackgroundTaskOutput::Kill(
+                KillTaskOutput::TaskNotFound(_),
+            )) => true,
             ToolOutput::Skill(s) => !s.success,
             ToolOutput::WebFetch(WebFetchOutput::Content(_)) => false,
             ToolOutput::WebFetch(_) => true,
@@ -816,6 +832,14 @@ impl ToolOutput {
             ToolOutput::KillTask(kill_output) => match kill_output {
                 KillTaskOutput::Result(r) => format!("{}: {}", r.outcome, r.message),
                 KillTaskOutput::TaskNotFound(msg) => msg.to_owned(),
+            },
+            ToolOutput::BackgroundTask(background) => match background {
+                BackgroundTaskOutput::Output(output) => {
+                    ToolOutput::TaskOutput(output.clone()).to_prompt_format()
+                }
+                BackgroundTaskOutput::Kill(kill) => {
+                    ToolOutput::KillTask(kill.clone()).to_prompt_format()
+                }
             },
             ToolOutput::Skill(skill_output) => skill_output
                 .skill_message
@@ -1251,6 +1275,7 @@ impl xai_tool_runtime::ToolOutput for SearchReplaceOutput {
     }
 }
 impl xai_tool_runtime::ToolOutput for TodoWriteOutput {}
+impl xai_tool_runtime::ToolOutput for BackgroundTaskOutput {}
 impl xai_tool_runtime::ToolOutput for WebFetchOutput {}
 impl xai_tool_runtime::ToolOutput for SkillOutput {}
 impl xai_tool_runtime::ToolOutput for ApplyPatchOutput {}
