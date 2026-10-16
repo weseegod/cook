@@ -1075,7 +1075,8 @@ img.brand-mark {
 .toast-stack {
   position: fixed;
   z-index: 140;
-  top: 12px;
+  /* Below the 40px `.agent-header`: a toast must never cover the Git chip or the header actions. */
+  top: 52px;
   right: 12px;
   display: flex;
   flex-direction: column;

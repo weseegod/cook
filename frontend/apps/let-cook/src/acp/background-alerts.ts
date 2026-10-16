@@ -1,10 +1,11 @@
 import { useSessionStore, type StashedInteraction, type TurnOutcome } from "../state/session";
+import { markAttention } from "./attention-badge";
 import { notifyWhileUnfocused } from "./os-notify";
 
 /**
  * A blocking request for a conversation that is not on screen. The agent stays parked on the
- * reverse-request, so the card is kept with its conversation; the toast and the native
- * notification are how the user learns the conversation is waiting.
+ * reverse-request, so the card is kept with its conversation; the toast, the native notification,
+ * and the icon badge are how the user learns the conversation is waiting.
  */
 export function parkBackgroundInteraction(
   sessionId: string,
@@ -19,6 +20,7 @@ export function parkBackgroundInteraction(
     body: copy.body,
     sessionId,
   });
+  markAttention(sessionId);
   void notifyWhileUnfocused("Let Cook", copy.body);
 }
 
@@ -30,6 +32,7 @@ export function parkBackgroundInteraction(
 export function reportBackgroundTurnOutcome(sessionId: string, outcome: TurnOutcome): void {
   const store = useSessionStore.getState();
   if (outcome.kind === "cancelled") return;
+  markAttention(sessionId);
   if (outcome.kind === "failed") {
     const message = outcome.error ?? "The turn failed";
     store.setSessionAlert(sessionId, message);

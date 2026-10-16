@@ -67,7 +67,7 @@ describe("verb runs", () => {
 
   it("claims finished thoughts into an open run but lets a streaming thought keep its row", () => {
     expect(rows([thought("t1"), tool("read-1", "Read a.ts"), tool("read-2", "Read b.ts")])).toEqual(["verb-group"]);
-    expect(rows([thought("t1", true), tool("read-1", "Read a.ts")])).toEqual(["verb-group", "message"]);
+    expect(rows([thought("t1", true), tool("read-1", "Read a.ts")])).toEqual(["message", "verb-group"]);
   });
 
   it("folds a grep+read cluster, interleaved with finished thoughts, into one header", () => {
@@ -94,10 +94,22 @@ describe("verb runs", () => {
       thought("t1", true),
       tool("read-2", "read_file", "completed", { kind: "read", paths: ["src/b.ts"] }),
     ]);
+    // The run's row stands where its first member is; the live thought keeps its own place after it.
     expect(projected.map((row) => row.type)).toEqual(["verb-group", "message"]);
     if (projected[0].type === "verb-group") {
       expect(projected[0].tools.map((entry) => entry.id)).toEqual(["read-1", "read-2"]);
     }
+  });
+
+  it("paints a thought that arrives after a web search below the run row, not above it", () => {
+    const projected = projectTranscript([
+      tool("ws-1", "Web Search tauri", "pending", { kind: "web_search" }),
+      thought("t1", true),
+    ]);
+    expect(projected.map((row) => row.type)).toEqual(["verb-group", "message"]);
+    // A thought that arrived first stays above, which is where the TUI keeps a transparent row.
+    expect(rows([thought("t0", true), tool("ws-2", "Web Search tauri", "pending", { kind: "web_search" })]))
+      .toEqual(["message", "verb-group"]);
   });
 
   it("keeps edit as its own row inside a read cluster while shell joins", () => {

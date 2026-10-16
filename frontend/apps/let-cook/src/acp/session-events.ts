@@ -5,15 +5,34 @@ export type SessionEventRail = "acp" | "xai";
 /** Keep the live Desktop transcript aligned with the TUI's event high-water marks. */
 export class SessionEventDedupe {
   private readonly highwater = new Map<string, number>();
+  /**
+   * Highest sequence accepted for a session, replays included. A replay never suppresses a live
+   * update (the agent replays what this window already painted, and the transcript is reset before
+   * that replay lands), so this tally exists only to set the Clear watermark.
+   */
+  private readonly sessionMax = new Map<string, number>();
+  /** Per session, the sequence the transcript was wiped at. */
+  private readonly clearedAt = new Map<string, number>();
 
   accept(rail: SessionEventRail, params: JsonRecord): boolean {
     const meta = asRecord(params._meta) ?? asRecord(params.meta);
-    if (meta?.isReplay === true) return true;
-
     const sequence = eventSequence(meta);
+    const sessionId = stringValue(params.sessionId ?? params.session_id);
+
+    if (sessionId && sequence !== null) {
+      const previousMax = this.sessionMax.get(sessionId);
+      if (previousMax === undefined || sequence > previousMax) this.sessionMax.set(sessionId, sequence);
+    }
+
+    if (meta?.isReplay === true) {
+      // `/clear` wiped the transcript this replay is about to paint back. Everything at or below
+      // the wipe stays gone; what the conversation produced afterwards sits above it and replays.
+      const cleared = sessionId ? this.clearedAt.get(sessionId) : undefined;
+      return !(cleared !== undefined && sequence !== null && sequence <= cleared);
+    }
+
     if (sequence === null) return true;
 
-    const sessionId = stringValue(params.sessionId ?? params.session_id);
     // An event without a session cannot be safely high-water-marked: using a shared
     // "unknown" bucket would let one session suppress another session's update.
     if (!sessionId) return true;
@@ -24,8 +43,19 @@ export class SessionEventDedupe {
     return true;
   }
 
+  /**
+   * Forget what a conversation had painted through this sequence. Call it with the wipe itself, so
+   * the next `session/load` replay cannot put the cleared rows back.
+   */
+  markCleared(sessionId: string): void {
+    const seen = this.sessionMax.get(sessionId);
+    if (seen !== undefined) this.clearedAt.set(sessionId, seen);
+  }
+
   clear(): void {
     this.highwater.clear();
+    this.sessionMax.clear();
+    this.clearedAt.clear();
   }
 }
 

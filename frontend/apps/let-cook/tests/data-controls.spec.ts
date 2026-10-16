@@ -130,3 +130,24 @@ test.describe("data controls", () => {
     await capture(page, "data-controls-light");
   });
 });
+
+test.describe("Settings → General follow-up mode", () => {
+  test("defaults to Steer and keeps the chosen mid-turn mode", async ({ page }) => {
+    await openWorkspace(page, DATA_SEED);
+    await page.getByLabel("Settings").click();
+
+    // A missing `[ui].follow_up_behavior` reads as Steer: the mode the shell routes follow-ups by.
+    await expect(page.getByRole("radio", { name: /^Steer/ })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radio", { name: /^Queue/ })).toHaveAttribute("aria-checked", "false");
+
+    await page.getByRole("radio", { name: /^Queue/ }).click();
+    await expect(page.getByRole("radio", { name: /^Queue/ })).toHaveAttribute("aria-checked", "true");
+    // The renderer holds no TOML writer: the host owns the file. Outside Tauri the same choice
+    // lives in the localStorage stand-in every other desktop pref uses.
+    expect(await page.evaluate(() => localStorage.getItem("cook.followUpBehavior"))).toBe("queue");
+
+    await page.keyboard.press("Escape");
+    await page.getByLabel("Settings").click();
+    await expect(page.getByRole("radio", { name: /^Queue/ })).toHaveAttribute("aria-checked", "true");
+  });
+});

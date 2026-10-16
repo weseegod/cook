@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { CONNECTED_SEED } from "./seed";
-import { openWorkspace, waitForCalls } from "./support/harness";
+import { gitSeed, openWorkspace, waitForCalls } from "./support/harness";
 
 /**
  * A blocking request belongs to the conversation that raised it. The window is one conversation
@@ -50,4 +50,47 @@ test("keeps a background conversation's question out of the open one", async ({ 
   // Back on screen the row reports the live phase it is blocked in.
   await expect(page.getByTestId("session-row-s-alpha-new").getByTestId("session-turn-status"))
     .toContainText("Waiting on answers for");
+});
+
+test("keeps a notification toast below the header and clear of the Git chip", async ({ page }) => {
+  await openWorkspace(page, gitSeed({ promptDelayMs: SEED.promptDelayMs, sessions: SEED.sessions }));
+  await page.getByTestId("session-row-s-alpha-new").locator(".session-open").click();
+  await waitForCalls(page, "session/load");
+  await page.getByTestId("composer-input").fill("Start a long turn");
+  await page.getByTestId("send-button").click();
+  await waitForCalls(page, "session/prompt");
+  await page.getByTestId("session-row-s-beta").locator(".session-open").click();
+  await waitForCalls(page, "session/load", 2);
+  await page.evaluate(() => void window.__cookMock!.question({ sessionId: "s-alpha-new" }));
+
+  const toast = page.getByTestId("toast-stack");
+  await expect(toast).toBeVisible();
+  const [toastBox, headerBox, chipBox] = await Promise.all([
+    toast.boundingBox(),
+    page.getByTestId("agent-header").boundingBox(),
+    page.getByTestId("git-chip").boundingBox(),
+  ]);
+  expect(toastBox).not.toBeNull();
+  expect(headerBox).not.toBeNull();
+
+  // The stack starts under the 40px header, so nothing it paints can cover the chip or the actions.
+  expect(toastBox!.y).toBeGreaterThanOrEqual(headerBox!.y + headerBox!.height);
+  if (chipBox) expect(toastBox!.y).toBeGreaterThanOrEqual(chipBox.y + chipBox.height);
+});
+
+test("re-opens a plan review that is still waiting when its conversation comes back", async ({ page }) => {
+  await openWorkspace(page, SEED);
+  await page.getByTestId("session-row-s-alpha-new").locator(".session-open").click();
+  await waitForCalls(page, "session/load");
+
+  // The agent parks on alpha's plan while beta is the conversation on screen.
+  await page.getByTestId("session-row-s-beta").locator(".session-open").click();
+  await waitForCalls(page, "session/load", 2);
+  await page.evaluate(() => void window.__cookMock!.plan({ sessionId: "s-alpha-new" }));
+  await expect(page.getByTestId("plan-pane")).toHaveCount(0);
+
+  // Coming back to alpha brings the waiting review with it — no chip click needed.
+  await page.getByTestId("session-row-s-alpha-new").locator(".session-open").click();
+  await waitForCalls(page, "session/load", 3);
+  await expect(page.getByTestId("plan-pane")).toBeVisible();
 });

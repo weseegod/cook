@@ -230,10 +230,13 @@ export class CookAcpClient {
 
   /**
    * `/clear` and the conversation menu's Clear: wipe the painted transcript without touching the
-   * session. Pending updates are applied first so a queued frame cannot repaint what was cleared.
+   * session. Pending updates are applied first so a queued frame cannot repaint what was cleared,
+   * and the replay barrier is raised so switching away and back cannot either.
    */
   clearTranscript(): void {
     this.sessionUpdates.flushNow();
+    const sessionId = useSessionStore.getState().sessionId;
+    if (sessionId) this.sessionEvents.markCleared(sessionId);
     useSessionStore.getState().clearTranscript();
   }
 

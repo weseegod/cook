@@ -117,10 +117,11 @@ registry; everything else goes to the notification registry.
 | `workspace.ts` | Renderer side of the read-only file/review sidecar |
 | `attachments.ts` | Composer attachments and image parts |
 | `mcp-servers.ts` | Normalize and merge the MCP catalog |
-| `session-events.ts` | Dedupe and prompt correlation |
+| `session-events.ts` | Dedupe, prompt correlation, and the Clear watermark a `session/load` replay is measured against |
 | `client-coalesce.ts` | Coalesce `session/update` before the reducer |
 | `mock-transport.ts` | ACP stand-in for Playwright (`VITE_MOCK_ACP=1`) and unit tests |
 | `os-notify.ts` | Turn-complete OS notification copy |
+| `attention-badge.ts` | Attention set per conversation, mirrored to the Dock/taskbar badge (`os_badge`) while the window is unfocused |
 | `background-alerts.ts` | Park a blocking card, toast, and alert for a conversation the window is not showing |
 | `trace.ts` | `COOK_DESKTOP_TRACE=1` method/id trace |
 
@@ -166,7 +167,9 @@ A conversation owns its blocking card and its outcome. `useSessionStore`
 carries the open one in `pendingQuestion` / `pendingPermission` / `error`;
 every other conversation's waiter lives in `interactionsBySession`, its failure
 in `sessionAlerts`, and both are restored when that conversation is loaded
-again. `ui/toast-stack.tsx` is the right-side message stack, and a message that
+again. A parked plan review comes back the same way, and its pane opens by
+itself while the agent is still waiting on that review. `ui/toast-stack.tsx` is
+the right-side message stack, and a message that
 names another conversation opens it instead of painting that conversation's
 transcript over the one on screen.
 
@@ -186,6 +189,8 @@ The projection folds like the TUI's scrollback. Consecutive foldable tools
 collapse under one header (`Read 2 files, Searched 1 pattern`); a finished
 thought is claimed into that run at height 0, and a still-streaming thought keeps
 its own `Thinking…` row without breaking the run (`docs/tui-presentation.md` §8).
+Rows stand in arrival order, so a thought that starts after a foldable run
+paints below that run's row.
 Agent shell (`kind: "execute"`) is a foldable member too; a user `!` command
 (`ToolBlock.bashMode`) keeps its own row, and a run of a single command does not
 fold so a lone `$ <command>` keeps its row. Which tools fold, and the one-line
@@ -196,9 +201,12 @@ name (`read_file`, `grep`) onto one vocabulary.
 
 Follow mode mirrors the TUI's scrollback: any
 scroll back from the tail drops it, and it resumes from a wheel down at the
-tail, "Jump to latest", or sending a prompt. The pane writes `scrollTop` itself
-(the follow pin, the anchor restore) only while no scroll gesture is in flight;
-`scrollend`, not a fixed timeout, is what ends the gesture. During a live turn
+tail, "Jump to latest", or sending a prompt. Only the tail pin stands aside
+while a scroll gesture is in flight; the anchor restore runs through it, because
+it only answers rows a spacer swap or a fresh measurement moved — holding it back
+let a wheel into under-measured rows drift by the mount error, in the thousands
+of pixels. `scrollend`, not a fixed timeout, is what ends the gesture. During a
+live turn
 the pin runs in the frame loop and again in the layout pass that mounts rows,
 since that pass changes the scroll extent and the browser answers with a scroll
 event that would otherwise read as the user leaving the tail.
@@ -283,7 +291,7 @@ The TUI follows the same notification in
 
 | Tab | File |
 |---|---|
-| General | `settings-panel.tsx` (theme, always-approve, composer prefs) |
+| General | `settings-panel.tsx` (theme, always-approve, composer prefs, the mid-turn message mode — Steer or Queue, read back from `[ui].follow_up_behavior`) |
 | Models | `providers.tsx`, `providers/` (cards, dialogs, OAuth, logos), `model-dialog.tsx`, `provider-form.tsx` |
 | Connectors | `connectors.tsx`, grouping `connectors-groups.ts` |
 | Memory & project | `context-panels.tsx` (`MemoryPanel`, `ProjectInstructionsPanel`) |
@@ -313,13 +321,13 @@ the window.
 | File | Role | Contract |
 |---|---|---|
 | `acp_host.rs` | Spawn and kill `cook agent stdio`, JSON-RPC ids, notification coalescing, native `fs/read_text_file` and `fs/write_text_file` | desktop-app §4.3 ACP mux. `terminal: false` until a real PTY exists |
-| `provider_config.rs` | Atomic `~/.cook/config.toml` edits. Credential stays in this process; the renderer gets presence only. `/models` probe | The production Desktop write path for `[model_providers.*]` and `[model.*]` |
+| `provider_config.rs` | Atomic `~/.cook/config.toml` edits. Credential stays in this process; the renderer gets presence only. `/models` probe. `[ui].follow_up_behavior` read/write | The production Desktop write path for `[model_providers.*]`, `[model.*]`, and the mid-turn message mode |
 | `provider_oauth.rs` | ChatGPT device flow and Claude PKCE. Grok login stays on the agent's `authenticate` | |
 | `http.rs` | The one HTTP client, used by provider probes | |
 | `workspace.rs` | Git review vs `HEAD`, file tree, preview, native open. Paths stay inside the workspace root | Read-only sidecar |
 | `bin_resolve.rs` | `COOK_BIN`, then `~/.cook/bin/cook`, then an optional bundled sidecar. Home is `$COOK_HOME`, then `$GROK_HOME`, then `~/.cook` | README § Agent binary resolution |
 | `logging.rs` | `~/.cook/logs/desktop.log`. Verbose ACP trace is `COOK_DESKTOP_TRACE=1` | |
-| `lib.rs` | Command list: ACP, folder/file pickers, workspace, providers, models, OAuth, OS notify, open path/url | |
+| `lib.rs` | Command list: ACP, folder/file pickers, workspace, providers, models, OAuth, OS notify, the Dock badge (`os_badge`), open path/url | |
 
 The updater plugin updates this app binary. It does not write
 `~/.cook/bin/cook`.
@@ -336,7 +344,7 @@ The updater plugin updates this app binary. It does not write
 | Change how a transcript row looks | `src/ui/chat/transcript-row.tsx` and `tool-card.tsx`. Projection: `transcript-projection.ts`. Paint rules: [`docs/tui-presentation.md`](../../../docs/tui-presentation.md). Forbidden chrome: desktop-app §7 |
 | Change what an agent update becomes in the transcript | `src/state/session/transcript.ts` |
 | Change the composer, Enter, or slash menu | `src/ui/chat/composer.tsx`, `slash-commands.ts`, `composer/` |
-| Change what `/clear` wipes (transcript only; the session and its context stay) | `src/state/session/store.ts` `clearTranscript`, `src/acp/client.ts` `clearTranscript` (flushes the update coalescer first) |
+| Change what `/clear` wipes (transcript only; the session and its context stay) | `src/state/session/store.ts` `clearTranscript`, `src/acp/client.ts` `clearTranscript` (flushes the update coalescer, then raises the Clear watermark in `session-events.ts` so a `session/load` replay cannot paint the cleared rows back) |
 | Change the model picker or which models appear | `src/ui/chat/model-picker.tsx`, `src/state/catalog.ts`. Saving a model is Settings → Models |
 | Change queue or Send now | §4 Prompt queue |
 | Change the status row (tokens/s, diffstat) | `src/ui/chat/composer-rails.tsx`, `composer-metrics.ts` |
@@ -347,6 +355,8 @@ The updater plugin updates this app binary. It does not write
 | Change the right-hand Review / Files / Preview panel | `src/ui/utility-panel.tsx`, `src/acp/workspace.ts`, host `src-tauri/src/workspace.rs` |
 | Change permissions, questions, or plan-mode exit UI | `src/ui/permissions/`, `src/acp/reverse/interactions.ts` |
 | Change the conversation list | `src/ui/sessions/session-sidebar.tsx` |
+| Change a notification toast's placement, or the Dock badge | `ui/toast-stack.tsx`, `.toast-stack` offset in `src/theme/shell.css` (below the 40px `.agent-header`), `src/acp/attention-badge.ts` and host `os_badge` |
+| Change Settings → General's mid-turn message mode | `settings-panel.tsx` `FollowUpBehaviorOptions`, `src/acp/host.ts` `readFollowUpBehavior` / `writeFollowUpBehavior`, host `provider_config.rs` |
 | Add or change a Settings tab | `src/ui/settings/settings-panel.tsx` and the tab file in §4 |
 | Change provider connect, OAuth, or model save | `src/ui/settings/providers.tsx`, `src/acp/providers.ts`, host `provider_config.rs` / `provider_oauth.rs` |
 | Add a provider logo | `public/providers/{id}.svg` and `PROVIDER_LOGO_IDS` in `provider-logo.tsx` |

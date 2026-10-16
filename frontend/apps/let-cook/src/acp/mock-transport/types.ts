@@ -161,6 +161,16 @@ export interface MockWorkspaceState {
  */
 export type MockPromptUpdate = Record<string, unknown>;
 
+/**
+ * One event of a session's transcript log: the method the agent emitted, its params, and the event
+ * id the log holds it under — the id `session/load` replays it with.
+ */
+export interface MockRecordedEvent {
+  method: string;
+  params: Record<string, unknown>;
+  eventId: string;
+}
+
 export interface MockState {
   /** Non-null when the agent holds an xAI credential of its own. */
   authMethodId: string | null;
@@ -205,6 +215,11 @@ export interface MockState {
   promptUpdates: MockPromptUpdate[];
   /** Optional replayed session/update sequence emitted by `session/load` for long-session tests. */
   historyUpdates: MockPromptUpdate[];
+  /**
+   * Per session, what its turns produced, in event order. `session/load` replays it after
+   * `historyUpdates`, the way the shell replays the session file it keeps on disk.
+   */
+  transcript: Record<string, MockRecordedEvent[]>;
   /** Hold the prompt response open so visual tests can inspect live activity. */
   promptDelayMs: number;
   /** Agent-side project instruction files keyed by path. */

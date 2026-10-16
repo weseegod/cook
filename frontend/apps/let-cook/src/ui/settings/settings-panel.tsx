@@ -1,8 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Cable, Cpu, Database, FileText, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
+import { Cable, CornerDownLeft, Cpu, Database, FileText, Info, Monitor, Moon, Palette, RefreshCw, ShieldCheck, SlidersHorizontal, Sparkles, Sun, Webhook, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { acpClient } from "../../acp/client";
-import { getConfigSecurity } from "../../acp/host";
+import { getConfigSecurity, readFollowUpBehavior, writeFollowUpBehavior, type FollowUpBehavior } from "../../acp/host";
 import { useModelSelection } from "../../state/catalog";
 import { useSessionStore } from "../../state/session";
 import {
@@ -46,6 +46,12 @@ const THEME_OPTIONS: Array<{ id: ThemePreference; label: string; icon: React.Rea
   { id: "system", label: "System", icon: <Monitor size={16} /> },
   { id: "light", label: "Light", icon: <Sun size={16} /> },
   { id: "dark", label: "Dark", icon: <Moon size={16} /> },
+];
+
+/** TUI settings catalog copy for `follow_up_behavior` (`settings/defs.rs`), default choice first. */
+const FOLLOW_UP_OPTIONS: Array<{ id: FollowUpBehavior; label: string; description: string }> = [
+  { id: "steer", label: "Steer", description: "Inject follow-ups mid-turn at the next tool or model step." },
+  { id: "queue", label: "Queue", description: "Hold follow-ups until the current turn finishes." },
 ];
 
 export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 0 }: { onClose: () => void; initialTab?: Tab; closeRequest?: number }) {
@@ -151,6 +157,9 @@ export function SettingsPanel({ onClose, initialTab = "general", closeRequest = 
               </Section>
               <Section title="Behavior" description="Control how Cook handles permissions." icon={<SlidersHorizontal size={15} />}>
                 <BehaviorOptions sessionId={sessionId} alwaysApprove={alwaysApprove} />
+              </Section>
+              <Section title="Follow-up behavior" description="What to do with messages you send while a turn is running." icon={<CornerDownLeft size={15} />}>
+                <FollowUpBehaviorOptions />
               </Section>
               <Section title="Display" description="Muted metrics on the turn status bar." icon={<Monitor size={15} />}>
                 <DisplayOptions />
@@ -327,6 +336,48 @@ function BehaviorOptions({ sessionId, alwaysApprove }: { sessionId: string | nul
         <ShieldCheck size={15} /> Reset permissions
       </button>
     </>
+  );
+}
+
+/**
+ * Mid-turn follow-up routing. Writes the shared `[ui].follow_up_behavior`, so the CLI and TUI see
+ * the same mode, and the shell picks it up on the config file's next mtime change.
+ */
+function FollowUpBehaviorOptions() {
+  const [behavior, setBehavior] = useState<FollowUpBehavior | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void readFollowUpBehavior().then((value) => {
+      if (!cancelled) setBehavior(value);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const current = behavior ?? "steer";
+  const choose = (next: FollowUpBehavior) => {
+    const previous = current;
+    setBehavior(next);
+    void writeFollowUpBehavior(next).catch(() => setBehavior(previous));
+  };
+  return (
+    <div className="theme-options" role="radiogroup" aria-label="Follow-up behavior">
+      {FOLLOW_UP_OPTIONS.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          role="radio"
+          aria-checked={current === option.id}
+          data-testid={`follow-up-behavior-${option.id}`}
+          title={option.description}
+          className={current === option.id ? "selected" : ""}
+          onClick={() => choose(option.id)}
+        >
+          <strong>{option.label}</strong>
+          <small>{option.description}</small>
+        </button>
+      ))}
+    </div>
   );
 }
 

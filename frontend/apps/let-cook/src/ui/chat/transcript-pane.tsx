@@ -57,9 +57,9 @@ function cancelFrame(handle: number): void {
 }
 
 /**
- * True while a scroll gesture is in flight. `pinToBottom`, the anchor restore, and the streaming pin
- * all stand aside for this window: a write over the user's own scroll is what made a live turn's
- * transcript feel like it was fighting the wheel — and the fight is invisible to `scroll` events,
+ * True while a scroll gesture is in flight. `pinToBottom` and the streaming pin stand aside for this
+ * window: a write that snaps the tail back over the user's own scroll is what made a live turn's
+ * transcript feel like it was fighting the wheel, and the fight is invisible to `scroll` events,
  * because the event then reports the position the pane wrote instead of the one the user asked for.
  * Wheel, touch, and pointer events arm it, and so does every scroll event the pane did not write:
  * a scrollbar drag, a key, and a scroll started outside the pane fire none of the others.
@@ -418,13 +418,12 @@ export function TranscriptPane({
   useLayoutEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) return;
-    // Mid-gesture the user's position is the truth. The anchor is re-read from it so the first
-    // restore after the gesture continues from where they left the transcript, not from where the
-    // pane last pinned it.
-    if (scrollGestureActive(gestureAtRef.current)) {
-      domAnchorRef.current = captureDomAnchor(transcript);
-      return;
-    }
+    // The anchor restore is not held back for a scroll gesture the way the tail pin is. It only
+    // answers rows that a spacer swap or a fresh measurement moved, so it cannot pull the reader
+    // away from a position the wheel just asked for — and holding it back is what let those moves
+    // accumulate: a wheel into rows the model only estimated mounts them at their real height,
+    // content below them drops by the difference, and without the correction the reading line
+    // lands thousands of pixels from where the wheel put it.
     if (followRef.current) {
       // This pin is not a second writer fighting the rAF one: the pass that mounts or drops rows
       // changes the scroll extent, and the browser answers with a scroll event that reads as the

@@ -1,6 +1,7 @@
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { useSessionStore, type PendingQuestion, type StashedInteraction } from "../../state/session";
 import { planFileName } from "../../state/plan-review";
+import { markAttention } from "../attention-badge";
 import { parkBackgroundInteraction } from "../background-alerts";
 import type { ReverseContext, ReverseDisposition, ReverseEntry } from "./types";
 
@@ -139,9 +140,13 @@ function parkWaiter(
   }
   if (interaction.kind === "permission") {
     useSessionStore.getState().set({ pendingPermission: interaction.value });
-    return;
+  } else {
+    useSessionStore.getState().set({ pendingQuestion: interaction.value });
   }
-  useSessionStore.getState().set({ pendingQuestion: interaction.value });
+  // The card sits in the open conversation. With the window unfocused that is exactly when the
+  // Dock/taskbar icon has to say so; a focused window answers with the card itself.
+  const waitingOn = owner ?? active;
+  if (waitingOn) markAttention(waitingOn);
 }
 
 /** R-ask / R-plan / R-elicit / R-trust / session/request_permission — park UI cards. */
@@ -198,6 +203,7 @@ export const interactionEntries: ReverseEntry[] = [
             planStashedDraft: null,
             pendingQuestion: question,
           });
+          markAttention(ownerId);
           return;
         }
         useSessionStore.getState().beginPlanReview(body, fileName);

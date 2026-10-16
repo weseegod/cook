@@ -2,6 +2,7 @@ import type { McpToolSummary, PluginView } from "../extensions";
 import { mergeMcpCatalog, mcpServersFromParams } from "../mcp-servers";
 import type { HookView, MemoryFileView } from "../settings-ext";
 import { activityPayload } from "../activity";
+import { markAttention } from "../attention-badge";
 import { reportBackgroundTurnOutcome } from "../background-alerts";
 import { notifyTurnComplete, shouldNotifyTurnComplete, turnCompleteNotifyCopy } from "../os-notify";
 import { modelCatalog } from "../xai";
@@ -226,6 +227,8 @@ export const notificationEntries: NotificationEntry[] = [
       if (shouldNotifyTurnComplete()) {
         const { title, body } = turnCompleteNotifyCopy(outcome);
         void notifyTurnComplete(title, body);
+        const waiting = sessionId ?? store.sessionId;
+        if (waiting) markAttention(waiting);
       }
     },
   },

@@ -819,9 +819,12 @@ test.describe("slash commands", () => {
     // The window answered it; nothing travelled to the agent.
     expect(callsTo(await mock.requests(), "session/prompt")).toHaveLength(1);
 
-    // Like the TUI's `/clear`, this is a display wipe: reopening replays the agent's history.
+    // Reopening replays the agent's record, and the wipe holds: what the clear covered stays gone.
     await page.getByTestId("session-row-mock-session").locator(".session-open").click();
-    await expect(page.getByText("Replayed line.")).toBeVisible();
+    await waitForCalls(page, "session/load");
+    await expect(page.getByText("Replayed line.")).toHaveCount(0);
+    await expect(page.getByText("Mock assistant reply.")).toHaveCount(0);
+    await expect(page.locator(".empty-chat")).toBeVisible();
   });
 
   test("opens context actions inside the composer and queues /compact", async ({ page }) => {

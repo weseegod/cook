@@ -1210,6 +1210,47 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     result
 }
 
+/// `[ui].follow_up_behavior` values, in the order the TUI's settings row lists them.
+pub const FOLLOW_UP_BEHAVIORS: &[&str] = &["steer", "queue"];
+/// What the shell uses when the key is missing (`FollowUpBehavior::default`).
+pub const FOLLOW_UP_BEHAVIOR_DEFAULT: &str = "steer";
+
+/// Mid-turn follow-up routing from `[ui].follow_up_behavior`.
+///
+/// A missing key, a non-string value, and an unknown string all read as the default, so a Desktop
+/// toggle can never leave the shell routing follow-ups differently from what Settings shows.
+pub fn follow_up_behavior_in(doc: &DocumentMut) -> String {
+    doc.get("ui")
+        .and_then(Item::as_table)
+        .and_then(|ui| ui.get("follow_up_behavior"))
+        .and_then(Item::as_str)
+        .filter(|value| FOLLOW_UP_BEHAVIORS.contains(value))
+        .unwrap_or(FOLLOW_UP_BEHAVIOR_DEFAULT)
+        .to_owned()
+}
+
+fn set_follow_up_behavior_in(doc: &mut DocumentMut, value: &str) -> Result<(), String> {
+    if !FOLLOW_UP_BEHAVIORS.contains(&value) {
+        return Err(format!(
+            "follow-up behavior must be one of {}",
+            FOLLOW_UP_BEHAVIORS.join(" | ")
+        ));
+    }
+    child_table(doc, "ui")?.insert("follow_up_behavior", toml_edit::value(value));
+    Ok(())
+}
+
+/// Read `[ui].follow_up_behavior` for the Settings row. Blocking file IO.
+pub fn follow_up_behavior() -> Result<String, String> {
+    Ok(follow_up_behavior_in(&load()?))
+}
+
+/// Write `[ui].follow_up_behavior`. The shell re-reads the key on mtime change, so CLI, TUI, and
+/// Desktop agree without a restart. Blocking file IO.
+pub fn set_follow_up_behavior(value: &str) -> Result<(), String> {
+    update(|doc| set_follow_up_behavior_in(doc, value))
+}
+
 fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table, String> {
     if !doc.contains_key(key) {
         let mut table = Table::new();
@@ -1224,8 +1265,9 @@ fn child_table<'a>(doc: &'a mut DocumentMut, key: &str) -> Result<&'a mut Table,
 #[cfg(test)]
 mod tests {
     use super::{
-        child_table, delete_provider_in, list_document, models_list_url, parse_models_listing,
-        probe_target_from_document, redact, upsert_provider_in, write_model, ProviderUpsert,
+        child_table, delete_provider_in, follow_up_behavior_in, list_document, models_list_url,
+        parse_models_listing, probe_target_from_document, redact, set_follow_up_behavior_in,
+        upsert_provider_in, write_model, ProviderUpsert,
     };
 
     #[test]
@@ -1523,5 +1565,53 @@ xai = "xAI"
         let restored = list_document(&doc);
         assert!(restored.hidden_providers.is_empty(), "{:?}", restored.hidden_providers);
         assert!(restored.providers.iter().any(|provider| provider.id == "openai"));
+    }
+
+    #[test]
+    fn follow_up_behavior_defaults_to_steer_for_missing_and_unknown_values() {
+        let missing: toml_edit::DocumentMut = "[ui]\nsimple_mode = true\n".parse().expect("fixture");
+        assert_eq!(follow_up_behavior_in(&missing), "steer");
+
+        let empty: toml_edit::DocumentMut = toml_edit::DocumentMut::new();
+        assert_eq!(follow_up_behavior_in(&empty), "steer");
+
+        let unknown: toml_edit::DocumentMut = "[ui]\nfollow_up_behavior = \"Queue\"\n"
+            .parse()
+            .expect("fixture");
+        assert_eq!(follow_up_behavior_in(&unknown), "steer");
+
+        let wrong_type: toml_edit::DocumentMut = "[ui]\nfollow_up_behavior = true\n"
+            .parse()
+            .expect("fixture");
+        assert_eq!(follow_up_behavior_in(&wrong_type), "steer");
+    }
+
+    #[test]
+    fn set_follow_up_behavior_writes_the_ui_key_and_keeps_neighbours() {
+        let mut doc: toml_edit::DocumentMut =
+            "[ui]\nsimple_mode = true\nfollow_up_behavior = \"steer\"\n"
+                .parse()
+                .expect("fixture");
+        set_follow_up_behavior_in(&mut doc, "queue").expect("write queue");
+        let rendered = doc.to_string();
+        assert!(rendered.contains("follow_up_behavior = \"queue\""), "{rendered}");
+        assert!(rendered.contains("simple_mode = true"), "{rendered}");
+        assert_eq!(follow_up_behavior_in(&doc), "queue");
+
+        set_follow_up_behavior_in(&mut doc, "steer").expect("write steer");
+        assert_eq!(follow_up_behavior_in(&doc), "steer");
+    }
+
+    #[test]
+    fn set_follow_up_behavior_rejects_junk_and_can_create_the_ui_table() {
+        let mut doc = toml_edit::DocumentMut::new();
+        let error = set_follow_up_behavior_in(&mut doc, "interject").expect_err("junk");
+        assert!(error.contains("steer | queue"), "{error}");
+        assert_eq!(follow_up_behavior_in(&doc), "steer");
+
+        set_follow_up_behavior_in(&mut doc, "queue").expect("write queue");
+        let rendered = doc.to_string();
+        assert!(rendered.contains("[ui]"), "{rendered}");
+        assert!(rendered.contains("follow_up_behavior = \"queue\""), "{rendered}");
     }
 }
