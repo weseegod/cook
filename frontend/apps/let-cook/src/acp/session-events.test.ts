@@ -18,6 +18,44 @@ describe("session event routing", () => {
     expect(dedupe.accept("acp", { ...update, _meta: { isReplay: true, eventId: "s1-2" } })).toBe(true);
   });
 
+  it("drops a replay the Clear watermark already wiped, and keeps what came after", () => {
+    const dedupe = new SessionEventDedupe();
+    const live = (sequence: number) => ({ sessionId: "s1", _meta: { eventId: `s1-${sequence}` } });
+    expect(dedupe.accept("acp", live(1))).toBe(true);
+    expect(dedupe.accept("acp", live(5))).toBe(true);
+
+    dedupe.markCleared("s1");
+
+    // Whatever a load replays below the wipe stays gone; a live id never suppresses a replay, so
+    // the watermark is the only thing holding the cleared rows back.
+    expect(dedupe.accept("acp", { sessionId: "s1", _meta: { isReplay: true, eventId: "s1-1" } })).toBe(false);
+    expect(dedupe.accept("acp", { sessionId: "s1", _meta: { isReplay: true, eventId: "s1-5" } })).toBe(false);
+    expect(dedupe.accept("acp", { sessionId: "s1", _meta: { isReplay: true, eventId: "s1-6" } })).toBe(true);
+
+    // The wipe belongs to the conversation the window cleared.
+    expect(dedupe.accept("acp", { sessionId: "s2", _meta: { isReplay: true, eventId: "s2-1" } })).toBe(true);
+    // Live events keep their own ordering, cleared or not.
+    expect(dedupe.accept("acp", live(5))).toBe(false);
+    expect(dedupe.accept("acp", live(6))).toBe(true);
+  });
+
+  it("counts a replayed event towards a later clear", () => {
+    const dedupe = new SessionEventDedupe();
+    const replayed = { sessionId: "s1", _meta: { isReplay: true, eventId: "s1-4" } };
+    expect(dedupe.accept("acp", replayed)).toBe(true);
+
+    dedupe.markCleared("s1");
+
+    expect(dedupe.accept("acp", replayed)).toBe(false);
+  });
+
+  it("keeps a replay from suppressing a live update under the same sequence", () => {
+    const dedupe = new SessionEventDedupe();
+    // An agent restart replays ids its fresh process then reuses for live updates.
+    expect(dedupe.accept("acp", { sessionId: "s1", _meta: { isReplay: true, eventId: "s1-9" } })).toBe(true);
+    expect(dedupe.accept("acp", { sessionId: "s1", _meta: { eventId: "s1-9" } })).toBe(true);
+  });
+
   it("keeps queued prompts isolated from stale live updates", () => {
     const prompts = new PromptCorrelation();
     prompts.begin("p1");

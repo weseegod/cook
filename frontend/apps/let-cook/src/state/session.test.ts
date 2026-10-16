@@ -783,7 +783,7 @@ describe("plan review", () => {
     expect(state.planDialogOpen).toBe(false);
   });
 
-  it("stashes a pending plan review on switch and restores it without opening the pane", () => {
+  it("stashes a pending plan review on switch and opens its pane again on return", () => {
     useSessionStore.getState().resetConversation("sess-a");
     useSessionStore.getState().beginPlanReview("# Plan A", "2026-09-19T14-30-22Z.md");
     useSessionStore.getState().savePlanComment(null, [1, 2], "tighten this");
@@ -809,7 +809,8 @@ describe("plan review", () => {
     useSessionStore.getState().restoreStashedPlanReview();
     expect(useSessionStore.getState()).toMatchObject({
       planReview: { body: "# Plan A", fileName: "2026-09-19T14-30-22Z.md", pending: true },
-      planDialogOpen: false,
+      // The agent is still parked on this review, so its pane comes back without a chip click.
+      planDialogOpen: true,
       planFileView: null,
       pendingQuestion: { rpcId: 42, kind: "plan" },
     });

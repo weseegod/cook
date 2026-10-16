@@ -222,12 +222,9 @@ test.describe("plan list", () => {
     await expect(page.getByTestId("session-row-s-other")).toHaveClass(/active/);
     await expect(page.getByTestId("plan-pane")).toHaveCount(0);
 
+    // The request is still parked, so coming back to its conversation opens the pane asking for it.
     await page.getByTestId("session-row-s-plan").locator(".session-open").click();
     await expect(page.getByTestId("session-row-s-plan")).toHaveClass(/active/);
-    await expect(page.getByTestId("plan-pane")).toHaveCount(0);
-
-    await page.getByTestId("plan-chip").click();
-    await page.getByTestId(`plan-file-open-${NEWEST}`).click();
     const pane = page.getByTestId("plan-pane");
     await expect(pane.getByTestId("plan-approve")).toBeVisible();
     await expect(pane.getByTestId("plan-clean")).toBeVisible();

@@ -254,6 +254,82 @@ test("keeps the position a scrollbar-style scroll leaves while the tail streams"
   expect(await topVisibleRowId(page)).toBe(top);
 });
 
+test("keeps the reading line on the wheel while rows taller than the estimate mount", async ({ page }) => {
+  // 80-item markdown lists make every assistant row ~1,900px against the model's 72px estimate, and
+  // 34 pairs leave the rows above the tail slice unmounted. Wheeling into them mounts rows at their
+  // real height, which drops the content below by the difference; the pane's anchor restore is the
+  // only thing that keeps the reader's line still, and it has to keep running while the wheel does.
+  const tallHistoryUpdates = Array.from({ length: 34 }, (_, index) => [
+    {
+      sessionUpdate: "user_message_chunk",
+      messageId: `tall-user-${index}`,
+      content: { type: "text", text: `History question ${index}` },
+    },
+    {
+      sessionUpdate: "agent_message_chunk",
+      content: {
+        type: "text",
+        text: Array.from({ length: 80 }, (_, line) => `- Tall history line ${index}-${line}`).join("\n"),
+      },
+    },
+  ]).flat();
+
+  await openWorkspace(page, shellSeed({ historyUpdates: tallHistoryUpdates }));
+  await page.getByTestId("session-row-session-login").locator(".session-open").click();
+  await expect(page.locator(".transcript-row")).toHaveCount(40);
+
+  const transcript = page.locator(".transcript");
+  await transcript.hover();
+  // Walk up to the rows the model only estimated: from here every wheel mounts fresh tall rows.
+  for (let index = 0; index < 15; index += 1) {
+    await page.mouse.wheel(0, -2_000);
+    await page.waitForTimeout(240);
+  }
+
+  // One row under the viewport top, watched for the whole burst: it stands in for the line the
+  // reader is on, and `scrollTop - offsetTop` is that line's place in the transcript's own layout.
+  const sampling = transcript.evaluate((element) => new Promise<string[]>((resolve) => {
+    const top = element.getBoundingClientRect().top;
+    const rows = [...element.querySelectorAll<HTMLElement>(".transcript-row")];
+    const markerId = rows.find((row) => row.getBoundingClientRect().bottom > top + 1)
+      ?.getAttribute("data-transcript-row") ?? null;
+    const samples: string[] = [];
+    const deadline = performance.now() + 3_000;
+    const tick = () => {
+      const marker = markerId
+        ? element.querySelector<HTMLElement>(`[data-transcript-row="${CSS.escape(markerId)}"]`)
+        : null;
+      samples.push(marker ? String(Math.round(element.scrollTop - marker.offsetTop)) : "-");
+      if (performance.now() > deadline) resolve(samples);
+      else requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }));
+
+  await page.waitForTimeout(80);
+  await transcript.hover();
+  const wheels = 16;
+  for (let index = 0; index < wheels; index += 1) {
+    await page.mouse.wheel(0, -600);
+    await page.waitForTimeout(25);
+  }
+
+  const samples = (await sampling).filter((sample) => sample !== "-");
+  expect(samples.length).toBeGreaterThan(20);
+  const positions = samples.map(Number);
+
+  // The burst scrolled the reading line up by its own 9,600px of wheel, not by a mounted row's
+  // height on top of that.
+  const travelled = positions[0] - positions.at(-1)!;
+  expect(travelled).toBeGreaterThan(wheels * 600 * 0.9);
+  expect(travelled).toBeLessThan(wheels * 600 * 1.15);
+
+  // No frame moves the reader further than the wheel step it was answering.
+  for (let index = 1; index < positions.length; index += 1) {
+    expect(positions[index - 1] - positions[index]).toBeLessThan(900);
+  }
+});
+
 test("keeps a wheel position near the tail on an idle transcript", async ({ page }) => {
   await openWorkspace(page, shellSeed({ historyUpdates }));
   await page.getByTestId("session-row-session-login").locator(".session-open").click();

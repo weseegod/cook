@@ -360,6 +360,25 @@ fn escape_applescript(value: &str) -> String {
         .replace('\r', " ")
 }
 
+/// Dock/taskbar badge for conversations that need the user while the window is unfocused.
+/// `count` of `None` (or 0) clears it. macOS badges the Dock, Linux needs a libunity shell, and
+/// Windows has no per-window badge — Tauri reports that as a no-op error, which is not a failure
+/// the renderer should surface.
+#[tauri::command]
+async fn os_badge(window: tauri::WebviewWindow, count: Option<i64>) -> Result<(), String> {
+    let value = count.filter(|value| *value > 0);
+    match window.set_badge_count(value) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let message = error.to_string();
+            if cfg!(windows) {
+                return Ok(());
+            }
+            Err(message)
+        }
+    }
+}
+
 /// Native OS notification when a turn finishes while the window is unfocused.
 #[tauri::command]
 async fn os_notify(title: String, body: String) -> Result<(), String> {
@@ -471,10 +490,27 @@ async fn desktop_model_set_default(model_id: String) -> Result<Value, String> {
     Ok(serde_json::json!({ "ok": true, "defaultModel": response_id }))
 }
 
+/// Read `[ui].follow_up_behavior` for Desktop → Settings → General.
+#[tauri::command]
+async fn desktop_follow_up_behavior_get() -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(provider_config::follow_up_behavior)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+/// Write `[ui].follow_up_behavior` (`steer` | `queue`) for the running shell.
+#[tauri::command]
+async fn desktop_follow_up_behavior_set(value: String) -> Result<Value, String> {
+    let behavior = value.clone();
+    tauri::async_runtime::spawn_blocking(move || provider_config::set_follow_up_behavior(&value))
+        .await
+        .map_err(|error| error.to_string())??;
+    Ok(serde_json::json!({ "ok": true, "followUpBehavior": behavior }))
+}
+
 /// Session record directory under `{cook home}/sessions/{encoded-cwd}/{sessionId}/`.
 #[tauri::command]
-async fn desktop_session_path(session_id: String, cwd: Option<String>) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+async fn desktop_session_path(session_id: String, cwd: Option<String>) -> Result<String, String> {    tauri::async_runtime::spawn_blocking(move || {
         session_path::find_session_dir(&session_id, cwd.as_deref())
     })
     .await
@@ -527,6 +563,7 @@ pub fn run() {
             open_path,
             config_security,
             os_notify,
+            os_badge,
             desktop_provider_list,
             desktop_provider_upsert,
             desktop_provider_unhide,
@@ -536,6 +573,8 @@ pub fn run() {
             desktop_model_delete,
             desktop_model_set_default,
             desktop_session_path,
+            desktop_follow_up_behavior_get,
+            desktop_follow_up_behavior_set,
             clipboard_write,
             open_url,
             provider_oauth_start,

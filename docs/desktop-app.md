@@ -145,11 +145,14 @@ documented lie (map `H-term`, `H-mcp`), not this contract. Fold in
 | Role | Code | Allowed | Forbidden |
 |---|---|---|---|
 | **ACP mux** | `acp_host.rs` | Spawn/kill sidecar, JSON-RPC id map, notification coalescing, native reverse `fs/*`, future real PTY | Stub a method while the cap is advertised |
-| **Secret-bearing TOML writer** | `provider_config.rs` | Locked, atomic `~/.cook/config.toml` edits; credential-carrying `/models` probe; redacted DTOs to the renderer | Echo full keys to the WebView |
+| **Secret-bearing TOML writer** | `provider_config.rs` | Locked, atomic `~/.cook/config.toml` edits; credential-carrying `/models` probe; redacted DTOs to the renderer; the shared `[ui].follow_up_behavior` the Settings row reads and writes | Echo full keys to the WebView |
 | **Read-only workspace sidecar** | `workspace.rs` | Git review vs `HEAD`, file tree/preview, native open; paths confined to the workspace root | Write, commit, LSP, growing into a git GUI |
 
 The TOML writer is the **only production Desktop write path** for
-`[model_providers.*]` / `[model.*]`. Agent `x.ai/providers/*` is the CLI/TUI
+`[model_providers.*]` / `[model.*]`, and for `[ui].follow_up_behavior`, the
+mid-turn message mode Settings → General offers (Steer or Queue, default Steer;
+the shell re-reads the key on mtime change, so CLI/TUI and Desktop agree without
+a restart). Agent `x.ai/providers/*` is the CLI/TUI
 path and the mock/test fallback (`desktopCommand`). A later credential-proxy
 (renderer → host injects the key into ACP params → agent writes) is optional
 if the two schemas drift; it is not required to scale the client.
@@ -315,8 +318,11 @@ Replay and live updates use the same reducer.
 Clearing (`/clear`, or **Clear** in the open conversation's row menu) is a
 display wipe in the window: it drops the painted rows and keeps the session,
 the agent's context, and the open turn. Nothing is written to the session record
-and nothing is sent over ACP, so a later `session/load` replays the full history
-— the TUI's `/clear` behaves the same way. A conversation the window has not
+and nothing is sent over ACP. The wipe holds when the conversation is opened
+again: the inbound dedupe remembers the event sequence the transcript was wiped
+at, so a later `session/load` replay drops every event at or below it and paints
+back only what the conversation produced after the clear. The watermark lives in
+the window session, like the TUI's `/clear`. A conversation the window has not
 loaded carries no transcript to wipe, so its row menu leaves **Clear** off.
 
 One surface reads a transcript that is not the open conversation's: a subagent

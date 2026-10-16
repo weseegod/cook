@@ -1,7 +1,15 @@
 import { availableCommandsUpdate, commandList, modelCatalog } from "../catalog";
 import { openWorkspaceAt, splitReply } from "../events";
-import { notify, state } from "../state";
+import { notify, notifyRecorded, sessionTranscript, state } from "../state";
 import type { MethodHandler } from "./registry";
+
+/**
+ * One event of the record `session/load` hands back: the id it was logged with, so the client can
+ * tell a replay from what a live turn streamed.
+ */
+function replay(method: string, params: Record<string, unknown>, eventId: string): void {
+  notify(method, params, { eventId, isReplay: true });
+}
 
 export const sessionHandlers: Record<string, MethodHandler> = {
   "initialize": ({ respond }) => {
@@ -56,10 +64,14 @@ export const sessionHandlers: Record<string, MethodHandler> = {
     // Opening a conversation is what moves the workspace the host answers for: the list can point
     // at another project than the one the window connected to.
     openWorkspaceAt(p.cwd);
-    notify("session/update", { ...availableCommandsUpdate(), sessionId: String(p.sessionId ?? sessionId) });
-    for (const update of state.historyUpdates) {
-      notify("session/update", { sessionId: String(p.sessionId ?? sessionId), update });
-    }
+    const target = String(p.sessionId ?? sessionId);
+    notify("session/update", { ...availableCommandsUpdate(), sessionId: target });
+    // The agent replays its own record of the conversation — the history on disk first, then what
+    // this session's turns produced — each event under the id it was logged with, marked a replay.
+    state.historyUpdates.forEach((update, index) => {
+      replay("session/update", { sessionId: target, update }, `${target}-${index + 1}`);
+    });
+    for (const event of sessionTranscript(target)) replay(event.method, event.params, event.eventId);
     return respond({ modes: null, models: modelCatalog() });
   },
   "session/prompt": async ({ p, sessionId, respond }) => {
@@ -81,10 +93,10 @@ export const sessionHandlers: Record<string, MethodHandler> = {
       // how the shell ships goal updates; everything else is a plain `session/update`.
       const envelope = update as { notify?: string; update?: Record<string, unknown> };
       if (typeof envelope.notify === "string" && envelope.update) {
-        notify(`_${envelope.notify}`, { sessionId: promptSessionId, update: envelope.update });
+        notifyRecorded(promptSessionId, `_${envelope.notify}`, { sessionId: promptSessionId, update: envelope.update });
         continue;
       }
-      notify("session/update", { sessionId: promptSessionId, update });
+      notifyRecorded(promptSessionId, "session/update", { sessionId: promptSessionId, update });
     }
     if (state.promptDelayMs > 0) await new Promise((resolve) => window.setTimeout(resolve, state.promptDelayMs));
     return respond({ stopReason: "end_turn" });

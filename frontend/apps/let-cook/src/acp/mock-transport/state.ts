@@ -1,5 +1,5 @@
 import { resetMockOauth } from "./oauth-pending";
-import type { MockState, RecordedRequest } from "./types";
+import type { MockRecordedEvent, MockState, RecordedRequest } from "./types";
 
 function defaultState(): MockState {
   return {
@@ -114,6 +114,7 @@ function defaultState(): MockState {
     reply: "Mock assistant reply.",
     promptUpdates: [],
     historyUpdates: [],
+    transcript: {},
     promptDelayMs: 0,
     files: {},
     promptRoot: "/home/demo/.cook/prompts",
@@ -243,21 +244,42 @@ function emit(message: unknown): void {
   for (const subscriber of subscribers) subscriber(message);
 }
 
-export function notify(method: string, params: unknown): void {
-  // Stamp `_meta.totalTokens` like the shell's `send_update_full`, so the desktop chip is live
-  // without waiting for `usage_update` / `x.ai/session/info`.
-  if (method === "session/update" && params && typeof params === "object") {
-    const p = params as Record<string, unknown>;
-    const existing = p._meta && typeof p._meta === "object" && !Array.isArray(p._meta)
-      ? { ...(p._meta as Record<string, unknown>) }
-      : {};
-    if (typeof existing.totalTokens !== "number") {
-      existing.totalTokens = state.context.used;
-    }
-    emit({ jsonrpc: "2.0", method, params: { ...p, _meta: existing } });
-    return;
-  }
-  emit({ jsonrpc: "2.0", method, params });
+export function notify(method: string, params: unknown, extra?: Record<string, unknown>): void {
+  emit({ jsonrpc: "2.0", method, params: notifiedParams(method, params, extra) });
+}
+
+/**
+ * The params a notification travels with. `session/update` carries `_meta.totalTokens` the way the
+ * shell's `send_update_full` stamps it, so the desktop chip is live without waiting for
+ * `usage_update` / `x.ai/session/info`; `extra` adds the event id a recorded event replays under.
+ */
+function notifiedParams(method: string, params: unknown, extra?: Record<string, unknown>): unknown {
+  const live = method === "session/update";
+  if ((!live && !extra) || !params || typeof params !== "object" || Array.isArray(params)) return params;
+  const p = params as Record<string, unknown>;
+  const existing = p._meta && typeof p._meta === "object" && !Array.isArray(p._meta)
+    ? { ...(p._meta as Record<string, unknown>) }
+    : {};
+  const meta = { ...existing, ...extra };
+  if (live && typeof meta.totalTokens !== "number") meta.totalTokens = state.context.used;
+  return { ...p, _meta: meta };
+}
+
+/**
+ * Emit one event of a session's turn and log it, the way the agent's session file keeps what it
+ * streamed. The id runs above the seeded history, so a live event never sorts below what a
+ * `session/load` replay hands back.
+ */
+export function notifyRecorded(sessionId: string, method: string, params: Record<string, unknown>): void {
+  const log = state.transcript[sessionId] ?? (state.transcript[sessionId] = []);
+  const eventId = `${sessionId}-${state.historyUpdates.length + log.length + 1}`;
+  log.push({ method, params, eventId });
+  notify(method, params, { eventId });
+}
+
+/** The events `session/load` replays for a session, in the order its turns produced them. */
+export function sessionTranscript(sessionId: string): MockRecordedEvent[] {
+  return state.transcript[sessionId] ?? [];
 }
 
 /** Session-update shaped notif (U-memf / U-plug / U-hook*). */

@@ -30,35 +30,38 @@ export function projectTranscript(blocks: readonly TranscriptBlock[]): DisplayBl
     const tools = entries.flatMap((item) => (item.entry === "tool" ? [item.tool] : []));
     // A run of nothing but one shell command folds to the less useful `Ran 1 command`, so it keeps
     // the `$ <command>` row (`RunScan::folds`).
-    const singletonCommand = tools.length === 1 && verbKind(tools[0]) === "command";
-    const group: DisplayBlock | null = tools.length > 0 && !singletonCommand
-      ? { type: "verb-group", id: `verb-${tools[0].id}`, tools }
-      : null;
-    const loneTool: DisplayBlock | null = singletonCommand ? { type: "tool", id: tools[0].id, tool: tools[0] } : null;
-    // Walk in arrival order so a live `Thinking…` row sits where it began. Finished thoughts are
-    // claimed into the group beside the tools and never paint a row of their own; with no tools
-    // they compact into one group, or one row when they are alone.
-    const thoughtRun: MessageBlock[] = [];
-    const liveRun: MessageBlock[] = [];
-    const emitGroup = () => {
-      // A live `Thinking…` row is Transparent: it keeps its own row rather than moving under the
-      // group header (`verb_group.rs::RunStep::Transparent`).
-      for (const thought of liveRun) output.push(thought);
-      if (group) {
-        output.push(group);
-        return;
-      }
-      // A lone command does not fold, so its claimed thoughts paint their own rows too.
-      if (loneTool) output.push(loneTool);
-      if (thoughtRun.length > 1) output.push({ type: "thought-group", id: `thought-${thoughtRun[0].id}`, thoughts: [...thoughtRun] });
-      else if (thoughtRun.length === 1) output.push(thoughtRun[0]);
-    };
+    const folds = tools.length > 0 && !(tools.length === 1 && verbKind(tools[0]) === "command");
+    // The run's row stands where its first member is: the folded header, or a lone command's `$` row.
+    const runRow: DisplayBlock | null = tools.length === 0
+      ? null
+      : folds
+        ? { type: "verb-group", id: `verb-${tools[0].id}`, tools }
+        : { type: "tool", id: tools[0].id, tool: tools[0] };
+    const finished = entries.flatMap((item) => (item.entry === "thought" && !item.thought.streaming ? [item.thought] : []));
+    let emittedRunRow = false;
+    let emittedFinished = false;
+    // Wire order is paint order: a live `Thinking…` row is Transparent, so it keeps its own row at
+    // its own index while the folded members collapse to height 0 (`verb_group.rs::RunStep`).
     for (const item of entries) {
-      if (item.entry === "tool") continue;
-      if (item.thought.streaming) liveRun.push(item.thought);
-      else thoughtRun.push(item.thought);
+      if (item.entry === "tool") {
+        if (!emittedRunRow && runRow) {
+          output.push(runRow);
+          emittedRunRow = true;
+        }
+        continue;
+      }
+      if (item.thought.streaming) {
+        output.push(item.thought);
+        continue;
+      }
+      // A folding run claims its finished thoughts at height 0, so they never paint a row.
+      if (folds || emittedFinished) continue;
+      // Without a fold the finished thoughts compact into one group, or one row when they are alone.
+      emittedFinished = true;
+      output.push(finished.length > 1
+        ? { type: "thought-group", id: `thought-${finished[0].id}`, thoughts: [...finished] }
+        : item.thought);
     }
-    emitGroup();
   };
 
   for (const block of blocks) {

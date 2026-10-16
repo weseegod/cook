@@ -237,8 +237,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         planEditingCommentId: stash.planEditingCommentId,
         planStashedDraft: stash.planStashedDraft,
         pendingQuestion: stash.pendingQuestion,
-        // Pane stays closed until the user opens that plan from the header chip.
-        planDialogOpen: false,
+        // A review the agent is still parked on opens its pane again, so coming back to the
+        // conversation also brings back the plan that is waiting for an answer. An answered
+        // review keeps the pane closed and stays reachable from the header chip.
+        planDialogOpen: stash.planReview.pending,
         planFileView: null,
         questionOpenedAt: Date.now(),
       };

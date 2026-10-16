@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { normalizeError } from "./errors";
 import { desktopError, desktopTrace } from "./trace";
+import { readLocal, writeLocal } from "../ui/storage";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -250,4 +251,40 @@ export async function onLog(handler: (line: string) => void): Promise<UnlistenFn
 export async function osNotify(title: string, body: string): Promise<void> {
   if (!isTauri()) return;
   await invokeDesktop("os_notify", { title, body });
+}
+
+/**
+ * Dock/taskbar badge count (macOS Dock badge; Linux with a libunity shell; unsupported on Windows).
+ * `null` clears it. Outside Tauri this is a no-op: the browser has no icon to mark.
+ */
+export async function osBadge(count: number | null): Promise<void> {
+  if (!isTauri()) return;
+  await invokeDesktop("os_badge", { count });
+}
+
+/** Mid-turn follow-up routing, shared with the CLI/TUI through `[ui].follow_up_behavior`. */
+export type FollowUpBehavior = "steer" | "queue";
+
+const FOLLOW_UP_BEHAVIOR_KEY = "followUpBehavior";
+
+/**
+ * `[ui].follow_up_behavior` from the cook home config, through the host that owns the file.
+ *
+ * A missing key, an unknown value, and a failed read all report `steer`, which is what the shell
+ * routes follow-ups by — the Settings row can never show a mode the agent is not using.
+ */
+export async function readFollowUpBehavior(): Promise<FollowUpBehavior> {
+  const value = await desktopCommand<string>(
+    "desktop_follow_up_behavior_get",
+    {},
+    async () => readLocal(FOLLOW_UP_BEHAVIOR_KEY) ?? "steer",
+  );
+  return value === "queue" ? "queue" : "steer";
+}
+
+/** Persist `[ui].follow_up_behavior`; the running shell re-reads it on the file's mtime change. */
+export async function writeFollowUpBehavior(value: FollowUpBehavior): Promise<void> {
+  await desktopCommand("desktop_follow_up_behavior_set", { value }, async () => {
+    writeLocal(FOLLOW_UP_BEHAVIOR_KEY, value);
+  });
 }

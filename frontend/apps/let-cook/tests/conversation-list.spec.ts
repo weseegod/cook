@@ -714,4 +714,38 @@ test.describe("conversation clear", () => {
     expect(callsTo(await mock.requests(), "session/prompt")).toHaveLength(0);
     expect(errors).toEqual([]);
   });
+
+  test("keeps a cleared transcript clear across a round trip and replays what came after", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await openWorkspace(page, CLEAR_SEED);
+
+    const composer = page.getByTestId("composer-input");
+    await page.getByTestId("session-row-chat-one").locator(".session-open").click();
+    await waitForCalls(page, "session/load");
+    await expect(page.getByText("Replayed line.")).toBeVisible();
+
+    await composer.fill("hello");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await composer.fill("/clear");
+    await composer.press("Enter");
+    await expect(page.locator(".empty-chat")).toBeVisible();
+
+    // A turn sent after the wipe belongs to the conversation again.
+    await composer.fill("again");
+    await page.getByTestId("send-button").click();
+    await expect(page.getByText("Mock assistant reply.")).toBeVisible();
+
+    await page.getByTestId("session-row-chat-two").locator(".session-open").click();
+    await waitForCalls(page, "session/load", 2);
+    await page.getByTestId("session-row-chat-one").locator(".session-open").click();
+    await waitForCalls(page, "session/load", 3);
+
+    // The reopened conversation is the agent's record minus everything the clear covered.
+    await expect(page.getByText("Replayed line.")).toHaveCount(0);
+    await expect(page.getByText("Mock assistant reply.")).toHaveCount(1);
+    expect(errors).toEqual([]);
+  });
 });
