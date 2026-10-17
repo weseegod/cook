@@ -87,14 +87,14 @@ scripts/                     tauri wrapper, install.sh, latest.json, version-fro
 ## 3. ACP client (`src/acp/`)
 
 `CookAcpClient` in `client.ts` is the object the UI calls (`acpClient`). It
-owns connect, crash restart, prompt send, and queue send-now. Inbound agent
-messages are `client/messages.ts` `handleInboundMessages`: a pending response
-completes the renderer promise; a message with an id goes to the reverse
-registry; everything else goes to the notification registry.
+owns connect, crash restart, the folder switch, prompt send, and queue send-now.
+Inbound agent messages are `client/messages.ts` `handleInboundMessages`: a
+pending response completes the renderer promise; a message with an id goes to the
+reverse registry; everything else goes to the notification registry.
 
 | Path | Role |
 |---|---|
-| `client.ts` | Lifecycle and the calls the UI makes. Prompt ids, painted-prompt set, `sendQueueEntryNow` |
+| `client.ts` | Lifecycle and the calls the UI makes. Prompt ids, painted-prompt set, `switchWorkspace`, `sendQueueEntryNow` |
 | `client/messages.ts` | Inbound pipeline. Session updates, child-session routing, registry dispatch |
 | `client/initialize.ts` | `initialize` once per process, from `handshake.ts` |
 | `client/requests.ts` | Session helpers: model, yolo, permission answer, usage, plan-file pull |
@@ -268,6 +268,16 @@ into live `user_message_chunk` echoes and skips a second paint when
 The TUI follows the same notification in
 `crates/codegen/xai-grok-pager/src/app/dispatch/queue.rs`.
 
+### Workspace switch
+
+Picking another folder — the palette's Open folder or the header's workspace chip —
+calls `CookAcpClient.switchWorkspace`, never `connect`. The window keeps its agent
+process and every other conversation: the running turn is not cancelled, and the new
+folder reaches the host through the `session/new` that opens the conversation there
+(`acp_host.rs::follow_workspace` moves the workspace root the file index, Git chip, and
+review panel read). `connect` owns the process and stays on the boot, error-retry, and
+crash-restart paths.
+
 ### Sidebar, tools, permissions, welcome
 
 | Path | Role |
@@ -373,7 +383,7 @@ The updater plugin updates this app binary. It does not write
 | Handle a new agent→client request | `src/acp/reverse/` and a capability-map row |
 | Handle a new agent→client notification | `src/acp/notifications/handlers.ts` and a capability-map row |
 | Call a new client→agent method | The wrapper file in §3 (`xai.ts`, `extensions.ts`, `providers.ts`, `turn-ops.ts`, `session-ops.ts`, `settings-ext.ts`) via `host.ts` `request` |
-| Change crash restart or connect | `src/acp/client.ts` |
+| Change crash restart or connect | `src/acp/client.ts`. A folder pick goes through `switchWorkspace`, which keeps the process (§3 Workspace switch) |
 | Change fs reads the agent asks the client for | `src-tauri/src/acp_host.rs` |
 | Change which `cook` binary starts | `src-tauri/src/bin_resolve.rs` |
 | Change desktop logging | `src-tauri/src/logging.rs` |

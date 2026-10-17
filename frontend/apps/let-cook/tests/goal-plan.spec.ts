@@ -178,6 +178,49 @@ test.describe("goal and plan presentation", () => {
     await expect(page.getByTestId("queue-remove-q1")).toBeVisible();
   });
 
+  test("steers a mid-turn message into the running turn and leaves that turn open", async ({ page }) => {
+    const mock = api(page);
+    // The seeded shell holds the follow-up the way a real turn holds a queued row: nothing answers
+    // its `session/prompt` until the agent promotes it.
+    await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 3_000, holdFollowUps: true });
+    const input = page.getByTestId("composer-input");
+    await input.fill("first turn");
+    await input.press("Enter");
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+    const [firstPrompt] = await waitForCalls(page, "session/prompt", 1);
+    const firstPromptId = String((firstPrompt.params._meta as Record<string, unknown>).promptId);
+
+    await input.fill("steer this");
+    await input.press("Enter");
+    const prompts = await waitForCalls(page, "session/prompt", 2);
+    const steerPromptId = String((prompts[1].params._meta as Record<string, unknown>).promptId);
+    expect((prompts[1].params.prompt as Array<Record<string, unknown>>)).toEqual([{ type: "text", text: "steer this" }]);
+    // Nothing paints it yet: the row comes from the agent's broadcast, not from a renderer copy.
+    await expect(page.locator(".message-user", { hasText: "steer this" })).toHaveCount(0);
+
+    // The agent promotes the held row: it is injected into the running turn, and its own request
+    // resolves `removedFromQueue` — a cancellation that must not close the turn it landed in.
+    expect(await mock.steer("steer this")).toBe(steerPromptId);
+    const steerRow = page.locator(".message-user", { hasText: "steer this" });
+    await expect(steerRow).toHaveCount(1);
+    await expect(page.locator(".message-user")).toHaveCount(2);
+    await expect(page.locator(".session-event")).toHaveCount(0);
+    await expect(page.getByTestId("turn-status")).toBeVisible();
+
+    // The running turn reports the row it is running as its own, never as a second turn.
+    await page.evaluate((id) => window.__cookMock!.queueChanged([], "mock-session", { id, text: "first turn" }), firstPromptId);
+    await expect(steerRow).toHaveCount(1);
+    await expect(page.locator(".message-user")).toHaveCount(2);
+
+    // The turn ends once, after the steer, with nothing left over from the promoted request.
+    await expect(page.locator(".session-event")).toHaveCount(1);
+    await expect(page.locator(".message-user")).toHaveCount(2);
+    const marker = await page.locator(".session-event").boundingBox();
+    const steered = await steerRow.boundingBox();
+    expect(marker && steered && steered.y < marker.y).toBe(true);
+    await expect(steerRow).toHaveCount(1);
+  });
+
   test("empty Enter sends a just-queued prompt once its row is confirmed", async ({ page }) => {
     await openWorkspace(page, { ...CONNECTED_SEED, promptDelayMs: 1500 });
     const input = page.getByTestId("composer-input");

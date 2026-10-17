@@ -240,6 +240,35 @@ export function record(method: string, params: unknown): void {
   });
 }
 
+/**
+ * Follow-ups a running turn is holding, keyed by the prompt id the window sent. Nothing answers a
+ * held `session/prompt` until `mockSteer` promotes it, which is what the shell does with a row
+ * that arrives mid-turn and never runs as a turn of its own.
+ */
+const heldFollowUps = new Map<string, (value: unknown) => void>();
+let promptsSeen = 0;
+
+/** Which `session/prompt` this is for the loaded conversation; the first one starts the turn. */
+export function nextPromptOrdinal(): number {
+  promptsSeen += 1;
+  return promptsSeen;
+}
+
+export function holdFollowUp(promptId: string, resolve: (value: unknown) => void): void {
+  heldFollowUps.set(promptId, resolve);
+}
+
+export function releaseHeldFollowUp(promptId: string): ((value: unknown) => void) | undefined {
+  const resolve = heldFollowUps.get(promptId);
+  heldFollowUps.delete(promptId);
+  return resolve;
+}
+
+/** Held follow-up row ids, oldest first — the order their `session/prompt` requests arrived. */
+export function heldFollowUpIds(): string[] {
+  return [...heldFollowUps.keys()];
+}
+
 function emit(message: unknown): void {
   for (const subscriber of subscribers) subscriber(message);
 }
@@ -309,6 +338,8 @@ export function mockReset(seed: Partial<MockState> = {}): void {
   requests = [];
   responses = [];
   nextServerRequestId = 1;
+  promptsSeen = 0;
+  heldFollowUps.clear();
   resetMockOauth();
   persist();
 }

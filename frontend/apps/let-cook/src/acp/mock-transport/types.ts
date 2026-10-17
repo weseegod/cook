@@ -222,6 +222,11 @@ export interface MockState {
   transcript: Record<string, MockRecordedEvent[]>;
   /** Hold the prompt response open so visual tests can inspect live activity. */
   promptDelayMs: number;
+  /**
+   * Hold a follow-up `session/prompt` a running turn is over, the way the shell holds a queued
+   * row. Nothing answers it until `steer` promotes it.
+   */
+  holdFollowUps?: boolean;
   /** Agent-side project instruction files keyed by path. */
   files: Record<string, string>;
   /** Prompts root the mock reports for `x.ai/prompts/list`. */
@@ -288,6 +293,12 @@ export interface MockControl {
     sessionId?: string,
     running?: { id: string; text: string; kind?: string },
   ): void;
+  /**
+   * Promote the held follow-up into the running turn the way the shell does: broadcast
+   * `x.ai/session/interjection` for the row and resolve its `session/prompt` with
+   * `_meta.completionKind = removedFromQueue`. Returns the row id, or `null` when none is held.
+   */
+  steer(text: string, sessionId?: string): string | null;
   /** A plain `session/update` under any session, with `_meta` — how a child session streams. */
   sessionUpdate(sessionId: string, update: Record<string, unknown>, meta?: Record<string, unknown>): void;
   /** Seed transcript blocks for browser tests that need persisted block sequences. */

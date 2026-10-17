@@ -39,7 +39,9 @@ export function AgentHeader({
 
   async function chooseWorkspace() {
     const selected = await pickFolder();
-    if (selected && selected !== cwd) await acpClient.connect(selected);
+    // The same agent keeps serving this window; only the folder the next conversation starts in
+    // changes, so a turn running in the current one is left alone.
+    if (selected && selected !== cwd) await acpClient.switchWorkspace(selected);
   }
 
   const cwdLabel = cwd ? shortPath(cwd) : "Choose folder";

@@ -216,7 +216,9 @@ export function AppShell() {
     const selected = await pickFolder();
     if (!selected) return;
     try {
-      await acpClient.connect(selected);
+      // Another folder is a new conversation on the running agent, never a new process: whatever
+      // turn is already running keeps running while this window moves on.
+      await acpClient.switchWorkspace(selected);
     } catch {
       // The client has already placed the normalized message in the session store.
     }

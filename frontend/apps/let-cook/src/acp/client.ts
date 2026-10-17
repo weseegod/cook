@@ -161,6 +161,45 @@ export class CookAcpClient {
     }
   }
 
+  /**
+   * Point the window at another folder without respawning the agent.
+   *
+   * The process, its running turns, and every other conversation stay as they are: the new folder
+   * reaches the host through `session/new`, which is what moves its workspace root
+   * (`src-tauri/src/acp_host.rs::follow_workspace`) for the file index, git chip, and review panel.
+   * Boot, error retry, and crash restart still go through `connect`, which owns the process.
+   */
+  async switchWorkspace(cwd: string): Promise<void> {
+    // A connect already in flight owns the process. Let it land, or `connect`'s single-flight guard
+    // would answer with that first folder and drop this pick.
+    if (this.startup) await this.startup.catch(() => undefined);
+    const store = useSessionStore.getState();
+    const live = this.cwd !== null
+      && (store.connection === "ready" || store.connection === "reconnecting");
+    if (!live) return this.connect(cwd);
+    if (this.cwd === cwd) return;
+
+    // A session already being created owns the next conversation; let it land before replacing it.
+    if (this.newSessionInFlight) await this.newSessionInFlight.catch(() => undefined);
+
+    this.cwd = cwd;
+    rememberWorkspace(cwd);
+    useSessionStore.getState().set({ cwd, error: null });
+
+    const creation = this.createSession();
+    this.newSessionInFlight = creation;
+    try {
+      await creation;
+    } catch (error) {
+      const message = normalizeError(error, "Could not open the folder");
+      // The folder never opened, so the conversation on screen stays where it was.
+      useSessionStore.getState().set({ error: message });
+      throw new Error(message);
+    } finally {
+      if (this.newSessionInFlight === creation) this.newSessionInFlight = null;
+    }
+  }
+
   private async installListeners() {
     for (const dispose of this.unlisten.splice(0)) dispose();
     this.unlisten.push(

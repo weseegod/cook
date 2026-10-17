@@ -1,6 +1,6 @@
 import { availableCommandsUpdate, commandList, modelCatalog } from "../catalog";
 import { openWorkspaceAt, splitReply } from "../events";
-import { notify, notifyRecorded, sessionTranscript, state } from "../state";
+import { holdFollowUp, nextPromptOrdinal, notify, notifyRecorded, sessionTranscript, state } from "../state";
 import type { MethodHandler } from "./registry";
 
 /**
@@ -75,6 +75,14 @@ export const sessionHandlers: Record<string, MethodHandler> = {
     return respond({ modes: null, models: modelCatalog() });
   },
   "session/prompt": async ({ p, sessionId, respond }) => {
+    const ordinal = nextPromptOrdinal();
+    const meta = (p._meta ?? {}) as Record<string, unknown>;
+    const promptId = typeof meta.promptId === "string" ? meta.promptId : null;
+    // A seeded turn holds what it is running over. The follow-up gets no answer here: `steer`
+    // promotes it, which is the shell's `removedFromQueue` resolution and never a turn of its own.
+    if (state.holdFollowUps && ordinal > 1 && promptId) {
+      return new Promise((resolve) => holdFollowUp(promptId, resolve));
+    }
     // A real turn reports its context through `x.ai/session/info`, never an ACP `usage_update`.
     state.context = {
       used: state.context.used + 1234,

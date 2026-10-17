@@ -1,5 +1,5 @@
 import type { FilePreview, GitStatusSummary, ReviewSnapshot, WorkspaceEntry, WorkspaceIndexEntry } from "../workspace";
-import { nextRequestId, notify, request, responses, state } from "./state";
+import { heldFollowUpIds, nextRequestId, notify, releaseHeldFollowUp, request, responses, state } from "./state";
 import type { TranscriptBlock } from "../../state/session";
 import type { MockPlanFile } from "./types";
 
@@ -277,6 +277,23 @@ export function mockSessionUpdate(
   meta: Record<string, unknown> = {},
 ): void {
   notify("session/update", { sessionId, update, ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}) });
+}
+
+/**
+ * The shell's mid-turn steer. The held follow-up never runs as its own turn: its text is injected
+ * into the running turn, every attached client is told with `x.ai/session/interjection` (carrying
+ * the row id), and the held `session/prompt` resolves `removedFromQueue` — a cancellation that is
+ * not the running turn's end.
+ */
+export function mockSteer(text: string, sessionId = "mock-session"): string | null {
+  const promptId = heldFollowUpIds().at(-1) ?? null;
+  if (!promptId) return null;
+  notify("_x.ai/session/interjection", { sessionId, text, interjectionId: promptId });
+  releaseHeldFollowUp(promptId)?.({
+    stopReason: "cancelled",
+    _meta: { completionKind: "removedFromQueue" },
+  });
+  return promptId;
 }
 
 /** Seed consecutive transcript blocks for browser tests that the ACP reducer cannot produce. */
