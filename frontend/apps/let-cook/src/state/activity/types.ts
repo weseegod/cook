@@ -31,6 +31,11 @@ export interface ActivityItem {
    * routes it to the row and to the viewer instead.
    */
   childSessionId?: string;
+  /**
+   * Effective model id for a subagent row (`subagent_spawned.model` / list_running). The TUI Tasks
+   * pane paints this muted on the row; shell background tasks leave it unset.
+   */
+  model?: string;
   /** A background command's captured stdout, as `x.ai/task/list` / `task_completed` report it. */
   output?: string;
   /** Path the shell writes the full stdout to, when it outgrew the snapshot's own copy. */

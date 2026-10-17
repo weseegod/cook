@@ -91,6 +91,21 @@ describe("TasksMenu", () => {
     expect(screen.getByTestId("task-group-tasks")).toHaveTextContent("Tasks");
   });
 
+  it("shows the subagent model on the row the way the TUI Tasks pane does", () => {
+    useActivityStore.getState().upsertSubagent({
+      id: "sa-1",
+      kind: "subagent",
+      name: "Explore the repository",
+      status: "running",
+      startedAt: Date.now(),
+      model: "qwen38-27b",
+      sessionId: "s1",
+    });
+    renderMenu();
+    expect(screen.getByTestId("task-model-sa-1")).toHaveTextContent("qwen38-27b");
+    expect(screen.getByTestId("task-row-sa-1").querySelector(".activity-model")).toHaveTextContent("qwen38-27b");
+  });
+
   it("stops a live row through the store", async () => {
     backgrounded("s1", "t-1", "Wait for server");
     renderMenu();

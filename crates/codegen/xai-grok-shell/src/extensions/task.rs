@@ -154,10 +154,13 @@ struct SubagentLiveSnapshotDto {
     context_usage_pct: u8,
     tools_used: Vec<String>,
     error_count: u32,
+    /// Effective model id for the child (TUI Tasks pane paints this on the row).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
 }
 
-impl From<SubagentInspection> for SubagentLiveSnapshotDto {
-    fn from(inspection: SubagentInspection) -> Self {
+impl SubagentLiveSnapshotDto {
+    fn from_inspection(inspection: SubagentInspection, model: Option<String>) -> Self {
         let SubagentInspection {
             snapshot,
             parent_session_id,
@@ -191,6 +194,7 @@ impl From<SubagentInspection> for SubagentLiveSnapshotDto {
             context_usage_pct,
             tools_used,
             error_count,
+            model,
         }
     }
 }
@@ -472,7 +476,13 @@ pub(crate) async fn handle_subagent(agent: &MvpAgent, args: &acp::ExtRequest) ->
                 .list_running_subagents(&req.session_id)
                 .await
                 .into_iter()
-                .map(SubagentLiveSnapshotDto::from)
+                .map(|inspection| {
+                    let child_id = acp::SessionId::new(inspection.child_session_id.as_str());
+                    let model = agent
+                        .get_session_handle(&child_id)
+                        .map(|handle| handle.model_id.0.to_string());
+                    SubagentLiveSnapshotDto::from_inspection(inspection, model)
+                })
                 .collect();
             respond(Ok::<_, String>(ListRunningSubagentsResponse { subagents }))
         }
@@ -531,6 +541,7 @@ mod tests {
             context_usage_pct: 23,
             tools_used: vec!["bash".into(), "grep".into()],
             error_count: 1,
+            model: Some("grok-4.6".into()),
         };
         let json = serde_json::to_value(&dto).expect("should serialize");
         assert_eq!(json.get("subagentId"), Some(&serde_json::json!("sub-1")));
@@ -564,6 +575,7 @@ mod tests {
             Some(&serde_json::json!(["bash", "grep"]))
         );
         assert_eq!(json.get("errorCount"), Some(&serde_json::json!(1)));
+        assert_eq!(json.get("model"), Some(&serde_json::json!("grok-4.6")));
     }
 
     #[test]
@@ -591,12 +603,13 @@ mod tests {
             fork_parent_prompt_id: None,
             resumed_from: None,
         };
-        let dto = SubagentLiveSnapshotDto::from(resolved);
+        let dto = SubagentLiveSnapshotDto::from_inspection(resolved, Some("qwen38-27b".into()));
         assert_eq!(dto.subagent_id, "s");
         assert_eq!(dto.parent_session_id, "p");
         assert_eq!(dto.child_session_id, "c");
         assert_eq!(dto.context_usage_pct, 50);
         assert_eq!(dto.tools_used, vec!["read_file"]);
+        assert_eq!(dto.model.as_deref(), Some("qwen38-27b"));
     }
 
     #[test]

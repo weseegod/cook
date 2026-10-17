@@ -1366,7 +1366,7 @@ impl SessionActor {
                 // Update the in-memory sampling config's `context_window` if the model reported a different value (mirror the legacy path's bookkeeping)
                 if let Some(mut cfg) = self.chat_state_handle.get_sampling_config().await
                     && error.model_metadata.as_ref().and_then(|m| m.context_window) == Some(cw)
-                    && self.compaction.context_window_override.is_none()
+                    && self.compaction.context_window_override.get().is_none()
                 {
                     if let Some(new_cw) = std::num::NonZeroU64::new(cw) {
                         cfg.context_window = self.context_window_after_overflow(&cfg, new_cw);

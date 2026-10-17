@@ -149,6 +149,7 @@ function fromSubagentList(sub: SubagentListItem, sessionId: string): ActivityIte
     startedAt: sub.startedAtEpochMs ?? Date.now() - (sub.durationMs ?? 0),
     detail: sub.subagentType,
     childSessionId: sub.childSessionId,
+    model: sub.model,
     sessionId,
   };
 }
@@ -167,6 +168,7 @@ function mergeItem(prev: ActivityItem | undefined, next: ActivityItem): Activity
     sessionId: next.sessionId ?? prev.sessionId,
     activityLabel: next.activityLabel ?? prev.activityLabel,
     childSessionId: next.childSessionId ?? prev.childSessionId,
+    model: next.model ?? prev.model,
     output: next.output ?? prev.output,
     outputFile: next.outputFile ?? prev.outputFile,
     truncated: next.truncated ?? prev.truncated,

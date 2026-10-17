@@ -637,6 +637,11 @@ test.describe("chat, attachments and the model picker", () => {
     const editor = page.getByRole("dialog", { name: "Edit GPT-5" });
     await editor.getByLabel("Model context window").fill("256000");
     await editor.getByLabel("Model output limit").fill("32000");
+    // A cleared limit stays empty — no snapped-back 0 — and Save stays off until it has a value.
+    await editor.getByLabel("Model context window").fill("");
+    await expect(editor.getByLabel("Model context window")).toHaveValue("");
+    await expect(editor.getByRole("button", { name: "Save model" })).toBeDisabled();
+    await editor.getByLabel("Model context window").fill("256000");
     await editor.getByLabel("Image").uncheck();
     await editor.getByRole("button", { name: "Save model" }).click();
     const call = (await waitForCalls(page, "x.ai/models/upsert")).at(-1)!;

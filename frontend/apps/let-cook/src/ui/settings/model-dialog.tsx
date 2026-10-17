@@ -22,6 +22,12 @@ export function suggestedLimits(model?: { contextWindow?: number | null; maxComp
   };
 }
 
+/** Limits edit as text so a field can be emptied; only whole numbers above zero count. */
+function limitValue(raw: string): number | null {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
 interface Candidate {
   id: string;
   name?: string | null;
@@ -57,12 +63,13 @@ export function ModelDialog({
   const editing = Boolean(model);
   const [id, setId] = useState(model?.id ?? "");
   const [name, setName] = useState(model?.name ?? "");
-  const [limits, setLimits] = useState(() =>
-    suggestedLimits({
+  const [limits, setLimits] = useState(() => {
+    const suggested = suggestedLimits({
       contextWindow: model?.contextWindow,
       maxCompletionTokens: model?.maxCompletionTokens,
-    }),
-  );
+    });
+    return { contextWindow: String(suggested.contextWindow), maxCompletionTokens: String(suggested.maxCompletionTokens) };
+  });
   const [text, setText] = useState(model?.inputModalities?.includes("text") ?? true);
   const [image, setImage] = useState(model?.inputModalities?.includes("image") ?? false);
   const [reasoning, setReasoning] = useState(model ? model.supportsReasoningEffort === true : true);
@@ -73,7 +80,9 @@ export function ModelDialog({
 
   const cleanId = id.trim();
   const duplicate = !editing && existingIds.includes(cleanId);
-  const canSave = cleanId.length > 0 && MODEL_ID.test(cleanId) && !duplicate && (text || image) && limits.contextWindow > 0 && limits.maxCompletionTokens > 0;
+  const contextWindow = limitValue(limits.contextWindow);
+  const maxCompletionTokens = limitValue(limits.maxCompletionTokens);
+  const canSave = cleanId.length > 0 && MODEL_ID.test(cleanId) && !duplicate && (text || image) && contextWindow !== null && maxCompletionTokens !== null;
 
   async function loadCandidates() {
     setProbing(true);
@@ -98,7 +107,8 @@ export function ModelDialog({
   function pick(candidate: Candidate) {
     setId(candidate.id);
     setName(candidate.name ?? candidate.id);
-    setLimits(suggestedLimits(candidate));
+    const suggested = suggestedLimits(candidate);
+    setLimits({ contextWindow: String(suggested.contextWindow), maxCompletionTokens: String(suggested.maxCompletionTokens) });
     setError(null);
   }
 
@@ -107,14 +117,16 @@ export function ModelDialog({
     setError(null);
     try {
       const input = [...(text ? ["text"] : []), ...(image ? ["image"] : [])];
+      // canSave already blocks invalid limits; the backstop keeps the request type-sound.
+      if (contextWindow === null || maxCompletionTokens === null) return;
       await upsertModel({
         id: cleanId,
         model: model?.apiModel ?? cleanId,
         providerId: provider.id,
         name: name.trim() || cleanId,
         input,
-        contextWindow: limits.contextWindow,
-        maxCompletionTokens: limits.maxCompletionTokens,
+        contextWindow,
+        maxCompletionTokens,
         supportsReasoningEffort: reasoning,
       });
       onSaved();
@@ -207,7 +219,7 @@ export function ModelDialog({
               step={1}
               aria-label="Model context window"
               value={limits.contextWindow}
-              onChange={(event) => setLimits((current) => ({ ...current, contextWindow: Number(event.target.value) }))}
+              onChange={(event) => setLimits((current) => ({ ...current, contextWindow: event.target.value }))}
             />
           </label>
           <label className="field">
@@ -218,7 +230,7 @@ export function ModelDialog({
               step={1}
               aria-label="Model output limit"
               value={limits.maxCompletionTokens}
-              onChange={(event) => setLimits((current) => ({ ...current, maxCompletionTokens: Number(event.target.value) }))}
+              onChange={(event) => setLimits((current) => ({ ...current, maxCompletionTokens: event.target.value }))}
             />
           </label>
         </div>

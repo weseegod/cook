@@ -164,8 +164,10 @@ pub(crate) struct CompactionConfig {
     /// Auto-compaction suppression state (`SUPPRESS_*`) after a deterministic failure; the gates early-return unless `SUPPRESS_NONE`.
     /// Manual `/compact` ignores it.
     pub auto_compact_suppressed: AtomicU8,
-    /// Locks the context window when `GROK_DEBUG_CONTEXT_WINDOW` is set.
-    pub context_window_override: Option<std::num::NonZeroU64>,
+    /// Per-model / debug context-window pin. `Cell` so a model switch can re-resolve
+    /// `[model.<id>].context_window` (or `GROK_DEBUG_CONTEXT_WINDOW`) without `&mut self`.
+    /// A stale spawn-time pin must not stick after the session changes models.
+    pub context_window_override: Cell<Option<std::num::NonZeroU64>>,
     /// Shared with `SessionHandle::context_window_selection`.
     pub context_window_selection: Arc<AtomicU64>,
     pub count: AtomicU64,

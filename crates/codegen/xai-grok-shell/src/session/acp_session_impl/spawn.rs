@@ -1982,7 +1982,7 @@ pub(crate) async fn spawn_session_actor(
         compaction: super::compaction_config::CompactionConfig {
             threshold_percent: std::cell::Cell::new(auto_compact_threshold_percent),
             force_compact: force_compact.clone(),
-            context_window_override,
+            context_window_override: std::cell::Cell::new(context_window_override),
             context_window_selection: context_window_selection.clone(),
             count: std::sync::atomic::AtomicU64::new(0),
             auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),

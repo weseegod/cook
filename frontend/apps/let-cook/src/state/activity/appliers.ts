@@ -126,6 +126,7 @@ export function applySubagentSessionUpdate(raw: Record<string, unknown>, session
       detail: stringOr(raw.subagent_type ?? raw.subagentType) ?? undefined,
       // The child's own updates stream under its session id; without it the viewer has no feed.
       childSessionId: stringOr(raw.child_session_id ?? raw.childSessionId) ?? id,
+      model: stringOr(raw.model ?? raw.modelId) ?? undefined,
       sessionId,
     });
     return;
